@@ -6,9 +6,7 @@ settings:
 
 importers:
 
-  .: {}
-
-  apps/platform:
+  .:
     dependencies:
       '@hookform/resolvers':
         specifier: ^5.2.2
