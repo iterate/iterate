@@ -6,13 +6,25 @@
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "os-v2",
 	"compatibility_date": "2025-04-04",
+	"compatibility_flags": ["nodejs_compat","nodejs_compat_v2"],
 	"main": "./workers/app.ts",
-	"vars": {
-		"VALUE_FROM_CLOUDFLARE": "Hello from Cloudflare"
-	},
 	"observability": {
 		"enabled": true
-	}
+	},
+	"r2_buckets": [
+		{
+		"binding": "ITERATE_FILES",
+		"bucket_name": "iterate-files"
+		}
+  	],
+	"hyperdrive": [
+		{
+			"binding": "ITERATE_POSTGRES",
+			// TODO: Add the real hyperdrive ID!
+			"id": "FILL_ME_IN",
+			"localConnectionString": "postgres://postgres:postgres@localhost:5432/iterate"
+		}
+	]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
