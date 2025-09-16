@@ -1,5 +1,5 @@
-import { initTRPC, TRPCError } from '@trpc/server';
-import type { Context } from './context.ts';
+import { initTRPC, TRPCError } from "@trpc/server";
+import type { Context } from "./context.ts";
 
 const t = initTRPC.context<Context>().create();
 
@@ -10,7 +10,7 @@ export const publicProcedure = t.procedure;
 // Protected procedure that requires authentication
 export const protectedProcedure = t.procedure.use(({ ctx, next }) => {
   if (!ctx.session || !ctx.user) {
-    throw new TRPCError({ code: 'UNAUTHORIZED' });
+    throw new TRPCError({ code: "UNAUTHORIZED" });
   }
   return next({
     ctx: {

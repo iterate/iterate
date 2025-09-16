@@ -1,7 +1,6 @@
-
 import { forwardRef, useEffect, useId, useState } from "react";
 import { cn } from "../../lib/utils";
-import { useTheme } from "next-themes"
+import { useTheme } from "next-themes";
 
 export interface AnimatedBeamProps {
   className?: string;
@@ -50,9 +49,9 @@ export const AnimatedBeam = forwardRef<SVGSVGElement, AnimatedBeamProps>(
 
     const { theme } = useTheme();
 
-    const pathColor = theme === 'dark' ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.2)';
-    const gradientStartColor = theme === 'dark' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.6)';
-    const gradientStopColor = theme === 'dark' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.6)';
+    const pathColor = theme === "dark" ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.2)";
+    const gradientStartColor = theme === "dark" ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.6)";
+    const gradientStopColor = theme === "dark" ? "rgba(255,255,255,0.8)" : "rgba(0,0,0,0.6)";
 
     useEffect(() => {
       const updatePath = () => {
@@ -68,14 +67,10 @@ export const AnimatedBeam = forwardRef<SVGSVGElement, AnimatedBeamProps>(
             height: svgHeight,
           });
 
-          const startX =
-            rectA.left - containerRect.left + rectA.width / 2 + startXOffset;
-          const startY =
-            rectA.top - containerRect.top + rectA.height / 2 + startYOffset;
-          const endX =
-            rectB.left - containerRect.left + rectB.width / 2 + endXOffset;
-          const endY =
-            rectB.top - containerRect.top + rectB.height / 2 + endYOffset;
+          const startX = rectA.left - containerRect.left + rectA.width / 2 + startXOffset;
+          const startY = rectA.top - containerRect.top + rectA.height / 2 + startYOffset;
+          const endX = rectB.left - containerRect.left + rectB.width / 2 + endXOffset;
+          const endY = rectB.top - containerRect.top + rectB.height / 2 + endYOffset;
 
           const controlPointX = startX + (endX - startX) / 2;
           const controlPointY = startY - curvature;
@@ -163,7 +158,7 @@ export const AnimatedBeam = forwardRef<SVGSVGElement, AnimatedBeamProps>(
             animationIterationCount: "infinite",
             animationDelay: `${delay}ms`,
           }}
-          onAnimationIteration={() => setAnimationDirection(prev => !prev)}
+          onAnimationIteration={() => setAnimationDirection((prev) => !prev)}
         />
 
         <defs>

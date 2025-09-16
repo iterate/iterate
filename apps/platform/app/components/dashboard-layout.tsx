@@ -69,7 +69,7 @@ function UserSwitcher() {
           },
         },
       });
-      
+
       if (result.error) {
         console.error("❌ Logout failed:", result.error);
       } else {

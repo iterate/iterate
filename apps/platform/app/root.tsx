@@ -7,13 +7,13 @@ import {
   ScrollRestoration,
 } from "react-router";
 import { ThemeProvider } from "next-themes";
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { httpBatchLink } from '@trpc/client';
-import { useState } from 'react';
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { httpBatchLink } from "@trpc/client";
+import { useState } from "react";
 
 import type { Route } from "./+types/root";
 import "./app.css";
-import { trpc } from './lib/trpc.ts';
+import { trpc } from "./lib/trpc.ts";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
@@ -73,12 +73,12 @@ export default function App() {
     trpc.createClient({
       links: [
         httpBatchLink({
-          url: '/api/trpc',
+          url: "/api/trpc",
           // Include credentials to send cookies
           fetch(url, options) {
             return fetch(url, {
               ...options,
-              credentials: 'include',
+              credentials: "include",
             } as RequestInit);
           },
         }),
@@ -89,9 +89,9 @@ export default function App() {
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>
-        <ThemeProvider 
-          attribute="class" 
-          defaultTheme="system" 
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
           enableSystem
           enableColorScheme
           storageKey="theme"
