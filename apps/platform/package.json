@@ -9,10 +9,7 @@
 		"dev": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- react-router dev",
 		"postinstall": "npm run cf-typegen",
 		"preview": "pnpm run build && vite preview",
-		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b",
-		"docker:up": "docker compose up -d postgres",
-		"docker:down": "docker compose down",
-		"docker:clean": "docker compose down -v"
+		"typecheck": "npm run cf-typegen && react-router typegen && tsc -b"
 	},
 	"dependencies": {
 		"@hookform/resolvers": "^5.2.2",
