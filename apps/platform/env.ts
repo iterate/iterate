@@ -1,3 +1,5 @@
+import { env as _env } from "cloudflare:workers";
+
 export type CloudflareEnv = Env & {
   VITE_PUBLIC_URL: string;
   OPENAI_API_KEY: string;
@@ -7,3 +9,5 @@ export type CloudflareEnv = Env & {
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
 };
+
+export const env = _env as CloudflareEnv;
