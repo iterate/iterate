@@ -3,7 +3,6 @@
 // Runtime types generated with workerd@1.20250913.0 2025-04-04 nodejs_compat,nodejs_compat_v2
 declare namespace Cloudflare {
 	interface Env {
-		BASE_URL: "https://platform.iterate.com";
 		ITERATE_FILES: R2Bucket;
 		ITERATE_POSTGRES: Hyperdrive;
 	}
