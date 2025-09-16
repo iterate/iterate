@@ -12,7 +12,7 @@ import type { CloudflareEnv } from "env.ts";
 const env = baseEnv as CloudflareEnv;
 
 // TODO: Replace with actual base URL configuration
-const BASE_URL = env.BASE_URL || "https://platform.iterate.com";
+const BASE_URL = env.VITE_PUBLIC_URL || "https://platform.iterate.com";
 
 type DrizzleDb = typeof drizzleDb;
 // Types
@@ -33,7 +33,7 @@ const startUpload = async (
   db: DrizzleDb,
   fileId: string,
   estateId: string,
-  filename?: string,
+  filename?: string
 ): Promise<FileRecord> => {
   const newFile: NewFileRecord = {
     iterateId: fileId,
@@ -74,7 +74,9 @@ const doUpload = async ({
     // Note: the openai library requires us to buffer the request in memory
     const fileBlob = await new Response(stream2).blob();
     const openAIFile = await openai.files.create({
-      file: new File([fileBlob], filename, { type: mimeType || "application/octet-stream" }),
+      file: new File([fileBlob], filename, {
+        type: mimeType || "application/octet-stream",
+      }),
       purpose: "user_data",
     });
 
@@ -112,7 +114,7 @@ const doUpload = async ({
       })
       .where(eq(files.iterateId, fileId));
 
-    throw new Error(`Failed to upload file ${fileId}`, {cause: error});
+    throw new Error(`Failed to upload file ${fileId}`, { cause: error });
   }
 };
 
@@ -122,18 +124,21 @@ const generateFileId = () => typeid("file").toString();
 // Helper function to generate R2 key for a file
 const generateR2Key = (fileId: string) => `files/${fileId}`;
 
-export const uploadFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const uploadFileHandler = async (
+  c: Context<{ Bindings: CloudflareEnv }>
+) => {
   try {
     const estateId = c.req.param("estateId");
     if (!estateId) {
       return c.json({ error: "estateId parameter is required" }, 400);
     }
-    
+
     const filename = c.req.query("filename");
     if (!filename) {
       return c.json({ error: "filename query parameter is required" }, 400);
     }
-    const contentType = c.req.header("content-type") || "application/octet-stream";
+    const contentType =
+      c.req.header("content-type") || "application/octet-stream";
     const stream = c.req.raw.body!;
     const contentLength = c.req.header("content-length")
       ? Number.parseInt(c.req.header("content-length")!)
@@ -151,7 +156,7 @@ export const uploadFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>)
       {
         error: error instanceof Error ? error.message : "Upload failed",
       },
-      500,
+      500
     );
   }
 };
@@ -170,17 +175,22 @@ export const uploadFileFromUrl = async ({
   // Fetch the file from URL
   const response = await fetch(url, headers ? { headers } : {});
   if (!response.ok) {
-    throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+    throw new Error(
+      `Failed to fetch URL: ${response.status} ${response.statusText}`
+    );
   }
 
-  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  const contentType =
+    response.headers.get("content-type") || "application/octet-stream";
 
   const contentLength = response.headers.get("content-length")
     ? Number.parseInt(response.headers.get("content-length")!)
     : 0;
   if (!contentLength) {
     // TODO: we could consider reading into memory here to get the content length
-    console.error("content-length header is missing, will try without it anyway");
+    console.error(
+      "content-length header is missing, will try without it anyway"
+    );
   }
 
   const fileRecord = await uploadFile({
@@ -194,7 +204,10 @@ export const uploadFileFromUrl = async ({
   return fileRecord;
 };
 
-export async function getFilePublicUrl(iterateFileId: string, estateId: string) {
+export async function getFilePublicUrl(
+  iterateFileId: string,
+  estateId: string
+) {
   return `${BASE_URL}/api/estate/${estateId}/files/${iterateFileId}`;
 }
 
@@ -229,15 +242,21 @@ export const uploadFile = async ({
         controller.close();
       },
     });
-    sourceStream.pipeTo(writable).catch((err) => console.error("FixedLengthStream error:", err));
+    sourceStream
+      .pipeTo(writable)
+      .catch((err) => console.error("FixedLengthStream error:", err));
     stream = readable;
   } else {
     if (!contentLength) {
       // _sometimes_ this works, in cloudflare it depends on where the ReadableStream is created
-      console.error("content-length header is missing. Trying anyway without it");
+      console.error(
+        "content-length header is missing. Trying anyway without it"
+      );
     } else {
       const { readable, writable } = new FixedLengthStream(contentLength);
-      stream.pipeTo(writable).catch((err) => console.error("FixedLengthStream error:", err));
+      stream
+        .pipeTo(writable)
+        .catch((err) => console.error("FixedLengthStream error:", err));
       stream = readable;
     }
   }
@@ -253,13 +272,15 @@ export const uploadFile = async ({
       filename,
       mimeType: contentType,
       db,
-      openai: await openAIProvider({ 
+      openai: await openAIProvider({
         env: {
           BRAINTRUST_API_KEY: env.BRAINTRUST_API_KEY || null,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
-          ...(env.POSTHOG_PUBLIC_KEY && { POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY }),
-        }, 
-        posthog: { traceId: `file-upload-${fileId}` } 
+          ...(env.POSTHOG_PUBLIC_KEY && {
+            POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY,
+          }),
+        },
+        posthog: { traceId: `file-upload-${fileId}` },
       }),
     });
 
@@ -270,7 +291,9 @@ export const uploadFile = async ({
   }
 };
 
-export const uploadFileFromUrlHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const uploadFileFromUrlHandler = async (
+  c: Context<{ Bindings: CloudflareEnv }>
+) => {
   const estateId = c.req.param("estateId");
   const url = c.req.query("url");
   const filename = c.req.query("filename");
@@ -294,14 +317,17 @@ export const uploadFileFromUrlHandler = async (c: Context<{ Bindings: Cloudflare
     console.error("Upload from URL error:", error);
     return c.json(
       {
-        error: error instanceof Error ? error.message : "Upload from URL failed",
+        error:
+          error instanceof Error ? error.message : "Upload from URL failed",
       },
-      500,
+      500
     );
   }
 };
 
-export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const getFileHandler = async (
+  c: Context<{ Bindings: CloudflareEnv }>
+) => {
   const fileId = c.req.param("id");
   const estateId = c.req.param("estateId");
   const disposition = c.req.query("disposition") || "attachment";
@@ -312,7 +338,11 @@ export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) =>
 
   try {
     // Get file record from database
-    const [fileRecord] = await db.select().from(files).where(eq(files.iterateId, fileId)).limit(1);
+    const [fileRecord] = await db
+      .select()
+      .from(files)
+      .where(eq(files.iterateId, fileId))
+      .limit(1);
     console.log(`[getFileHandler] Looking for file ${fileId}:`, fileRecord);
     if (!fileRecord) {
       console.error(`[getFileHandler] File not found in database: ${fileId}`);
@@ -321,7 +351,9 @@ export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) =>
 
     // Verify the file belongs to the specified estate
     if (fileRecord.estateId !== estateId) {
-      console.error(`[getFileHandler] File ${fileId} does not belong to estate ${estateId}`);
+      console.error(
+        `[getFileHandler] File ${fileId} does not belong to estate ${estateId}`
+      );
       return c.json({ error: "File not found" }, 404);
     }
 
@@ -340,11 +372,17 @@ export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) =>
 
     // Return the file with appropriate headers
     const headers = new Headers();
-    headers.set("Content-Type", fileRecord.mimeType || "application/octet-stream");
+    headers.set(
+      "Content-Type",
+      fileRecord.mimeType || "application/octet-stream"
+    );
 
     // Use the disposition query parameter to control inline vs attachment
     const validDisposition = disposition === "inline" ? "inline" : "attachment";
-    headers.set("Content-Disposition", `${validDisposition}; filename="${fileRecord.filename}"`);
+    headers.set(
+      "Content-Disposition",
+      `${validDisposition}; filename="${fileRecord.filename}"`
+    );
 
     if (object.httpEtag) {
       headers.set("ETag", object.httpEtag);
@@ -357,7 +395,7 @@ export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) =>
       {
         error: error instanceof Error ? error.message : "File retrieval failed",
       },
-      500,
+      500
     );
   }
 };
