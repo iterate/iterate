@@ -212,19 +212,19 @@ export const defaultContextRules = async () => [
       trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
         overrideName: "edit_image",
       }),
-      {
-        type: "agent_durable_object_tool",
-        methodName: "sendSlackMessage",
-        overrideInputJSONSchema: z.toJSONSchema(
-          (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
-            text: true,
-            ephemeral: true,
-            user: true,
-            blocks: true,
-            endTurn: true,
-          }),
-        ),
-      },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "sendSlackMessage",
+      //   overrideInputJSONSchema: z.toJSONSchema(
+      //     (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
+      //       text: true,
+      //       ephemeral: true,
+      //       user: true,
+      //       blocks: true,
+      //       endTurn: true,
+      //     }),
+      //   ),
+      // },
     ],
   }),
   {

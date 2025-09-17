@@ -5,4 +5,6 @@ export default [
   route("/login", "./routes/login.tsx"),
   route("/integrations", "./routes/integrations.tsx"),
   route("/estate", "./routes/estate.tsx"),
+  route("/agents", "./routes/agents-index.tsx"),
+  route("/agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
 ] satisfies RouteConfig;

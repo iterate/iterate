@@ -36,7 +36,7 @@
   "migrations": [
     {
       "tag": "2025-01-init-agents",
-      "new_classes": ["IterateAgent"],
+      "new_sqlite_classes": ["IterateAgent"],
     },
   ],
   /**
