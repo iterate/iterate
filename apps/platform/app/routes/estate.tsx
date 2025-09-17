@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Github, ArrowRight, Edit2, Check, X } from "lucide-react";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import { trpcClient } from "../lib/trpc-client.ts";
 import type { Route } from "./+types/estate";
 
 export function meta(_args: Route.MetaArgs) {
@@ -21,15 +22,60 @@ export default function ManageEstate() {
   const [tempTitle, setTempTitle] = useState(title);
   const [isConnected, setIsConnected] = useState(false);
   const [connectedRepo, setConnectedRepo] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [estateId, setEstateId] = useState<string | null>(null);
+
+  // Load estate data on component mount
+  useEffect(() => {
+    const loadEstate = async () => {
+      try {
+        // First get the user's estate ID
+        const { estateId: userEstateId } =
+          await trpcClient.integrations.getCurrentUserEstateId.query();
+        setEstateId(userEstateId);
+
+        // Then get the estate details
+        const estate = await trpcClient.estate.get.query({ estateId: userEstateId });
+        setTitle(estate.name);
+        setTempTitle(estate.name);
+      } catch (error) {
+        console.error("Failed to load estate:", error);
+        // Keep default title if loading fails
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadEstate();
+  }, []);
 
   const handleEditTitle = () => {
     setIsEditing(true);
     setTempTitle(title);
   };
 
-  const handleSaveTitle = () => {
-    setTitle(tempTitle);
-    setIsEditing(false);
+  const handleSaveTitle = async () => {
+    if (tempTitle.trim() === title || !estateId) {
+      setIsEditing(false);
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const updatedEstate = await trpcClient.estate.updateName.mutate({
+        estateId,
+        name: tempTitle.trim(),
+      });
+      setTitle(updatedEstate.name);
+      setIsEditing(false);
+    } catch (error) {
+      console.error("Failed to update estate name:", error);
+      // Reset temp title on error
+      setTempTitle(title);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCancelEdit = () => {
@@ -53,19 +99,43 @@ export default function ManageEstate() {
       <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
         {/* Editable Title */}
         <div className="mb-12">
-          {isEditing ? (
+          {isLoading ? (
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-9 w-48 bg-slate-200 dark:bg-slate-700 animate-pulse rounded"></div>
+              <div className="h-8 w-8 bg-slate-200 dark:bg-slate-700 animate-pulse rounded"></div>
+            </div>
+          ) : isEditing ? (
             <div className="flex items-center gap-3 mb-4">
               <Input
                 value={tempTitle}
                 onChange={(e) => setTempTitle(e.target.value)}
+                onKeyDown={(e) => {
+                  if (
+                    e.key === "Enter" &&
+                    !isSaving &&
+                    tempTitle.trim() &&
+                    tempTitle.trim() !== title
+                  ) {
+                    handleSaveTitle();
+                  } else if (e.key === "Escape") {
+                    handleCancelEdit();
+                  }
+                }}
                 className="text-3xl font-bold border-none p-0 h-auto text-slate-900 dark:text-white focus-visible:ring-0 focus-visible:ring-offset-0"
                 style={{ fontSize: "1.875rem", lineHeight: "2.25rem" }}
+                disabled={isSaving}
+                autoFocus
               />
               <div className="flex gap-2">
-                <Button size="sm" variant="ghost" onClick={handleSaveTitle}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleSaveTitle}
+                  disabled={isSaving || !tempTitle.trim() || tempTitle.trim() === title}
+                >
                   <Check className="w-4 h-4" />
                 </Button>
-                <Button size="sm" variant="ghost" onClick={handleCancelEdit}>
+                <Button size="sm" variant="ghost" onClick={handleCancelEdit} disabled={isSaving}>
                   <X className="w-4 h-4" />
                 </Button>
               </div>
