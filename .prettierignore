@@ -17,7 +17,7 @@ logs.json
 .git/
 
 # Migrations
-**/drizzle/migrations/**
+**/db/migrations/**
 
 # Corepack
 **/.corepack/**

@@ -1,4 +1,4 @@
-import { Link, ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
+import { ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../components/ui/button.tsx";
 import {
@@ -31,9 +31,9 @@ export function meta(_args: Route.MetaArgs) {
 function ScopesList({ scope }: { scope: string }) {
   const [isOpen, setIsOpen] = useState(false);
 
-  // Split scopes by comma and clean them up
+  // Split scopes by comma or space and clean them up
   const scopes = scope
-    .split(",")
+    .split(/[,\s]+/)
     .map((s) => s.trim())
     .filter(Boolean);
 
@@ -51,23 +51,22 @@ function ScopesList({ scope }: { scope: string }) {
         <Button
           variant="ghost"
           size="sm"
-          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground flex items-center"
         >
           <span className="mr-1">
-            {scopes.length} scope{scopes.length !== 1 ? "s" : ""}
+            {scopes.length} permission{scopes.length !== 1 ? "s" : ""}
           </span>
           {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-2">
-        <ul className="space-y-1">
+        <div className="grid grid-cols-1 gap-1">
           {scopes.map((singleScope, index) => (
-            <li key={index} className="flex items-center text-xs text-muted-foreground">
-              <span className="w-1 h-1 bg-muted-foreground rounded-full mr-2 flex-shrink-0" />
-              <span className="break-all">{singleScope}</span>
-            </li>
+            <Badge key={index} variant="secondary" className="text-xs justify-start font-mono">
+              {singleScope}
+            </Badge>
           ))}
-        </ul>
+        </div>
       </CollapsibleContent>
     </Collapsible>
   );
@@ -196,20 +195,24 @@ export default function Integrations() {
               </CardHeader>
 
               <CardContent className="pt-0">
-                <div className="flex items-center gap-4 text-sm text-muted-foreground mb-4">
-                  <div className="flex items-center gap-1">
-                    <Link className="w-4 h-4" />
-                    <span>
-                      {integration.connections} connection
-                      {integration.connections !== 1 ? "s" : ""} in {integration.apps} app
-                      {integration.apps !== 1 ? "s" : ""}
-                    </span>
+                {integration.isConnected && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
+                    {integration.isEstateWide && (
+                      <Badge variant="outline" className="text-xs">
+                        Estate-wide
+                      </Badge>
+                    )}
+                    {integration.isPersonal && (
+                      <Badge variant="outline" className="text-xs">
+                        Personal
+                      </Badge>
+                    )}
                   </div>
-                </div>
+                )}
 
                 {integration.scope && (
                   <div className="mb-4">
-                    <p className="text-xs text-muted-foreground mb-1">Scopes:</p>
+                    <p className="text-xs text-muted-foreground mb-1">Permissions:</p>
                     <ScopesList scope={integration.scope} />
                   </div>
                 )}
@@ -220,7 +223,7 @@ export default function Integrations() {
                       Connected
                     </Badge>
                     <Button variant="outline" size="sm">
-                      Manage
+                      Disconnect
                     </Button>
                   </div>
                 ) : (

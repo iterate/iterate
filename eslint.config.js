@@ -30,7 +30,7 @@ export default defineConfig([
     "**/logs.json",
     "**/worker-configuration.d.ts",
     "**/routeTree.gen.ts",
-    "**/drizzle/migrations/",
+    "**/db/migrations/",
     "**/*.d.ts",
     "**/node_modules/",
     "**/dist/",

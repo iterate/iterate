@@ -6,8 +6,8 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os-v2",
   "compatibility_date": "2025-04-04",
-  "compatibility_flags": ["nodejs_compat", "nodejs_compat_v2"],
-  "main": "./workers/app.ts",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "./backend/worker.ts",
   "observability": {
     "enabled": true,
   },

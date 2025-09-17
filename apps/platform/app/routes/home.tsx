@@ -1,9 +1,10 @@
-import { useState } from "react";
 import { CheckCircle, ArrowRight } from "lucide-react";
-
+import { toast } from "sonner";
 import { Button } from "../components/ui/button.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import { authClient } from "../lib/auth-client.ts";
+import { trpc } from "../lib/trpc.ts";
 import type { Route } from "./+types/home";
 
 export function meta(_args: Route.MetaArgs) {
@@ -14,11 +15,29 @@ export function meta(_args: Route.MetaArgs) {
 }
 
 function ConnectSlackCard() {
-  const [isConnected, setIsConnected] = useState(false);
+  const { data: integrations, isLoading: integrationsLoading } = trpc.integrations.list.useQuery();
+  const { data: estateData } = trpc.integrations.getCurrentUserEstateId.useQuery();
 
-  const handleConnectSlack = () => {
-    // Simulate connecting to Slack
-    setIsConnected(true);
+  // Check if Slack bot is connected at the estate level
+  const slackBotIntegration = integrations?.find((i) => i.id === "slack-bot");
+  const isConnected = !integrationsLoading && (slackBotIntegration?.isConnected || false);
+
+  const handleConnectSlack = async () => {
+    if (!estateData?.estateId) {
+      toast.error("Unable to get estate information");
+      return;
+    }
+
+    const result = await authClient.integrations.link.slackBot({
+      estateId: estateData.estateId,
+      callbackURL: "/?success=true",
+    });
+
+    if (result.error) {
+      toast.error(result.error.message);
+    } else {
+      window.location.href = result.data.url.toString();
+    }
   };
 
   const handleGoToSlack = () => {
@@ -45,7 +64,11 @@ function ConnectSlackCard() {
       </div>
 
       {/* Integration status */}
-      {isConnected ? (
+      {integrationsLoading ? (
+        <div className="flex items-center justify-center py-4">
+          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
+        </div>
+      ) : isConnected ? (
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />

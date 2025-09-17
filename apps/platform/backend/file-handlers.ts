@@ -1,15 +1,12 @@
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
-import { env as baseEnv } from "cloudflare:workers";
 import { typeid } from "typeid-js";
-import type { CloudflareEnv } from "../env.ts";
-import type { Variables } from "../workers/app.ts";
+import { env, type CloudflareEnv } from "../env.ts";
+import type { Variables } from "./worker.ts";
 import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
-
-const env = baseEnv as CloudflareEnv;
 
 // TODO: Replace with actual base URL configuration
 const BASE_URL = env.VITE_PUBLIC_URL || "https://platform.iterate.com";
@@ -35,7 +32,7 @@ const startUpload = async (
   filename?: string,
 ): Promise<FileRecord> => {
   const newFile: NewFileRecord = {
-    iterateId: fileId,
+    id: fileId,
     status: "started",
     filename,
     estateId,
@@ -91,9 +88,8 @@ const doUpload = async ({
         fileSize,
         mimeType,
         openAIFileId: openAIFile.id,
-        uploadedAt: new Date(),
       })
-      .where(eq(files.iterateId, fileId))
+      .where(eq(files.id, fileId))
       .returning();
 
     if (!updatedFile) {
@@ -111,7 +107,7 @@ const doUpload = async ({
       .set({
         status: "error",
       })
-      .where(eq(files.iterateId, fileId));
+      .where(eq(files.id, fileId));
 
     throw new Error(`Failed to upload file ${fileId}`, { cause: error });
   }
@@ -342,7 +338,7 @@ export const getFileHandler = async (
 
   try {
     // Get file record from database
-    const [fileRecord] = await db.select().from(files).where(eq(files.iterateId, fileId)).limit(1);
+    const [fileRecord] = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
     console.log(`[getFileHandler] Looking for file ${fileId}:`, fileRecord);
     if (!fileRecord) {
       console.error(`[getFileHandler] File not found in database: ${fileId}`);

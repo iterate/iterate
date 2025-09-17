@@ -1,6 +1,6 @@
 import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import type { Context as HonoContext } from "hono";
-import type { Variables } from "../../workers/app";
+import type { Variables } from "../worker";
 import type { CloudflareEnv } from "../../env";
 
 export async function createContext(
