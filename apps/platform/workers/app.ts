@@ -1,5 +1,7 @@
 import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { contextStorage } from "hono/context-storage";
 import {
   uploadFileHandler,
   uploadFileFromUrlHandler,
@@ -7,11 +9,9 @@ import {
 } from "../backend/file-handlers.ts";
 import type { CloudflareEnv } from "../env.ts";
 import { getAuth, type Auth, type AuthSession } from "../backend/auth/auth.ts";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { appRouter } from "../backend/trpc/root.ts";
 import { createContext } from "../backend/trpc/context.ts";
 import { getDb, type DB } from "../backend/db/client.ts";
-import { contextStorage } from "hono/context-storage";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -57,7 +57,9 @@ app.all("/api/trpc/*", (c) => {
 
 // File upload routes
 app.use("/api/estate/:estateId/*", (c, next) => {
-  if (!c.var.session) c.json({ error: "Unauthorized" }, 401);
+  if (!c.var.session) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
   //TODO: session.user.estates.includes(c.req.param("estateId")) -> PASS
   return next();
 });

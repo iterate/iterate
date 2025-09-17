@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/postgres-js";
-import * as schema from "./schema.ts";
-import { env } from "../../env";
 import postgres from "postgres";
+import { env } from "../../env.ts";
+import * as schema from "./schema.ts";
 
 const pg = () =>
   postgres(env.ITERATE_POSTGRES.connectionString, {

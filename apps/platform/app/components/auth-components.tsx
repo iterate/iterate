@@ -1,5 +1,5 @@
-import { authClient } from "../lib/auth-client";
-import { Button } from "./ui/button";
+import { authClient } from "../lib/auth-client.ts";
+import { Button } from "./ui/button.tsx";
 
 export function LoginProviders() {
   const handleGoogleSignIn = async () => {

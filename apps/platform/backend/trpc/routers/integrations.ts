@@ -1,7 +1,7 @@
 import { z } from "zod";
+import { eq, and } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc.ts";
 import { account } from "../../db/schema.ts";
-import { eq, and } from "drizzle-orm";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {

@@ -1,14 +1,14 @@
-import type { Route } from "./+types/integrations";
 import { Link, ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
-import { Button } from "../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
-import { Badge } from "../components/ui/badge";
-import { DashboardLayout } from "../components/dashboard-layout";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible";
-import { trpc } from "../lib/trpc.ts";
 import { useState } from "react";
+import { Button } from "../components/ui/button.tsx";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card.tsx";
+import { Badge } from "../components/ui/badge.tsx";
+import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible.tsx";
+import { trpc } from "../lib/trpc.ts";
+import type { Route } from "./+types/integrations";
 
-export function meta({}: Route.MetaArgs) {
+export function meta(_args: Route.MetaArgs) {
   return [
     { title: "Integrations - Iterate Dashboard" },
     {

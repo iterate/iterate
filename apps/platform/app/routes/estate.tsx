@@ -1,11 +1,11 @@
-import type { Route } from "./+types/estate";
 import { useState } from "react";
 import { Github, ArrowRight, Edit2, Check, X } from "lucide-react";
-import { Button } from "../components/ui/button";
-import { Input } from "../components/ui/input";
-import { DashboardLayout } from "../components/dashboard-layout";
+import { Button } from "../components/ui/button.tsx";
+import { Input } from "../components/ui/input.tsx";
+import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import type { Route } from "./+types/estate";
 
-export function meta({}: Route.MetaArgs) {
+export function meta(_args: Route.MetaArgs) {
   return [
     { title: "Manage Estate - Iterate Dashboard" },
     {

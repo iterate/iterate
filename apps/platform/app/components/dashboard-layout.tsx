@@ -5,13 +5,13 @@ import {
   Users,
   ChevronDown,
   Bot,
-  Zap,
+  _Zap,
   FileText,
   LogOut,
   User,
   CreditCard,
 } from "lucide-react";
-import { authClient } from "../lib/auth-client";
+import { authClient } from "../lib/auth-client.ts";
 
 import {
   Sidebar,
@@ -27,9 +27,9 @@ import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarGroupContent,
-} from "../components/ui/sidebar";
-import { Button } from "../components/ui/button";
-import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar";
+} from "../components/ui/sidebar.tsx";
+import { Button } from "../components/ui/button.tsx";
+import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -37,7 +37,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu";
+} from "../components/ui/dropdown-menu.tsx";
 
 const navigation = [
   {
