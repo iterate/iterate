@@ -14,6 +14,7 @@ import { useState } from "react";
 
 import type { Route } from "./+types/root";
 import { trpc } from "./lib/trpc.ts";
+import { AuthGuard } from "./components/auth-guard.tsx";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
@@ -96,7 +97,9 @@ export default function App() {
           enableColorScheme
           storageKey="theme"
         >
-          <Outlet />
+          <AuthGuard>
+            <Outlet />
+          </AuthGuard>
         </ThemeProvider>
       </QueryClientProvider>
     </trpc.Provider>

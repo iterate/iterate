@@ -2,18 +2,13 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
-import {
-  uploadFileHandler,
-  uploadFileFromUrlHandler,
-  getFileHandler,
-} from "../backend/file-handlers.ts";
 import type { CloudflareEnv } from "../env.ts";
-import { getAuth, type Auth, type AuthSession } from "../backend/auth/auth.ts";
-import { appRouter } from "../backend/trpc/root.ts";
-import { createContext } from "../backend/trpc/context.ts";
-import { getDb, type DB } from "../backend/db/client.ts";
-import { IterateAgent } from "../backend/agent/iterate-agent.ts";
-
+import { getDb, type DB } from "./db/client.ts";
+import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
+import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
+import { appRouter } from "./trpc/root.ts";
+import { createContext } from "./trpc/context.ts";
+import { IterateAgent } from "./agent/iterate-agent.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {

@@ -6,9 +6,14 @@
     "build": "pnpm -r --parallel build",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "lint": "eslint . --fix",
+    "lint:check": "eslint .",
     "docker:up": "docker compose up -d postgres",
     "docker:down": "docker compose down",
-    "docker:clean": "docker compose down -v"
+    "docker:clean": "docker compose down -v",
+    "db:migrate": "pnpm -r db:migrate",
+    "db:generate": "pnpm -r db:generate",
+    "db:studio": "pnpm -r --parallel db:studio"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
