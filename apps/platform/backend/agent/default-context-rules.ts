@@ -2,11 +2,10 @@
 
 import dedent from "dedent";
 import { z } from "zod/v4";
-import { makeTrpcCallable } from "./callable-builders.ts";
 import { defineRule, matchers } from "./context.ts";
 
 // not typesafe version
-const trpcCallableBuilder = makeTrpcCallable<any>();
+// const trpcCallableBuilder = makeTrpcCallable<any>();
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -143,19 +142,19 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
-    slug: "@iterate-com/slack-default-context-rules",
+    id: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
       // IterateAgent DO tools
-      {
-        type: "agent_durable_object_tool",
-        methodName: "doNothing",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "connectMCPServer",
-      },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "doNothing",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "connectMCPServer",
+      // },
       {
         type: "agent_durable_object_tool",
         methodName: "getAgentDebugURL",
@@ -178,57 +177,55 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "stopRespondingUntilMentioned",
       },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "addSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "removeSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "uploadAndShareFileInSlack",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "updateSlackMessage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getUrlContent",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "searchWeb",
-      },
-
-      // TRPC tools
-      // @ts-expect-error not typesafe
-      trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
-        overrideName: "generate_image",
-      }),
-      // @ts-expect-error not typesafe
-      trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
-        overrideName: "edit_image",
-      }),
       // {
       //   type: "agent_durable_object_tool",
-      //   methodName: "sendSlackMessage",
-      //   overrideInputJSONSchema: z.toJSONSchema(
-      //     (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
-      //       text: true,
-      //       ephemeral: true,
-      //       user: true,
-      //       blocks: true,
-      //       endTurn: true,
-      //     }),
-      //   ),
+      //   methodName: "addSlackReaction",
       // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "removeSlackReaction",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "uploadAndShareFileInSlack",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "updateSlackMessage",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "getUrlContent",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "searchWeb",
+      // },
+
+      // TRPC tools
+      // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
+      //   overrideName: "generate_image",
+      // }),
+      // trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
+      //   overrideName: "edit_image",
+      // }),
+      {
+        type: "agent_durable_object_tool",
+        methodName: "sendSlackMessage",
+        overrideInputJSONSchema: z.toJSONSchema(
+          (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
+            text: true,
+            ephemeral: true,
+            user: true,
+            blocks: true,
+            endTurn: true,
+          }),
+        ),
+      },
     ],
   }),
   {
-    slug: "using-linear",
+    id: "using-linear",
     prompt: dedent`
       When using Linear tools:
       - When displaying Linear issues, use: "<issue.url|issue.identifier>: title".
@@ -243,7 +240,7 @@ export const defaultContextRules = async () => [
     match: matchers.hasMCPConnection("mcp.linear.app"),
   },
   {
-    slug: "presenting-notion-results",
+    id: "presenting-notion-results",
     prompt: dedent`
       When displaying Notion search results:
       - Use bullet points (•) instead of hyphens (-) for search results

@@ -9,6 +9,8 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
+import { SlackAgent } from "./agent/slack-agent.ts";
+import { slackApp } from "./integrations/slack/slack.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -65,6 +67,9 @@ app.post("/api/estate/:estateId/files", uploadFileHandler);
 app.post("/api/estate/:estateId/files/from-url", uploadFileFromUrlHandler);
 app.get("/api/estate/:estateId/files/:id", getFileHandler);
 
+// Mount the Slack integration app
+app.route("/api/integrations/slack", slackApp);
+
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
   () => import("virtual:react-router/server-build"),
@@ -79,4 +84,4 @@ app.all("*", (c) => {
 
 export default app;
 
-export { IterateAgent };
+export { IterateAgent, SlackAgent };

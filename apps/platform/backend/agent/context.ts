@@ -160,7 +160,7 @@ export type ContextItem = RequireAtLeastOne<{
   tools: ToolSpec[];
   mcpServers: MCPServerInput[];
 }> & {
-  slug: string;
+  id: string;
   description?: string;
 };
 
@@ -438,7 +438,7 @@ function parseHm(hhmm: string): number {
 
 /**
  * Helper function to create context rules from files matching a glob pattern.
- * Each file becomes a context rule with slug derived from filename and prompt from file content.
+ * Each file becomes a context rule with id derived from filename and prompt from file content.
  */
 export function contextRulesFromFiles(pattern: string, overrides: Partial<ContextRule> = {}) {
   try {
@@ -452,7 +452,7 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
       // Get relative path from config directory and remove .md extension
       return defineRule({
-        slug: filePath.replace(/\.md$/, ""),
+        id: filePath.replace(/\.md$/, ""),
         prompt: fileContent,
         ...overrides,
       });

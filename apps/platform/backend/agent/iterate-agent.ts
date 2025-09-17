@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
 import { z } from "zod/v4";
 
 // Parent directory imports
-import type { CloudflareEnv } from "../../env.ts";
+import { env as _env, type CloudflareEnv } from "../../env.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
@@ -35,6 +36,8 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
+import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
+import { defaultContextRules } from "./default-context-rules.ts";
 // import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -201,7 +204,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const posthogClient = this.getPosthogClient();
+    const _posthogClient = this.getPosthogClient();
 
     const baseDeps: AgentCoreDeps = {
       storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
@@ -234,24 +237,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         });
       },
 
-      toolSpecsToImplementations: async (_specs: ToolSpec[]) => {
-        return [];
-        // const cacheKey = `toolSpecsToImplementations-${createHash("md5").update(JSON.stringify(specs)).digest("hex")}`;
-        // return this.#swrGet(
-        //   cacheKey,
-        //   async () =>
-        //     await toolSpecsToImplementations({
-        //       toolSpecs: specs,
-        //       // todo: move toolSpecsToImplementations to just be an instance method on this class
-        //       // cast is silly - env is protected on this class.
-        //       theDO: this as typeof this & { env: CloudflareEnv },
-        //       agentCallableOpts: {
-        //         workerName: "platform" as Branded<"WorkerName">,
-        //         durableObjectClassName: this.constructor.name as Branded<"DurableObjectClassName">,
-        //         durableObjectId: this.ctx.id.toString() as Branded<"DurableObjectId">,
-        //       },
-        //     }),
-        // );
+      toolSpecsToImplementations: async (specs: ToolSpec[]) => {
+        const cacheKey = `toolSpecsToImplementations-${createHash("md5").update(JSON.stringify(specs)).digest("hex")}`;
+        return this.#swrGet(
+          cacheKey,
+          async () =>
+            await toolSpecsToImplementations({
+              toolSpecs: specs,
+              // todo: move toolSpecsToImplementations to just be an instance method on this class
+              // cast is silly - env is protected on this class.
+              theDO: this as typeof this & { env: CloudflareEnv },
+            }),
+        );
       },
 
       onLLMStreamResponseStreamingChunk: (chunk: any) => {
@@ -272,7 +269,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
       // TODO: somebody who understands this more than me needs to fix this type
       // @ts-expect-error
-      uploadFile: async (data: {
+      uploadFile: async (_data: {
         ctx: ExecutionContext;
         content: ReadableStream;
         filename: string;
@@ -436,7 +433,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     // Rehydrate MCP connections after DO restart
     // This will reconnect any previously connected MCP servers
-    const reducedState = this.getReducedState();
+    const _reducedState = this.getReducedState();
 
     // const mcpConnectRequestEvents = rehydrateMCPConnections(
     //   Object.values(reducedState.mcpConnections || {}),
@@ -462,7 +459,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    return [];
+    return await defaultContextRules();
     // Fetch context rules from the platform
     // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
     //   trpcCallableBuilder.platform.agents.listContextRules.build(),

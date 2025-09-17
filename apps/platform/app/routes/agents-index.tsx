@@ -1,7 +1,13 @@
 import { Link } from "react-router";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../components/ui/card.tsx";
 
 export default function AgentsIndexPage() {
   // Example agent instances - in a real app, this would come from your API
@@ -12,7 +18,7 @@ export default function AgentsIndexPage() {
       description: "A test agent instance for development",
     },
     {
-      agentClassName: "IterateAgent", 
+      agentClassName: "IterateAgent",
       durableObjectName: "demo-agent",
       description: "Demo agent for showcasing functionality",
     },
@@ -35,20 +41,14 @@ export default function AgentsIndexPage() {
             {exampleAgents.map((agent) => (
               <Card key={`${agent.agentClassName}-${agent.durableObjectName}`}>
                 <CardHeader>
-                  <CardTitle className="text-lg">
-                    {agent.durableObjectName}
-                  </CardTitle>
+                  <CardTitle className="text-lg">{agent.durableObjectName}</CardTitle>
                   <CardDescription>
                     {agent.agentClassName} • {agent.description}
                   </CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <Link 
-                    to={`/agents/${agent.agentClassName}/${agent.durableObjectName}`}
-                  >
-                    <Button className="w-full">
-                      View Agent
-                    </Button>
+                  <Link to={`/agents/${agent.agentClassName}/${agent.durableObjectName}`}>
+                    <Button className="w-full">View Agent</Button>
                   </Link>
                 </CardContent>
               </Card>

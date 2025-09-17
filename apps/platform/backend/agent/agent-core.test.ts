@@ -2590,7 +2590,7 @@ describe("AgentCore ephemeralPromptFragments", () => {
 
   it("should reset ephemeralPromptFragments at the start of each reducer run", async () => {
     const contextItem: ContextItem = {
-      slug: "test-context",
+      id: "test-context",
       prompt: f("test", "This is a test prompt"),
       mcpServers: [],
     };
@@ -2645,13 +2645,13 @@ describe("AgentCore ephemeralPromptFragments", () => {
       // Set up context items that should be rendered
       const contextItems: ContextItem[] = [
         {
-          slug: "test-context",
+          id: "test-context",
           prompt: f("context", "This is important ephemeral context data"),
           description: "Test context item",
           mcpServers: [],
         },
         {
-          slug: "another-context",
+          id: "another-context",
           prompt: f("rule", "Another piece of context information"),
           description: "Another test context",
           mcpServers: [],
@@ -2722,25 +2722,25 @@ describe("AgentCore ephemeralPromptFragments", () => {
     // Set up context items including some that will render to empty strings
     const contextItems: ContextItem[] = [
       {
-        slug: "empty-context",
+        id: "empty-context",
         prompt: f("empty", ""), // This will render to empty
         description: "Empty context item",
         mcpServers: [],
       },
       {
-        slug: "whitespace-context",
+        id: "whitespace-context",
         prompt: f("whitespace", "   \n\t   "), // This will render to whitespace only
         description: "Whitespace context item",
         mcpServers: [],
       },
       {
-        slug: "null-context",
+        id: "null-context",
         prompt: null as any, // This should be filtered out
         description: "Null context item",
         mcpServers: [],
       },
       {
-        slug: "valid-context",
+        id: "valid-context",
         prompt: f("valid", "This is valid context"),
         description: "Valid context item",
         mcpServers: [],

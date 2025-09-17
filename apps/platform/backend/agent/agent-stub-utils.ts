@@ -1,13 +1,18 @@
-import { getAgentByName, type Agent } from "agents";
-import type { CloudflareEnv } from "../../env.ts";
+import { getAgentByName, type Agent as _Agent } from "agents";
+import { env } from "../../env.ts";
 
 export async function getAgentStub(params: {
-  env: CloudflareEnv;
   agentInstanceName: string;
-  agentClassName: "IterateAgent"; //| "SlackAgent";
+  agentClassName: "IterateAgent" | "SlackAgent";
   reason: string;
 }) {
-  // TODO bring back slack agent
-  // TODO bring back persistence of agent instances
-  return await getAgentByName(params.env.ITERATE_AGENT, params.agentInstanceName);
+  console.log(
+    `[getAgentStub] Getting ${params.agentClassName} agent ${params.agentInstanceName}. Reason: ${params.reason}`,
+  );
+  if (params.agentClassName === "SlackAgent") {
+    return await getAgentByName(env.SLACK_AGENT, params.agentInstanceName);
+  } else if (params.agentClassName === "IterateAgent") {
+    return await getAgentByName(env.ITERATE_AGENT, params.agentInstanceName);
+  }
+  throw new Error(`Unknown agent class name: ${params.agentClassName}`);
 }
