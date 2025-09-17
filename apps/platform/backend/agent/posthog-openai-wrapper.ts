@@ -1,6 +1,6 @@
 import type OpenAI from "openai";
 import { match } from "ts-pattern";
-import { SELF_AGENT_DISTINCT_ID, type PosthogCloudflare } from "./posthog-cloudflare.ts";
+import { SELF_AGENT_DISTINCT_ID, type PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 
 // Global trace storage for conversation continuity
 const _traceStorage = new Map<

@@ -12,7 +12,11 @@ export const getAuth = (db: DB) =>
     }),
     socialProviders: {
       google: {
-        scopes: ["https://www.googleapis.com/auth/userinfo.email", "https://www.googleapis.com/auth/userinfo.profile", "openid"],
+        scopes: [
+          "https://www.googleapis.com/auth/userinfo.email",
+          "https://www.googleapis.com/auth/userinfo.profile",
+          "openid",
+        ],
         clientId: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
       },

@@ -1,8 +1,8 @@
 import { initLogger } from "braintrust/browser";
 import { OpenAI } from "openai";
 import invariant from "tiny-invariant";
+import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { braintrustOpenAIWrapper } from "./braintrust-wrapper.ts";
-import { PosthogCloudflare } from "./posthog-cloudflare.ts";
 import { posthogOpenAIWrapper } from "./posthog-openai-wrapper.ts";
 
 // need to keep an active reference to the logger...

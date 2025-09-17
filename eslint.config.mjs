@@ -127,7 +127,6 @@ export default defineConfig([
       // A11y rules (mapping from biome a11y rules)
       "jsx-a11y/click-events-have-key-events": "off",
       "jsx-a11y/no-noninteractive-element-to-interactive-role": "off",
-
     },
   },
   // Override for test files (mapping from biome overrides)
