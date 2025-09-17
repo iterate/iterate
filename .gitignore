@@ -1,10 +1,10 @@
 .DS_Store
-/node_modules/
+node_modules
 *.tsbuildinfo
 
 # React Router
-/.react-router/
-/build/
+.react-router
+build
 
 # Cloudflare
 .mf
