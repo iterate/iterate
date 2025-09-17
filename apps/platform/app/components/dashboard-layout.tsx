@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router";
 import {
   Home as HomeIcon,
@@ -9,8 +10,12 @@ import {
   LogOut,
   User,
   CreditCard,
+  Building2,
+  Check,
 } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
+import { trpcClient } from "../lib/trpc-client.ts";
+import { getSelectedEstateId, setSelectedEstateId } from "../lib/estate-cookie.ts";
 
 import {
   Sidebar,
@@ -55,6 +60,100 @@ const navigation = [
     ],
   },
 ];
+
+interface Estate {
+  id: string;
+  name: string;
+  organizationName: string;
+  organizationId: string;
+}
+
+function EstateSwitcher() {
+  const [estates, setEstates] = useState<Estate[]>([]);
+  const [selectedEstateId, setSelectedEstateIdState] = useState<string | null>(null);
+  const [currentEstate, setCurrentEstate] = useState<Estate | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    const loadEstates = async () => {
+      try {
+        const estatesList = await trpcClient.estates.list.query();
+        setEstates(estatesList);
+
+        // Get selected estate from cookie or use first estate as default
+        const cookieEstateId = getSelectedEstateId();
+        const defaultEstateId = cookieEstateId || estatesList[0]?.id;
+
+        if (defaultEstateId) {
+          setSelectedEstateIdState(defaultEstateId);
+          const estate = estatesList.find((e) => e.id === defaultEstateId);
+          setCurrentEstate(estate || estatesList[0] || null);
+
+          // Save to cookie if not already set
+          if (!cookieEstateId && estatesList[0]) {
+            setSelectedEstateId(estatesList[0].id);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load estates:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadEstates();
+  }, []);
+
+  const handleEstateSwitch = (estate: Estate) => {
+    setSelectedEstateIdState(estate.id);
+    setCurrentEstate(estate);
+    setSelectedEstateId(estate.id);
+  };
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
+        <Building2 className="size-4" />
+        <span>Loading...</span>
+      </div>
+    );
+  }
+
+  if (!currentEstate) {
+    return null;
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" className="w-full justify-start gap-2 px-2 py-1.5 h-auto mb-2">
+          <Building2 className="size-4 text-muted-foreground" />
+          <div className="flex-1 text-left">
+            <div className="font-medium text-sm">{currentEstate.name}</div>
+          </div>
+          <ChevronDown className="size-4 text-muted-foreground" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-56" side="top" align="start">
+        <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {estates.map((estate) => (
+          <DropdownMenuItem
+            key={estate.id}
+            onClick={() => handleEstateSwitch(estate)}
+            className="flex items-center justify-between"
+          >
+            <div className="flex items-center gap-2">
+              <Building2 className="size-4" />
+              <div className="font-medium">{estate.name}</div>
+            </div>
+            {selectedEstateId === estate.id && <Check className="size-4" />}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
 
 function UserSwitcher() {
   const handleLogout = async () => {
@@ -173,6 +272,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <div className="size-2 rounded-full bg-green-500"></div>
               <span className="text-sm text-muted-foreground">Connected</span>
             </div>
+            <EstateSwitcher />
             <UserSwitcher />
           </SidebarFooter>
         </Sidebar>
