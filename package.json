@@ -8,6 +8,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
+    "typecheck": "pnpm -r --parallel typecheck",
     "test": "pnpm -r --parallel test",
     "test:watch": "pnpm -r --parallel test:watch",
     "docker:up": "docker compose up -d postgres",
