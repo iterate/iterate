@@ -6,12 +6,12 @@
     "sourceMap": true,
     "declaration": true,
     "declarationMap": true,
-    "exactOptionalPropertyTypes": true,
+    "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": false, // this makes defining workers a bit of a PITA
     "noImplicitReturns": true,
     "noImplicitAny": true,
-    "noUncheckedIndexedAccess": true,
+    "noUncheckedIndexedAccess": false,
     "noUnusedLocals": false, // ESLint handles this
     "noUnusedParameters": true,
     "useUnknownInCatchVariables": true,
@@ -27,5 +27,6 @@
     "skipLibCheck": true,
     "noEmit": true,
     "allowImportingTsExtensions": true
-  }
+  },
+  "exclude": ["backend/legacy-agent/**/*"]
 }

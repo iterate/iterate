@@ -12,6 +12,8 @@ import { getAuth, type Auth, type AuthSession } from "../backend/auth/auth.ts";
 import { appRouter } from "../backend/trpc/root.ts";
 import { createContext } from "../backend/trpc/context.ts";
 import { getDb, type DB } from "../backend/db/client.ts";
+import { IterateAgent } from "../backend/agent/iterate-agent.ts";
+
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -81,3 +83,5 @@ app.all("*", (c) => {
 });
 
 export default app;
+
+export { IterateAgent };

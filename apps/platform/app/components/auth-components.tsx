@@ -12,10 +12,9 @@ export function LoginProviders() {
         callbackURL: "/", // Redirect to home after login
       });
 
-      if(result.error){
+      if (result.error) {
         toast.error("Failed to sign in with Google");
       }
-
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }

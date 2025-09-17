@@ -1,10 +1,20 @@
 import { Link, ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { Button } from "../components/ui/button.tsx";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  CardDescription,
+} from "../components/ui/card.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../components/ui/collapsible.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../components/ui/collapsible.tsx";
 import { trpc } from "../lib/trpc.ts";
 import type { Route } from "./+types/integrations";
 

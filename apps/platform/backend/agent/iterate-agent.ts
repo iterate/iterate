@@ -1,0 +1,843 @@
+import { Agent as CloudflareAgent } from "agents";
+import { formatDistanceToNow } from "date-fns";
+import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
+import { z } from "zod/v4";
+
+// Parent directory imports
+import type { CloudflareEnv } from "../../env.ts";
+import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
+import type { JSONSerializable } from "../utils/type-helpers.ts";
+
+// Local imports
+import {
+  AgentCore,
+  type AgentCoreDeps,
+  type AgentCoreSlice,
+  type MergedDepsForSlices,
+  type MergedEventForSlices,
+  type MergedEventInputForSlices,
+  type MergedStateForSlices,
+} from "./agent-core.ts";
+import { AgentCoreEvent, CORE_INITIAL_REDUCED_STATE } from "./agent-core-schemas.ts";
+import { evaluateContextRuleMatchers, type ContextItem, type ContextRule } from "./context.ts";
+import type { DOToolDefinitions } from "./do-tools.ts";
+// import {
+//   rehydrateMCPConnections,
+//   runMCPEventHooks,
+//   handleMCPConnectRequest,
+// } from "./mcp-event-hooks.ts";
+// import { mcpSlice } from "./mcp-slice.ts";
+// import {
+//   MCPConnectRequestEventInput,
+//   MCPAddMcpServerEventInput,
+// } from "./mcp-slice.ts";
+import { iterateAgentTools } from "./iterate-agent-tools.ts";
+import { openAIProvider } from "./openai-client.ts";
+import { renderPromptFragment } from "./prompt-fragments.ts";
+import type { ToolSpec } from "./tool-schemas.ts";
+// import type { MCPServer } from "./tool-schemas.ts";
+
+// Commented imports (preserved for reference)
+// import { getAgentDebugUri } from "./posthog-utils.ts";
+// import { uploadFile } from "./files/hono-handlers.ts";
+// import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
+// import { PlatformPosthog } from "./posthog.ts";
+// import { trpcCallableBuilder } from "../legacy-agent/trpc/callable-builders.ts";
+
+// -----------------------------------------------------------------------------
+// Core slice definition – *always* included for any IterateAgent variant.
+// Additional agent-specific slices should extend this array via class inheritance.
+// -----------------------------------------------------------------------------
+
+// export const CORE_AGENT_SLICES = [mcpSlice] as const;
+export const CORE_AGENT_SLICES = [] as const;
+
+/**
+ * Helper type representing the core slices bundled with every IterateAgent.
+ */
+export type CoreAgentSlices = typeof CORE_AGENT_SLICES;
+
+/**
+ * Utility type for merging two readonly slice arrays while preserving the tuple
+ * element types.
+ */
+export type MergeSlices<Base extends readonly unknown[], Extra extends readonly unknown[]> = [
+  ...Base,
+  ...Extra,
+];
+
+// -----------------------------------------------------------------------------
+// Reminder metadata & persisted agent state ------------------------------------
+// -----------------------------------------------------------------------------
+
+const ReminderMetadata = z.object({
+  // Our own generated ID that we control and use throughout the API
+  iterateReminderId: z.string(),
+  // The CloudflareAgent SDK's internal task ID - needed for cancellation but not exposed in API
+  agentSDKScheduledTaskId: z
+    .string()
+    .describe("Internal CloudflareAgent scheduler task ID - required for cancelSchedule()"),
+  message: z.string(),
+  createdAt: z.string().datetime(),
+  isRecurring: z.boolean(),
+  scheduleDetail: z
+    .string()
+    .describe("Human-readable schedule info, e.g., cron string or one-time execution time."),
+});
+
+type ReminderMetadata = z.infer<typeof ReminderMetadata>;
+
+export const IterateAgentState = z.object({
+  events: z.array(AgentCoreEvent),
+  // Using z.any() since CoreReducedState contains OpenAI types that aren't Zod schemas
+  reminders: z.record(z.string(), ReminderMetadata).default({}).optional(),
+  braintrustParentSpanExportedId: z.string().optional(),
+  recordRawRequest: z.boolean().default(false),
+});
+
+export type IterateAgentState = z.infer<typeof IterateAgentState>;
+
+type ToolsInterface = typeof iterateAgentTools.$infer.interface;
+type Inputs = typeof iterateAgentTools.$infer.inputTypes;
+
+// -----------------------------------------------------------------------------
+// Generic IterateAgentBase -----------------------------------------------------
+// -----------------------------------------------------------------------------
+
+/**
+ * Generic base class for Iterate Agents.
+ *
+ * The second generic parameter `Slices` allows subclasses to extend the built-in
+ * core slices with their own domain-specific slices while guaranteeing that the
+ * core ones are always present.
+ */
+export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSlices>
+  extends CloudflareAgent<CloudflareEnv, IterateAgentState>
+  implements ToolsInterface
+{
+  // Runtime slice list – inferred from the generic parameter.
+  protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
+
+  initialState = {
+    events: [],
+    reducedState: CORE_INITIAL_REDUCED_STATE,
+    reminders: {},
+    recordRawRequest: true,
+  };
+
+  #swrCacheMinTimeToStale = 1000 * 60;
+  /** don't use directly, use #swrGet instead, which makes sure background work prevents the process from dying until it's done */
+  #rawSwrCache = createStaleWhileRevalidateCache({
+    minTimeToStale: this.#swrCacheMinTimeToStale,
+    storage: {
+      // todo: use this.sql`insert into swr_cache ...` instead. remove from state
+      getItem: (key) => {
+        const [result] = this.sql<string>`select json from swr_cache where key = ${key}`;
+        try {
+          return typeof result === "string" ? JSON.parse(result) : undefined;
+        } catch (e) {
+          console.warn(`Failed to parse JSON for key ${key}: ${result}: ${String(e)}`);
+          return undefined;
+        }
+      },
+      setItem: (key, value) => {
+        this.sql`
+          insert into swr_cache (key, json)
+          values (${key}, ${JSON.stringify(value)})
+          on conflict (key)
+          do update set json = excluded.json
+        `;
+      },
+      removeItem: (key) => {
+        this.sql`delete from swr_cache where key = ${key}`;
+      },
+    },
+  });
+  async #swrGet<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const retrieved = await this.#rawSwrCache.retrieve(key);
+    if (retrieved.cachedAge > this.#swrCacheMinTimeToStale) {
+      this.ctx.waitUntil(this.#rawSwrCache(key, fn)); // make sure process doesn't die until this is retrieved
+    }
+    return this.#rawSwrCache(key, fn).then((r) => r.value);
+  }
+
+  onStateUpdate(state: IterateAgentState, source: "server") {
+    super.onStateUpdate(state, source);
+    this.agentCore.recordRawRequest = state.recordRawRequest;
+  }
+
+  constructor(ctx: DurableObjectState, env: CloudflareEnv) {
+    super(ctx, env);
+
+    this.agentCore = this.initAgentCore();
+    this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+  }
+
+  private posthog: PosthogCloudflare | undefined = undefined;
+  private getPosthogClient() {
+    if (!this.posthog) {
+      this.posthog = new PosthogCloudflare(this.ctx, { estate: "some estate", environment: "dev" });
+    }
+    return this.posthog;
+  }
+
+  /**
+   * Get all slices for this agent. This method must be overridden by subclasses
+   * to return the correct statically-typed slice array.
+   */
+  protected getSlices(): Slices {
+    // Default implementation returns just the core slices.
+    // Subclasses MUST override this to return their full slice array.
+    return CORE_AGENT_SLICES as unknown as Slices;
+  }
+
+  toolDefinitions(): DOToolDefinitions<{}> {
+    return iterateAgentTools;
+  }
+
+  /**
+   * Initialize the AgentCore with dependencies. This method can be overridden
+   * by subclasses to provide additional dependencies.
+   */
+  protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
+    const slices = this.getSlices();
+    const posthogClient = this.getPosthogClient();
+
+    const baseDeps: AgentCoreDeps = {
+      storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
+        this.setState({
+          events: [...events],
+          reminders: this.state.reminders ?? {},
+          braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
+          recordRawRequest: this.state.recordRawRequest,
+        });
+      },
+
+      background: (fn: () => Promise<void>) => {
+        this.ctx.waitUntil(fn());
+      },
+
+      getOpenAIClient: async () => {
+        return await openAIProvider({
+          posthog: {
+            traceId: this.name,
+          },
+          env: {
+            BRAINTRUST_API_KEY: this.env.BRAINTRUST_API_KEY,
+            OPENAI_API_KEY: this.env.OPENAI_API_KEY,
+            POSTHOG_PUBLIC_KEY: this.env.POSTHOG_PUBLIC_KEY,
+          },
+          projectName: `iterate-platform`,
+          ...(this.state.braintrustParentSpanExportedId && {
+            braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
+          }),
+        });
+      },
+
+      toolSpecsToImplementations: async (_specs: ToolSpec[]) => {
+        return [];
+        // const cacheKey = `toolSpecsToImplementations-${createHash("md5").update(JSON.stringify(specs)).digest("hex")}`;
+        // return this.#swrGet(
+        //   cacheKey,
+        //   async () =>
+        //     await toolSpecsToImplementations({
+        //       toolSpecs: specs,
+        //       // todo: move toolSpecsToImplementations to just be an instance method on this class
+        //       // cast is silly - env is protected on this class.
+        //       theDO: this as typeof this & { env: CloudflareEnv },
+        //       agentCallableOpts: {
+        //         workerName: "platform" as Branded<"WorkerName">,
+        //         durableObjectClassName: this.constructor.name as Branded<"DurableObjectClassName">,
+        //         durableObjectId: this.ctx.id.toString() as Branded<"DurableObjectId">,
+        //       },
+        //     }),
+        // );
+      },
+
+      onLLMStreamResponseStreamingChunk: (chunk: any) => {
+        // Broadcast OpenAI streaming chunk to all connected clients using SDK's broadcast
+        try {
+          this.broadcast(
+            JSON.stringify({
+              type: "openai_response_chunk",
+              content: chunk,
+              timestamp: Date.now(),
+            }),
+          );
+        } catch (error) {
+          // During HMR, broadcast might fail - log but don't crash
+          console.warn("Failed to broadcast OpenAI chunk during HMR:", error);
+        }
+      },
+
+      // TODO: somebody who understands this more than me needs to fix this type
+      // @ts-expect-error
+      uploadFile: async (data: {
+        ctx: ExecutionContext;
+        content: ReadableStream;
+        filename: string;
+        mimeType?: string;
+        contentLength: number;
+      }) => {
+        throw new Error(
+          "uploadFile is not implemented yet - it's only relevant for openai native image generation anyway",
+        );
+        // // Cloudflare needs to know the content length in advance, so we need to create a fixed-length stream
+        // const fileRecord = await uploadFile({
+        //   stream: data.content,
+        //   contentLength: data.contentLength,
+        //   filename: data.filename,
+        //   contentType: data.mimeType || "application/octet-stream",
+        // });
+        // return {
+        //   fileId: fileRecord.iterateId,
+        //   openAIFileId: fileRecord.openAIFileId,
+        //   originalFilename: fileRecord.filename,
+        //   size: fileRecord.fileSize,
+        //   mimeType: fileRecord.mimeType,
+        // };
+      },
+
+      turnFileIdIntoPublicURL: (fileId: string) => {
+        return `${this.env.VITE_PUBLIC_URL}/api/uploads/${fileId}`;
+      },
+
+      getFinalRedirectUrl: async <S>(payload: {
+        durableObjectInstanceName: string;
+        reducedState: S;
+      }) => {
+        return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
+      },
+
+      // Wrap the default console so every call is also sent to connected websocket clients
+      console: (() => {
+        // we're going to jettison this soon
+        return console;
+      })(),
+
+      // onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
+      //   const event = _event as MergedEventForSlices<Slices>;
+      //   const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
+      //   // Handle MCP side effects for relevant events
+      //   const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;
+      //   type MCPRelevantEvent = (typeof mcpRelevantEvents)[number];
+
+      //   if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
+      //     const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
+      //     this.ctx.waitUntil(
+      //       (async () => {
+      //         if (reducedState.mcpConnections) {
+      //           const eventsToAdd = await runMCPEventHooks({
+      //             event: mcpEvent,
+      //             reducedState,
+      //             agentDurableObjectId: this.ctx.id.toString(),
+      //             agentDurableObjectName: this.name,
+      //             getFinalRedirectUrl: deps.getFinalRedirectUrl!,
+      //           });
+
+      //           for (const eventToAdd of eventsToAdd) {
+      //             await this.agentCore.addEvent(eventToAdd);
+      //           }
+      //         }
+      //       })(),
+      //     );
+      //   }
+
+      //   // this.ctx.waitUntil(
+      //     /**
+      //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
+      //      *
+      //      * Unfortunately we hit an issue with the CloudFlare workerd process behaving in an unexpected manner, where fetch() calls would never resolve
+      //      * and so both posthog and braintrust calls would break.
+      //      *
+      //      * We suspect this is related to the way that durable objects handle their own liveliness when handing off to a worker via RPC or Event Queues,
+      //      * causing async work like promises and timers to never process.
+      //      *
+      //      * For more details read this thread:
+      //      * https://iterate-com.slack.com/archives/C06LU7PGK0S/p1754985703369859
+      //      */
+      //     // processPosthogAgentCoreEvent(posthogClient, {
+      //     //   event: `AGENT_CORE_EVENT_ADDED`,
+      //     //   data: {
+      //     //     event,
+      //     //     reducedState,
+      //     //     className: this.constructor.name,
+      //     //     // TODO we don't have the agent instance name here - in the future we will.
+      //     //     // But for now I'm just using the ID to identify the agent instance.
+      //     //     // I think Rahul has some witchcraft in the works to get us the name
+      //     //     agentInstanceName: this.name,
+      //     //     agentDebugURL: getAgentDebugUri({
+      //     //       durableObjectName: this.name,
+      //     //       agentClassName: this.constructor.name,
+      //     //     }),
+      //     //   },
+      //     //   source: {
+      //     //     service: "platform",
+      //     //   },
+      //     // }),
+      //   // );
+      // },
+
+      collectContextItems: async (): Promise<ContextItem[]> => {
+        // Collect context rules - this may include durable object class specific rules (e.g. from SlackAgent)
+        // as well as what's coming from platform.agents.listContextRules
+        const contextRules = await this.#swrGet("contextRules", () => this.getContextRules());
+        return Promise.all(
+          contextRules.map(async (rule) => ({
+            rule,
+            shouldInclude: await evaluateContextRuleMatchers({
+              contextRule: rule,
+              matchAgainst: {
+                agentCoreState: this.agentCore.state,
+                durableObjectClassName: this.constructor.name,
+              },
+            }),
+          })),
+        ).then((results) =>
+          results.filter(({ shouldInclude }) => shouldInclude).map(({ rule }) => rule),
+        );
+      },
+    };
+
+    const extraDeps = this.getExtraDependencies(baseDeps);
+    const deps = { ...baseDeps, ...extraDeps } as MergedDepsForSlices<Slices>;
+
+    return new AgentCore({
+      deps: deps,
+      slices: slices,
+    });
+  }
+
+  /**
+   * Override this method in subclasses to provide additional dependencies
+   * for the AgentCore.
+   *
+   * We pass in the original deps, so that we can hook into existing dependencies
+   * and add additional functionality but maintain the old logic.
+   */
+  protected getExtraDependencies(_deps: AgentCoreDeps): Partial<MergedDepsForSlices<Slices>> {
+    return {};
+  }
+
+  /**
+   * Called after an agent object in constructed and the state has been loaded from the DO store.
+   */
+  async onStart(): Promise<void> {
+    // Call parent onStart to ensure persistence completes
+    await super.onStart();
+
+    await this.agentCore.initializeWithEvents(this.state.events || []);
+
+    // Sync the reduced state after loading events
+    this.setState({
+      ...this.state,
+      reminders: this.state.reminders ?? {},
+    });
+
+    // Rehydrate MCP connections after DO restart
+    // This will reconnect any previously connected MCP servers
+    const reducedState = this.getReducedState();
+
+    // const mcpConnectRequestEvents = rehydrateMCPConnections(
+    //   Object.values(reducedState.mcpConnections || {}),
+    // );
+
+    // Note! If we want to make things a little more deterministic and easier to reason about, we could actually perform the MCP connection here, instead of
+    // just adding the MCP:CONNECT_REQUEST events, which cause the connection to happen in the background. As it is, if we get rehydrated by a webhook, we can
+    // process the incoming message while the MCP connection is still happening in the background. If there are bugs with that, we might want to make the tradeoff
+    // of slowing down onStart by performing the MCP connection here.
+
+    // The MCP:CONNECT_REQUEST events will automatically clear the tools
+    // for each connection before attempting to reconnect
+    // await this.agentCore.addEvents(mcpConnectRequestEvents);
+  }
+
+  getEvents(): ReadonlyArray<MergedEventForSlices<Slices>> {
+    return this.agentCore.events;
+  }
+
+  /**
+   * Get default context rules that are always available to this agent.
+   * Can be overridden by subclasses to provide agent-specific rules.
+   * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
+   */
+  protected async getContextRules(): Promise<ContextRule[]> {
+    return [];
+    // Fetch context rules from the platform
+    // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
+    //   trpcCallableBuilder.platform.agents.listContextRules.build(),
+    //   {},
+    // );
+
+    // // Type guard to ensure platformRules is an array
+    // if (!Array.isArray(rulesFromSkinnyRepo)) {
+    //   console.warn("Expected platform context rules to be an array, got:", rulesFromSkinnyRepo);
+    //   return [];
+    // }
+
+    // return rulesFromSkinnyRepo;
+  }
+
+  async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
+    return this.agentCore.addEvent(event);
+  }
+
+  async addEvents(events: MergedEventInputForSlices<Slices>[]): Promise<{ eventIndex: number }[]> {
+    return this.agentCore.addEvents(events);
+  }
+
+  getReducedState(): Readonly<
+    MergedStateForSlices<Slices> & MergedStateForSlices<CoreAgentSlices>
+  > {
+    return this.agentCore.state;
+  }
+
+  /*
+   * Get the reduced state at a specific event index
+   */
+  async getReducedStateAtEventIndex(
+    eventIndex: number,
+  ): Promise<Readonly<MergedStateForSlices<Slices>>> {
+    return this.agentCore.getReducedStateAtEventIndex(eventIndex);
+  }
+
+  async getState() {
+    return { ...this.state, reducedState: this.agentCore.state };
+  }
+
+  // Injects a function tool call from the outside into the agent
+  async injectToolCall({
+    toolName,
+    args,
+    triggerLLMRequest = true,
+  }: {
+    toolName: string;
+    args: JSONSerializable;
+    triggerLLMRequest?: boolean;
+  }) {
+    // Create a mock function call object that matches OpenAI's format
+    const functionCall = {
+      type: "function_call" as const,
+      call_id: `injected-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: toolName,
+      arguments: JSON.stringify(args),
+      status: "completed" as const,
+    };
+
+    // Use the agentCore's existing tryInvokeLocalFunctionTool method
+    const result = await this.agentCore.tryInvokeLocalFunctionTool(functionCall);
+
+    return this.addEvent({
+      type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+      data: { call: functionCall, result: result },
+      triggerLLMRequest,
+    });
+  }
+  /**
+   * Generic handler for scheduled reminders. This method will be called by the scheduler.
+   */
+  async handleReminder(data: { iterateReminderId: string }) {
+    console.log(`Executing reminder: ${data.iterateReminderId}`);
+
+    const reminder = this.state.reminders?.[data.iterateReminderId];
+    if (!reminder) {
+      console.error(`Reminder with ID ${data.iterateReminderId} not found in state.`);
+      return;
+    }
+
+    const timeAgo = formatDistanceToNow(new Date(reminder.createdAt), { addSuffix: true });
+
+    const message = renderPromptFragment([
+      reminder.message,
+      {
+        tag: "context",
+        content: [
+          `This is a ${reminder.isRecurring ? "recurring " : ""}reminder you set for yourself ${timeAgo}.`,
+          reminder.isRecurring
+            ? `This is a recurring reminder. You can cancel it using the cancelReminder tool with id "${data.iterateReminderId}".`
+            : null,
+        ],
+      },
+    ]);
+
+    const events: MergedEventInputForSlices<Slices>[] = [];
+
+    // Check if the agent is paused and resume it if needed
+    // This ensures reminders can trigger LLM responses even if the agent was previously paused
+    if (this.agentCore.state.paused) {
+      events.push({
+        type: "CORE:RESUME_LLM_REQUESTS",
+        triggerLLMRequest: false,
+      });
+    }
+
+    // Add an event to record the scheduled task execution and trigger LLM response
+    events.push({
+      type: "CORE:LLM_INPUT_ITEM",
+      data: {
+        type: "message",
+        role: "developer",
+        content: [{ type: "input_text", text: message }],
+      },
+      triggerLLMRequest: true,
+    });
+    await this.addEvents(events);
+
+    if (!reminder.isRecurring) {
+      // One-time reminder, remove it from state after execution
+      const newReminders = { ...this.state.reminders };
+      delete newReminders[data.iterateReminderId];
+      this.setState({
+        ...this.state,
+        reminders: newReminders,
+      });
+    }
+
+    return {
+      success: true,
+      reminderId: data.iterateReminderId,
+      executedAt: new Date().toISOString(),
+    };
+  }
+
+  // set the braintrust parent span exported id into the state
+  async setBraintrustParentSpanExportedId(braintrustParentSpanExportedId: string | undefined) {
+    this.setState({
+      ...this.state,
+      braintrustParentSpanExportedId,
+    });
+  }
+
+  // get the braintrust parent span exported id from the state
+  async getBraintrustParentSpanExportedId() {
+    return this.state.braintrustParentSpanExportedId;
+  }
+
+  ping() {
+    return { message: "pong back at you!" };
+  }
+  async flexibleTestTool(input: Inputs["flexibleTestTool"]) {
+    switch (input.behaviour) {
+      case "slow-tool": {
+        const start = input.recordStartTime ? new Date().toISOString() : undefined;
+        await new Promise((resolve) => setTimeout(resolve, input.delay));
+        return { start, message: input.response, delayed: true, delayMs: input.delay };
+      }
+      case "raise-error":
+        throw new Error(input.error);
+      case "return-secret":
+        return { secret: input.secret, behaviour: "return-secret" };
+      default:
+        throw new Error("Unknown behaviour");
+    }
+  }
+
+  reverse(input: Inputs["reverse"]) {
+    return { reversed: input.message.split("").reverse().join("") };
+  }
+  doNothing() {
+    return {};
+  }
+  getAgentDebugURL() {
+    return { debugURL: `${this.env.VITE_PUBLIC_URL}/agents/${this.constructor.name}/${this.name}` };
+  }
+  async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
+    const { message, type, when } = input;
+
+    let scheduleTime: number | Date | string;
+    let scheduleDetail: string;
+    let isRecurring: boolean;
+
+    switch (type) {
+      case "numberOfSecondsFromNow": {
+        const seconds = Number(when);
+        if (!Number.isInteger(seconds) || seconds <= 0) {
+          throw new Error(
+            "For 'numberOfSecondsFromNow' type, 'when' must be a positive integer number of seconds",
+          );
+        }
+        scheduleTime = seconds;
+        scheduleDetail = `in ${seconds} seconds`;
+        isRecurring = false;
+        break;
+      }
+      case "atSpecificDateAndTime": {
+        try {
+          scheduleTime = new Date(when);
+          if (Number.isNaN(scheduleTime.getTime())) {
+            throw new Error("Invalid date");
+          }
+        } catch (_error) {
+          throw new Error(
+            "For 'atSpecificDateAndTime' type, 'when' must be a valid ISO 8601 date-time string",
+          );
+        }
+        scheduleDetail = `at ${when}`;
+        isRecurring = false;
+        break;
+      }
+      case "recurringCron": {
+        scheduleTime = when;
+        scheduleDetail = `with cron: ${when}`;
+        isRecurring = true;
+        break;
+      }
+      default:
+        throw new Error(`Invalid reminder type: ${type}`);
+    }
+
+    // Why we need two IDs:
+    // 1. iterateReminderId: We generate this ID to pass to the handler so it knows which reminder is executing
+    // 2. agentSDKScheduledTaskId: The CloudflareAgent generates this after scheduling - we need it for cancelSchedule()
+    // This dual-ID approach is necessary because the CloudflareAgent scheduler API doesn't let us:
+    //   - Provide our own task ID when scheduling
+    //   - Access the task data/metadata from within the handler
+    //   - Know which task is executing without passing data to the handler
+
+    // Generate our own reminder ID that we control
+    const iterateReminderId = `reminder-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    // Schedule the task, passing our ID so the handler knows which reminder to execute
+    const task = await this.schedule(scheduleTime, "handleReminder", {
+      iterateReminderId,
+    });
+
+    const reminder: ReminderMetadata = {
+      iterateReminderId,
+      agentSDKScheduledTaskId: task.id,
+      message,
+      createdAt: new Date().toISOString(),
+      isRecurring,
+      scheduleDetail,
+    };
+
+    // Store the reminder indexed by our reminder ID
+    this.setState({
+      ...this.state,
+      reminders: {
+        ...this.state.reminders,
+        [iterateReminderId]: reminder,
+      },
+    });
+
+    // Return the reminder without exposing the internal agentSDKScheduledTaskId
+    const { agentSDKScheduledTaskId: _, ...publicReminder } = reminder;
+    return publicReminder;
+  }
+
+  listMyReminders(_params: Inputs["listMyReminders"]) {
+    const scheduledTasks = this.getSchedules();
+    const scheduledTaskIds = new Set(scheduledTasks.map((t) => t.id));
+
+    const allReminders = Object.values(this.state.reminders ?? {});
+    const activeReminders = allReminders.filter((r) =>
+      scheduledTaskIds.has(r.agentSDKScheduledTaskId),
+    );
+
+    // Prune reminders from state that are no longer scheduled
+    const newRemindersState = Object.fromEntries(
+      activeReminders.map((r) => [r.iterateReminderId, r]),
+    );
+    this.setState({
+      ...this.state,
+      reminders: newRemindersState,
+    });
+
+    // Return reminders without exposing the internal agentSDKScheduledTaskId
+    const publicReminders = activeReminders.map(
+      ({ agentSDKScheduledTaskId, ...reminder }) => reminder,
+    );
+    return { reminders: publicReminders, count: publicReminders.length };
+  }
+
+  async cancelReminder(input: { iterateReminderId: string }) {
+    const { iterateReminderId } = input;
+    const reminder = this.state.reminders?.[iterateReminderId];
+    if (!reminder) {
+      return {
+        iterateReminderId,
+        cancelled: false,
+        message: "Reminder not found.",
+      };
+    }
+
+    const cancelled = await this.cancelSchedule(reminder.agentSDKScheduledTaskId);
+
+    if (this.state.reminders?.[iterateReminderId]) {
+      const newReminders = { ...this.state.reminders };
+      delete newReminders[iterateReminderId];
+      this.setState({
+        ...this.state,
+        reminders: newReminders,
+      });
+    }
+
+    return {
+      iterateReminderId,
+      cancelled,
+      message: cancelled
+        ? "Reminder successfully cancelled."
+        : "Reminder not found or already executed/cancelled.",
+    };
+  }
+
+  // async connectMCPServer(input: Inputs["connectMCPServer"]) {
+  //   const formattedServerUrl = new URL(input.serverUrl);
+  //   if (input.requiresQueryParamsAuth) {
+  //     const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
+  //     formattedServerUrl.search = searchParams.toString();
+  //   }
+  //   const mcpServer: MCPServer = {
+  //     serverUrl: formattedServerUrl.toString(),
+  //     mode: input.mode,
+  //     requiresAuth: input.requiresOAuth || false,
+  //     headers: input.requiresHeadersAuth || undefined,
+  //   };
+  //   const addServerEvent: MCPAddMcpServerEventInput = {
+  //     type: "MCP:ADD_MCP_SERVERS",
+  //     data: {
+  //       servers: [mcpServer],
+  //     },
+  //     metadata: {},
+  //     triggerLLMRequest: false,
+  //   };
+
+  //   const connectRequestEvent: MCPConnectRequestEventInput = {
+  //     type: "MCP:CONNECT_REQUEST",
+  //     data: {
+  //       ...mcpServer,
+  //       triggerLLMRequestOnEstablishedConnection: false,
+  //       userId: input.onBehalfOfIterateUserId,
+  //     },
+  //     metadata: {},
+  //     triggerLLMRequest: false,
+  //   };
+
+  //   const events = await handleMCPConnectRequest({
+  //     event: {
+  //       ...connectRequestEvent,
+  //       eventIndex: 0,
+  //       createdAt: new Date().toISOString(),
+  //     },
+  //     agentDurableObjectId: this.ctx.id.toString(),
+  //     agentDurableObjectName: this.name,
+  //     reducedState: this.getReducedState(),
+  //   });
+
+  //   if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+  //     return {
+  //       __addAgentCoreEvents: [addServerEvent, ...events],
+  //       success: false,
+  //       message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
+  //       addedMcpServer: mcpServer,
+  //     };
+  //   }
+
+  //   return {
+  //     __addAgentCoreEvents: [addServerEvent, ...events],
+  //     success: true,
+  //     message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
+  //     addedMcpServer: mcpServer,
+  //   };
+  // }
+}

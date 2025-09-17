@@ -107,7 +107,6 @@ function convertOpenAIResponseToBraintrustOutput(response: OpenAIResponse): Brai
     }));
 
     // Add assistant message with tool calls
-    // @ts-expect-error - content is optional
     messages.push({
       role: "assistant",
       content: undefined,
@@ -341,8 +340,6 @@ export function braintrustOpenAIWrapper(openai: OpenAI, braintrustParentSpanExpo
 
                 await logLLMRequestToBraintrust(
                   input,
-                  // @ts-expect-error - prop is a string
-
                   {
                     messages,
                     functionCalls,

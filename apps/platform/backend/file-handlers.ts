@@ -7,7 +7,7 @@ import type { CloudflareEnv } from "../env.ts";
 import type { Variables } from "../workers/app.ts";
 import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
-import { openAIProvider } from "./utils/openai-client.ts";
+import { openAIProvider } from "./agent/openai-client.ts";
 
 const env = baseEnv as CloudflareEnv;
 
@@ -127,6 +127,11 @@ export const uploadFileHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
   try {
+    const db = c.var.db;
+    if (!db) {
+      return c.json({ error: "Database unavailable" }, 500);
+    }
+
     const estateId = c.req.param("estateId");
     if (!estateId) {
       return c.json({ error: "estateId parameter is required" }, 400);
@@ -147,7 +152,7 @@ export const uploadFileHandler = async (
       filename,
       contentType,
       estateId,
-      db: c.var.db,
+      db,
     });
     return c.json(fileRecord);
   } catch (error) {
@@ -301,7 +306,12 @@ export const uploadFileFromUrlHandler = async (
   }
 
   try {
-    const fileRecord = await uploadFileFromUrl({ url, filename, estateId, db: c.var.db });
+    const db = c.var.db;
+    if (!db) {
+      return c.json({ error: "Database unavailable" }, 500);
+    }
+
+    const fileRecord = await uploadFileFromUrl({ url, filename, estateId, db });
     return c.json(fileRecord);
   } catch (error) {
     console.error("Upload from URL error:", error);
@@ -322,6 +332,9 @@ export const getFileHandler = async (
   const disposition = c.req.query("disposition") || "attachment";
 
   const db = c.var.db;
+  if (!db) {
+    return c.json({ error: "Database unavailable" }, 500);
+  }
 
   if (!estateId) {
     return c.json({ error: "estateId parameter is required" }, 400);
