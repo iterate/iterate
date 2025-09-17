@@ -1,573 +1,570 @@
-// @ts-nocheck
 import { describe, it, expect, vi } from "vitest";
 import z from "zod";
-import type { RuntimeJsonSchema } from "../../dispatcher.ts";
-import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
-import type { ToolSpec, LocalFunctionRuntimeTool } from "./tool-schemas.ts";
+import { toolSpecsToImplementations, sanitizeToolName } from "./tool-spec-to-runtime-tool.ts";
+import type { ToolSpec } from "./tool-schemas.ts";
 
-describe.skip("toolSpecsToImplementations", () => {
-  // Helper to create mocks
-  const createMocks = () => ({
-    runCallable: vi.fn().mockResolvedValue({ result: "success" }),
-    getRuntimeJsonSchemas: vi
-      .fn()
-      .mockImplementation(async (callables) => callables.map(() => null)),
-  });
-
-  // Helper to create environment
-  const createEnv = (mocks: ReturnType<typeof createMocks>) => ({
-    PLATFORM: {
-      runCallable: mocks.runCallable,
-      getRuntimeJsonSchemas: mocks.getRuntimeJsonSchemas,
-    },
-  });
-
-  const toolDefinitions = () => ({
-    ping: {
-      description: "Ping a durable object",
-      input: z.object({}),
-    },
-  });
+describe("toolSpecsToImplementations", () => {
+  // Mock DO with tool definitions
+  const createMockDO = (toolDefs = {}, methods = {}) => {
+    const mockDO: any = {
+      constructor: { name: "TestDO" },
+      toolDefinitions: () => toolDefs,
+      ...methods,
+    };
+    return mockDO;
+  };
 
   describe("tool conversion", () => {
-    it.each([
-      {
-        name: "OpenAI builtin tool - returned as-is",
-        spec: {
+    it("returns OpenAI builtin tools as-is", async () => {
+      const spec: ToolSpec = {
+        type: "openai_builtin",
+        openAITool: {
+          type: "file_search" as const,
+          vector_store_ids: ["test-store"],
+        },
+      };
+
+      const theDO = createMockDO();
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toEqual(spec.openAITool);
+    });
+
+    it("throws error for serialized_callable_tool", async () => {
+      const spec: ToolSpec = {
+        type: "serialized_callable_tool",
+        inputJSONSchema: null,
+        callable: {
+          type: "NOOP",
+          passThroughArgs: null,
+          $infer: { Input: {}, Output: {} },
+        },
+      };
+
+      const theDO = createMockDO();
+
+      await expect(async () => {
+        await toolSpecsToImplementations({
+          toolSpecs: [spec],
+          theDO,
+        });
+      }).rejects.toThrow("SerializedCallableToolSpec not implemented");
+    });
+
+    it("converts agent_durable_object_tool correctly", async () => {
+      const pingToolDef = {
+        description: "Ping a durable object",
+        input: z.object({ message: z.string() }),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "ping",
+        passThroughArgs: { contextId: "ctx-123" },
+      };
+
+      const mockPing = vi.fn().mockResolvedValue({ result: "pong" });
+      const theDO = createMockDO({ ping: pingToolDef }, { ping: mockPing });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      expect(results).toHaveLength(1);
+      const tool = results[0] as any; // Cast to any to access properties
+
+      expect(tool).toMatchObject({
+        type: "function",
+        name: "ping",
+        description: "Ping a durable object",
+        metadata: { source: "durable-object" },
+        strict: false,
+      });
+      expect(tool.parameters).toBeDefined();
+      expect(tool.execute).toBeDefined();
+      expect(typeof tool.execute).toBe("function");
+    });
+
+    it("uses overrideName when provided", async () => {
+      const pingToolDef = {
+        description: "Ping a durable object",
+        input: z.object({}),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "ping",
+        overrideName: "customPingName",
+      };
+
+      const mockPing = vi.fn();
+      const theDO = createMockDO({ ping: pingToolDef }, { ping: mockPing });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      expect((results[0] as any).name).toBe("customPingName");
+    });
+
+    it("uses overrideDescription when provided", async () => {
+      const pingToolDef = {
+        description: "Original description",
+        input: z.object({}),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "ping",
+        overrideDescription: "Custom description",
+      };
+
+      const mockPing = vi.fn();
+      const theDO = createMockDO({ ping: pingToolDef }, { ping: mockPing });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      expect((results[0] as any).description).toBe("Custom description");
+    });
+
+    it("applies hideOptionalInputs to filter optional fields", async () => {
+      const createUserToolDef = {
+        description: "Create a new user",
+        input: z.object({
+          name: z.string(),
+          email: z.string(),
+          age: z.number().optional(),
+          address: z.string().optional(),
+        }),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "createUser",
+        hideOptionalInputs: true,
+      };
+
+      const mockCreateUser = vi.fn();
+      const theDO = createMockDO({ createUser: createUserToolDef }, { createUser: mockCreateUser });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      const parameters = (results[0] as any).parameters;
+      expect(parameters.properties).toHaveProperty("name");
+      expect(parameters.properties).toHaveProperty("email");
+      expect(parameters.properties).not.toHaveProperty("age");
+      expect(parameters.properties).not.toHaveProperty("address");
+      expect(parameters.required).toEqual(["name", "email"]);
+    });
+
+    it("throws error when methodName not found in tool definitions", async () => {
+      const toolDefs = {
+        ping: {
+          description: "Ping",
+          input: z.object({}),
+        },
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "nonexistent",
+      };
+
+      const theDO = createMockDO(toolDefs);
+
+      await expect(async () => {
+        await toolSpecsToImplementations({
+          toolSpecs: [spec],
+          theDO,
+        });
+      }).rejects.toThrow("methodName nonexistent is not a function on the Durable Object");
+    });
+
+    it("processes multiple tool specs in batch", async () => {
+      const basicToolDefs = {
+        ping: {
+          description: "Ping",
+          input: z.object({}),
+        },
+        echo: {
+          description: "Echo",
+          input: z.object({ message: z.string() }),
+        },
+      };
+
+      const specs: ToolSpec[] = [
+        {
           type: "openai_builtin",
-          openAITool: {
-            type: "web_search_preview" as const,
-            search_context_size: "medium" as const,
-          },
+          openAITool: { type: "web_search" as const },
         },
-        agentOpts: undefined,
-        setupMocks: undefined,
-        expectedTool: {
-          type: "web_search_preview" as const,
-          search_context_size: "medium" as const,
-        },
-      },
-      {
-        name: "TRPC procedure callable - basic conversion",
-        spec: {
-          type: "serialized_callable_tool",
-          inputJSONSchema: null,
-          callable: {
-            type: "TRPC_PROCEDURE",
-            workerName: "myWorker" as any,
-            trpcProcedurePath: "user.getProfile",
-            passThroughArgs: {},
-          },
-        },
-        agentOpts: undefined,
-        setupMocks: undefined,
-        expectedTool: {
-          type: "function",
-          name: "myWorker_user_getProfile",
-          description: null,
-          parameters: null,
-          strict: false,
-        },
-      },
-      // Removed ability to invoke other DOs, for now, in order to simplify and focus on calling the agent's DO instance.
-      // {
-      //   name: "Durable object with runtime schema and passthrough args",
-      //   spec: {
-      //     type: "serialized_callable_tool",
-      //     inputJSONSchema: null,
-      //     callable: {
-      //       type: "DURABLE_OBJECT_PROCEDURE",
-      //       workerName: "myWorker" as any,
-      //       durableObjectClassName: "MyDO" as any,
-      //       procedureName: "process" as any,
-      //       durableObjectName: "instance-123" as any,
-      //       passThroughArgs: { internalId: "internal-123" },
-      //     },
-      //   },
-      //   agentOpts: undefined,
-      //   setupMocks: (mocks: ReturnType<typeof createMocks>) => {
-      //     const runtimeSchema: RuntimeJsonSchema = {
-      //       inputJsonSchema: {
-      //         type: "object",
-      //         properties: {
-      //           name: { type: "string" },
-      //           internalId: { type: "string" },
-      //         },
-      //         required: ["name", "internalId"],
-      //       },
-      //       outputJsonSchema: { type: "object" },
-      //       metadata: { description: "Processes data" },
-      //     };
-      //     mocks.getRuntimeJsonSchemas.mockResolvedValue([runtimeSchema]);
-      //   },
-      //   expectedTool: {
-      //     type: "function",
-      //     name: "myWorker_MyDO_process",
-      //     description: "Processes data",
-      //     // internalId should be removed from parameters due to passThroughArgs
-      //     parameters: {
-      //       type: "object",
-      //       properties: {
-      //         name: { type: "string" },
-      //       },
-      //       required: ["name"],
-      //       additionalProperties: false,
-      //     },
-      //     strict: false,
-      //   },
-      // },
-      {
-        name: "Agent durable object tool",
-        spec: {
+        {
           type: "agent_durable_object_tool",
           methodName: "ping",
-          passThroughArgs: { contextId: "ctx-123" },
         },
-        agentOpts: {
-          workerName: "agent" as any,
-          durableObjectClassName: "IterateAgent" as any,
-          durableObjectName: "agent-instance-456" as any,
+        {
+          type: "agent_durable_object_tool",
+          methodName: "echo",
         },
-        setupMocks: undefined,
-        expectedTool: {
-          type: "function",
-          name: "ping",
-          description: expect.any(String),
-          parameters: expect.objectContaining({ type: "object" }),
-          metadata: expect.objectContaining({ source: "durable-object" }),
-          strict: false,
-        },
-      },
-      {
-        name: "Spec overrides take precedence",
-        spec: {
-          type: "serialized_callable_tool",
-          inputJSONSchema: null,
-          callable: {
-            type: "TRPC_PROCEDURE",
-            workerName: "myWorker" as any,
-            trpcProcedurePath: "user.update",
-            passThroughArgs: {},
-          },
-          overrideName: "customName",
-          overrideDescription: "Custom description",
-          overrideInputJSONSchema: { type: "object", properties: { id: { type: "number" } } },
-          strict: true,
-        },
-        agentOpts: undefined,
-        setupMocks: (mocks: ReturnType<typeof createMocks>) => {
-          // Runtime schema should be overridden
-          mocks.getRuntimeJsonSchemas.mockResolvedValue([
-            {
-              inputJsonSchema: { type: "object", properties: { name: { type: "string" } } },
-              outputJsonSchema: { type: "object" },
-              metadata: { description: "Runtime description" },
-            },
-          ]);
-        },
-        expectedTool: {
-          type: "function",
-          name: "customName",
-          description: "Custom description",
-          parameters: {
-            type: "object",
-            properties: { id: { type: "number" } },
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        name: "hideOptionalInputs filters out optional fields",
-        spec: {
-          type: "serialized_callable_tool",
-          inputJSONSchema: null,
-          callable: {
-            type: "TRPC_PROCEDURE",
-            workerName: "myWorker" as any,
-            trpcProcedurePath: "user.create",
-            passThroughArgs: {},
-          },
-          hideOptionalInputs: true,
-          strict: true,
-        },
-        agentOpts: undefined,
-        setupMocks: (mocks: ReturnType<typeof createMocks>) => {
-          const runtimeSchema: RuntimeJsonSchema = {
-            inputJsonSchema: {
-              type: "object",
-              properties: {
-                name: { type: "string", description: "User's name" },
-                email: { type: "string", description: "User's email" },
-                age: { type: "number", description: "User's age (optional)" },
-                address: {
-                  type: "object",
-                  properties: {
-                    street: { type: "string" },
-                    city: { type: "string" },
-                    country: { type: "string" },
-                    zipCode: { type: "string" },
-                  },
-                  required: ["street", "city"],
-                },
-              },
-              required: ["name", "email", "address"],
-            },
-            outputJsonSchema: { type: "object" },
-            metadata: { description: "Creates a new user" },
-          };
-          mocks.getRuntimeJsonSchemas.mockResolvedValue([runtimeSchema]);
-        },
-        expectedTool: {
-          type: "function",
-          name: "myWorker_user_create",
-          description: "Creates a new user",
-          // Only required fields should remain after filtering
-          parameters: {
-            type: "object",
-            properties: {
-              name: { type: "string", description: "User's name" },
-              email: { type: "string", description: "User's email" },
-              address: {
-                type: "object",
-                properties: {
-                  street: { type: "string" },
-                  city: { type: "string" },
-                },
-                required: ["street", "city"],
-                additionalProperties: false,
-              },
-            },
-            required: ["name", "email", "address"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        name: "hideOptionalInputs works with overrideInputJSONSchema",
-        spec: {
-          type: "serialized_callable_tool",
-          inputJSONSchema: null,
-          callable: {
-            type: "TRPC_PROCEDURE",
-            workerName: "myWorker" as any,
-            trpcProcedurePath: "data.process",
-            passThroughArgs: {},
-          },
-          overrideInputJSONSchema: {
-            type: "object",
-            properties: {
-              id: { type: "string" },
-              title: { type: "string" },
-              description: { type: "string" },
-              tags: {
-                type: "array",
-                items: { type: "string" },
-              },
-              metadata: {
-                type: "object",
-                properties: {
-                  author: { type: "string" },
-                  createdAt: { type: "string" },
-                  version: { type: "number" },
-                },
-                required: ["author"],
-              },
-            },
-            required: ["id", "title"],
-          },
-          hideOptionalInputs: true,
-          strict: true,
-        },
-        agentOpts: undefined,
-        setupMocks: undefined,
-        expectedTool: {
-          type: "function",
-          name: "myWorker_data_process",
-          description: null,
-          parameters: {
-            type: "object",
-            properties: {
-              id: { type: "string" },
-              title: { type: "string" },
-            },
-            required: ["id", "title"],
-            additionalProperties: false,
-          },
-          strict: true,
-        },
-      },
-      {
-        name: "hideOptionalInputs filters even when strict is false",
-        spec: {
-          type: "serialized_callable_tool",
-          inputJSONSchema: null,
-          callable: {
-            type: "TRPC_PROCEDURE",
-            workerName: "myWorker" as any,
-            trpcProcedurePath: "user.update",
-            passThroughArgs: {},
-          },
-          hideOptionalInputs: true,
-          strict: false, // explicitly false
-        },
-        agentOpts: undefined,
-        setupMocks: (mocks: ReturnType<typeof createMocks>) => {
-          const runtimeSchema: RuntimeJsonSchema = {
-            inputJsonSchema: {
-              type: "object",
-              properties: {
-                id: { type: "string" },
-                name: { type: "string" },
-                email: { type: "string" },
-                age: { type: "number" },
-              },
-              required: ["id"],
-            },
-            outputJsonSchema: { type: "object" },
-            metadata: { description: "Updates a user" },
-          };
-          mocks.getRuntimeJsonSchemas.mockResolvedValue([runtimeSchema]);
-        },
-        expectedTool: {
-          type: "function",
-          name: "myWorker_user_update",
-          description: "Updates a user",
-          // Only required fields should remain even though strict is false
-          parameters: {
-            type: "object",
-            properties: {
-              id: { type: "string" },
-            },
-            required: ["id"],
-            additionalProperties: false,
-          },
-          strict: false,
-        },
-      },
-    ])("$name", async ({ spec, agentOpts, setupMocks, expectedTool }) => {
-      // Create mocks
-      const mocks = createMocks();
+      ];
 
-      // Setup mocks if needed
-      if (setupMocks) {
-        setupMocks(mocks);
-      }
+      const mockPing = vi.fn();
+      const mockEcho = vi.fn();
+      const theDO = createMockDO(basicToolDefs, { ping: mockPing, echo: mockEcho });
 
-      // Create environment
-      const env = createEnv(mocks);
-
-      // Run the function
       const results = await toolSpecsToImplementations({
-        toolSpecs: [spec as ToolSpec],
-        theDO: { env, toolDefinitions },
-        agentCallableOpts: agentOpts,
+        toolSpecs: specs,
+        theDO,
       });
-      const result = results[0];
 
-      // Check if it has execute function (for non-builtin tools)
-      if (expectedTool.type === "function") {
-        expect(result).toHaveProperty("execute");
-        expect(typeof (result as LocalFunctionRuntimeTool).execute).toBe("function");
-
-        // Compare without execute function
-        const { execute: _execute, ...resultWithoutExecute } = result as LocalFunctionRuntimeTool;
-        expect(resultWithoutExecute).toEqual(expectedTool);
-      } else {
-        expect(result).toEqual(expectedTool);
+      expect(results).toHaveLength(3);
+      // First spec is openai_builtin, so it returns the openAITool
+      const firstSpec = specs[0];
+      if (firstSpec.type === "openai_builtin") {
+        expect(results[0]).toEqual(firstSpec.openAITool);
       }
+      expect((results[1] as any).name).toBe("ping");
+      expect((results[2] as any).name).toBe("echo");
     });
   });
 
-  describe("execute function", () => {
-    it("should call runCallable with correct arguments", async () => {
-      const mocks = createMocks();
-      const env = createEnv(mocks);
+  describe("execute function for agent_durable_object_tool", () => {
+    it("calls the DO method with correct arguments", async () => {
+      const echoToolDef = {
+        description: "Echo message",
+        input: z.object({ message: z.string() }),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "echo",
+      };
+
+      const mockResponse = { result: "echoed" };
+      const mockEcho = vi.fn().mockResolvedValue(mockResponse);
+      const theDO = createMockDO({ echo: echoToolDef }, { echo: mockEcho });
 
       const results = await toolSpecsToImplementations({
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            inputJSONSchema: null,
-            callable: {
-              type: "TRPC_PROCEDURE",
-              workerName: "myWorker" as any,
-              trpcProcedurePath: "test.method",
-              passThroughArgs: {},
-            },
-          } as ToolSpec,
-        ],
-        theDO: { env, toolDefinitions },
+        toolSpecs: [spec],
+        theDO,
       });
-      const result = results[0];
 
-      // Execute the function
-      const executeResult = await (result as LocalFunctionRuntimeTool).execute(
-        { id: "call-123", name: "test", arguments: '{"foo": "bar"}' } as any,
-        { foo: "bar" },
+      const tool = results[0] as any;
+      const executeResult = await tool.execute(
+        { id: "call-123", name: "echo", arguments: '{"message": "hello"}' },
+        { message: "hello" },
       );
 
-      expect(mocks.runCallable).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "TRPC_PROCEDURE",
-          workerName: "myWorker",
-          trpcProcedurePath: "test.method",
-        }),
-        { foo: "bar" },
-      );
+      expect(mockEcho).toHaveBeenCalledWith({ message: "hello" });
       expect(executeResult).toEqual({
-        toolCallResult: { result: "success" },
+        toolCallResult: mockResponse,
         triggerLLMRequest: true,
       });
     });
 
-    it("should throw error if multiple arguments are passed", async () => {
-      const mocks = createMocks();
-      const env = createEnv(mocks);
+    it("merges passThroughArgs with method arguments", async () => {
+      const processToolDef = {
+        description: "Process data",
+        input: z.object({
+          data: z.string(),
+          contextId: z.string(),
+        }),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "process",
+        passThroughArgs: { contextId: "ctx-123" },
+      };
+
+      const mockProcess = vi.fn().mockResolvedValue({ success: true });
+      const theDO = createMockDO({ process: processToolDef }, { process: mockProcess });
 
       const results = await toolSpecsToImplementations({
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            inputJSONSchema: null,
-            callable: {
-              type: "TRPC_PROCEDURE",
-              workerName: "myWorker" as any,
-              trpcProcedurePath: "test.method",
-              passThroughArgs: {},
-            },
-          } as ToolSpec,
-        ],
-        theDO: { env, toolDefinitions },
+        toolSpecs: [spec],
+        theDO,
       });
-      const result = results[0];
 
-      // Try to execute with multiple arguments
-      await expect(
-        (result as LocalFunctionRuntimeTool).execute(
-          { id: "call-123", name: "test", arguments: "{}" } as any,
-          { foo: "bar" },
-          { extra: "arg" },
-        ),
-      ).rejects.toThrow("Tool must be called with just a single argument that is a JSON object");
+      const tool = results[0] as any;
+      await tool.execute(
+        { id: "call-456", name: "process", arguments: '{"data": "test"}' },
+        { data: "test" },
+      );
+
+      expect(mockProcess).toHaveBeenCalledWith({
+        data: "test",
+        contextId: "ctx-123",
+      });
     });
 
-    it("maps __triggerLLMRequest to triggerLLMRequest and cleans result", async () => {
-      const mocks = createMocks();
-      // Default would be false if spec.triggerLLMRequest is set to false; we will override via magic prop
-      mocks.runCallable.mockResolvedValue({ ok: true, __triggerLLMRequest: true });
-      const env = createEnv(mocks);
+    it("validates arguments using zod schema", async () => {
+      const strictMethodToolDef = {
+        description: "Strict validation",
+        input: z.object({
+          requiredField: z.string(),
+          numberField: z.number(),
+        }),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "strictMethod",
+      };
+
+      const mockStrictMethod = vi.fn();
+      const theDO = createMockDO(
+        { strictMethod: strictMethodToolDef },
+        { strictMethod: mockStrictMethod },
+      );
 
       const results = await toolSpecsToImplementations({
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            inputJSONSchema: null,
-            callable: {
-              type: "TRPC_PROCEDURE",
-              workerName: "myWorker" as any,
-              trpcProcedurePath: "test.method",
-              passThroughArgs: {},
-            },
-            // Set default to false to ensure magic prop overrides it
-            triggerLLMRequest: false,
-          } as ToolSpec,
-        ],
-        theDO: { env, toolDefinitions },
+        toolSpecs: [spec],
+        theDO,
       });
-      const tool = results[0] as LocalFunctionRuntimeTool;
-      const exec = await tool.execute(
-        { id: "call-xyz", name: tool.name, arguments: "{}" } as any,
+
+      const tool = results[0] as any;
+
+      // Invalid arguments should throw
+      await expect(async () => {
+        await tool.execute(
+          { id: "call-789", name: "strictMethod", arguments: '{"requiredField": "test"}' },
+          { requiredField: "test", numberField: "not-a-number" }, // Invalid type
+        );
+      }).rejects.toThrow("Invalid arguments");
+    });
+
+    it("processes magic __triggerLLMRequest property", async () => {
+      const magicMethodToolDef = {
+        description: "Returns magic",
+        input: z.object({}),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "magicMethod",
+        triggerLLMRequest: false, // Default is false
+      };
+
+      const mockMagicMethod = vi.fn().mockResolvedValue({
+        data: "result",
+        __triggerLLMRequest: true, // Override the default
+      });
+      const theDO = createMockDO(
+        { magicMethod: magicMethodToolDef },
+        { magicMethod: mockMagicMethod },
+      );
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      const tool = results[0] as any;
+      const executeResult = await tool.execute(
+        { id: "call-magic", name: "magicMethod", arguments: "{}" },
         {},
       );
 
-      expect(exec.triggerLLMRequest).toBe(true);
-      expect(exec.toolCallResult).toEqual({ ok: true });
+      expect(executeResult.triggerLLMRequest).toBe(true);
+      expect(executeResult.toolCallResult).toEqual({ data: "result" });
     });
 
-    it("appends CORE:PAUSE_LLM_REQUESTS after __addAgentCoreEvents and cleans result", async () => {
-      const mocks = createMocks();
-      mocks.runCallable.mockResolvedValue({
-        msg: "ok",
-        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { foo: "bar" } }],
+    it("processes magic __pauseAgentUntilMentioned property", async () => {
+      const pauseMethodToolDef = {
+        description: "Pauses agent",
+        input: z.object({}),
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "pauseMethod",
+      };
+
+      const mockPauseMethod = vi.fn().mockResolvedValue({
+        data: "paused",
         __pauseAgentUntilMentioned: true,
       });
-      const env = createEnv(mocks);
+      const theDO = createMockDO(
+        { pauseMethod: pauseMethodToolDef },
+        { pauseMethod: mockPauseMethod },
+      );
 
       const results = await toolSpecsToImplementations({
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            inputJSONSchema: null,
-            callable: {
-              type: "TRPC_PROCEDURE",
-              workerName: "myWorker" as any,
-              trpcProcedurePath: "test.method",
-              passThroughArgs: {},
-            },
-          } as ToolSpec,
-        ],
-        theDO: { env, toolDefinitions },
+        toolSpecs: [spec],
+        theDO,
       });
 
-      const tool = results[0] as LocalFunctionRuntimeTool;
-      const exec = await tool.execute(
-        { id: "call-abc", name: tool.name, arguments: "{}" } as any,
+      const tool = results[0] as any;
+      const executeResult = await tool.execute(
+        { id: "call-pause", name: "pauseMethod", arguments: "{}" },
         {},
       );
 
-      expect(exec.toolCallResult).toEqual({ msg: "ok" });
-      expect(Array.isArray(exec.addEvents)).toBe(true);
-      expect(exec.addEvents?.length).toBe(2);
-      expect(exec.addEvents?.[0].type).toBe("CORE:SET_METADATA");
-      expect(exec.addEvents?.[1].type).toBe("CORE:PAUSE_LLM_REQUESTS");
+      expect(executeResult.addEvents).toBeDefined();
+      expect(executeResult.addEvents).toHaveLength(1);
+      expect(executeResult.addEvents[0]).toEqual({
+        type: "CORE:PAUSE_LLM_REQUESTS",
+        data: {},
+        metadata: {},
+        triggerLLMRequest: false,
+      });
+      expect(executeResult.toolCallResult).toEqual({ data: "paused" });
     });
-  });
 
-  describe("error cases", () => {
-    it.skip("should throw if agent instance name is missing", async () => {
-      const mocks = createMocks();
-      const env = createEnv(mocks);
+    it("combines __addAgentCoreEvents with __pauseAgentUntilMentioned", async () => {
+      const complexMethodToolDef = {
+        description: "Complex method",
+        input: z.object({}),
+      };
 
-      await expect(
-        toolSpecsToImplementations({
-          toolSpecs: [
-            {
-              type: "agent_durable_object_tool",
-              methodName: "ping",
-            } as ToolSpec,
-          ],
-          theDO: { env, toolDefinitions },
-        }),
-      ).rejects.toThrow("agentCallableOpts is required for agent_durable_object_tool");
-    });
-  });
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "complexMethod",
+      };
 
-  describe("tool name sanitization", () => {
-    it("should sanitize tool names to match OpenAI requirements", async () => {
-      const mocks = createMocks();
-      const env = createEnv(mocks);
+      const mockComplexMethod = vi.fn().mockResolvedValue({
+        data: "complex",
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { key: "value" } }],
+        __pauseAgentUntilMentioned: true,
+      });
+      const theDO = createMockDO(
+        { complexMethod: complexMethodToolDef },
+        { complexMethod: mockComplexMethod },
+      );
 
-      const result = await toolSpecsToImplementations({
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            inputJSONSchema: null,
-            callable: {
-              type: "TRPC_PROCEDURE",
-              workerName: "myWorker" as any,
-              trpcProcedurePath: "user.getProfile@v2",
-              passThroughArgs: {},
-            },
-          } as ToolSpec,
-        ],
-        theDO: { env, toolDefinitions }, // no do tools
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
       });
 
-      // The generated name would be "myWorker_user.getProfile@v2"
-      // After sanitization it should be "myWorker_user_getProfile_v2"
-      expect((result[0] as LocalFunctionRuntimeTool).name).toBe("myWorker_user_getProfile_v2");
+      const tool = results[0] as any;
+      const executeResult = await tool.execute(
+        { id: "call-complex", name: "complexMethod", arguments: "{}" },
+        {},
+      );
+
+      expect(executeResult.addEvents).toHaveLength(2);
+      expect(executeResult.addEvents[0].type).toBe("CORE:SET_METADATA");
+      expect(executeResult.addEvents[1].type).toBe("CORE:PAUSE_LLM_REQUESTS");
+    });
+  });
+
+  describe("sanitizeToolName", () => {
+    it("replaces invalid characters with underscores", () => {
+      expect(sanitizeToolName("user.getProfile@v2")).toBe("user_getProfile_v2");
+      expect(sanitizeToolName("my-tool-name")).toBe("my-tool-name");
+      expect(sanitizeToolName("tool_with_underscores")).toBe("tool_with_underscores");
+      expect(sanitizeToolName("tool!@#$%^&*()")).toBe("tool__________");
+    });
+
+    it("preserves valid characters", () => {
+      expect(sanitizeToolName("validToolName123")).toBe("validToolName123");
+      expect(sanitizeToolName("tool-with_dash-and_underscore")).toBe(
+        "tool-with_dash-and_underscore",
+      );
+      expect(sanitizeToolName("UPPERCASE_tool")).toBe("UPPERCASE_tool");
+    });
+
+    it("returns 'tool' as fallback for empty result", () => {
+      expect(sanitizeToolName("!@#$%^&*()")).toBe("__________");
+      expect(sanitizeToolName("")).toBe("tool");
+    });
+  });
+
+  describe("edge cases", () => {
+    it("handles tool definitions without description", async () => {
+      const noDescToolDef = {
+        input: z.object({}),
+        // No description provided
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "noDesc",
+      };
+
+      const mockNoDesc = vi.fn();
+      const theDO = createMockDO({ noDesc: noDescToolDef }, { noDesc: mockNoDesc });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      expect((results[0] as any).description).toBeNull();
+    });
+
+    it("handles tool definitions without input schema", async () => {
+      const noInputToolDef = {
+        description: "No input required",
+        // No input schema
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "noInput",
+      };
+
+      const mockNoInput = vi.fn().mockResolvedValue({ ok: true });
+      const theDO = createMockDO({ noInput: noInputToolDef }, { noInput: mockNoInput });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      const tool = results[0] as any;
+      const executeResult = await tool.execute(
+        { id: "call-no-input", name: "noInput", arguments: "{}" },
+        {},
+      );
+
+      expect(mockNoInput).toHaveBeenCalledWith({});
+      expect(executeResult.toolCallResult).toEqual({ ok: true });
+    });
+
+    it("handles overrideInputJSONSchema", async () => {
+      const overrideToolDef = {
+        description: "Override test",
+        input: z.object({ originalField: z.string() }),
+      };
+
+      const customSchema = {
+        type: "object",
+        properties: {
+          customField: { type: "string" },
+        },
+        required: ["customField"],
+      };
+
+      const spec: ToolSpec = {
+        type: "agent_durable_object_tool",
+        methodName: "override",
+        overrideInputJSONSchema: customSchema,
+      };
+
+      const mockOverride = vi.fn();
+      const theDO = createMockDO({ override: overrideToolDef }, { override: mockOverride });
+
+      const results = await toolSpecsToImplementations({
+        toolSpecs: [spec],
+        theDO,
+      });
+
+      // The parameters should use the override schema, not the original
+      expect((results[0] as any).parameters.properties).toHaveProperty("customField");
+      expect((results[0] as any).parameters.properties).not.toHaveProperty("originalField");
     });
   });
 });

@@ -1,7 +1,7 @@
 // I'd like to move this to the SDK as soon as possible, but it requires some package reorganisation
 
 import dedent from "dedent";
-import { z } from "zod/v4";
+import { z as _z } from "zod/v4";
 import { makeTrpcCallable } from "./callable-builders.ts";
 import { defineRule, matchers } from "./context.ts";
 
@@ -143,7 +143,7 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
-    slug: "@iterate-com/slack-default-context-rules",
+    id: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
@@ -228,7 +228,7 @@ export const defaultContextRules = async () => [
     ],
   }),
   {
-    slug: "using-linear",
+    id: "using-linear",
     prompt: dedent`
       When using Linear tools:
       - When displaying Linear issues, use: "<issue.url|issue.identifier>: title".
@@ -243,7 +243,7 @@ export const defaultContextRules = async () => [
     match: matchers.hasMCPConnection("mcp.linear.app"),
   },
   {
-    slug: "presenting-notion-results",
+    id: "presenting-notion-results",
     prompt: dedent`
       When displaying Notion search results:
       - Use bullet points (•) instead of hyphens (-) for search results

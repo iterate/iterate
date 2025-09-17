@@ -13,10 +13,14 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   useEffect(() => {
     // Don't redirect if we're still loading the session
-    if (isPending) return;
+    if (isPending) {
+      return;
+    }
 
     // Don't redirect if we're already on the login page
-    if (location.pathname === "/login") return;
+    if (location.pathname === "/login") {
+      return;
+    }
 
     // If no session and not on login page, redirect to login
     if (!session) {

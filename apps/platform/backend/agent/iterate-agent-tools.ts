@@ -1,4 +1,4 @@
-import dedent from "dedent";
+import _dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 

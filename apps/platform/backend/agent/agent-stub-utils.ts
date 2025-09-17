@@ -1,4 +1,4 @@
-import { getAgentByName, type Agent } from "agents";
+import { getAgentByName, type Agent as _Agent } from "agents";
 import type { CloudflareEnv } from "../../env.ts";
 
 export async function getAgentStub(params: {

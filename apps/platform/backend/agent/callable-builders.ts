@@ -4,16 +4,16 @@ import type {
   PathToInput,
   PathToOutput,
   MergeTrpcRouters,
-  JSONSerializable,
+  JSONSerializable as _JSONSerializable,
 } from "../utils/type-helpers.ts";
 import type {
   Branded,
   CreateCallable,
   DurableObjectCallable,
   TrpcProcedureCallable,
-  UrlCallable,
+  UrlCallable as _UrlCallable,
   WorkerProcedureCallable,
-  WorkflowEventCallable,
+  WorkflowEventCallable as _WorkflowEventCallable,
 } from "./callable.ts";
 import type { SerializedCallableToolSpec, ToolSpec } from "./tool-schemas.ts";
 
