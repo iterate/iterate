@@ -4,9 +4,8 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r --parallel build",
-	"docker:up": "docker compose up -d postgres",
-	"docker:down": "docker compose down",
-	"docker:clean": "docker compose down -v"
-
+    "docker:up": "docker compose up -d postgres",
+    "docker:down": "docker compose down",
+    "docker:clean": "docker compose down -v"
   }
 }
