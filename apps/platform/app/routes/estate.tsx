@@ -72,9 +72,7 @@ export default function ManageEstate() {
             </div>
           ) : (
             <div className="flex items-center gap-3 mb-4">
-              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">
-                {title}
-              </h1>
+              <h1 className="text-3xl font-bold text-slate-900 dark:text-white">{title}</h1>
               <Button size="sm" variant="ghost" onClick={handleEditTitle}>
                 <Edit2 className="w-4 h-4" />
               </Button>
@@ -91,14 +89,11 @@ export default function ManageEstate() {
             <Github className="w-10 h-10 text-white" />
           </div>
 
-          <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">
-            Connect GitHub
-          </h2>
+          <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect GitHub</h2>
 
           <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed mb-8">
-            Connect your GitHub account to automatically manage your digital
-            estate, backup important repositories, and ensure your code legacy
-            is preserved.
+            Connect your GitHub account to automatically manage your digital estate, backup
+            important repositories, and ensure your code legacy is preserved.
           </p>
         </div>
 

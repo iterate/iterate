@@ -58,7 +58,10 @@ export async function openAIProvider(opts: {
       .then((m) => m.waitUntil)
       .catch(() => (_promise: Promise<void>) => {});
     // TODO: How do we get the estate and environment?
-    _posthogClient = new PosthogCloudflare({ waitUntil }, { estate: "TODO: Add estate", environment: "TODO: Add environment" });
+    _posthogClient = new PosthogCloudflare(
+      { waitUntil },
+      { estate: "TODO: Add estate", environment: "TODO: Add environment" },
+    );
     openai = posthogOpenAIWrapper(openai, _posthogClient!, opts.posthog);
   }
 

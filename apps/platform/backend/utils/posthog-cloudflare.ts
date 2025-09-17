@@ -65,13 +65,12 @@ export class PosthogCloudflare<
       groupType: "estate",
       groupKey: estateMeta.estate,
       properties: {
-          environment: estateMeta.environment,
+        environment: estateMeta.environment,
       },
     });
   }
 
   identify(internalUserId: string, properties: IdentityAgent | IdentityUser | IdentityBot) {
-
     // `name` and `email` are special properties which get picked up as the UI label for a Person profile
     // This helps us identify agents/bots more clearly
     const name = properties.type === "agent" ? `Agent on ${this.estateMeta.estate}` : undefined;
@@ -93,7 +92,6 @@ export class PosthogCloudflare<
     distinctId: string,
     properties: TEvents[TEvent],
   ) {
-
     this.ctx.waitUntil(
       this.client.captureImmediate({
         event: String(event),
@@ -101,7 +99,7 @@ export class PosthogCloudflare<
         properties: {
           ...properties,
           ...this.estateMeta,
-        },  
+        },
         groups: {
           estate: this.estateMeta.estate,
         },

@@ -318,7 +318,7 @@ export function braintrustOpenAIWrapper(openai: OpenAI, braintrustParentSpanExpo
       return new Proxy(target.responses, {
         get(target, prop) {
           if (prop !== "stream") {
-                    // @ts-expect-error - prop is a string
+            // @ts-expect-error - prop is a string
             return target[prop];
           }
           const _stream = target[prop];
@@ -341,7 +341,7 @@ export function braintrustOpenAIWrapper(openai: OpenAI, braintrustParentSpanExpo
 
                 await logLLMRequestToBraintrust(
                   input,
-                          // @ts-expect-error - prop is a string
+                  // @ts-expect-error - prop is a string
 
                   {
                     messages,

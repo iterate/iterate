@@ -4,8 +4,13 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r --parallel build",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "docker:up": "docker compose up -d postgres",
     "docker:down": "docker compose down",
     "docker:clean": "docker compose down -v"
+  },
+  "devDependencies": {
+    "prettier": "^3.6.2"
   }
 }

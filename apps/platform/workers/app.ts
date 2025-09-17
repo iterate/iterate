@@ -46,7 +46,7 @@ app.get("/api/estate/:estateId/files/:id", getFileHandler);
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
   () => import("virtual:react-router/server-build"),
-  import.meta.env.MODE
+  import.meta.env.MODE,
 );
 
 app.all("*", (c) => {

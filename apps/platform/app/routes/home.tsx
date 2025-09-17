@@ -30,26 +30,17 @@ function ConnectSlackCard() {
     <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
       {/* Header with Slack logo */}
       <div className="mb-8">
-        <img
-          src="/slack.png"
-          alt="Slack"
-          className="w-20 h-20 mb-6 object-contain"
-        />
+        <img src="/slack.png" alt="Slack" className="w-20 h-20 mb-6 object-contain" />
 
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">
-          Connect Slack
-        </h1>
+        <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect Slack</h1>
 
         <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed">
           Connect Slack to start using iterate. Just{" "}
-          <Badge
-            variant="secondary"
-            className="font-mono text-base px-2 py-0.5 mx-1"
-          >
+          <Badge variant="secondary" className="font-mono text-base px-2 py-0.5 mx-1">
             @iterate
           </Badge>{" "}
-          in Slack to help with your tasks like managing Linear tickets,
-          searching Notion, adding Gmail users and sending emails.
+          in Slack to help with your tasks like managing Linear tickets, searching Notion, adding
+          Gmail users and sending emails.
         </p>
       </div>
 
@@ -58,9 +49,7 @@ function ConnectSlackCard() {
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />
-            <span className="text-green-700 dark:text-green-300 font-medium">
-              Slack Connected
-            </span>
+            <span className="text-green-700 dark:text-green-300 font-medium">Slack Connected</span>
           </div>
 
           <Button

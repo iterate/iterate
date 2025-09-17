@@ -251,7 +251,7 @@ export function posthogOpenAIWrapper(
       return new Proxy(target.responses, {
         get(target, prop) {
           if (prop !== "stream") {
-          // @ts-ignore - string / symbol index signature
+            // @ts-ignore - string / symbol index signature
             return target[prop];
           }
 
@@ -399,7 +399,7 @@ export function posthogOpenAIWrapper(
                       return { done: false, value: chunk };
                     };
                   }
-                // @ts-ignore - string / symbol index signature
+                  // @ts-ignore - string / symbol index signature
                   return target[prop];
                 },
               });

@@ -2,13 +2,7 @@ import type { Route } from "./+types/integrations";
 import { useState } from "react";
 import { Link, ArrowRight, Github } from "lucide-react";
 import { Button } from "../components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "../components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { DashboardLayout } from "../components/dashboard-layout";
 
@@ -17,8 +11,7 @@ export function meta({}: Route.MetaArgs) {
     { title: "Integrations - Iterate Dashboard" },
     {
       name: "description",
-      content:
-        "Connect your accounts to enable integrations across the platform",
+      content: "Connect your accounts to enable integrations across the platform",
     },
   ];
 }
@@ -64,8 +57,8 @@ export default function Integrations() {
               isConnected: true,
               connections: integration.connections + 1,
             }
-          : integration
-      )
+          : integration,
+      ),
     );
   };
 
@@ -99,9 +92,7 @@ export default function Integrations() {
                       />
                     )}
                     <div>
-                      <CardTitle className="text-lg">
-                        {integration.name}
-                      </CardTitle>
+                      <CardTitle className="text-lg">{integration.name}</CardTitle>
                       <CardDescription className="text-sm">
                         {integration.description}
                       </CardDescription>
@@ -116,18 +107,15 @@ export default function Integrations() {
                     <Link className="w-4 h-4" />
                     <span>
                       {integration.connections} connection
-                      {integration.connections !== 1 ? "s" : ""} in{" "}
-                      {integration.apps} app{integration.apps !== 1 ? "s" : ""}
+                      {integration.connections !== 1 ? "s" : ""} in {integration.apps} app
+                      {integration.apps !== 1 ? "s" : ""}
                     </span>
                   </div>
                 </div>
 
                 {integration.isConnected ? (
                   <div className="flex items-center gap-2">
-                    <Badge
-                      variant="secondary"
-                      className="text-green-700 bg-green-100"
-                    >
+                    <Badge variant="secondary" className="text-green-700 bg-green-100">
                       Connected
                     </Badge>
                     <Button variant="outline" size="sm">
@@ -135,10 +123,7 @@ export default function Integrations() {
                     </Button>
                   </div>
                 ) : (
-                  <Button
-                    className="w-full"
-                    onClick={() => handleConnect(integration.id)}
-                  >
+                  <Button className="w-full" onClick={() => handleConnect(integration.id)}>
                     Connect {integration.name}
                     <ArrowRight className="w-4 h-4 ml-2" />
                   </Button>

@@ -60,10 +60,7 @@ function UserSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button
-          variant="ghost"
-          className="w-full justify-start gap-2 px-2 py-1.5 h-auto"
-        >
+        <Button variant="ghost" className="w-full justify-start gap-2 px-2 py-1.5 h-auto">
           <Avatar className="size-8">
             <AvatarImage src="" />
             <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white font-medium">
@@ -72,9 +69,7 @@ function UserSwitcher() {
           </Avatar>
           <div className="flex-1 text-left">
             <div className="font-medium">Nick Blow</div>
-            <div className="text-xs text-muted-foreground">
-              nickblow@nustom.com
-            </div>
+            <div className="text-xs text-muted-foreground">nickblow@nustom.com</div>
           </div>
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>
@@ -117,16 +112,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <Sidebar className="border-r">
           <SidebarHeader className="border-b px-6 py-4">
             <div className="flex items-center gap-2">
-              <img
-                src="/logo.svg"
-                alt="Iterate"
-                className="size-8 text-white"
-              />
+              <img src="/logo.svg" alt="Iterate" className="size-8 text-white" />
               <span className="font-semibold text-lg">Iterate</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1">
-              Autopilot engaged
-            </div>
+            <div className="text-xs text-muted-foreground mt-1">Autopilot engaged</div>
           </SidebarHeader>
 
           <SidebarContent className="px-4 py-4">
