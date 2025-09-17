@@ -35,6 +35,7 @@ export default defineConfig([
     "**/node_modules/",
     "**/dist/",
     "**/build/",
+    "pnpm-lock.yaml",
   ]),
   js.configs.recommended,
   // TypeScript/JavaScript files

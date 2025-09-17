@@ -34,3 +34,4 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install
       - run: pnpm typecheck
+        working-directory: apps/platform
