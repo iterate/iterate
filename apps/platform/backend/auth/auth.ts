@@ -1,8 +1,8 @@
-import { type DB } from "../db/client";
 import { betterAuth } from "better-auth";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import * as schema from "../db/schema";
-import { env } from "../../env";
+import { type DB } from "../db/client.ts";
+import * as schema from "../db/schema.ts";
+import { env } from "../../env.ts";
 
 export const getAuth = (db: DB) =>
   betterAuth({

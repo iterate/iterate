@@ -1,12 +1,12 @@
-import type { Route } from "./+types/home";
 import { useState } from "react";
 import { CheckCircle, ArrowRight } from "lucide-react";
 
-import { Button } from "../components/ui/button";
-import { Badge } from "../components/ui/badge";
-import { DashboardLayout } from "../components/dashboard-layout";
+import { Button } from "../components/ui/button.tsx";
+import { Badge } from "../components/ui/badge.tsx";
+import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import type { Route } from "./+types/home";
 
-export function meta({}: Route.MetaArgs) {
+export function meta(_args: Route.MetaArgs) {
   return [
     { title: "Iterate Dashboard" },
     { name: "description", content: "Iterate platform dashboard" },

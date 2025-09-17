@@ -1,3 +1,4 @@
+import "./app.css";
 import {
   isRouteErrorResponse,
   Links,
@@ -12,7 +13,6 @@ import { httpBatchLink } from "@trpc/client";
 import { useState } from "react";
 
 import type { Route } from "./+types/root";
-import "./app.css";
 import { trpc } from "./lib/trpc.ts";
 
 export const links: Route.LinksFunction = () => [

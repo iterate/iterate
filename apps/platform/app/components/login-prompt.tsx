@@ -1,9 +1,9 @@
 import { useRef, type ComponentPropsWithRef } from "react";
-import { cn } from "../lib/utils";
-import { CenterCenter } from "./center-center";
-import { AnimatedBeam } from "./ui/animated-beam";
-import { IterateLetterI } from "./ui/iterate-logos";
-import { LoginProviders } from "./auth-components";
+import { cn } from "../lib/utils.ts";
+import { CenterCenter } from "./center-center.tsx";
+import { AnimatedBeam } from "./ui/animated-beam.tsx";
+import { IterateLetterI } from "./ui/iterate-logos.tsx";
+import { LoginProviders } from "./auth-components.tsx";
 
 function LogoBox({ className, children, ref }: ComponentPropsWithRef<"div">) {
   return (
