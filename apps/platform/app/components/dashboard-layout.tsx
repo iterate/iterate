@@ -5,7 +5,6 @@ import {
   Users,
   ChevronDown,
   Bot,
-  _Zap,
   FileText,
   LogOut,
   User,

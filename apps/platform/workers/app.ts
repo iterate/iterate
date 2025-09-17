@@ -56,7 +56,7 @@ app.all("/api/trpc/*", (c) => {
 });
 
 // File upload routes
-app.use("/api/estate/:estateId/*", (c, next) => {
+app.use("/api/estate/:estateId/*", async (c, next) => {
   if (!c.var.session) {
     return c.json({ error: "Unauthorized" }, 401);
   }

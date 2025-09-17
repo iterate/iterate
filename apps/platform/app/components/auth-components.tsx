@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
 
@@ -11,12 +12,10 @@ export function LoginProviders() {
         callbackURL: "/", // Redirect to home after login
       });
 
-      if (result.error) {
-        console.error("❌ Google sign-in failed:", result.error);
-        // You could show a toast or error message to the user here
-      } else {
-        console.log("✅ Google sign-in successful!");
+      if(result.error){
+        toast.error("Failed to sign in with Google");
       }
+
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }
