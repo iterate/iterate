@@ -8,6 +8,8 @@
     "deploy": "pnpm run build && wrangler deploy",
     "dev": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- react-router dev",
     "preview": "pnpm run build && vite preview",
+    "test": "doppler run -- vitest",
+    "test:watch": "doppler run -- vitest --watch",
     "typecheck": "pnpm run cf-typegen && react-router typegen && tsc -b",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",

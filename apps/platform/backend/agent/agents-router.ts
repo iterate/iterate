@@ -3,7 +3,7 @@ import { z } from "zod/v4";
 
 import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { AgentCoreEventInput, FileSharedEventInput } from "./agent-core-schemas.ts";
-import type { MergedEventForSlices } from "./agent-core.ts";
+// import type { MergedEventForSlices } from "./agent-core.ts";
 import { getAgentStub } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
@@ -37,7 +37,7 @@ const agentStubProcedure = protectedProcedure
 // Define a schema for context rules
 // TODO not sure why this is here and not in context.ts ...
 const ContextRule = z.object({
-  slug: z.string(),
+  id: z.string(),
   description: z.string().optional(),
   prompt: z.any().optional(),
   tools: z.array(z.any()).optional().default([]),
@@ -73,13 +73,13 @@ export const agentsRouter = router({
       const allRules = [...(await defaultContextRules()), ...rulesFromDb];
       const seenSlugs = new Set<string>();
       const dedupedRules = allRules.filter((rule) => {
-        if (typeof rule.slug !== "string") {
+        if (typeof rule.id !== "string") {
           return false;
         }
-        if (seenSlugs.has(rule.slug)) {
+        if (seenSlugs.has(rule.id)) {
           return false;
         }
-        seenSlugs.add(rule.slug);
+        seenSlugs.add(rule.id);
         return true;
       });
       return dedupedRules;
@@ -90,7 +90,7 @@ export const agentsRouter = router({
   //   .mutation(async ({ input }) => {
   //     // Insert the new context rules
   //     const rulesToInsert = input.map((rule) => ({
-  //       slug: rule.slug,
+  //       slug: rule.id,
   //       serializedRule: rule,
   //     })) satisfies (typeof contextRules.$inferInsert)[];
   //     await db.batch([
@@ -342,7 +342,7 @@ export const agentsRouter = router({
       );
 
       return {
-        cancelledCount: results.filter((r) => r.cancelled).length,
+        cancelledCount: results.filter((r: any) => r.cancelled).length,
         totalCount: reminders.length,
         results,
       };

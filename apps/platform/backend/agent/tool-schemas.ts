@@ -1,9 +1,9 @@
 import z from "zod/v4";
+import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 import { JSONSerializable } from "../utils/type-helpers.ts";
 import { FunctionCall, OpenAIBuiltinTool } from "./openai-response-schemas.ts";
 import { SerializedCallable } from "./callable.ts";
 import type { AgentCoreEventInput } from "./agent-core-schemas.ts";
-import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 export const IntegrationMode = z.enum(["personal", "company"]);
 export type IntegrationMode = z.infer<typeof IntegrationMode>;
 

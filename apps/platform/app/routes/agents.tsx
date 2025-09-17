@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "react-router";
 import { ArrowLeft } from "lucide-react";
 import { trpc } from "../lib/trpc.ts";
@@ -11,11 +11,20 @@ export default function AgentsPage() {
   const [message, setMessage] = useState("");
   const utils = trpc.useUtils();
 
-  // Get agent state
-  const [agentState] = trpc.agents.getState.useSuspenseQuery({
+  // Get agent state with polling
+  const { data: agentState, refetch } = trpc.agents.getState.useQuery({
     agentInstanceName: durableObjectName!,
     agentClassName: agentClassName! as "IterateAgent",
   });
+
+  // Refresh feed every second
+  useEffect(() => {
+    const interval = setInterval(() => {
+      refetch();
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [refetch]);
 
   // Add events mutation
   const addEventsMutation = trpc.agents.addEvents.useMutation({
@@ -79,46 +88,52 @@ export default function AgentsPage() {
             </h1>
           </div>
 
-      {/* Message input form */}
-      <form onSubmit={handleSendMessage} className="mb-6">
-        <div className="flex gap-2">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Send a message to the agent..."
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={addEventsMutation.isPending}
-          />
-          <button
-            type="submit"
-            disabled={addEventsMutation.isPending || !message.trim()}
-            className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {addEventsMutation.isPending ? "Sending..." : "Send"}
-          </button>
-        </div>
-      </form>
-
-      {/* Agent state display */}
-      <div className="p-4 rounded-lg">
-        <h2 className="text-lg font-semibold mb-3">Agent State</h2>
-        <pre className="p-4 rounded border overflow-auto max-h-96 text-sm">
-          {JSON.stringify(agentState, null, 2)}
-        </pre>
-      </div>
-
-      {/* Error display */}
-      {addEventsMutation.error && (
-        <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-          <h3 className="text-red-800 font-medium">Error sending message:</h3>
-          <p className="text-red-700 text-sm mt-1">
-            {addEventsMutation.error instanceof Error
-              ? addEventsMutation.error.message
-              : "An unknown error occurred"}
-          </p>
+          {/* Agent state display */}
+          <div className="p-4 rounded-lg mb-6">
+            <div className="space-y-4 max-h-96 overflow-auto">
+              {agentState?.events?.map((event: any, index: number) => (
+                <div key={index} className="border rounded p-3">
+                  <h3 className="font-medium text-sm text-gray-600 mb-2">{event.type}</h3>
+                  <pre className="text-xs p-2 rounded overflow-x-auto">
+                    {JSON.stringify(event, null, 2)}
+                  </pre>
+                </div>
+              )) || <p className="text-gray-500">No events yet...</p>}
+            </div>
           </div>
-        )}
+
+          {/* Message input form */}
+          <form onSubmit={handleSendMessage} className="mb-6">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                placeholder="Send a message to the agent..."
+                className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                disabled={addEventsMutation.isPending}
+              />
+              <button
+                type="submit"
+                disabled={addEventsMutation.isPending || !message.trim()}
+                className="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addEventsMutation.isPending ? "Sending..." : "Send"}
+              </button>
+            </div>
+          </form>
+
+          {/* Error display */}
+          {addEventsMutation.error && (
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <h3 className="text-red-800 font-medium">Error sending message:</h3>
+              <p className="text-red-700 text-sm mt-1">
+                {addEventsMutation.error instanceof Error
+                  ? addEventsMutation.error.message
+                  : "An unknown error occurred"}
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </DashboardLayout>
