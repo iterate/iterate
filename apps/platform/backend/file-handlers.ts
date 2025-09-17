@@ -3,18 +3,17 @@ import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { env as baseEnv } from "cloudflare:workers";
-import type { db as drizzleDb } from "./db/client.ts";
-import { db } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../env.ts";
+import type { DB } from "./db/client.ts";
+import type { Variables } from "../workers/app.ts";
 
 const env = baseEnv as CloudflareEnv;
 
 // TODO: Replace with actual base URL configuration
 const BASE_URL = env.VITE_PUBLIC_URL || "https://platform.iterate.com";
 
-type DrizzleDb = typeof drizzleDb;
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
 export type NewFileRecord = InferInsertModel<typeof files>;
@@ -25,12 +24,12 @@ export interface UploadArgs {
   fileId: string;
   filename: string;
   mimeType?: string;
-  db: DrizzleDb;
+  db: DB;
   openai: Awaited<ReturnType<typeof openAIProvider>>;
 }
 
 const startUpload = async (
-  db: DrizzleDb,
+  db: DB,
   fileId: string,
   estateId: string,
   filename?: string,
@@ -124,7 +123,9 @@ const generateFileId = () => typeid("file").toString();
 // Helper function to generate R2 key for a file
 const generateR2Key = (fileId: string) => `files/${fileId}`;
 
-export const uploadFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const uploadFileHandler = async (
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
   try {
     const estateId = c.req.param("estateId");
     if (!estateId) {
@@ -146,6 +147,7 @@ export const uploadFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>)
       filename,
       contentType,
       estateId,
+      db: c.var.db,
     });
     return c.json(fileRecord);
   } catch (error) {
@@ -163,11 +165,13 @@ export const uploadFileFromUrl = async ({
   filename,
   headers,
   estateId,
+  db,
 }: {
   url: string;
   filename: string;
   headers?: Record<string, string>;
   estateId: string;
+  db: DB;
 }): Promise<FileRecord> => {
   // Fetch the file from URL
   const response = await fetch(url, headers ? { headers } : {});
@@ -191,6 +195,7 @@ export const uploadFileFromUrl = async ({
     filename,
     contentType,
     estateId,
+    db,
   });
 
   return fileRecord;
@@ -206,10 +211,12 @@ export const uploadFile = async ({
   filename,
   contentType,
   estateId,
+  db,
 }: {
   filename: string;
   contentType: string;
   estateId: string;
+  db: DB;
 } & (
   | {
       stream: ReadableStream;
@@ -274,7 +281,9 @@ export const uploadFile = async ({
   }
 };
 
-export const uploadFileFromUrlHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const uploadFileFromUrlHandler = async (
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
   const estateId = c.req.param("estateId");
   const url = c.req.query("url");
   const filename = c.req.query("filename");
@@ -292,7 +301,7 @@ export const uploadFileFromUrlHandler = async (c: Context<{ Bindings: Cloudflare
   }
 
   try {
-    const fileRecord = await uploadFileFromUrl({ url, filename, estateId });
+    const fileRecord = await uploadFileFromUrl({ url, filename, estateId, db: c.var.db });
     return c.json(fileRecord);
   } catch (error) {
     console.error("Upload from URL error:", error);
@@ -305,10 +314,14 @@ export const uploadFileFromUrlHandler = async (c: Context<{ Bindings: Cloudflare
   }
 };
 
-export const getFileHandler = async (c: Context<{ Bindings: CloudflareEnv }>) => {
+export const getFileHandler = async (
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
   const fileId = c.req.param("id");
   const estateId = c.req.param("estateId");
   const disposition = c.req.query("disposition") || "attachment";
+
+  const db = c.var.db;
 
   if (!estateId) {
     return c.json({ error: "estateId parameter is required" }, 400);

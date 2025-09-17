@@ -6,7 +6,12 @@ import {
   getFileHandler,
 } from "../backend/file-handlers.ts";
 import type { CloudflareEnv } from "../env.ts";
-import { auth } from "../backend/auth/auth.ts";
+import { getAuth, type Auth, type AuthSession } from "../backend/auth/auth.ts";
+import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { appRouter } from "../backend/trpc/root.ts";
+import { createContext } from "../backend/trpc/context.ts";
+import { getDb, type DB } from "../backend/db/client.ts";
+import { contextStorage } from "hono/context-storage";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -16,21 +21,39 @@ declare module "react-router" {
     };
   }
 }
+
 export type Variables = {
-  session: typeof auth.$Infer.Session | null;
+  auth: Auth;
+  session: AuthSession;
+  db: DB;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+app.use(contextStorage());
 
 app.use("*", async (c, next) => {
+  const db = getDb();
+  const auth = getAuth(db);
   const session = await auth.api.getSession({
     headers: c.req.raw.headers,
   });
+  c.set("db", db);
+  c.set("auth", auth);
   c.set("session", session);
   return next();
 });
 
-app.all("/api/auth/*", (c) => auth.handler(c.req.raw));
+app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+
+// tRPC endpoint
+app.all("/api/trpc/*", (c) => {
+  return fetchRequestHandler({
+    endpoint: "/api/trpc",
+    req: c.req.raw,
+    router: appRouter,
+    createContext: (opts) => createContext(c, opts),
+  });
+});
 
 // File upload routes
 app.use("/api/estate/:estateId/*", (c, next) => {

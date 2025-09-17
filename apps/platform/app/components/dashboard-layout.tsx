@@ -11,6 +11,7 @@ import {
   User,
   CreditCard,
 } from "lucide-react";
+import { authClient } from "../lib/auth-client";
 
 import {
   Sidebar,
@@ -57,6 +58,28 @@ const navigation = [
 ];
 
 function UserSwitcher() {
+  const handleLogout = async () => {
+    try {
+      console.log("🚪 Logging out...");
+      const result = await authClient.signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            // Redirect to login page after successful logout
+            window.location.href = "/login";
+          },
+        },
+      });
+
+      if (result.error) {
+        console.error("❌ Logout failed:", result.error);
+      } else {
+        console.log("✅ Logout successful!");
+      }
+    } catch (error) {
+      console.error("❌ Logout error:", error);
+    }
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -90,7 +113,7 @@ function UserSwitcher() {
           <span>Settings</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator />
-        <DropdownMenuItem>
+        <DropdownMenuItem onClick={handleLogout}>
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>
         </DropdownMenuItem>
