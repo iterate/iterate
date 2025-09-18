@@ -15,15 +15,15 @@ export function meta(_args: Route.MetaArgs) {
 }
 
 function ConnectSlackCard() {
-  const { data: integrations, isLoading: integrationsLoading } = trpc.integrations.list.useQuery();
-  const { data: estateData } = trpc.integrations.getCurrentUserEstateId.useQuery();
+  const [integrations] = trpc.integrations.list.useSuspenseQuery();
+  const [estateData] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
 
   // Check if Slack bot is connected at the estate level
-  const slackBotIntegration = integrations?.find((i) => i.id === "slack-bot");
-  const isConnected = !integrationsLoading && (slackBotIntegration?.isConnected || false);
+  const slackBotIntegration = integrations.find((i) => i.id === "slack-bot");
+  const isConnected = slackBotIntegration?.isConnected || false;
 
   const handleConnectSlack = async () => {
-    if (!estateData?.estateId) {
+    if (!estateData.estateId) {
       toast.error("Unable to get estate information");
       return;
     }
@@ -64,11 +64,7 @@ function ConnectSlackCard() {
       </div>
 
       {/* Integration status */}
-      {integrationsLoading ? (
-        <div className="flex items-center justify-center py-4">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-purple-600"></div>
-        </div>
-      ) : isConnected ? (
+      {isConnected ? (
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
             <CheckCircle className="h-6 w-6 text-green-600 dark:text-green-400" />

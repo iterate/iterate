@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc.ts";
-import { organizationUserMembership, estate } from "../../db/schema.ts";
+import { organizationUserMembership } from "../../db/schema.ts";
 
 export const estatesRouter = router({
   // Get all estates for the current user

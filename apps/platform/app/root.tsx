@@ -10,11 +10,12 @@ import {
 import { ThemeProvider } from "next-themes";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
-import { useState } from "react";
+import { useState, Suspense } from "react";
 
 import type { Route } from "./+types/root";
 import { trpc } from "./lib/trpc.ts";
 import { AuthGuard } from "./components/auth-guard.tsx";
+import { GlobalLoading } from "./components/global-loading.tsx";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
@@ -98,7 +99,9 @@ export default function App() {
           storageKey="theme"
         >
           <AuthGuard>
-            <Outlet />
+            <Suspense fallback={<GlobalLoading />}>
+              <Outlet />
+            </Suspense>
           </AuthGuard>
         </ThemeProvider>
       </QueryClientProvider>

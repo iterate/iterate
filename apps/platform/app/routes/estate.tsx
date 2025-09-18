@@ -1,9 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Github, ArrowRight, Edit2, Check, X } from "lucide-react";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
-import { trpcClient } from "../lib/trpc-client.ts";
+import { trpc } from "../lib/trpc.ts";
 import type { Route } from "./+types/estate";
 
 export function meta(_args: Route.MetaArgs) {
@@ -16,39 +16,30 @@ export function meta(_args: Route.MetaArgs) {
   ];
 }
 
-export default function ManageEstate() {
-  const [title, setTitle] = useState("My Estate");
+function EstateContent() {
   const [isEditing, setIsEditing] = useState(false);
-  const [tempTitle, setTempTitle] = useState(title);
+  const [tempTitle, setTempTitle] = useState("");
   const [isConnected, setIsConnected] = useState(false);
   const [connectedRepo, setConnectedRepo] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [estateId, setEstateId] = useState<string | null>(null);
 
-  // Load estate data on component mount
-  useEffect(() => {
-    const loadEstate = async () => {
-      try {
-        // First get the user's estate ID
-        const { estateId: userEstateId } =
-          await trpcClient.integrations.getCurrentUserEstateId.query();
-        setEstateId(userEstateId);
+  // Get user's estate ID
+  const [estateIdData] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
 
-        // Then get the estate details
-        const estate = await trpcClient.estate.get.query({ estateId: userEstateId });
-        setTitle(estate.name);
-        setTempTitle(estate.name);
-      } catch (error) {
-        console.error("Failed to load estate:", error);
-        // Keep default title if loading fails
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  // Get estate details
+  const [estate] = trpc.estate.get.useSuspenseQuery({
+    estateId: estateIdData.estateId,
+  });
 
-    loadEstate();
-  }, []);
+  // Update estate name mutation
+  const updateEstateMutation = trpc.estate.updateName.useMutation();
+
+  const title = estate.name;
+
+  // Initialize temp title when estate data loads
+  if (estate && tempTitle === "" && !isEditing) {
+    setTempTitle(estate.name);
+  }
 
   const handleEditTitle = () => {
     setIsEditing(true);
@@ -56,18 +47,17 @@ export default function ManageEstate() {
   };
 
   const handleSaveTitle = async () => {
-    if (tempTitle.trim() === title || !estateId) {
+    if (tempTitle.trim() === title) {
       setIsEditing(false);
       return;
     }
 
     setIsSaving(true);
     try {
-      const updatedEstate = await trpcClient.estate.updateName.mutate({
-        estateId,
+      await updateEstateMutation.mutateAsync({
+        estateId: estateIdData.estateId,
         name: tempTitle.trim(),
       });
-      setTitle(updatedEstate.name);
       setIsEditing(false);
     } catch (error) {
       console.error("Failed to update estate name:", error);
@@ -99,12 +89,7 @@ export default function ManageEstate() {
       <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
         {/* Editable Title */}
         <div className="mb-12">
-          {isLoading ? (
-            <div className="flex items-center gap-3 mb-4">
-              <div className="h-9 w-48 bg-slate-200 dark:bg-slate-700 animate-pulse rounded"></div>
-              <div className="h-8 w-8 bg-slate-200 dark:bg-slate-700 animate-pulse rounded"></div>
-            </div>
-          ) : isEditing ? (
+          {isEditing ? (
             <div className="flex items-center gap-3 mb-4">
               <Input
                 value={tempTitle}
@@ -199,4 +184,8 @@ export default function ManageEstate() {
       </div>
     </DashboardLayout>
   );
+}
+
+export default function ManageEstate() {
+  return <EstateContent />;
 }

@@ -14,7 +14,7 @@ import {
   Check,
 } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
-import { trpcClient } from "../lib/trpc-client.ts";
+import { trpc } from "../lib/trpc.ts";
 import { getSelectedEstateId, setSelectedEstateId } from "../lib/estate-cookie.ts";
 
 import {
@@ -69,55 +69,34 @@ interface Estate {
 }
 
 function EstateSwitcher() {
-  const [estates, setEstates] = useState<Estate[]>([]);
+  const [estates] = trpc.estates.list.useSuspenseQuery();
   const [selectedEstateId, setSelectedEstateIdState] = useState<string | null>(null);
   const [currentEstate, setCurrentEstate] = useState<Estate | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const loadEstates = async () => {
-      try {
-        const estatesList = await trpcClient.estates.list.query();
-        setEstates(estatesList);
+    if (estates && estates.length > 0) {
+      // Get selected estate from cookie or use first estate as default
+      const cookieEstateId = getSelectedEstateId();
+      const defaultEstateId = cookieEstateId || estates[0]?.id;
 
-        // Get selected estate from cookie or use first estate as default
-        const cookieEstateId = getSelectedEstateId();
-        const defaultEstateId = cookieEstateId || estatesList[0]?.id;
+      if (defaultEstateId) {
+        setSelectedEstateIdState(defaultEstateId);
+        const estate = estates.find((e: Estate) => e.id === defaultEstateId);
+        setCurrentEstate(estate || estates[0] || null);
 
-        if (defaultEstateId) {
-          setSelectedEstateIdState(defaultEstateId);
-          const estate = estatesList.find((e) => e.id === defaultEstateId);
-          setCurrentEstate(estate || estatesList[0] || null);
-
-          // Save to cookie if not already set
-          if (!cookieEstateId && estatesList[0]) {
-            setSelectedEstateId(estatesList[0].id);
-          }
+        // Save to cookie if not already set
+        if (!cookieEstateId && estates[0]) {
+          setSelectedEstateId(estates[0].id);
         }
-      } catch (error) {
-        console.error("Failed to load estates:", error);
-      } finally {
-        setIsLoading(false);
       }
-    };
-
-    loadEstates();
-  }, []);
+    }
+  }, [estates]);
 
   const handleEstateSwitch = (estate: Estate) => {
     setSelectedEstateIdState(estate.id);
     setCurrentEstate(estate);
     setSelectedEstateId(estate.id);
   };
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center gap-2 px-2 py-1.5 text-sm text-muted-foreground">
-        <Building2 className="size-4" />
-        <span>Loading...</span>
-      </div>
-    );
-  }
 
   if (!currentEstate) {
     return null;
@@ -137,7 +116,7 @@ function EstateSwitcher() {
       <DropdownMenuContent className="w-56" side="top" align="start">
         <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {estates.map((estate) => (
+        {estates?.map((estate: Estate) => (
           <DropdownMenuItem
             key={estate.id}
             onClick={() => handleEstateSwitch(estate)}
@@ -156,6 +135,8 @@ function EstateSwitcher() {
 }
 
 function UserSwitcher() {
+  const [user] = trpc.user.me.useSuspenseQuery();
+
   const handleLogout = async () => {
     try {
       console.log("🚪 Logging out...");
@@ -178,19 +159,29 @@ function UserSwitcher() {
     }
   };
 
+  // Generate initials from name
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" className="w-full justify-start gap-2 px-2 py-1.5 h-auto">
           <Avatar className="size-8">
-            <AvatarImage src="" />
+            <AvatarImage src={user.image || ""} />
             <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white font-medium">
-              NB
+              {getInitials(user.name)}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 text-left">
-            <div className="font-medium">Nick Blow</div>
-            <div className="text-xs text-muted-foreground">nickblow@nustom.com</div>
+            <div className="font-medium">{user.name}</div>
+            <div className="text-xs text-muted-foreground">{user.email}</div>
           </div>
           <ChevronDown className="size-4 text-muted-foreground" />
         </Button>
