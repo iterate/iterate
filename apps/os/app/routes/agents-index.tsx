@@ -6,13 +6,7 @@ import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Badge } from "../components/ui/badge.tsx";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card.tsx";
+import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import {
   Table,
   TableBody,

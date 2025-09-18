@@ -1,10 +1,9 @@
-import { Link, useLocation, useNavigate, useParams, useLoaderData } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
   Users,
   ChevronDown,
-  Bot,
   FileText,
   LogOut,
   User,
