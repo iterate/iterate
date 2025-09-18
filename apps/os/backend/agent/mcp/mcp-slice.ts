@@ -378,7 +378,6 @@ export const mcpSlice = defineAgentCoreSlice<{
     pendingConnections: [],
     mcpServers: [],
   },
-  // eslint-disable-next-line iterate/prefer-single-object-params -- look at this later
   reduce(state, deps, event) {
     switch (event.type) {
       case "MCP:ADD_MCP_SERVERS": {
