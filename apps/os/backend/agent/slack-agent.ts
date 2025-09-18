@@ -18,12 +18,7 @@ import type {
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
-import type {
-  SlackInteractionPayload,
-  SlackModalDefinition,
-  SlackModalDefinitions,
-  SlackWebhookPayload,
-} from "./slack.types.ts";
+import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
   extractBotUserIdFromAuthorizations,
   getMentionedExternalUserIds,
@@ -493,33 +488,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return undefined;
   }
 
-  async storeModalDefinitions(modalDefinitions: SlackModalDefinitions): Promise<void> {
-    for (const [actionId, modalDef] of Object.entries(modalDefinitions) as [
-      string,
-      SlackModalDefinition,
-    ][]) {
-      const agentState = await this.getState();
-      const threadTs = agentState?.reducedState?.slackThreadId;
-      const modalWithMetadata: SlackModalDefinition = {
-        ...modalDef,
-        callback_id: modalDef.callback_id || `${actionId}_form`,
-        private_metadata: JSON.stringify({
-          thread_ts: threadTs,
-          action_id: actionId,
-        }),
-      };
-      await this.addEvents([
-        {
-          type: "SLACK:STORE_MODAL_DEFINITION",
-          data: {
-            actionId,
-            modal: modalWithMetadata,
-          },
-        },
-      ]);
-    }
-  }
-
   /**
    * Finds the most recent Slack message timestamp (ts) seen by this agent from webhook events
    */
@@ -623,75 +591,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return {
       success: true,
     };
-  }
-
-  async onSlackInteractionReceived(_payload: SlackInteractionPayload) {
-    throw new Error("Not implemented");
-    // // we don't pass in the bot user id because they can't send interactions
-    // const participantJoinedEvents = await this.getParticipantJoinedEvents(payload.user.id);
-    // await this.addEvents(participantJoinedEvents);
-
-    // // Handle deterministic modal operations - open stored modals when buttons are clicked
-    // let modalOpened = false;
-    // if (payload.type === "block_actions" && payload.trigger_id) {
-    //   const actions = payload.actions || [];
-
-    //   const agentState = await this.getState();
-    //   const modalDefinitions: SlackModalDefinitions =
-    //     agentState?.reducedState?.interactions?.modalDefinitions || {};
-
-    //   for (const action of actions) {
-    //     const actionId = action.action_id;
-    //     if (!actionId) {
-    //       continue;
-    //     }
-
-    //     if (!modalDefinitions[actionId]) {
-    //       continue;
-    //     }
-
-    //     const modalView: SlackModalDefinition = modalDefinitions[actionId];
-
-    //     const result = await serverTrpc.platform.integrations.slack.openModal.mutate({
-    //       triggerId: payload.trigger_id,
-    //       view: modalView,
-    //     });
-
-    //     if (result.success) {
-    //       modalOpened = true;
-    //     }
-    //   }
-    // }
-
-    // // Handle instant button feedback - update message immediately to show selection
-    // // This happens for all button interactions that don't open modals
-    // if (
-    //   payload.type === "block_actions" &&
-    //   !modalOpened &&
-    //   payload.message?.ts &&
-    //   payload.channel?.id &&
-    //   (payload.actions || []).length > 0
-    // ) {
-    //   await this.handleInstantButtonFeedback({
-    //     channelId: payload.channel.id,
-    //     messageTs: payload.message.ts,
-    //     actions: payload.actions || [],
-    //     userId: payload.user.id,
-    //   });
-    // }
-
-    // const shouldTriggerLLM = !modalOpened || payload.type === "view_submission";
-
-    // await this.addEvents([
-    //   {
-    //     type: "SLACK:INTERACTION_RECEIVED",
-    //     data: input,
-    //     triggerLLMRequest: shouldTriggerLLM,
-    //   },
-    // ]);
-    // return {
-    //   success: true,
-    // };
   }
 
   async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
