@@ -2,7 +2,6 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
-import { and, eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
@@ -12,9 +11,7 @@ import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
-import { getAgentStub } from "./agent/agent-stub-utils.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { agentInstance } from "./db/schema.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -50,7 +47,6 @@ app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // agent websocket endpoint
 app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
-  const estateId = c.req.param("estateId")!;
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
@@ -58,25 +54,30 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
     return c.json({ error: "Invalid agent class name" }, 400);
   }
 
-  const agentRecord = await c.var.db.query.agentInstance.findFirst({
-    where: and(
-      eq(agentInstance.estateId, estateId),
-      eq(agentInstance.durableObjectName, agentInstanceName),
-      eq(agentInstance.className, agentClassName),
-    ),
-  });
-
-  if (!agentRecord) {
-    return c.json({ error: "Agent not found" }, 404);
+  try {
+    let agentStub: DurableObjectStub;
+    if (agentClassName === "SlackAgent") {
+      // Use SlackAgent's inherited method
+      // @ts-expect-error - TODO couldn't get types to line up
+      agentStub = await SlackAgent.getStubByName({
+        db: c.var.db,
+        agentInstanceName,
+      });
+    } else {
+      agentStub = await IterateAgent.getStubByName({
+        db: c.var.db,
+        agentInstanceName,
+      });
+    }
+    return agentStub.fetch(c.req.raw);
+  } catch (error) {
+    const message = (error as Error).message || "Unknown error";
+    if (message.includes("not found")) {
+      return c.json({ error: "Agent not found" }, 404);
+    }
+    console.error("Failed to get agent stub:", error);
+    return c.json({ error: "Failed to connect to agent" }, 500);
   }
-
-  const agentStub = await getAgentStub({
-    durableObjectClassName: agentClassName,
-    durableObjectName: agentInstanceName,
-    agentRecord,
-  });
-
-  return agentStub.fetch(c.req.raw);
 });
 
 // tRPC endpoint

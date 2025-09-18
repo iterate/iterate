@@ -1,23 +1,33 @@
 import { Hono } from "hono";
-import { eq } from "drizzle-orm";
-import { getAgentByName } from "agents";
-import type { Variables } from "../../worker.ts";
-import { env, type CloudflareEnv } from "../../../env.ts";
+import { and, eq } from "drizzle-orm";
+import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
-import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
+
+import { SlackAgent } from "../../agent/slack-agent.ts";
 import {
   extractBotUserIdFromAuthorizations,
   isBotMentionedInMessage,
 } from "../../agent/slack-agent-utils.ts";
 
-export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
 async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string }) {
-  console.log("slackTeamIdToEstateId", teamId);
-  // TODO implement properl
-  const estateId = await db.query.estate.findFirst();
-  return estateId?.id;
+  const result = await db
+    .select({
+      estateId: schema.providerEstateMapping.internalEstateId,
+    })
+    .from(schema.providerEstateMapping)
+    .where(
+      and(
+        eq(schema.providerEstateMapping.externalId, teamId),
+        eq(schema.providerEstateMapping.providerId, "slack-bot"),
+      ),
+    )
+    .limit(1);
+
+  return result[0]?.estateId ?? null;
 }
 
 slackApp.post("/webhook", async (c) => {
@@ -32,6 +42,12 @@ slackApp.post("/webhook", async (c) => {
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
     console.warn("Slack webhook received without a team ID", body);
+    return c.text("ok");
+  }
+
+  // Ignore reaction events for now to avoid unnecessary errors/recursion during dev
+  if (body.event.type === "reaction_added" || body.event.type === "reaction_removed") {
+    // TODO re-insert this once we've got reaction handling working
     return c.text("ok");
   }
 
@@ -51,11 +67,10 @@ slackApp.post("/webhook", async (c) => {
   });
 
   const durableObjectName = `SlackAgent-${routingKey}`;
-  const durableObjectId = env.SLACK_AGENT.idFromName(durableObjectName);
 
   // look up in the database to get all the agents by routing key
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
-    where: eq(agentInstanceRoute.routingKey, routingKey),
+    where: eq(schema.agentInstanceRoute.routingKey, routingKey),
     with: {
       agentInstance: true,
     },
@@ -66,11 +81,7 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  let agentRecord: typeof agentInstance.$inferSelect;
-
-  if (agentRoute) {
-    agentRecord = agentRoute.agentInstance;
-  } else {
+  if (!agentRoute) {
     const botUserId = extractBotUserIdFromAuthorizations(body);
     const isBotMentioned =
       botUserId && body.event.type === "message"
@@ -81,38 +92,18 @@ slackApp.post("/webhook", async (c) => {
     if (!isBotMentioned && !isDM) {
       return c.text("ok");
     }
-
-    [agentRecord] = await db
-      .insert(agentInstance)
-      .values({
-        estateId,
-        className: "SlackAgent",
-        // this is an oqaque string as far as the system is concerned, but useful for humans
-        durableObjectName,
-        durableObjectId: durableObjectId.toString(),
-        metadata: {
-          reason: `Slack webhook received`,
-        },
-      })
-      .onConflictDoUpdate({
-        target: agentInstance.durableObjectId,
-        set: {
-          metadata: { reason: `Slack webhook received` },
-        },
-      })
-      .returning();
-
-    await db.insert(agentInstanceRoute).values({
-      agentInstanceId: agentRecord.id,
-      routingKey,
-    });
   }
-  // TODO replace with what's in getAgentByName and set databaserecord after constructor
-  const agentStub = await getAgentByName(env.SLACK_AGENT, durableObjectName);
-  // onStart and onStateUpdate and all the reducers and all that stuff already ran -- whoops
 
-  await agentStub.setDatabaseRecord(agentRecord);
-  c.executionCtx.waitUntil(agentStub.onSlackWebhookEventReceived(body));
+  // @ts-expect-error - TODO couldn't get types to line up
+  const agentStub = await SlackAgent.getOrCreateStubByRoute({
+    db,
+    estateId,
+    agentInstanceName: durableObjectName,
+    route: routingKey,
+    reason: "Slack webhook received",
+  });
+
+  c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
   return c.text("ok");
 });

@@ -4,16 +4,17 @@ import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
-import { env } from "../../env.ts";
+// import { env } from "../../env.ts";
 import {
-  AgentCoreEvent,
   AgentCoreEventInput,
   FileSharedEventInput,
   type CoreReducedState,
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
-import { getAgentStub } from "./agent-stub-utils.ts";
+import { IterateAgent } from "./iterate-agent.ts";
+import { SlackAgent, type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
+import type { MergedEventForSlices } from "./agent-core.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { SlackEventInput } from "./slack-slice.ts";
@@ -28,56 +29,30 @@ const agentStubProcedure = protectedProcedure
         .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
-      reason: z.string().describe("The reason for getting the agent stub").optional(),
-      createIfNotExists: z.boolean().optional().default(true),
+      reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
     }),
   )
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    let record = await ctx.db.query.agentInstance.findFirst({
-      where: and(
-        eq(agentInstance.durableObjectName, input.agentInstanceName),
-        eq(agentInstance.className, input.agentClassName),
-      ),
-    });
-
-    if (!record) {
-      if (!input.createIfNotExists) {
-        throw new Error(`Agent instance ${input.agentInstanceName} not found`);
-      }
-
-      const durableObjectId =
-        input.agentClassName === "SlackAgent"
-          ? env.SLACK_AGENT.idFromName(input.agentInstanceName)
-          : env.ITERATE_AGENT.idFromName(input.agentInstanceName);
-
-      [record] = await ctx.db
-        .insert(agentInstance)
-        .values({
+    // Always use getOrCreateStubByName - agents are created on demand
+    const agent = await (input.agentClassName === "SlackAgent"
+      ? // @ts-expect-error - TODO couldn't get types to line up
+        SlackAgent.getOrCreateStubByName({
+          db: ctx.db,
           estateId,
-          durableObjectId: durableObjectId.toString(),
-          className: input.agentClassName,
-          durableObjectName: input.agentInstanceName,
-          metadata: {
-            reason: input.reason || "Created implicitly by agents trpc router (not slack webhook)",
-          },
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
         })
-        .onConflictDoNothing()
-        .returning();
-    }
+      : IterateAgent.getOrCreateStubByName({
+          db: ctx.db,
+          estateId,
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
+        }));
 
-    if (record.estateId !== estateId) {
-      throw new Error(
-        `Agent instance ${input.agentInstanceName} does not belong to estate ${estateId}`,
-      );
-    }
+    // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 
-    const agent = await getAgentStub({
-      durableObjectName: input.agentInstanceName,
-      durableObjectClassName: input.agentClassName,
-      agentRecord: record,
-    });
     return next({ ctx: { ...ctx, agent } });
   });
 
@@ -188,15 +163,13 @@ export const agentsRouter = router({
     // )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      console.log("\n\n\n\n\ngetState", await ctx.agent.databaseRecord);
       return { events, databaseRecord: await ctx.agent.databaseRecord };
     }),
 
   getEvents: agentStubProcedure
     .meta({ description: "Get the events of an agent instance" })
-    .output(z.array(AgentCoreEvent))
     .query(async ({ ctx }) => {
-      return await ctx.agent.getEvents();
+      return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
     }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
