@@ -10,9 +10,11 @@ import {
 } from "../components/ui/card.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import { trpc } from "../lib/trpc.ts";
+import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 
 export default function AgentsIndexPage() {
-  const [{ estateId }] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
+  const estateId = useEstateId();
+  const getEstateUrl = useEstateUrl();
 
   const [agents] = trpc.agents.list.useSuspenseQuery({
     estateId: estateId,
@@ -48,7 +50,9 @@ export default function AgentsIndexPage() {
                   </CardHeader>
                   <CardContent>
                     <div className="space-y-2">
-                      <Link to={`/agents/${agent.className}/${agent.durableObjectName}`}>
+                      <Link
+                        to={getEstateUrl(`agents/${agent.className}/${agent.durableObjectName}`)}
+                      >
                         <Button className="w-full">View Agent</Button>
                       </Link>
                       <div className="text-xs text-muted-foreground space-y-1">

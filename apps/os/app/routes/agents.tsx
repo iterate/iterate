@@ -4,16 +4,17 @@ import { ArrowLeft } from "lucide-react";
 import { trpc } from "../lib/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 
 export default function AgentsPage() {
   const params = useParams();
   const { agentClassName, durableObjectName } = params;
   const [message, setMessage] = useState("");
   const utils = trpc.useUtils();
+  const getEstateUrl = useEstateUrl();
 
   // Get user's estate ID
-  const [{ estateId }] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
-
+  const estateId = useEstateId();
   if (
     !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
     !durableObjectName
@@ -89,7 +90,7 @@ export default function AgentsPage() {
         <div className="max-w-4xl mx-auto">
           {/* Back navigation */}
           <div className="mb-6">
-            <Link to="/agents">
+            <Link to={getEstateUrl("agents")}>
               <Button variant="ghost" className="mb-4">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Agents

@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link, useLocation, useNavigate, useParams, useLoaderData } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
@@ -15,7 +14,8 @@ import {
 } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
 import { trpc } from "../lib/trpc.ts";
-import { getSelectedEstateId, setSelectedEstateId } from "../lib/estate-cookie.ts";
+import { setSelectedEstate } from "../lib/estate-cookie.ts";
+import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 
 import {
   Sidebar,
@@ -47,17 +47,14 @@ const navigation = [
   {
     title: "Platform",
     items: [
-      { title: "Home", icon: HomeIcon, path: "/" },
-      { title: "Integrations", icon: Settings, path: "/integrations" },
-      { title: "Manage estate", icon: FileText, path: "/estate" },
+      { title: "Home", icon: HomeIcon, path: "" },
+      { title: "Integrations", icon: Settings, path: "integrations" },
+      { title: "Manage estate", icon: FileText, path: "estate" },
     ],
   },
   {
     title: "Agents",
-    items: [
-      { title: "Manage agents", icon: Users, path: "/agents" },
-      { title: "Start Slack Agent", icon: Bot, path: "/slack-agent" },
-    ],
+    items: [{ title: "Manage agents", icon: Users, path: "agents" }],
   },
 ];
 
@@ -70,32 +67,23 @@ interface Estate {
 
 function EstateSwitcher() {
   const [estates] = trpc.estates.list.useSuspenseQuery();
-  const [selectedEstateId, setSelectedEstateIdState] = useState<string | null>(null);
-  const [currentEstate, setCurrentEstate] = useState<Estate | null>(null);
+  const navigate = useNavigate();
+  const params = useParams();
+  const currentEstateId = params.estateId;
 
-  useEffect(() => {
-    if (estates && estates.length > 0) {
-      // Get selected estate from cookie or use first estate as default
-      const cookieEstateId = getSelectedEstateId();
-      const defaultEstateId = cookieEstateId || estates[0]?.id;
-
-      if (defaultEstateId) {
-        setSelectedEstateIdState(defaultEstateId);
-        const estate = estates.find((e: Estate) => e.id === defaultEstateId);
-        setCurrentEstate(estate || estates[0] || null);
-
-        // Save to cookie if not already set
-        if (!cookieEstateId && estates[0]) {
-          setSelectedEstateId(estates[0].id);
-        }
-      }
-    }
-  }, [estates]);
+  const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
 
   const handleEstateSwitch = (estate: Estate) => {
-    setSelectedEstateIdState(estate.id);
-    setCurrentEstate(estate);
-    setSelectedEstateId(estate.id);
+    // Save the new selection to cookie
+    setSelectedEstate(estate.organizationId, estate.id);
+
+    // Get the current path within the estate
+    const currentPath = window.location.pathname;
+    const pathParts = currentPath.split("/").slice(3); // Remove org/estate parts
+    const subPath = pathParts.join("/");
+
+    // Navigate to the same page in the new estate
+    navigate(`/${estate.organizationId}/${estate.id}${subPath ? `/${subPath}` : ""}`);
   };
 
   if (!currentEstate) {
@@ -126,7 +114,7 @@ function EstateSwitcher() {
               <Building2 className="size-4" />
               <div className="font-medium">{estate.name}</div>
             </div>
-            {selectedEstateId === estate.id && <Check className="size-4" />}
+            {currentEstateId === estate.id && <Check className="size-4" />}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>
@@ -217,7 +205,8 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-
+  const getEstateUrl = useEstateUrl();
+  const estateId = useEstateId();
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
@@ -242,10 +231,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                       <SidebarMenuItem key={item.title}>
                         <SidebarMenuButton
                           asChild
-                          isActive={location.pathname === item.path}
+                          isActive={
+                            (item.path && location.pathname.endsWith(item.path)) ||
+                            (item.path === "" && location.pathname.endsWith(`/${estateId}/`))
+                          }
                           className="w-full justify-start gap-3 px-3 py-2 rounded-lg"
                         >
-                          <Link to={item.path}>
+                          <Link to={getEstateUrl(item.path)}>
                             <item.icon className="size-4" />
                             <span>{item.title}</span>
                           </Link>

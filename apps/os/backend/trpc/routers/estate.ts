@@ -1,79 +1,74 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { protectedProcedure, router } from "../trpc.ts";
-import { estate, organizationUserMembership } from "../../db/schema.ts";
-import type { DB } from "../../db/client.ts";
-
-// Helper function to check if user has access to a specific estate
-export const checkUserEstateAccess = async (
-  db: DB,
-  userId: string,
-  estateId: string,
-): Promise<boolean> => {
-  const userWithEstates = await db.query.organizationUserMembership.findFirst({
-    where: eq(organizationUserMembership.userId, userId),
-    with: {
-      organization: {
-        with: {
-          estates: true,
-        },
-      },
-    },
-  });
-
-  if (!userWithEstates?.organization?.estates) {
-    return false;
-  }
-
-  return userWithEstates.organization.estates.some((estate: any) => estate.id === estateId);
-};
+import {
+  protectedProcedure,
+  estateProtectedProcedure,
+  getUserEstateAccess,
+  router,
+} from "../trpc.ts";
+import { estate } from "../../db/schema.ts";
 
 export const estateRouter = router({
-  // Get a specific estate (with permission check)
-  get: protectedProcedure
+  // Check if user has access to a specific estate (non-throwing version)
+  checkAccess: protectedProcedure
     .input(
       z.object({
         estateId: z.string(),
+        organizationId: z.string(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      // Check if user has access to this estate
-      const hasAccess = await checkUserEstateAccess(ctx.db, ctx.user.id, input.estateId);
-      if (!hasAccess) {
-        throw new Error("Access denied: User does not have permission to access this estate");
+      try {
+        // Use the shared helper function
+        const result = await getUserEstateAccess(
+          ctx.db,
+          ctx.user.id,
+          input.estateId,
+          input.organizationId,
+        );
+
+        if (result.hasAccess && result.estate) {
+          return {
+            hasAccess: true,
+            estate: {
+              id: result.estate.id,
+              name: result.estate.name,
+              organizationId: result.estate.organizationId,
+            },
+          };
+        }
+
+        return { hasAccess: false, estate: null };
+      } catch {
+        // Return false on any error instead of throwing
+        return { hasAccess: false, estate: null };
       }
-
-      const userEstate = await ctx.db.query.estate.findFirst({
-        where: eq(estate.id, input.estateId),
-      });
-
-      if (!userEstate) {
-        throw new Error("Estate not found");
-      }
-
-      return {
-        id: userEstate.id,
-        name: userEstate.name,
-        organizationId: userEstate.organizationId,
-        createdAt: userEstate.createdAt,
-        updatedAt: userEstate.updatedAt,
-      };
     }),
 
+  // Get a specific estate (with permission check)
+  get: estateProtectedProcedure.query(async ({ ctx }) => {
+    // The estate is already validated and available in context
+    const userEstate = ctx.estate;
+
+    return {
+      id: userEstate.id,
+      name: userEstate.name,
+      organizationId: userEstate.organizationId,
+      createdAt: userEstate.createdAt,
+      updatedAt: userEstate.updatedAt,
+    };
+  }),
+
   // Update estate name
-  updateName: protectedProcedure
+  updateName: estateProtectedProcedure
     .input(
       z.object({
-        estateId: z.string(),
         name: z.string().min(1, "Estate name cannot be empty").max(100, "Estate name too long"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Check if user has access to this estate
-      const hasAccess = await checkUserEstateAccess(ctx.db, ctx.user.id, input.estateId);
-      if (!hasAccess) {
-        throw new Error("Access denied: User does not have permission to update this estate");
-      }
+      // The estate is already validated and available in context
+      const estateId = ctx.estate.id;
 
       // Update the estate name
       const updatedEstate = await ctx.db
@@ -82,7 +77,7 @@ export const estateRouter = router({
           name: input.name,
           updatedAt: new Date(),
         })
-        .where(eq(estate.id, input.estateId))
+        .where(eq(estate.id, estateId))
         .returning();
 
       if (!updatedEstate[0]) {
