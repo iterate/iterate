@@ -126,8 +126,8 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx }) => {
-      // TODO need the correct type for slack agent also
-      return (await ctx.agent.getState()) as IterateAgentState;
+      const events = await ctx.agent.getEvents();
+      return { events };
     }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
