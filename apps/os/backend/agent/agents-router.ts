@@ -6,8 +6,6 @@ import { AgentCoreEventInput, FileSharedEventInput } from "./agent-core-schemas.
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { MergedEventForSlices } from "./agent-core.ts";
-import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { SlackEventInput } from "./slack-slice.ts";
@@ -148,12 +146,15 @@ export const agentsRouter = router({
 
   getState: agentStubProcedure
     .meta({ description: "Get the state of an agent instance" })
+    .output(
+      z.object({
+        events: z.array(AllAgentEventInputSchemas),
+        databaseRecord: z.any(),
+      }),
+    )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      return {
-        events: events as MergedEventForSlices<SlackAgentSlices>[],
-        databaseRecord: await ctx.agent.getDatabaseRecord(),
-      };
+      return { events, databaseRecord: await ctx.agent.getDatabaseRecord() };
     }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
