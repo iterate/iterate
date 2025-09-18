@@ -1,18 +1,18 @@
-// @ts-nocheck
-
-import { defineAgentCoreSlice } from "@iterate-com/helpers/agent/agent-core";
+import { z } from "zod/v4";
+import { defineAgentCoreSlice } from "../agent-core.ts";
 import {
   agentCoreBaseEventFields,
   agentCoreBaseEventInputFields,
   type AgentCoreEventInput,
   type CoreReducedState,
-} from "@iterate-com/helpers/agent/agent-core-schemas";
-import type { ResponseInputItem } from "@iterate-com/helpers/agent/openai-response-schemas";
-import { IntegrationMode } from "@iterate-com/helpers/integrations/integration-schemas";
-import { MCPServer } from "@iterate-com/sdk/tools";
-import { z } from "zod/v4";
-import type { CloudflareEnv } from "../legacy-agent/env.ts";
-import { generateRuntimeToolsFromConnections } from "./mcp-tool-mapping.ts";
+} from "../agent-core-schemas.ts";
+import type { ResponseInputItem } from "../openai-response-schemas.ts";
+import { IntegrationMode, MCPServer } from "../tool-schemas.ts";
+import type { CloudflareEnv } from "../../../env.ts";
+import {
+  generateRuntimeToolsFromConnections,
+  type LazyConnectionDeps,
+} from "./mcp-tool-mapping.ts";
 
 // ------------------------- Schemas -------------------------
 
@@ -297,7 +297,12 @@ export type MCPEventInput = z.input<typeof MCPEventInput>;
 /**
  * Generate a connection key from server URL, mode, and optional user ID
  */
-export function getConnectionKey(serverUrl: string, mode: IntegrationMode, userId?: string) {
+export function getConnectionKey(params: {
+  serverUrl: string;
+  mode: IntegrationMode;
+  userId?: string;
+}) {
+  const { serverUrl, mode, userId } = params;
   if (mode === "personal" && userId) {
     return MCPConnectionKey.parse(`${serverUrl}::personal::${userId}`);
   }
@@ -315,17 +320,19 @@ export function parseConnectionKey(key: MCPConnectionKey) {
 /**
  * Update runtime tools from MCP connections
  */
-function updateRuntimeTools<TEventInput = AgentCoreEventInput>(
-  state: CoreReducedState<TEventInput> & MCPSliceState,
-  newConnections: Record<MCPConnectionKey, MCPConnection>,
-  deps: MCPSliceDeps,
-) {
+function updateRuntimeTools<TEventInput = AgentCoreEventInput>(params: {
+  state: CoreReducedState<TEventInput> & MCPSliceState;
+  newConnections: Record<MCPConnectionKey, MCPConnection>;
+  deps: MCPSliceDeps;
+}) {
+  const { state, newConnections, deps } = params;
   const newRuntimeTools = generateRuntimeToolsFromConnections(
     newConnections,
     deps.uploadFile ||
       (() => {
         throw new Error("uploadFile dependency not implemented");
       }),
+    deps.lazyConnectionDeps,
   );
 
   const existingNonMCPTools = state.runtimeTools.filter((tool) => {
@@ -352,6 +359,7 @@ export interface MCPSliceDeps {
     size?: number;
     mimeType?: string;
   }>;
+  lazyConnectionDeps?: LazyConnectionDeps;
 }
 
 // ------------------------- Slice Definition -------------------------
@@ -370,7 +378,6 @@ export const mcpSlice = defineAgentCoreSlice<{
     pendingConnections: [],
     mcpServers: [],
   },
-
   reduce(state, deps, event) {
     switch (event.type) {
       case "MCP:ADD_MCP_SERVERS": {
@@ -389,7 +396,7 @@ export const mcpSlice = defineAgentCoreSlice<{
 
       case "MCP:CONNECT_REQUEST": {
         const { serverUrl, mode, userId } = event.data;
-        const connectionKey = getConnectionKey(serverUrl, mode, userId);
+        const connectionKey = getConnectionKey({ serverUrl, mode, userId });
         const { [connectionKey]: _conn, ...rest } = state.mcpConnections;
         // Add to pending connections if not already there
         const pendingConnections = state.pendingConnections || [];
@@ -398,7 +405,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           : [...pendingConnections, connectionKey];
 
         // Update runtime tools to remove tools from the disconnected connection
-        const updatedRuntimeTools = updateRuntimeTools(state, rest, deps);
+        const updatedRuntimeTools = updateRuntimeTools({ state, newConnections: rest, deps });
 
         return {
           mcpConnections: { ...rest },
@@ -420,7 +427,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         };
 
         const { userId, integrationSlug, tools } = connectionProps;
-        const updatedRuntimeTools = updateRuntimeTools(state, newConnections, deps);
+        const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
         const connectionMessage = {
           type: "message",
           role: "developer",
@@ -452,7 +459,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         if (connectionKey) {
           delete newConnections[connectionKey];
         }
-        const updatedRuntimeTools = updateRuntimeTools(state, newConnections, deps);
+        const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
         return {
           mcpConnections: newConnections,
           runtimeTools: updatedRuntimeTools,
@@ -474,7 +481,7 @@ export const mcpSlice = defineAgentCoreSlice<{
             tools,
           },
         };
-        const updatedRuntimeTools = updateRuntimeTools(state, newConnections, deps);
+        const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
         return {
           mcpConnections: newConnections,
           runtimeTools: updatedRuntimeTools,
@@ -501,7 +508,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         if (connectionKey) {
           delete newConnections[connectionKey];
         }
-        const updatedRuntimeTools = updateRuntimeTools(state, newConnections, deps);
+        const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
 
         // Remove from pending connections
         const pendingConnections = state.pendingConnections || [];

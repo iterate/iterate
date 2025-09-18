@@ -1,6 +1,7 @@
-import _dedent from "dedent";
+import dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
+import { IntegrationMode } from "./tool-schemas.ts";
 
 export type IterateAgentToolInterface = typeof iterateAgentTools.$infer.interface;
 export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;
@@ -79,35 +80,35 @@ export const iterateAgentTools = defineDOTools({
     description: "Cancel a previously set reminder by its ID.",
     input: z.object({ iterateReminderId: z.string() }),
   },
-  // connectMCPServer: {
-  //   description: dedent`
-  //     Connect to a remote MCP (Model Context Protocol) server.
-  //     This will make additional tools available to you.
-  //   `,
-  //   input: z.object({
-  //     serverUrl: z.string().describe("The URL of the MCP server"),
-  //     mode: IntegrationMode.default("personal").describe(
-  //       "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
-  //     ),
-  //     requiresOAuth: z
-  //       .boolean()
-  //       .nullable()
-  //       .describe(
-  //         "Whether this MCP server requires OAuth authentication (use for OAuth servers that require authentication)",
-  //       ),
-  //     requiresHeadersAuth: z
-  //       .record(z.string(), z.string())
-  //       .nullable()
-  //       .describe(
-  //         "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'Authorization': 'Bearer {apiKey}' }",
-  //       ),
-  //     requiresQueryParamsAuth: z
-  //       .record(z.string(), z.string())
-  //       .nullable()
-  //       .describe(
-  //         "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'apiKey': '{apiKey}', 'accountId': '123' }",
-  //       ),
-  //     onBehalfOfIterateUserId: z.string().describe("The iterate user ID to connect on behalf of."),
-  //   }),
-  // },
+  connectMCPServer: {
+    description: dedent`
+      Connect to a remote MCP (Model Context Protocol) server.
+      This will make additional tools available to you.
+    `,
+    input: z.object({
+      serverUrl: z.string().describe("The URL of the MCP server"),
+      mode: IntegrationMode.default("personal").describe(
+        "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
+      ),
+      requiresOAuth: z
+        .boolean()
+        .nullable()
+        .describe(
+          "Whether this MCP server requires OAuth authentication (use for OAuth servers that require authentication)",
+        ),
+      requiresHeadersAuth: z
+        .record(z.string(), z.string())
+        .nullable()
+        .describe(
+          "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'Authorization': 'Bearer {apiKey}' }",
+        ),
+      requiresQueryParamsAuth: z
+        .record(z.string(), z.string())
+        .nullable()
+        .describe(
+          "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'apiKey': '{apiKey}', 'accountId': '123' }",
+        ),
+      onBehalfOfIterateUserId: z.string().describe("The iterate user ID to connect on behalf of."),
+    }),
+  },
 });

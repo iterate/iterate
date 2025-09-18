@@ -166,7 +166,6 @@ export const slackSlice = defineAgentCoreSlice<{
     },
   },
   reduce(state, _deps, event) {
-    // Slack slice reducer is actually right now, let's try to keep this way
     const next = { ...state };
 
     switch (event.type) {
@@ -181,7 +180,6 @@ export const slackSlice = defineAgentCoreSlice<{
       }
 
       case "SLACK:STORE_MODAL_DEFINITION": {
-        // Store modal definition for later use when button is clicked
         if (!next.interactions) {
           next.interactions = {
             modalDefinitions: {},
@@ -195,18 +193,13 @@ export const slackSlice = defineAgentCoreSlice<{
       case "SLACK:WEBHOOK_EVENT_RECEIVED": {
         const payload = event.data.payload as SlackWebhookPayload;
 
-        // Extract and cache bot user ID from webhook payload if not already cached
         if (next.botUserId === undefined) {
           const extractedBotUserId = extractBotUserIdFromAuthorizations(payload);
           if (extractedBotUserId) {
             next.botUserId = extractedBotUserId;
-            console.log(
-              `[slack-slice reducer] Extracted and cached bot user ID from authorizations: ${next.botUserId}`,
-            );
           }
         }
 
-        // Convert webhook -> message content (prompt engineering helper)
         const {
           promptFragment: messageContent,
           shouldTriggerLLM,
@@ -230,23 +223,13 @@ export const slackSlice = defineAgentCoreSlice<{
           };
           next.inputItems = [...next.inputItems, message];
         }
-
-        // Set whether to trigger LLM request based on the webhook analysis
-        if (shouldTriggerLLM && !next.paused) {
-          next.triggerLLMRequest = true;
-        } else {
-          // Explicitly set to false when we shouldn't trigger LLM
-          // (e.g., for bot's own messages, system events, etc.)
-          next.triggerLLMRequest = false;
-        }
-
+        next.triggerLLMRequest = shouldTriggerLLM && !next.paused;
         break;
       }
 
       case "SLACK:INTERACTION_RECEIVED": {
         const { payload, timestamp } = event.data;
 
-        // Ensure interactions object exists
         if (!next.interactions) {
           next.interactions = {
             modalDefinitions: {},
@@ -254,13 +237,9 @@ export const slackSlice = defineAgentCoreSlice<{
           };
         }
 
-        // Handle different interaction types
         switch (payload.type) {
           case "block_actions": {
-            // Check if this interaction should trigger LLM (might be deterministic modal opening)
             const shouldTriggerLLM = event.triggerLLMRequest !== false;
-
-            // Only add input items and trigger LLM if this isn't a deterministic action
             if (shouldTriggerLLM) {
               const actions = payload.actions || [];
               const actionDescriptions = actions.map((a: any) => {
@@ -270,7 +249,6 @@ export const slackSlice = defineAgentCoreSlice<{
 
               const actionTexts = actionDescriptions.map((a) => a.desc).join(", ");
 
-              // Build context-aware prompt with message update guidance
               const promptContent: PromptFragment[] = [];
               promptContent.push(
                 f(
@@ -279,10 +257,8 @@ export const slackSlice = defineAgentCoreSlice<{
                 ),
               );
 
-              // Add interaction context with timestamps
               const messageTs = "message" in payload ? payload.message?.ts : undefined;
 
-              // Add guidance for message updates
               if (messageTs) {
                 promptContent.push(
                   f("message_update_guidance", [
@@ -307,14 +283,12 @@ export const slackSlice = defineAgentCoreSlice<{
               });
               next.triggerLLMRequest = true;
             } else {
-              // Deterministic action (like modal opening) - don't trigger LLM or add input items
               next.triggerLLMRequest = false;
             }
             break;
           }
 
           case "view_submission": {
-            // Store modal state for potential updates
             if (payload.view?.id && payload.user?.id) {
               const userId = payload.user.id;
               next.interactions.modalViews[userId] = {
@@ -327,7 +301,6 @@ export const slackSlice = defineAgentCoreSlice<{
               };
             }
 
-            // Extract form values and add to LLM prompt
             const formValues = extractFormValues(payload.view?.state?.values);
             const modalTitle = payload.view?.title?.text || "Form";
             const callbackId = payload.view?.callback_id || "unknown";
@@ -359,7 +332,6 @@ export const slackSlice = defineAgentCoreSlice<{
           }
 
           case "view_closed":
-            // Clean up modal state
             if (payload.user?.id) {
               delete next.interactions.modalViews[payload.user.id];
             }
@@ -368,7 +340,6 @@ export const slackSlice = defineAgentCoreSlice<{
 
           case "shortcut":
           case "message_action":
-            // Add context for shortcuts and message actions
             next.inputItems.push({
               type: "message" as const,
               role: "user",
@@ -422,7 +393,6 @@ export const slackSlice = defineAgentCoreSlice<{
 
 export type SlackSlice = typeof slackSlice;
 
-// Helper function to extract form values from Slack's nested state structure
 function extractFormValues(stateValues: any): Record<string, any> {
   if (!stateValues) {
     return {};

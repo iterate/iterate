@@ -1,13 +1,13 @@
-// @ts-nocheck
-
-import type { AgentCoreDeps } from "@iterate-com/helpers/agent/agent-core";
-import type { AgentCoreEventInput } from "@iterate-com/helpers/agent/agent-core-schemas";
-import type { LocalFunctionRuntimeTool } from "@iterate-com/helpers/agent/tools/tool-schemas";
-import { sanitizeToolName } from "@iterate-com/helpers/agent/tools/tool-spec-to-runtime-tool";
-import { IntegrationMode } from "@iterate-com/helpers/integrations/integration-schemas";
 import { z } from "zod/v4";
-import { mcpManagerCache } from "./mcp-event-hooks.ts";
+import type { AgentCoreDeps, MergedStateForSlices } from "../agent-core.ts";
+import type { AgentCoreEventInput } from "../agent-core-schemas.ts";
+import type { LocalFunctionRuntimeTool } from "../tool-schemas.ts";
+import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
+import { IntegrationMode } from "../tool-schemas.ts";
+import type { CoreAgentSlices } from "../iterate-agent.ts";
+import { lazyConnectMCPServer, mcpManagerCache } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
+import type { MCPEventHookReturnEvent } from "./mcp-event-hooks.ts";
 
 type UploadFileFunction = NonNullable<AgentCoreDeps["uploadFile"]>;
 
@@ -219,7 +219,8 @@ export async function processMCPContent(
  * Format: {integrationSlug}_{toolName}
  * Ensures the name doesn't exceed 64 characters (OpenAI limit)
  */
-export function generateToolName(slug: string, toolName: string): string {
+export function generateToolName(params: { slug: string; toolName: string }): string {
+  const { slug, toolName } = params;
   const prefix = `${slug}_`;
   const remainingSpace = 64 - prefix.length;
   const truncatedToolName =
@@ -245,10 +246,10 @@ export function computeToolMapping(
       continue;
     }
     for (const tool of connection.tools) {
-      const toolName = generateToolName(
-        (connection.serverName ?? connection.integrationSlug ?? "mcp").toLowerCase(),
-        tool.name,
-      );
+      const toolName = generateToolName({
+        slug: (connection.serverName ?? connection.integrationSlug ?? "mcp").toLowerCase(),
+        toolName: tool.name,
+      });
       if (!toolMapping[toolName]) {
         toolMapping[toolName] = {
           integrationSlug: connection.integrationSlug ?? connection.serverUrl,
@@ -298,6 +299,7 @@ function hasToolSchemaConflicts(
 export function generateRuntimeToolsFromConnections(
   connections: Record<MCPConnectionKey, MCPConnection>,
   uploadFile: UploadFileFunction,
+  lazyConnectionDeps?: LazyConnectionDeps,
 ): LocalFunctionRuntimeTool[] {
   const toolMapping = computeToolMapping(connections);
   const runtimeTools: LocalFunctionRuntimeTool[] = [];
@@ -321,6 +323,7 @@ export function generateRuntimeToolsFromConnections(
         integrationSlug: toolInfo.integrationSlug,
         connections: toolInfo.connections,
         uploadFile,
+        lazyConnectionDeps,
       }),
     );
   }
@@ -328,6 +331,17 @@ export function generateRuntimeToolsFromConnections(
 }
 
 // ------------------------- Runtime Tool Creation -------------------------
+
+// Lazy connection dependencies interface
+export interface LazyConnectionDeps {
+  agentDurableObjectId: string;
+  getAgentDurableObjectName: () => string; // Made lazy to avoid early access
+  getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
+  getFinalRedirectUrl?: (payload: {
+    durableObjectInstanceName: string;
+    reducedState: MergedStateForSlices<CoreAgentSlices>;
+  }) => Promise<string | undefined>;
+}
 
 /**
  * Convert MCP tool to OpenAI runtime tool with impersonation support
@@ -338,6 +352,7 @@ export function createRuntimeToolFromMCPTool(params: {
   integrationSlug: string;
   connections: Record<MCPConnectionKey, MCPToolConnectionInfo>;
   uploadFile: UploadFileFunction;
+  lazyConnectionDeps?: LazyConnectionDeps;
 }): LocalFunctionRuntimeTool {
   const { tool, toolName, integrationSlug, connections, uploadFile } = params;
 
@@ -376,6 +391,8 @@ export function createRuntimeToolFromMCPTool(params: {
       let selectedConnectionKey: MCPConnectionKey | undefined;
       let selectedConnection: MCPToolConnectionInfo | undefined;
 
+      let additionalMCPEvents: MCPEventHookReturnEvent[] = [];
+
       if (hasPersonalConnections) {
         if (!impersonateUserId) {
           throw new Error(
@@ -411,14 +428,65 @@ export function createRuntimeToolFromMCPTool(params: {
         }
       }
 
-      const manager = mcpManagerCache.managers.get(selectedConnectionKey);
+      let manager = mcpManagerCache.managers.get(selectedConnectionKey);
 
       if (!manager) {
-        throw new Error(
-          `MCP manager not found for connection. The connection may need to be re-established.`,
+        // Lazy connection handling
+        if (!params.lazyConnectionDeps) {
+          throw new Error(
+            `MCP manager not found for connection and lazy connection deps not provided. The connection may need to be re-established.`,
+          );
+        }
+
+        const reducedState = params.lazyConnectionDeps.getReducedState();
+        const connection = reducedState.mcpConnections[selectedConnectionKey];
+
+        if (!connection) {
+          throw new Error(
+            `MCP connection ${selectedConnectionKey} not found in state. The connection may have been removed.`,
+          );
+        }
+
+        console.log(
+          `[MCP] Tool ${toolName} triggering lazy connection to ${selectedConnectionKey}`,
         );
+
+        const result = await lazyConnectMCPServer({
+          connectionKey: selectedConnectionKey,
+          connection,
+          agentDurableObjectId: params.lazyConnectionDeps.agentDurableObjectId,
+          agentDurableObjectName: params.lazyConnectionDeps.getAgentDurableObjectName(),
+          reducedState: reducedState,
+          getFinalRedirectUrl: params.lazyConnectionDeps.getFinalRedirectUrl,
+        });
+
+        if (!result.success) {
+          throw new Error(`Failed to establish MCP connection: ${result.error}`);
+        }
+
+        manager = result.data;
+
+        additionalMCPEvents = result.events || [];
+
+        if (!manager) {
+          return {
+            addEvents: [...additionalMCPEvents],
+            toolCallResult: {
+              content: [],
+              textSummary: `Tool call failed`,
+            },
+            triggerLLMRequest: true,
+          };
+        }
       }
-      if (!manager.mcpConnections[selectedConnection.serverId]) {
+
+      // Get the actual serverId from the manager's connections
+      // During rehydration, the serverId might change and the state might not be updated yet
+      // We always have one mcp connection, so we can just get the first one
+      // At this point, manager is definitely assigned (either from cache or lazy connection)
+      const actualServerId = Object.keys(manager.mcpConnections)[0];
+
+      if (!actualServerId || !manager.mcpConnections[actualServerId]) {
         throw new Error(
           `There was a system error and the MCP manager is not connected to the server. Please contact support.`,
         );
@@ -426,7 +494,7 @@ export function createRuntimeToolFromMCPTool(params: {
 
       try {
         const mcpResult = await manager.callTool({
-          serverId: selectedConnection.serverId,
+          serverId: actualServerId,
           name: tool.name,
           arguments: toolArgs,
         });
@@ -436,7 +504,7 @@ export function createRuntimeToolFromMCPTool(params: {
           try {
             const resourceContent = await manager.readResource(
               {
-                serverId: selectedConnection.serverId,
+                serverId: actualServerId,
                 uri: mcpResult.resource_link as string,
               },
               {},
@@ -464,7 +532,7 @@ export function createRuntimeToolFromMCPTool(params: {
             return {
               toolCallResult: result,
               triggerLLMRequest: true,
-              addEvents: fileEvents,
+              addEvents: [...additionalMCPEvents, ...fileEvents],
             };
           } catch (error) {
             console.warn(`Failed to fetch resource ${mcpResult.resource_link}:`, error);
@@ -500,7 +568,7 @@ export function createRuntimeToolFromMCPTool(params: {
         return {
           toolCallResult: result,
           triggerLLMRequest: true,
-          addEvents: fileEvents,
+          addEvents: [...additionalMCPEvents, ...fileEvents] as any,
         };
       } catch (error) {
         console.error(`[MCP] Tool execution failed for ${tool.name}:`, error);

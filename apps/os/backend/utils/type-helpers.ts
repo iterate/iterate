@@ -373,3 +373,17 @@ export const backcompat = <T, U>(params: {
     (params.old as z.ZodType<U & { deprecated: true }>).transform(params.upgrade),
   ]);
 };
+
+/**
+ * A Result type for explicit error handling.
+ * This type represents the outcome of an operation that can either succeed or fail.
+ *
+ * @example
+ * function divide(a: number, b: number): Result<number> {
+ *   if (b === 0) {
+ *     return { success: false, error: "Division by zero" };
+ *   }
+ *   return { success: true, data: a / b };
+ * }
+ */
+export type Result<T, E = string> = { success: true; data: T } | { success: false; error: E };
