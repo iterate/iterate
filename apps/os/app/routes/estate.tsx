@@ -127,7 +127,7 @@ function EstateContent() {
 
       return { previousEstate };
     },
-    onError: (err, newData, context) => {
+    onError: (_err, _newData, context) => {
       // If the mutation fails, use the context returned from onMutate to roll back
       utils.estate.get.setData({ estateId: estateIdData.estateId }, context?.previousEstate);
       toast.error("Failed to update estate name");
