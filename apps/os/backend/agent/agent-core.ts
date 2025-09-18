@@ -299,7 +299,7 @@ export class AgentCore<
     mentionedParticipants: {},
   } as MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices>;
 
-  recordRawRequest = false;
+  recordRawRequest = true;
 
   get state(): Readonly<typeof this._state> {
     return this._state;

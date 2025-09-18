@@ -11,6 +11,7 @@ import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
+import { getAgentStub } from "./agent/agent-stub-utils.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -43,6 +44,21 @@ app.use("*", async (c, next) => {
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
+
+// agent websocket endpoint
+app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
+  const estateId = c.req.param("estateId")!;
+  const agentClassName = c.req.param("className")!;
+  const agentInstanceName = c.req.param("agentInstanceName")!;
+
+  const agentStub = await getAgentStub(c.var.db, {
+    estateId,
+    className: agentClassName as "IterateAgent" | "SlackAgent",
+    durableObjectName: agentInstanceName,
+  });
+
+  return agentStub.fetch(c.req.raw);
+});
 
 // tRPC endpoint
 app.all("/api/trpc/*", (c) => {

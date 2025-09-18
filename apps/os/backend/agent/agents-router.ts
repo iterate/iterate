@@ -2,7 +2,7 @@ import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod/v4";
 
 import { protectedProcedure, router } from "../trpc/trpc.ts";
-import { AgentCoreEventInput, FileSharedEventInput } from "./agent-core-schemas.ts";
+import { AgentCoreEvent, AgentCoreEventInput, FileSharedEventInput, type CoreReducedState } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
@@ -157,6 +157,13 @@ export const agentsRouter = router({
       return { events, databaseRecord: await ctx.agent.getDatabaseRecord() };
     }),
 
+  getEvents: agentStubProcedure
+    .meta({ description: "Get the events of an agent instance" })
+    .output(z.array(AgentCoreEvent))
+    .query(async ({ ctx }) => {
+      return await ctx.agent.getEvents();
+    }),
+
   setBraintrustParentSpanExportedId: agentStubProcedure
     .meta({ description: "Set the braintrust span exported id for an agent instance" })
     .input(
@@ -205,7 +212,7 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return await ctx.agent.getReducedStateAtEventIndex(input.eventIndex);
+      return (await ctx.agent.getReducedStateAtEventIndex(input.eventIndex)) as CoreReducedState;
     }),
 
   // listAgentInstances: protectedProcedure

@@ -1,6 +1,11 @@
-import { Link } from "react-router";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { useNavigate } from "react-router";
+import { Bot, ChevronUp, ChevronDown, Search } from "lucide-react";
+import { format, formatDistanceToNow } from "date-fns";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
+import { Input } from "../components/ui/input.tsx";
+import { Badge } from "../components/ui/badge.tsx";
 import {
   Card,
   CardContent,
@@ -8,11 +13,25 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
-import { Badge } from "../components/ui/badge.tsx";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../components/ui/table.tsx";
 import { trpc } from "../lib/trpc.ts";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 
-export default function AgentsIndexPage() {
+type SortField = "name" | "className" | "createdAt";
+type SortDirection = "asc" | "desc";
+
+function AgentInstancesTable() {
+  const navigate = useNavigate();
+  const [filter, setFilter] = useState("");
+  const [sortField, setSortField] = useState<SortField>("createdAt");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
 
@@ -20,95 +39,228 @@ export default function AgentsIndexPage() {
     estateId: estateId,
   });
 
+  const handleRowClick = (params: { agentName: string; className: string }) => {
+    const { agentName, className } = params;
+    navigate(getEstateUrl(`/agents/${className}/${agentName}`));
+  };
+
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortField(field);
+      setSortDirection("desc");
+    }
+  };
+
+  const sortedAndFilteredData = useMemo(() => {
+    const filtered = agents.filter((agent) =>
+      agent.durableObjectName.toLowerCase().includes(filter.toLowerCase()),
+    );
+
+    filtered.sort((a, b) => {
+      let aValue: string | Date;
+      let bValue: string | Date;
+
+      switch (sortField) {
+        case "name":
+          aValue = a.durableObjectName;
+          bValue = b.durableObjectName;
+          break;
+        case "className":
+          aValue = a.className;
+          bValue = b.className;
+          break;
+        case "createdAt":
+          aValue = new Date(a.createdAt);
+          bValue = new Date(b.createdAt);
+          break;
+        default:
+          return 0;
+      }
+
+      if (aValue < bValue) {
+        return sortDirection === "asc" ? -1 : 1;
+      }
+      if (aValue > bValue) {
+        return sortDirection === "asc" ? 1 : -1;
+      }
+      return 0;
+    });
+
+    return filtered;
+  }, [agents, filter, sortField, sortDirection]);
+
+  if (agents.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <Bot className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+        <p className="text-muted-foreground">No agent instances found</p>
+        <p className="text-sm text-muted-foreground mt-1">
+          Create your first agent using the form above
+        </p>
+      </div>
+    );
+  }
+
+  const getSortIcon = (field: SortField) => {
+    if (sortField !== field) {
+      return null;
+    }
+    return sortDirection === "asc" ? (
+      <ChevronUp className="h-4 w-4 ml-1" />
+    ) : (
+      <ChevronDown className="h-4 w-4 ml-1" />
+    );
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold">Existing Agent Instances</h2>
+        <Badge variant="secondary">
+          {sortedAndFilteredData.length} of {agents.length} instance{agents.length !== 1 ? "s" : ""}
+        </Badge>
+      </div>
+
+      {/* Filter bar */}
+      <div className="relative">
+        <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+        <Input
+          placeholder="Filter agents by name..."
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          className="pl-10"
+        />
+      </div>
+
+      <div className="overflow-auto max-h-[calc(100vh-400px)]">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead
+                className="cursor-pointer hover:bg-muted/50 select-none w-[40%]"
+                onClick={() => handleSort("name")}
+              >
+                <div className="flex items-center">
+                  Agent Name
+                  {getSortIcon("name")}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer hover:bg-muted/50 select-none w-[30%]"
+                onClick={() => handleSort("className")}
+              >
+                <div className="flex items-center">
+                  Class Name
+                  {getSortIcon("className")}
+                </div>
+              </TableHead>
+              <TableHead
+                className="cursor-pointer hover:bg-muted/50 select-none w-[30%]"
+                onClick={() => handleSort("createdAt")}
+              >
+                <div className="flex items-center">
+                  Created
+                  {getSortIcon("createdAt")}
+                </div>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {sortedAndFilteredData.map((agent) => (
+              <TableRow
+                key={agent.id}
+                className="cursor-pointer hover:bg-muted/50"
+                onClick={() =>
+                  handleRowClick({
+                    agentName: agent.durableObjectName,
+                    className: agent.className,
+                  })
+                }
+              >
+                <TableCell className="font-medium max-w-0 w-[40%]">
+                  <div className="truncate pr-2" title={agent.durableObjectName}>
+                    {agent.durableObjectName}
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground max-w-0 w-[30%]">
+                  <div className="truncate pr-2" title={agent.className}>
+                    <Badge variant={agent.className === "SlackAgent" ? "default" : "secondary"}>
+                      {agent.className}
+                    </Badge>
+                  </div>
+                </TableCell>
+                <TableCell className="text-muted-foreground text-sm">
+                  <div title={format(new Date(agent.createdAt), "PPpp")}>
+                    {formatDistanceToNow(new Date(agent.createdAt), { addSuffix: true })}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+  );
+}
+
+export default function AgentsIndexPage() {
+  const [agentName, setAgentName] = useState<string>("");
+  const agentClassName = "IterateAgent"; // Always use IterateAgent
+  const inputRef = useRef<HTMLInputElement>(null);
+  const navigate = useNavigate();
+  const getEstateUrl = useEstateUrl();
+
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  const handleNavigate = () => {
+    if (agentName.trim() && agentClassName) {
+      navigate(getEstateUrl(`/agents/${agentClassName}/${agentName.trim()}`));
+    }
+  };
+
   return (
     <DashboardLayout>
-      <div className="p-6">
-        <div className="max-w-6xl mx-auto">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">
-              Manage Agents
-            </h1>
-            <p className="text-slate-600 dark:text-slate-300 text-lg">
-              View and interact with your agent instances
-            </p>
-          </div>
-
-          {agents.length > 0 ? (
-            <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-              {agents.map((agent) => (
-                <Card key={agent.id}>
-                  <CardHeader>
-                    <div className="flex items-center justify-between">
-                      <CardTitle className="text-lg truncate">{agent.durableObjectName}</CardTitle>
-                      <Badge variant={agent.className === "SlackAgent" ? "default" : "secondary"}>
-                        {agent.className}
-                      </Badge>
-                    </div>
-                    <CardDescription>
-                      <pre>{JSON.stringify(agent.metadata, null, 2)}</pre>
-                    </CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="space-y-2">
-                      <Link
-                        to={getEstateUrl(`agents/${agent.className}/${agent.durableObjectName}`)}
-                      >
-                        <Button className="w-full">View Agent</Button>
-                      </Link>
-                      <div className="text-xs text-muted-foreground space-y-1">
-                        <div>Created: {new Date(agent.createdAt).toLocaleDateString()}</div>
-                        <div className="truncate" title={agent.durableObjectId}>
-                          ID: {agent.durableObjectId.slice(0, 12)}...
-                        </div>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          ) : (
-            <div className="text-center py-12">
-              <div className="mx-auto w-24 h-24 bg-gray-100 dark:bg-gray-800 rounded-full flex items-center justify-center mb-4">
-                <svg
-                  className="w-12 h-12 text-gray-400"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-                  />
-                </svg>
+      <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
+        <Card className="bg-muted/30">
+          <CardHeader>
+            <CardTitle>Create New Agent</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="flex gap-2 relative">
+              <div className="relative flex-1">
+                <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                  <Bot size={16} className="text-muted-foreground" />
+                </div>
+                <Input
+                  id="agent-name"
+                  ref={inputRef}
+                  value={agentName}
+                  onChange={(e) => setAgentName(e.target.value)}
+                  placeholder="Enter agent durable object instance name"
+                  className="flex-1 pl-10"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      handleNavigate();
+                    }
+                  }}
+                />
               </div>
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
-                No agents found
-              </h3>
-              <p className="text-gray-600 dark:text-gray-400 mb-4">
-                No agent instances have been created for this estate yet.
-              </p>
+              <Button onClick={handleNavigate} disabled={!agentName.trim()}>
+                Go
+              </Button>
             </div>
-          )}
+          </CardContent>
+        </Card>
 
-          <div className="mt-8 p-6 border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
-            <div className="text-center">
-              <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100 mb-2">
-                Custom Agent Access
-              </h3>
-              <p className="text-gray-600 dark:text-gray-400 mb-4">
-                Access any agent directly using the URL pattern:
-              </p>
-              <code className="bg-gray-100 dark:bg-gray-800 px-3 py-1 rounded text-sm">
-                /agents/[agentClassName]/[durableObjectName]
-              </code>
-              <p className="text-sm text-gray-500 dark:text-gray-500 mt-2">
-                Example: /agents/IterateAgent/my-custom-agent
-              </p>
-            </div>
-          </div>
-        </div>
+        <Card>
+          <CardContent className="pt-6">
+            <AgentInstancesTable />
+          </CardContent>
+        </Card>
       </div>
     </DashboardLayout>
   );
