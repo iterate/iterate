@@ -8,6 +8,13 @@
       "when": 1758118513610,
       "tag": "0000_dizzy_klaw",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1758194240513,
+      "tag": "0001_sad_vin_gonzales",
+      "breakpoints": true
     }
   ]
 }

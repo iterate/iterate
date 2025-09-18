@@ -4,17 +4,20 @@ import { z } from "zod/v4";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { AgentCoreEventInput, FileSharedEventInput } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
-import { getAgentStub } from "./agent-stub-utils.ts";
+import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
+import type { MergedEventForSlices } from "./agent-core.ts";
+import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { SlackEventInput } from "./slack-slice.ts";
-import type { IterateAgentState } from "./iterate-agent.ts";
+// import type { IterateAgentState } from "./iterate-agent.ts";
 
 const agentStubProcedure = protectedProcedure
   .input(
     z.object({
-      agentInstanceName: z.string().describe("The name of the agent instance"),
+      estateId: z.string().describe("The estate this agent belongs to"),
+      agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
         .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
@@ -23,12 +26,20 @@ const agentStubProcedure = protectedProcedure
         .string()
         .describe("The reason for getting the agent stub - defaults to the request method and path")
         .optional(),
+      createIfNotExists: z.boolean().optional().default(true),
+      routingKeys: z.array(z.string()).optional().default([]),
     }),
   )
   .use(async ({ input, ctx, next }) => {
-    const agent = await getAgentStub({
-      ...input,
+    const estateId = input.estateId;
+    const agent = await getAgentStub(ctx.db, {
+      estateId,
+      className: input.agentClassName,
+      durableObjectName: input.agentInstanceName,
+      createIfNotExists: input.createIfNotExists,
+      routingKeys: input.routingKeys,
       reason: input.reason || `${ctx.c.req.method} ${ctx.c.req.url}`,
+      metadata: input.reason ? { reason: input.reason } : undefined,
     });
     return next({ ctx: { ...ctx, agent } });
   });
@@ -60,6 +71,23 @@ export const agentsRouter = router({
       timestamp: new Date().toISOString(),
       service: "agent",
     })),
+
+  list: protectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        agentClassName: z.enum(["IterateAgent", "SlackAgent"]).optional(),
+        routingKey: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const agents = await listAgents(ctx.db, {
+        estateId: input.estateId,
+        className: input.agentClassName,
+        routingKey: input.routingKey,
+      });
+      return agents;
+    }),
 
   listContextRules: protectedProcedure
     .meta({ description: "List all context rules available in the estate" })
@@ -120,14 +148,12 @@ export const agentsRouter = router({
 
   getState: agentStubProcedure
     .meta({ description: "Get the state of an agent instance" })
-    .output(
-      z.object({
-        events: z.array(AllAgentEventInputSchemas),
-      }),
-    )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      return { events };
+      return {
+        events: events as MergedEventForSlices<SlackAgentSlices>[],
+        databaseRecord: await ctx.agent.getDatabaseRecord(),
+      };
     }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure

@@ -11,10 +11,21 @@ export default function AgentsPage() {
   const [message, setMessage] = useState("");
   const utils = trpc.useUtils();
 
+  // Get user's estate ID
+  const [{ estateId }] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
+
+  if (
+    !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
+    !durableObjectName
+  ) {
+    throw new Error("Invalid agent class name or durable object name");
+  }
+
   // Get agent state with polling
   const { data: agentState, refetch } = trpc.agents.getState.useQuery({
-    agentInstanceName: durableObjectName!,
-    agentClassName: agentClassName! as "IterateAgent",
+    agentInstanceName: durableObjectName,
+    agentClassName: agentClassName,
+    estateId: estateId,
   });
 
   // Refresh feed every second
@@ -61,8 +72,9 @@ export default function AgentsPage() {
 
     try {
       await addEventsMutation.mutateAsync({
-        agentInstanceName: durableObjectName!,
-        agentClassName: agentClassName! as "IterateAgent",
+        agentInstanceName: durableObjectName,
+        agentClassName: agentClassName,
+        estateId: estateId,
         events: [userMessageEvent],
       });
       setMessage(""); // Clear the input after successful send
@@ -86,6 +98,15 @@ export default function AgentsPage() {
             <h1 className="text-2xl font-bold">
               Agent: {agentClassName}/{durableObjectName}
             </h1>
+          </div>
+
+          {/* Agent database record display */}
+          <div className="p-4 rounded-lg mb-6">
+            <div className="space-y-4 max-h-96 overflow-auto">
+              <pre className="text-xs p-2 rounded overflow-x-auto">
+                {JSON.stringify(agentState?.databaseRecord, null, 2)}
+              </pre>
+            </div>
           </div>
 
           {/* Agent state display */}
