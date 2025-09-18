@@ -801,10 +801,10 @@ function ToolCallInjector({
       ) : (
         <div className="flex gap-4 h-[calc(80vh-12rem)]">
           {/* Tool selector */}
-          <Card className="w-80 flex-shrink-0 p-0">
-            <div className="p-4">
-              <h3 className="font-medium mb-3">Available Tools</h3>
-              <div className="space-y-1 max-h-96 overflow-y-auto pr-2">
+          <Card className="w-80 flex-shrink-0 p-0 flex flex-col">
+            <div className="p-4 flex flex-col h-full">
+              <h3 className="font-medium mb-3 flex-shrink-0">Available Tools</h3>
+              <div className="space-y-1 flex-1 overflow-y-auto pr-2">
                 {availableTools.map((tool, index) => (
                   <button
                     key={tool.name}
