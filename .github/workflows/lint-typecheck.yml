@@ -29,4 +29,3 @@ jobs:
 
       - name: Run Typecheck
         run: pnpm typecheck
-        working-directory: apps/platform
