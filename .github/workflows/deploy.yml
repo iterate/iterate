@@ -9,8 +9,6 @@ permissions:
 
 jobs:
   deploy:
-    #Skip for now
-    if: false
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - name: Checkout code
@@ -30,8 +28,16 @@ jobs:
       - name: Install Doppler CLI
         run: curl -Ls https://cli.doppler.com/install.sh | sh
 
+      - name: Setup Doppler
+        run: doppler setup --config 'prd' --project os
+
+      - name: Sync secrets
+        run: doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
       - name: Deploy
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run --token $DOPPLER_TOKEN --project os-v2 --config prd -- pnpm deploy
-        working-directory: apps/platform
+        run: pnpm run deploy
+        working-directory: apps/os

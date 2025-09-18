@@ -6,6 +6,6 @@ export default defineConfig({
   dialect: "postgresql",
   casing: "snake_case",
   dbCredentials: {
-    url: "postgres://postgres:postgres@localhost:5432/iterate",
+    url: process.env.PSCALE_DATABASE_URL || "postgres://postgres:postgres@localhost:5432/iterate",
   },
 });

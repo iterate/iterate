@@ -11,6 +11,12 @@
   "observability": {
     "enabled": true,
   },
+  "routes": [
+    {
+      "pattern": "os.iterate.com",
+      "custom_domain": true,
+    },
+  ],
   "r2_buckets": [
     {
       "binding": "ITERATE_FILES",
@@ -20,8 +26,7 @@
   "hyperdrive": [
     {
       "binding": "ITERATE_POSTGRES",
-      // TODO: Add the real hyperdrive ID!
-      "id": "FILL_ME_IN",
+      "id": "0f83253702d742918896a58172be90e7",
       "localConnectionString": "postgres://postgres:postgres@localhost:5432/iterate",
     },
   ],

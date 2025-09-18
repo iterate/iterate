@@ -5,7 +5,7 @@
   "scripts": {
     "build": "react-router build",
     "cf-typegen": "wrangler types",
-    "deploy": "pnpm run build && wrangler deploy",
+    "deploy": "doppler run -- pnpm run build && wrangler deploy",
     "dev": "CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- react-router dev",
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
