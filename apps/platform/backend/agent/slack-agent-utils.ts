@@ -1,11 +1,6 @@
-// @ts-nocheck
-
-import { createHash } from "crypto";
+import { createHash } from "node:crypto";
 import type { SlackEvent } from "@slack/types";
-import * as R from "remeda";
-import { serverTrpc } from "../legacy-agent/trpc/trpc.ts";
-import type { SlackWebhookPayload } from "./slack.types.ts";
-import { shouldIncludeEventInConversation } from "./slack-filters.ts";
+import type { SlackWebhookPayload } from "./slack.types";
 
 export function getMentionedExternalUserIds(body: string) {
   const mentionRegex = /<@([A-Z0-9]+)(?:\|[^>]+)?>/g;
@@ -31,16 +26,14 @@ export function isBotMentionedInMessage(
 }
 
 export async function getThreadId(slackEvent: SlackEvent) {
-  if (slackEvent.type === "message") {
+  if (slackEvent.type === "message" || slackEvent.type === "app_mention") {
     return "thread_ts" in slackEvent ? slackEvent.thread_ts : slackEvent.ts;
   }
-  if (slackEvent.type === "app_mention") {
-    return slackEvent.thread_ts;
-  }
   if (slackEvent.type === "reaction_added" || slackEvent.type === "reaction_removed") {
-    return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
-      messageTs: slackEvent.item.ts,
-    });
+    throw new Error("Not implemented");
+    // return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
+    //   messageTs: slackEvent.item.ts,
+    // });
   }
 
   return null;
@@ -120,100 +113,95 @@ export function extractBotUserIdFromAuthorizations(
   return botAuthorization?.user_id;
 }
 
-export async function handleChannelJoinedEvent(params: { channelId: string; botUserId: string }) {
-  const { channelId, botUserId } = params;
+export async function handleChannelJoinedEvent(_params: { channelId: string; botUserId: string }) {
+  throw new Error("Not implemented");
+  // const { channelId, botUserId } = params;
+  // try {
+  //   const messagesResult = await serverTrpc.platform.integrations.slack.getChannelHistory.query({
+  //     channel: channelId,
+  //     limit: 2,
+  //   });
 
-  try {
-    const messagesResult = await serverTrpc.platform.integrations.slack.getChannelHistory.query({
-      channel: channelId,
-      limit: 2,
-    });
+  //   if (messagesResult.messages && messagesResult.messages.length > 0) {
+  //     const threadsWithMentions = R.groupBy(messagesResult.messages, (m) => m.thread_ts || m.ts);
 
-    if (messagesResult.messages && messagesResult.messages.length > 0) {
-      const threadsWithMentions = R.groupBy(messagesResult.messages, (m) => m.thread_ts || m.ts);
+  //     for (const [threadTs, threadMessages] of Object.entries(threadsWithMentions)) {
+  //       const messageWithBotMention = threadMessages.find(
+  //         (msg) => msg.type === "message" && isBotMentionedInMessage(msg, botUserId),
+  //       );
 
-      for (const [threadTs, threadMessages] of Object.entries(threadsWithMentions)) {
-        const messageWithBotMention = threadMessages.find(
-          (msg) => msg.type === "message" && isBotMentionedInMessage(msg, botUserId),
-        );
+  //       if (messageWithBotMention) {
+  //         const priorMessages = threadMessages
+  //           .map(
+  //             (msg) =>
+  //               `[${msg.ts}] ${msg.user ? `<@${msg.user}>` : "Unknown"}: ${msg.text || "(no text)"}`,
+  //           )
+  //           .join("\n");
 
-        if (messageWithBotMention) {
-          const priorMessages = threadMessages
-            .map(
-              (msg) =>
-                `[${msg.ts}] ${msg.user ? `<@${msg.user}>` : "Unknown"}: ${msg.text || "(no text)"}`,
-            )
-            .join("\n");
+  //         await serverTrpc.platform.integrations.slack.joinThreadWithAgent.mutate({
+  //           channel: channelId,
+  //           threadTs,
+  //           reactToTsOverride: messageWithBotMention.ts,
+  //           eventsToAdd: [
+  //             {
+  //               type: "CORE:LLM_INPUT_ITEM",
+  //               data: {
+  //                 type: "message",
+  //                 role: "developer",
+  //                 content: [
+  //                   {
+  //                     type: "input_text",
+  //                     text: `Go ahead and engage with this conversation. Prior messages: ${priorMessages}`,
+  //                   },
+  //                 ],
+  //               },
+  //               triggerLLMRequest: true,
+  //             },
+  //           ],
+  //         });
+  //       }
+  //     }
 
-          await serverTrpc.platform.integrations.slack.joinThreadWithAgent.mutate({
-            channel: channelId,
-            threadTs,
-            reactToTsOverride: messageWithBotMention.ts,
-            eventsToAdd: [
-              {
-                type: "CORE:LLM_INPUT_ITEM",
-                data: {
-                  type: "message",
-                  role: "developer",
-                  content: [
-                    {
-                      type: "input_text",
-                      text: `Go ahead and engage with this conversation. Prior messages: ${priorMessages}`,
-                    },
-                  ],
-                },
-                triggerLLMRequest: true,
-              },
-            ],
-          });
-        }
-      }
+  //     const joinedThreadsCount = Object.entries(threadsWithMentions).filter(([_, messages]) =>
+  //       messages.some((msg) => msg.type === "message" && isBotMentionedInMessage(msg, botUserId)),
+  //     ).length;
 
-      const joinedThreadsCount = Object.entries(threadsWithMentions).filter(([_, messages]) =>
-        messages.some((msg) => msg.type === "message" && isBotMentionedInMessage(msg, botUserId)),
-      ).length;
-
-      if (joinedThreadsCount > 0) {
-        console.log(
-          `[SlackAgent] Joined ${joinedThreadsCount} threads after channel_joined event in channel ${channelId}`,
-        );
-      }
-    }
-  } catch (error) {
-    console.error(`[SlackAgent] Error handling channel_joined event:`, error);
-  }
+  //     if (joinedThreadsCount > 0) {
+  //       console.log(
+  //         `[SlackAgent] Joined ${joinedThreadsCount} threads after channel_joined event in channel ${channelId}`,
+  //       );
+  //     }
+  //   }
+  // } catch (error) {
+  //   console.error(`[SlackAgent] Error handling channel_joined event:`, error);
+  // }
 }
 
-export async function reactToSlackWebhook(slackWebhookPayload: SlackWebhookPayload) {
-  const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
-
-  if (!botUserId || !slackWebhookPayload.event) {
-    return;
-  }
-
-  const messageMetadata = await getMessageMetadata(slackWebhookPayload.event);
-  if (!messageMetadata) {
-    return;
-  }
-
-  const shouldInclude = shouldIncludeEventInConversation(slackWebhookPayload.event, botUserId);
-
-  if (shouldInclude && slackWebhookPayload.event.type === "message") {
-    if (messageMetadata.channel && messageMetadata.messageTs) {
-      const isMentioned = isBotMentionedInMessage(slackWebhookPayload.event, botUserId);
-
-      if (isMentioned) {
-        await serverTrpc.platform.integrations.slack.addSlackReaction
-          .mutate({
-            channel: messageMetadata.channel,
-            timestamp: messageMetadata.messageTs,
-            name: "eyes",
-          })
-          .then(
-            () => console.log("[SlackAgent] Added eyes reaction"),
-            (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
-          );
-      }
-    }
-  }
+export async function reactToSlackWebhook(_slackWebhookPayload: SlackWebhookPayload) {
+  // const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
+  // if (!botUserId || !slackWebhookPayload.event) {
+  //   return;
+  // }
+  // const messageMetadata = await getMessageMetadata(slackWebhookPayload.event);
+  // if (!messageMetadata) {
+  //   return;
+  // }
+  // const shouldInclude = shouldIncludeEventInConversation(slackWebhookPayload.event, botUserId);
+  // if (shouldInclude && slackWebhookPayload.event.type === "message") {
+  //   if (messageMetadata.channel && messageMetadata.messageTs) {
+  //     const isMentioned = isBotMentionedInMessage(slackWebhookPayload.event, botUserId);
+  //     if (isMentioned) {
+  //       await serverTrpc.platform.integrations.slack.addSlackReaction
+  //         .mutate({
+  //           channel: messageMetadata.channel,
+  //           timestamp: messageMetadata.messageTs,
+  //           name: "eyes",
+  //         })
+  //         .then(
+  //           () => console.log("[SlackAgent] Added eyes reaction"),
+  //           (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
+  //         );
+  //     }
+  //   }
+  // }
 }

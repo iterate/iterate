@@ -10,6 +10,9 @@ export type CloudflareEnv = Env & {
   GOOGLE_CLIENT_SECRET: string;
   SLACK_CLIENT_ID: string;
   SLACK_CLIENT_SECRET: string;
+
+  // temporarily using this old env var i found in doppler until i can hook up to better auth accounts table
+  SLACK_PROXY_BOT_TOKEN: string;
 };
 
 export const env = _env as CloudflareEnv;

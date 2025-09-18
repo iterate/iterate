@@ -8,6 +8,9 @@ export default defineConfig({
   build: {
     sourcemap: process.env.NODE_ENV === "development" ? true : false,
   },
+  server: {
+    allowedHosts: [".dev.iterate.com"],
+  },
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),
     tailwindcss(),

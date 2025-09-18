@@ -37,6 +37,7 @@ import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
+import { defaultContextRules } from "./default-context-rules.ts";
 // import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -458,17 +459,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    return [
-      {
-        id: "bla",
-        tools: [
-          {
-            type: "agent_durable_object_tool",
-            methodName: "reverse",
-          },
-        ],
-      },
-    ];
+    return await defaultContextRules();
     // Fetch context rules from the platform
     // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
     //   trpcCallableBuilder.platform.agents.listContextRules.build(),

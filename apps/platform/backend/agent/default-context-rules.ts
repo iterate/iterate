@@ -1,12 +1,11 @@
 // I'd like to move this to the SDK as soon as possible, but it requires some package reorganisation
 
 import dedent from "dedent";
-import { z as _z } from "zod/v4";
-import { makeTrpcCallable } from "./callable-builders.ts";
+import { z } from "zod/v4";
 import { defineRule, matchers } from "./context.ts";
 
 // not typesafe version
-const trpcCallableBuilder = makeTrpcCallable<any>();
+// const trpcCallableBuilder = makeTrpcCallable<any>();
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -148,14 +147,14 @@ export const defaultContextRules = async () => [
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
       // IterateAgent DO tools
-      {
-        type: "agent_durable_object_tool",
-        methodName: "doNothing",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "connectMCPServer",
-      },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "doNothing",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "connectMCPServer",
+      // },
       {
         type: "agent_durable_object_tool",
         methodName: "getAgentDebugURL",
@@ -178,53 +177,51 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "stopRespondingUntilMentioned",
       },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "addSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "removeSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "uploadAndShareFileInSlack",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "updateSlackMessage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getUrlContent",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "searchWeb",
-      },
-
-      // TRPC tools
-      // @ts-expect-error not typesafe
-      trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
-        overrideName: "generate_image",
-      }),
-      // @ts-expect-error not typesafe
-      trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
-        overrideName: "edit_image",
-      }),
       // {
       //   type: "agent_durable_object_tool",
-      //   methodName: "sendSlackMessage",
-      //   overrideInputJSONSchema: z.toJSONSchema(
-      //     (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
-      //       text: true,
-      //       ephemeral: true,
-      //       user: true,
-      //       blocks: true,
-      //       endTurn: true,
-      //     }),
-      //   ),
+      //   methodName: "addSlackReaction",
       // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "removeSlackReaction",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "uploadAndShareFileInSlack",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "updateSlackMessage",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "getUrlContent",
+      // },
+      // {
+      //   type: "agent_durable_object_tool",
+      //   methodName: "searchWeb",
+      // },
+
+      // TRPC tools
+      // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
+      //   overrideName: "generate_image",
+      // }),
+      // trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
+      //   overrideName: "edit_image",
+      // }),
+      {
+        type: "agent_durable_object_tool",
+        methodName: "sendSlackMessage",
+        overrideInputJSONSchema: z.toJSONSchema(
+          (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
+            text: true,
+            ephemeral: true,
+            user: true,
+            blocks: true,
+            endTurn: true,
+          }),
+        ),
+      },
     ],
   }),
   {

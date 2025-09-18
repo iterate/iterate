@@ -1,48 +1,57 @@
-// @ts-nocheck
-
-import { z } from "zod";
-import { defineDOTools } from "@iterate-com/helpers/agent/do-tools";
-import { IntegrationMode } from "@iterate-com/sdk/tools";
-import {
-  AddSlackReactionInput,
-  RemoveSlackReactionInput,
-  SendSlackMessageInput,
-  UpdateSlackMessageInput,
-  UploadFileToSlackInput,
-} from "../legacy-agent/integrations/slack/router.ts";
-import type { StaticIntegrationSlug } from "../legacy-agent/integrations/manifests.ts";
-import { SearchRequest } from "../legacy-agent/trpc/routes/default-tools.ts";
-import { SlackInteractionPayload } from "./slack.types.ts";
+import z from "zod";
+import { defineDOTools } from "./do-tools.ts";
 
 export const slackAgentTools = defineDOTools({
-  getSetupIntegrationInAgentURL: {
-    description:
-      "Setup an integration in the agent. Call with internal id for the user requesting the integration.",
-    input: z.object({
-      impersonateUserEmail: z.string(),
-      mode: IntegrationMode,
-      integrationSlug: z.string() as z.ZodType<StaticIntegrationSlug>,
-      appSlug: z.string(),
-    }),
-  },
-  onSlackWebhookEventReceived: {
-    description: "Handle a Slack webhook event",
-    input: z.unknown(),
-  },
-  onSlackInteractionReceived: {
-    description: "Handle a Slack interaction event",
-    input: z.object({
-      payload: SlackInteractionPayload,
-      interactionId: z.string(),
-      timestamp: z.number(),
-    }),
-  },
+  // Not sure we still need this
+  // getSetupIntegrationInAgentURL: {
+  //   description:
+  //     "Setup an integration in the agent. Call with internal id for the user requesting the integration.",
+  //   input: z.object({
+  //     impersonateUserEmail: z.string(),
+  //     mode: IntegrationMode,
+  //     integrationSlug: z.string() as z.ZodType<StaticIntegrationSlug>,
+  //     appSlug: z.string(),
+  //   }),
+  // },
   sendSlackMessage: {
     description: `Send a message to a Slack channel to a specific user. Supports rich formatting using blocks, buttons, and interactive elements for structured messages, forms, and other interactive components. Include modalDefinitions to define modals that open when buttons are clicked. Always set ephemeral=false!`,
-    input: SendSlackMessageInput.extend({
-      // make these both optional, because we can infer them from context (but still want to allow agents to send messages to other threads)
-      channel: SendSlackMessageInput.shape.channel.optional(),
-      threadTs: SendSlackMessageInput.shape.threadTs.optional(),
+    input: z.object({
+      text: z.string().describe("The message text (required if blocks not provided)"),
+      blocks: z
+        .array(z.record(z.string(), z.any()))
+        .optional()
+        .describe("Array of slack block objects"),
+      ephemeral: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether to send as ephemeral message (visible only to specific user). Requires 'user' field when true.",
+        ),
+      user: z
+        .string()
+        .optional()
+        .describe("Slack user ID to send ephemeral message to (required when ephemeral=true)"),
+      metadata: z
+        .object({
+          event_type: z.string(),
+          event_payload: z.any(),
+        })
+        .optional()
+        .describe("Optional metadata for tracking message events"),
+      modalDefinitions: z
+        .record(z.string(), z.any())
+        .optional()
+        .describe(
+          "Modal definitions for button interactions - maps action_id to modal view definition",
+        ),
+      unfurlLinks: z
+        .boolean()
+        .optional()
+        .describe("Whether to unfurl links. If undefined, uses intelligent heuristics."),
+      unfurlMedia: z
+        .boolean()
+        .optional()
+        .describe("Whether to unfurl media. If undefined, uses intelligent heuristics."),
       endTurn: z
         .boolean()
         .default(false)
@@ -54,37 +63,42 @@ export const slackAgentTools = defineDOTools({
   },
   addSlackReaction: {
     description: "Add an emoji reaction to a Slack message",
-    input: AddSlackReactionInput,
+    input: z.object({
+      ts: z.string().describe("The ts of the message to react to"),
+      name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
+    }),
   },
   removeSlackReaction: {
     description: "Remove an emoji reaction from a Slack message",
-    input: RemoveSlackReactionInput,
-  },
-  uploadAndShareFileInSlack: {
-    description:
-      "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
-    input: UploadFileToSlackInput.extend({
-      // make these both optional, because we can infer them from context (but still want to allow agents to upload files to other threads)
-      channel: z.string().optional(),
-      threadTs: z.string().optional(),
-    }),
-  },
-  createMemory: {
-    description: "Create a memory",
     input: z.object({
-      impersonateUserEmail: z.string(),
-      content: z.string(),
-      isEstateWide: z
-        .boolean()
-        .describe(
-          "Whether everyone in the estate can see this memory or it is a personal memory for the current user",
-        ),
+      ts: z.string().describe("The ts of the message to remove reaction from"),
+      name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
     }),
   },
+  // uploadAndShareFileInSlack: {
+  //   description:
+  //     "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
+  //   input: z.object({
+  //     iterateFileId: z.string().describe("The Iterate file ID to upload"),
+  //     initial_comment: z.string().optional().describe("Optional comment to include with the file"),
+  //   }).extend({
+  //     // make these both optional, because we can infer them from context (but still want to allow agents to upload files to other threads)
+  //     channel: z.string().optional(),
+  //     threadTs: z.string().optional(),
+  //   }),
+  // },
   updateSlackMessage: {
     description:
       "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
-    input: UpdateSlackMessageInput,
+    input: z.object({
+      ts: z.string().describe("The timestamp of the message to update"),
+      text: z.string().optional().describe("Updated message text"),
+      blocks: z
+        .array(z.record(z.string(), z.any()))
+        .optional()
+        .describe("Updated Block Kit blocks"),
+      metadata: z.any().optional().describe("Updated metadata"),
+    }),
   },
   stopRespondingUntilMentioned: {
     description:
@@ -110,7 +124,11 @@ export const slackAgentTools = defineDOTools({
     }),
   },
   searchWeb: {
-    description: "Neural search the web",
-    input: SearchRequest.omit({ type: true }),
+    description: "Search the web using exa (think of it like a better google)",
+    input: z.object({
+      query: z.string(),
+      numResults: z.number().optional().default(10),
+      safeSearch: z.boolean().optional().default(true),
+    }),
   },
 });

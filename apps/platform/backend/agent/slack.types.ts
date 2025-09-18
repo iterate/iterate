@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { SlackEvent } from "@slack/types";
 
 // Slack Interaction Payload Types

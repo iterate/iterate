@@ -16,7 +16,7 @@ const agentStubProcedure = protectedProcedure
     z.object({
       agentInstanceName: z.string().describe("The name of the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent"])
+        .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z
@@ -27,7 +27,6 @@ const agentStubProcedure = protectedProcedure
   )
   .use(async ({ input, ctx, next }) => {
     const agent = await getAgentStub({
-      env: ctx.c.env,
       ...input,
       reason: input.reason || `${ctx.c.req.method} ${ctx.c.req.url}`,
     });
