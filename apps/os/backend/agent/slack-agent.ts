@@ -425,10 +425,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // let lastUserMessage: any = null;
 
-    // for (let i = state.events.length - 1; i >= 0; i--) {
-    //   const event = state.events[i] as any;
+    // const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+    // for (let i = events.length; i >= 0; i--) {
+    //   const event = state.events[i];
 
-    //   if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
+    //   if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") { // todo: remove this check - no longer needed because we're using this.getEventsByType
     //     const slackEvent = event.data?.payload?.event as SlackEvent;
 
     //     if (slackEvent?.type === "message") {
