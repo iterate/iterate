@@ -19,8 +19,8 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent } from "./agent-core-schemas.ts";
-import { evaluateContextRuleMatchers, type ContextItem, type ContextRule } from "./context.ts";
+import { AgentCoreEvent, type ContextRuleWithToolSpecsWithSchemas } from "./agent-core-schemas.ts";
+import { evaluateContextRuleMatchers } from "./context.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 // import {
 //   rehydrateMCPConnections,
@@ -36,8 +36,12 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
-import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
+import {
+  toolSpecsToImplementations,
+  toolSpecsWithSchemasToImplementations,
+} from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
+import type { ContextItem, ContextRule } from "./context-schemas.ts";
 // import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -130,14 +134,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
-  private databaseRecord?: {
-    persistedId: string;
-    estateId: string;
-    className: string;
-    durableObjectName: string;
-    durableObjectId: string;
-    metadata: Record<string, unknown>;
-  };
   // Runtime slice list – inferred from the generic parameter.
   protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
 
@@ -261,9 +257,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const _posthogClient = this.getPosthogClient();
+    const posthogClient = this.getPosthogClient();
 
     const baseDeps: AgentCoreDeps = {
+      getRuleMatchData: (state) => ({
+        agentCoreState: state,
+        durableObjectClassName: this.constructor.name,
+      }),
       storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
@@ -321,6 +321,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           projectName: `iterate-platform`,
           braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
         });
+      },
+
+      toolSpecsWithSchemasToImplementations: (specs) => {
+        // dumb cast to expose protected properties
+        return toolSpecsWithSchemasToImplementations({ do: this, toolSpecs: specs });
       },
 
       toolSpecsToImplementations: async (specs: ToolSpec[]) => {
@@ -502,6 +507,42 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
 
+  async getInitialContextRulesEvent() {
+    const rules = await this.getContextRules();
+    const tools = rules.flatMap(
+      (rule, ruleIndex) =>
+        rule.tools?.map((tool, toolIndex) => ({ tool, ruleIndex, toolIndex })) || [],
+    );
+    const self = this as typeof this & { env: IterateAgent["env"] };
+    const runtimeTools = await toolSpecsToImplementations({
+      theDO: self,
+      toolSpecs: tools.map(({ tool }) => tool),
+    });
+    const jsonSchemas = Object.fromEntries(
+      tools.map(({ ruleIndex, toolIndex }, i) => [
+        `${ruleIndex}-${toolIndex}`,
+        runtimeTools[i].type === "function" ? runtimeTools[i].parameters : null,
+      ]),
+    );
+    const rulesWithToolsWithSchemas = rules.map(
+      (rule, ruleIndex): ContextRuleWithToolSpecsWithSchemas => ({
+        ...rule,
+        tools: rule.tools?.map((tool, toolIndex) => ({
+          spec: tool,
+          inputSchema: jsonSchemas[`${ruleIndex}-${toolIndex}`],
+        })),
+      }),
+    );
+    return {
+      type: "CORE:ADD_CONTEXT_ITEMS",
+      data: { items: rulesWithToolsWithSchemas },
+      metadata: {},
+      triggerLLMRequest: false,
+      createdAt: new Date().toISOString(),
+      eventIndex: 0,
+    } satisfies AgentCoreEvent;
+  }
+
   /**
    * Called after an agent object in constructed and the state has been loaded from the DO store.
    */
@@ -509,8 +550,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Call parent onStart to ensure persistence completes
     await super.onStart();
 
-    const event = this.getEvents();
-    await this.agentCore.initializeWithEvents(event);
+    const events = this.getEvents();
+    if (events.length === 0) {
+      // new agent, fetch initial context rules, along with tool schemas etc.
+      events.push(await this.getInitialContextRulesEvent());
+    }
+    await this.agentCore.initializeWithEvents(events);
 
     this.setState({
       ...this.state,
@@ -621,9 +666,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   /*
    * Get the reduced state at a specific event index
    */
-  async getReducedStateAtEventIndex(
-    eventIndex: number,
-  ): Promise<Readonly<MergedStateForSlices<Slices>>> {
+  async getReducedStateAtEventIndex(eventIndex: number) {
     return this.agentCore.getReducedStateAtEventIndex(eventIndex);
   }
 

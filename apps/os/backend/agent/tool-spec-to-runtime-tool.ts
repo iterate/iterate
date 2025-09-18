@@ -10,8 +10,8 @@ import {
   type ToolSpec,
 } from "./tool-schemas.ts";
 import { parseMagicAgentInstructions } from "./magic.ts";
-import { subtractObjectPropsFromJSONSchema } from "./subtract-object-props-from-json-schema.ts";
 import { filterOptionalFieldsFromJSONSchema } from "./json-schema.ts";
+import { subtractObjectPropsFromJSONSchema } from "./subtract-object-props-from-json-schema.ts";
 
 /**
  * Sanitizes a tool name to match OpenAI's requirements: ^[a-zA-Z0-9_-]+$
@@ -88,6 +88,63 @@ function fiddleWithJsonSchema(
   return jsonSchema;
 }
 
+export type DOWithToolDefinitions = {
+  toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
+};
+
+export function toolSpecsWithSchemasToImplementations(params: {
+  do: DOWithToolDefinitions;
+  toolSpecs: { spec: ToolSpec; inputSchema: {} | null }[];
+}) {
+  const { toolSpecs } = params;
+
+  return toolSpecs.map(({ spec, inputSchema }): RuntimeTool => {
+    // Handle openai_builtin tools immediately
+    if (spec.type === "openai_builtin") {
+      return spec.openAITool;
+    }
+
+    if (spec.type === "agent_durable_object_tool") {
+      spec = { ...spec, overrideName: spec.overrideName || spec.methodName };
+      const { methodName, passThroughArgs } = spec;
+      const toolDefinitions = params.do.toolDefinitions();
+      if (!(methodName in toolDefinitions)) {
+        throw new Error(`methodName ${methodName} not found in doToolDefinitions`);
+      }
+      const def = toolDefinitions[methodName] as unknown as DOToolDef<{}, any>;
+      const doToolRuntimeJsonSchema = doToolToRuntimeJsonSchema(def);
+      const inputJsonSchema = fiddleWithJsonSchema(
+        inputSchema || spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema,
+        spec,
+      );
+      return {
+        type: "function",
+        name: spec.overrideName || sanitizeToolName(spec.methodName),
+        metadata: { source: "durable-object" },
+        parameters: inputJsonSchema,
+        // we default strict mode to false because then we can allow the LLM to call us with "any object"
+        strict: false,
+        description: spec.overrideDescription || def?.description || null,
+        execute: async (_openaiExecuteParams, methodParams) => {
+          const combinedArgs = { ...(methodParams as {}), ...(passThroughArgs as {}) };
+          const validatedArgs = def?.input
+            ? def.input.safeParse(combinedArgs)
+            : ({ success: true, data: combinedArgs } as const);
+          if (!validatedArgs.success) {
+            throw new Error(`Invalid arguments: ${z.prettifyError(validatedArgs.error)}`);
+          }
+          const result = await (params.do as {} as Record<string, Function>)[methodName](
+            validatedArgs.data,
+          );
+          return processMagic(result, spec);
+        },
+      };
+    }
+
+    throw new Error(`Callable not implemented.`);
+  });
+}
+
 /**
  * Batch convert tool specifications to their runtime implementations
  *
@@ -95,11 +152,11 @@ function fiddleWithJsonSchema(
  * @returns A promise that resolves to an array of runtime tool implementations
  */
 // todo: move this to agent.ts - it's only used there
-export async function toolSpecsToImplementations<
+export function toolSpecsToImplementations<
   T extends {
     toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
   },
->(params: { toolSpecs: ToolSpec[]; theDO: T }): Promise<RuntimeTool[]> {
+>(params: { toolSpecs: ToolSpec[]; theDO: T }): RuntimeTool[] {
   return params.toolSpecs.reduce((acc, spec) => {
     if (spec.type === "openai_builtin") {
       return [...acc, spec.openAITool];

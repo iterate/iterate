@@ -195,8 +195,8 @@ importers:
         specifier: ^5.1.30
         version: 5.1.30
       jsonata:
-        specifier: ^2.1.0
-        version: 2.1.0
+        specifier: github:mmkal/jsonata#e892b028ccb52d795cf29468e6a12c81db029c90
+        version: https://codeload.github.com/mmkal/jsonata/tar.gz/e892b028ccb52d795cf29468e6a12c81db029c90
       lucide-react:
         specifier: ^0.544.0
         version: 0.544.0(react@19.1.1)
@@ -3821,8 +3821,9 @@ packages:
     engines: {node: '>=6'}
     hasBin: true
 
-  jsonata@2.1.0:
-    resolution: {integrity: sha512-OCzaRMK8HobtX8fp37uIVmL8CY1IGc/a6gLsDqz3quExFR09/U78HUzWYr7T31UEB6+Eu0/8dkVD5fFDOl9a8w==}
+  jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/e892b028ccb52d795cf29468e6a12c81db029c90:
+    resolution: {tarball: https://codeload.github.com/mmkal/jsonata/tar.gz/e892b028ccb52d795cf29468e6a12c81db029c90}
+    version: 2.1.0
     engines: {node: '>= 8'}
 
   jsx-ast-utils@3.3.5:
@@ -8924,7 +8925,7 @@ snapshots:
 
   json5@2.2.3: {}
 
-  jsonata@2.1.0: {}
+  jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/e892b028ccb52d795cf29468e6a12c81db029c90: {}
 
   jsx-ast-utils@3.3.5:
     dependencies:
