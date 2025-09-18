@@ -39,7 +39,7 @@ import {
   hashToolSpec,
 } from "./agent-core-schemas.js";
 import { PromptFragment, renderPromptFragment } from "./prompt-fragments.js";
-import { MCPServer, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
+import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import type { ContextItem } from "./context.ts";
 
 /**
@@ -744,20 +744,6 @@ export class AgentCore<
               performance.now() - beforeToolSpecs;
           }
           timings[`reducers_core_toolSpecs_${index}`] = performance.now() - beforeToolSpecs;
-        }
-        if (item.mcpServers) {
-          // Only add MCP servers that aren't already present (based on serverUrl equality)
-          const existingMcpServerUrls = new Set(next.mcpServers.map((server) => server.serverUrl));
-          const newMcpServers = item.mcpServers.filter(
-            (server) => !existingMcpServerUrls.has(server.serverUrl),
-          );
-
-          if (newMcpServers.length > 0) {
-            next.mcpServers = [
-              ...next.mcpServers,
-              ...newMcpServers.map((server) => MCPServer.parse(server)),
-            ];
-          }
         }
       }
       next.ephemeralPromptFragments["context-items"] = collectedPromptFragments;

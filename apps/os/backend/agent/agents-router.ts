@@ -265,11 +265,9 @@ export const agentsRouter = router({
           .optional()
           .default([])
           .describe("Tool specifications for the agent"),
-        mcpServers: z.array(z.any()).optional().default([]).describe("MCP servers for the agent"),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // Build the events array
       const events: any[] = [
         {
           type: "CORE:SET_SYSTEM_PROMPT",
@@ -286,7 +284,6 @@ export const agentsRouter = router({
         },
       ];
 
-      // Add tool specs if provided
       if (input.toolSpecs.length > 0) {
         events.push({
           type: "CORE:ADD_TOOL_SPECS",
@@ -296,16 +293,6 @@ export const agentsRouter = router({
         });
       }
 
-      if (input.mcpServers.length > 0) {
-        events.push({
-          type: "MCP:ADD_MCP_SERVERS",
-          data: {
-            servers: input.mcpServers,
-          },
-        });
-      }
-
-      // Send all events
       return await ctx.agent.addEvents(events);
     }),
 

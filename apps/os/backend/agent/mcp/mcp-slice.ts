@@ -7,7 +7,7 @@ import {
   type CoreReducedState,
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
-import { IntegrationMode, MCPServer } from "../tool-schemas.ts";
+import { IntegrationMode } from "../tool-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import {
   generateRuntimeToolsFromConnections,
@@ -78,7 +78,6 @@ export type MCPConnection = z.infer<typeof MCPConnection>;
 export interface MCPSliceState {
   mcpConnections: Record<MCPConnectionKey, MCPConnection>;
   pendingConnections: string[]; // Track pending connection keys
-  mcpServers: MCPServer[];
 }
 
 // ------------------------- Event Schemas -------------------------
@@ -107,36 +106,6 @@ export const MCPConnectRequestEvent = z.object({
 export const MCPConnectRequestEventInput = z.object({
   ...agentCoreBaseEventInputFields,
   ...mcpConnectRequestFields,
-});
-
-const mcpAddMcpServerFields = {
-  type: z.literal("MCP:ADD_MCP_SERVERS"),
-  data: z.object({ servers: z.array(MCPServer) }),
-};
-
-export const MCPAddMcpServerEvent = z.object({
-  ...agentCoreBaseEventFields,
-  ...mcpAddMcpServerFields,
-});
-
-export const MCPAddMcpServerEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpAddMcpServerFields,
-});
-
-const mcpRemoveMcpServerFields = {
-  type: z.literal("MCP:REMOVE_MCP_SERVERS"),
-  data: z.object({ servers: z.array(MCPServer) }),
-};
-
-export const MCPRemoveMcpServerEvent = z.object({
-  ...agentCoreBaseEventFields,
-  ...mcpRemoveMcpServerFields,
-});
-
-export const MCPRemoveMcpServerEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpRemoveMcpServerFields,
 });
 
 const mcpConnectionEstablishedFields = {
@@ -256,8 +225,6 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPToolsChanged,
   MCPConnectionErrorEvent,
   MCPOAuthRequiredEvent,
-  MCPAddMcpServerEvent,
-  MCPRemoveMcpServerEvent,
 ]);
 
 export const MCPEventInput = z.discriminatedUnion("type", [
@@ -267,8 +234,6 @@ export const MCPEventInput = z.discriminatedUnion("type", [
   MCPToolsChangedInput,
   MCPConnectionErrorEventInput,
   MCPOAuthRequiredEventInput,
-  MCPAddMcpServerEventInput,
-  MCPRemoveMcpServerEventInput,
 ]);
 
 // ------------------------- Types -------------------------
@@ -278,16 +243,12 @@ export type MCPDisconnectRequestEvent = z.infer<typeof MCPDisconnectRequestEvent
 export type MCPConnectionEstablishedEvent = z.infer<typeof MCPConnectionEstablishedEvent>;
 export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
-export type MCPAddMcpServerEvent = z.infer<typeof MCPAddMcpServerEvent>;
-export type MCPRemoveMcpServerEvent = z.infer<typeof MCPRemoveMcpServerEvent>;
 
 export type MCPConnectRequestEventInput = z.infer<typeof MCPConnectRequestEventInput>;
 export type MCPDisconnectRequestEventInput = z.infer<typeof MCPDisconnectRequestEventInput>;
 export type MCPConnectionEstablishedEventInput = z.infer<typeof MCPConnectionEstablishedEventInput>;
 export type MCPConnectionErrorEventInput = z.infer<typeof MCPConnectionErrorEventInput>;
 export type MCPOAuthRequiredEventInput = z.infer<typeof MCPOAuthRequiredEventInput>;
-export type MCPAddMcpServerEventInput = z.infer<typeof MCPAddMcpServerEventInput>;
-export type MCPRemoveMcpServerEventInput = z.infer<typeof MCPRemoveMcpServerEventInput>;
 
 export type MCPEvent = z.infer<typeof MCPEvent>;
 export type MCPEventInput = z.input<typeof MCPEventInput>;
@@ -376,24 +337,9 @@ export const mcpSlice = defineAgentCoreSlice<{
   initialState: {
     mcpConnections: {},
     pendingConnections: [],
-    mcpServers: [],
   },
   reduce(state, deps, event) {
     switch (event.type) {
-      case "MCP:ADD_MCP_SERVERS": {
-        const { servers } = event.data;
-        const newUrls = new Set(event.data.servers.map((s) => s.serverUrl));
-        return {
-          mcpServers: [...state.mcpServers.filter((s) => !newUrls.has(s.serverUrl)), ...servers],
-        };
-      }
-
-      case "MCP:REMOVE_MCP_SERVERS": {
-        return {
-          mcpServers: state.mcpServers.filter((server) => !event.data.servers.includes(server)),
-        };
-      }
-
       case "MCP:CONNECT_REQUEST": {
         const { serverUrl, mode, userId } = event.data;
         const connectionKey = getConnectionKey({ serverUrl, mode, userId });

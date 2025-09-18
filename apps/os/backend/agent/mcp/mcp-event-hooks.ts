@@ -6,7 +6,6 @@ import type { CoreAgentSlices } from "../iterate-agent.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
-  type MCPAddMcpServerEvent,
   type MCPConnection,
   type MCPConnectionErrorEventInput,
   type MCPConnectionEstablishedEventInput,
@@ -16,16 +15,11 @@ import {
   type MCPDisconnectRequestEvent,
   type MCPDisconnectRequestEventInput,
   type MCPOAuthRequiredEventInput,
-  type MCPRemoveMcpServerEvent,
 } from "./mcp-slice.ts";
 
 // ------------------------- Types -------------------------
 
-type HookedMCPEvent =
-  | MCPAddMcpServerEvent
-  | MCPRemoveMcpServerEvent
-  | MCPConnectRequestEvent
-  | MCPDisconnectRequestEvent;
+type HookedMCPEvent = MCPConnectRequestEvent | MCPDisconnectRequestEvent;
 
 export type MCPEventHookReturnEvent =
   | MCPConnectRequestEventInput
@@ -55,113 +49,6 @@ interface MCPConnectionResult {
 export const mcpManagerCache = {
   managers: new Map<MCPConnectionKey, MCPClientManager>(),
 };
-
-// ------------------------- Event Handlers -------------------------
-
-async function handleAddMcpServers(
-  params: MCPEventHandlerParams<MCPAddMcpServerEvent>,
-): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState } = params;
-  const events: MCPEventHookReturnEvent[] = [];
-
-  // We need to request connections if there are existing participants.
-  // If the connection is company mode, we only need to request a single connection.
-  for (const spec of event.data.servers) {
-    if (spec.mode === "personal") {
-      const participants = Object.entries(reducedState.participants);
-      for (const [userId] of participants) {
-        const connectionKey = getConnectionKey({
-          serverUrl: spec.serverUrl,
-          mode: "personal",
-          userId,
-        });
-        if (reducedState.mcpConnections[connectionKey]?.connectedAt) {
-          console.log(`[MCP] Already connected to ${connectionKey}, skipping reconnection`);
-          continue;
-        }
-
-        events.push({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            serverUrl: spec.serverUrl,
-            mode: "personal",
-            userId,
-            integrationSlug: spec.integrationSlug,
-            allowedTools: spec.allowedTools,
-            allowedPrompts: spec.allowedPrompts,
-            allowedResources: spec.allowedResources,
-            requiresAuth: spec.requiresAuth ?? true,
-            triggerLLMRequestOnEstablishedConnection: false,
-            headers: spec.headers,
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-      }
-    } else {
-      const connectionKey = getConnectionKey({
-        serverUrl: spec.serverUrl,
-        mode: "company",
-        userId: undefined,
-      });
-      if (reducedState.mcpConnections[connectionKey]?.connectedAt) {
-        console.log(`[MCP] Already connected to ${connectionKey}, skipping reconnection`);
-        continue;
-      }
-
-      if (Object.keys(reducedState.participants).length === 0) {
-        console.warn(
-          "[MCP] No participants found for company mode connection. Skipping connection request.",
-        );
-        continue;
-      }
-      events.push({
-        type: "MCP:CONNECT_REQUEST",
-        data: {
-          serverUrl: spec.serverUrl,
-          mode: "company",
-          // add this to prevent csrf
-          // the person who initiates the conversation is the one who must connect
-          userId: Object.values(reducedState.participants)[0].internalUserId,
-          requiresAuth: spec.requiresAuth ?? true,
-          integrationSlug: spec.integrationSlug,
-          allowedTools: spec.allowedTools,
-          allowedPrompts: spec.allowedPrompts,
-          allowedResources: spec.allowedResources,
-          triggerLLMRequestOnEstablishedConnection: false,
-          headers: spec.headers,
-        },
-        metadata: {},
-        triggerLLMRequest: false,
-      });
-    }
-  }
-
-  return events;
-}
-
-async function handleRemoveMcpServers(
-  params: MCPEventHandlerParams<MCPRemoveMcpServerEvent>,
-): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState } = params;
-  const events: MCPEventHookReturnEvent[] = [];
-
-  for (const server of event.data.servers) {
-    for (const participant of Object.keys(reducedState.participants)) {
-      events.push({
-        type: "MCP:DISCONNECT_REQUEST",
-        data: {
-          serverUrl: server.serverUrl,
-          userId: participant,
-        },
-        metadata: {},
-        triggerLLMRequest: false,
-      });
-    }
-  }
-
-  return events;
-}
 
 function extractStringDependencies(targetString: string): string[] {
   const dependencies = targetString.match(/\{([^}]+)\}/g);
@@ -776,10 +663,6 @@ export async function runMCPEventHooks(
   params: MCPEventHandlerParams,
 ): Promise<MCPEventHookReturnEvent[]> {
   switch (params.event.type) {
-    case "MCP:ADD_MCP_SERVERS":
-      return await handleAddMcpServers({ ...params, event: params.event });
-    case "MCP:REMOVE_MCP_SERVERS":
-      return await handleRemoveMcpServers({ ...params, event: params.event });
     case "MCP:CONNECT_REQUEST":
       return await handleMCPConnectRequest({ ...params, event: params.event });
     case "MCP:DISCONNECT_REQUEST":
