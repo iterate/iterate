@@ -30,6 +30,8 @@ jobs:
 
       - name: Setup Doppler
         run: doppler setup --config 'prd' --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Sync secrets
         run: doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk
