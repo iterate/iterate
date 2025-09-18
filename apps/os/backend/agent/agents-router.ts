@@ -30,41 +30,27 @@ const agentStubProcedure = protectedProcedure
         .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
-      reason: z.string().describe("The reason for getting the agent stub").optional(),
-      createIfNotExists: z.boolean().optional().default(true),
+      reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
     }),
   )
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    // Use the appropriate method based on createIfNotExists flag
-    const agent = await (input.createIfNotExists
-      ? // Creating or getting existing
-        (input.agentClassName === "SlackAgent"
-          ? // @ts-expect-error - TODO couldn't get types to line up
-            SlackAgent.getOrCreateStubByName({
-              db: ctx.db,
-              estateId,
-              agentInstanceName: input.agentInstanceName,
-              metadata: { reason: input.reason || "Created via agents router" },
-            })
-          : IterateAgent.getOrCreateStubByName({
-              db: ctx.db,
-              estateId,
-              agentInstanceName: input.agentInstanceName,
-              metadata: { reason: input.reason || "Created via agents router" },
-            }))
-      : // Getting existing only
-        (input.agentClassName === "SlackAgent"
-          ? // @ts-expect-error - TODO couldn't get types to line up
-            SlackAgent.getStubByName({
-              db: ctx.db,
-              agentInstanceName: input.agentInstanceName,
-            })
-          : IterateAgent.getStubByName({
-              db: ctx.db,
-              agentInstanceName: input.agentInstanceName,
-            })));
+    // Always use getOrCreateStubByName - agents are created on demand
+    const agent = await (input.agentClassName === "SlackAgent"
+      ? // @ts-expect-error - TODO couldn't get types to line up
+        SlackAgent.getOrCreateStubByName({
+          db: ctx.db,
+          estateId,
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
+        })
+      : IterateAgent.getOrCreateStubByName({
+          db: ctx.db,
+          estateId,
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
+        }));
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 

@@ -138,6 +138,33 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
   }
 
+  // Internal helper to get stub from existing database record and touch lastActiveAt
+  private static async getStubFromRecord<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      record: AgentInstanceDatabaseRecord;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, record } = params;
+    const namespace = this.getNamespace();
+    const stub = await getAgentByName(namespace, record.durableObjectName);
+    await stub.setDatabaseRecord(record);
+
+    // Touch the agent (update lastActiveAt)
+    await db
+      .update(agentInstance)
+      .set({
+        metadata: {
+          ...record.metadata,
+          lastActiveAt: new Date().toISOString(),
+        },
+      })
+      .where(eq(agentInstance.id, record.id));
+
+    return stub as DurableObjectStub<InstanceType<T>>;
+  }
+
   // Get stub for existing agent by name (does not create)
   static async getStubByName<T extends typeof IterateAgent>(
     this: T,
@@ -160,22 +187,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
 
-    const namespace = this.getNamespace();
-    const stub = await getAgentByName(namespace, record.durableObjectName);
-    await stub.setDatabaseRecord(record);
-    
-    // Touch the agent (update lastActiveAt)
-    await db
-      .update(agentInstance)
-      .set({ 
-        metadata: { 
-          ...record.metadata,
-          lastActiveAt: new Date().toISOString() 
-        } 
-      })
-      .where(eq(agentInstance.id, record.id));
-    
-    return stub as DurableObjectStub<InstanceType<T>>;
+    return this.getStubFromRecord({ db, record });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -203,25 +215,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       throw new Error(`Multiple agents found for routing key ${routingKey}`);
     }
 
-    const namespace = this.getNamespace();
     const stubs = await Promise.all(
-      matchingAgents.map(async (record) => {
-        const stub = await getAgentByName(namespace, record.durableObjectName);
-        await stub.setDatabaseRecord(record);
-        
-        // Touch the agent (update lastActiveAt)
-        await db
-          .update(agentInstance)
-          .set({ 
-            metadata: { 
-              ...record.metadata,
-              lastActiveAt: new Date().toISOString() 
-            } 
-          })
-          .where(eq(agentInstance.id, record.id));
-        
-        return stub as DurableObjectStub<InstanceType<T>>;
-      }),
+      matchingAgents.map((record) => this.getStubFromRecord({ db, record })),
     );
 
     return stubs;
@@ -234,10 +229,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       db: DB;
       estateId: string;
       agentInstanceName: string;
-      metadata?: any;
+      reason?: string;
     },
   ): Promise<DurableObjectStub<InstanceType<T>>> {
-    const { db, estateId, agentInstanceName, metadata } = params;
+    const { db, estateId, agentInstanceName, reason } = params;
     const className = this.name;
 
     let record = await db.query.agentInstance.findFirst({
@@ -256,15 +251,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           className,
           durableObjectName: agentInstanceName,
           durableObjectId: durableObjectId.toString(),
-          metadata: metadata || { createdAt: new Date().toISOString() },
+          metadata: {
+            reason: reason || "Created",
+            createdAt: new Date().toISOString(),
+          },
         })
         .onConflictDoUpdate({
           target: agentInstance.durableObjectId,
-          set: { 
-            metadata: { 
-              ...(metadata || {}),
-              lastActiveAt: new Date().toISOString() 
-            } 
+          set: {
+            metadata: {
+              reason: reason || "Updated",
+              lastActiveAt: new Date().toISOString(),
+            },
           },
         })
         .returning();
@@ -273,26 +271,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       if (record.estateId !== estateId) {
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
-      
-      // Touch the agent (update lastActiveAt)
-      await db
-        .update(agentInstance)
-        .set({ 
-          metadata: { 
-            ...record.metadata,
-            lastActiveAt: new Date().toISOString() 
-          } 
-        })
-        .where(eq(agentInstance.id, record.id));
     }
 
-    const namespace = this.getNamespace();
-    const stub = await getAgentByName(namespace, record.durableObjectName);
-    await stub.setDatabaseRecord(record);
-    return stub as DurableObjectStub<InstanceType<T>>;
+    return this.getStubFromRecord({ db, record });
   }
 
-  // Get or create stub by route  
+  // Get or create stub by route
   static async getOrCreateStubByRoute<T extends typeof IterateAgent>(
     this: T,
     params: {
@@ -300,11 +284,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       estateId: string;
       agentInstanceName: string;
       route: string;
-      metadata?: any;
+      reason?: string;
     },
   ): Promise<DurableObjectStub<InstanceType<T>>> {
-    const { db, estateId, agentInstanceName, route, metadata } = params;
-    
+    const { db, estateId, agentInstanceName, route, reason } = params;
+
     // First check if an agent already exists for this route
     const existingRoutes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, route),
@@ -316,22 +300,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      const namespace = this.getNamespace();
-      const stub = await getAgentByName(namespace, existingAgent.durableObjectName);
-      await stub.setDatabaseRecord(existingAgent);
-      
-      // Touch the agent (update lastActiveAt)
-      await db
-        .update(agentInstance)
-        .set({ 
-          metadata: { 
-            ...existingAgent.metadata,
-            lastActiveAt: new Date().toISOString() 
-          } 
-        })
-        .where(eq(agentInstance.id, existingAgent.id));
-      
-      return stub as DurableObjectStub<InstanceType<T>>;
+      return this.getStubFromRecord({ db, record: existingAgent });
     }
 
     // No existing agent for this route, create one with route
@@ -343,15 +312,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         className: this.name,
         durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
-        metadata: metadata || { createdAt: new Date().toISOString() },
+        metadata: {
+          reason: reason || "Created via route",
+          createdAt: new Date().toISOString(),
+        },
       })
       .onConflictDoUpdate({
         target: agentInstance.durableObjectId,
-        set: { 
-          metadata: { 
-            ...(metadata || {}),
-            lastActiveAt: new Date().toISOString() 
-          } 
+        set: {
+          metadata: {
+            reason: reason || "Updated via route",
+            lastActiveAt: new Date().toISOString(),
+          },
         },
       })
       .returning();
@@ -362,10 +334,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .values({ agentInstanceId: record.id, routingKey: route })
       .onConflictDoNothing();
 
-    const namespace = this.getNamespace();
-    const stub = await getAgentByName(namespace, record.durableObjectName);
-    await stub.setDatabaseRecord(record);
-    return stub as DurableObjectStub<InstanceType<T>>;
+    return this.getStubFromRecord({ db, record });
   }
   // The database record that is saved for this agent - this will be set via getStubFromRecord immediately after the constructor runs
   // So before onStart() state hydration

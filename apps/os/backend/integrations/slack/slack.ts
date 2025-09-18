@@ -86,7 +86,7 @@ slackApp.post("/webhook", async (c) => {
     estateId,
     agentInstanceName: durableObjectName,
     route: routingKey,
-    metadata: { reason: "Slack webhook received" },
+    reason: "Slack webhook received",
   });
 
   c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
