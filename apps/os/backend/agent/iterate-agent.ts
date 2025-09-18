@@ -19,7 +19,7 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent, CORE_INITIAL_REDUCED_STATE } from "./agent-core-schemas.ts";
+import { AgentCoreEvent } from "./agent-core-schemas.ts";
 import { evaluateContextRuleMatchers, type ContextItem, type ContextRule } from "./context.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 // import {
@@ -60,6 +60,20 @@ export const CORE_AGENT_SLICES = [] as const;
  */
 export type CoreAgentSlices = typeof CORE_AGENT_SLICES;
 
+const EventRow = z.object({
+  type: z.string(),
+  data_json: z.string(),
+  metadata_json: z.string(),
+  trigger_llm_request: z.number(),
+  created_at: z.string(),
+  event_index: z.number(),
+  idempotency_key: z.string().nullable(),
+});
+
+const EventRows = z.array(EventRow);
+
+export type EventRow = z.infer<typeof EventRow>;
+
 /**
  * Utility type for merging two readonly slice arrays while preserving the tuple
  * element types.
@@ -91,8 +105,6 @@ const ReminderMetadata = z.object({
 type ReminderMetadata = z.infer<typeof ReminderMetadata>;
 
 export const IterateAgentState = z.object({
-  events: z.array(AgentCoreEvent),
-  // Using z.any() since CoreReducedState contains OpenAI types that aren't Zod schemas
   reminders: z.record(z.string(), ReminderMetadata).default({}).optional(),
   braintrustParentSpanExportedId: z.string().optional(),
   recordRawRequest: z.boolean().default(false),
@@ -122,10 +134,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
 
   initialState = {
-    events: [],
-    reducedState: CORE_INITIAL_REDUCED_STATE,
     reminders: {},
-    recordRawRequest: true,
+    recordRawRequest: false,
   };
 
   #swrCacheMinTimeToStale = 1000 * 60;
@@ -172,6 +182,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
 
+    // DO NOT CHANGE THE SCHEMA WITHOUT UPDATING THE MIGRATION LOGIC
+    // If you need to change the schema, you can add more columns with separate statements
+    this.sql`
+      CREATE TABLE IF NOT EXISTS agent_events (
+        event_index INTEGER PRIMARY KEY,
+        event_type TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        trigger_llm_request INTEGER NOT NULL DEFAULT 0,
+        idempotency_key TEXT,
+        data_json TEXT NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}'
+      )
+    `;
+
+    this.sql`CREATE INDEX IF NOT EXISTS idx_agent_events_type ON agent_events(event_type)`;
+    this.sql`CREATE INDEX IF NOT EXISTS idx_agent_events_created_at ON agent_events(created_at)`;
+    this
+      .sql`CREATE INDEX IF NOT EXISTS idx_agent_events_idempotency ON agent_events(idempotency_key) WHERE idempotency_key IS NOT NULL`;
+
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
   }
@@ -208,12 +237,43 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const baseDeps: AgentCoreDeps = {
       storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
+        // Insert SQL is sync so fine to just iterate
+        for (const event of events) {
+          this.sql`
+            INSERT OR REPLACE INTO agent_events (
+              event_index, event_type, created_at, 
+              trigger_llm_request, idempotency_key, data_json, metadata_json
+            ) VALUES (
+              ${event.eventIndex},
+              ${event.type},
+              ${event.createdAt},
+              ${typeof event.triggerLLMRequest === "boolean" ? Number(event.triggerLLMRequest) : 0},
+              ${event.idempotencyKey || null},
+              ${JSON.stringify(event.data)},
+              ${JSON.stringify(event.metadata || {})}
+            )
+          `;
+        }
+
+        // Update state to trigger broadcast to connected clients
         this.setState({
-          events: [...events],
           reminders: this.state.reminders ?? {},
           braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
           recordRawRequest: this.state.recordRawRequest,
         });
+
+        // Broadcast the new events to all connected clients
+        try {
+          this.broadcast(
+            JSON.stringify({
+              type: "events_added",
+              events: events,
+              timestamp: Date.now(),
+            }),
+          );
+        } catch (error) {
+          console.warn("Failed to broadcast events:", error);
+        }
       },
 
       background: (fn: () => Promise<void>) => {
@@ -231,9 +291,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             POSTHOG_PUBLIC_KEY: this.env.POSTHOG_PUBLIC_KEY,
           },
           projectName: `iterate-platform`,
-          ...(this.state.braintrustParentSpanExportedId && {
-            braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
-          }),
+          braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
         });
       },
 
@@ -423,9 +481,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Call parent onStart to ensure persistence completes
     await super.onStart();
 
-    await this.agentCore.initializeWithEvents(this.state.events || []);
+    const event = this.getEvents();
+    await this.agentCore.initializeWithEvents(event);
 
-    // Sync the reduced state after loading events
     this.setState({
       ...this.state,
       reminders: this.state.reminders ?? {},
@@ -449,8 +507,51 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // await this.agentCore.addEvents(mcpConnectRequestEvents);
   }
 
-  getEvents(): ReadonlyArray<MergedEventForSlices<Slices>> {
-    return this.agentCore.events;
+  getEvents(): MergedEventForSlices<Slices>[] {
+    const rawEvents = this.sql`
+      SELECT 
+        event_type as type,
+        data_json,
+        metadata_json,
+        trigger_llm_request,
+        created_at,
+        event_index,
+        idempotency_key
+      FROM agent_events 
+      ORDER BY event_index ASC
+    `;
+    return parseEventRows(rawEvents) as MergedEventForSlices<Slices>[];
+  }
+
+  /**
+   * Get events filtered by type with proper type casting.
+   * This is more efficient than fetching all events and filtering in memory.
+   *
+   * @param eventType The event type to filter by
+   * @returns Array of events of the specified type
+   *
+   * @example
+   * // Get all Slack webhook events with proper typing
+   * const slackEvents = agent.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+   * // slackEvents is properly typed as events with that specific type
+   */
+  getEventsByType<T extends MergedEventForSlices<Slices>["type"]>(
+    eventType: T,
+  ): Extract<MergedEventForSlices<Slices>, { type: T }>[] {
+    const rawEvents = this.sql`
+      SELECT 
+        event_type as type,
+        data_json,
+        metadata_json,
+        trigger_llm_request,
+        created_at,
+        event_index,
+        idempotency_key
+      FROM agent_events 
+      WHERE event_type = ${eventType}
+      ORDER BY event_index ASC
+    `;
+    return parseEventRows(rawEvents) as Extract<MergedEventForSlices<Slices>, { type: T }>[];
   }
 
   /**
@@ -837,4 +938,29 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   //     addedMcpServer: mcpServer,
   //   };
   // }
+}
+
+// -----------------------------------------------------------------------------
+// Utility functions ----------------------------------------------------------
+// -----------------------------------------------------------------------------
+
+/**
+ * Helper function to parse event rows from raw SQL results.
+ * Accepts raw SQL results and returns parsed event rows.
+ */
+function parseEventRows(rawSqlResults: unknown[]) {
+  // Use zod to parse rows to flag schema migrations with an explicit error
+  const events = EventRows.parse(rawSqlResults);
+
+  const parsedEvents = events.map((event) => ({
+    type: event.type,
+    data: JSON.parse(event.data_json),
+    metadata: JSON.parse(event.metadata_json),
+    triggerLLMRequest: event.trigger_llm_request === 1,
+    createdAt: event.created_at,
+    eventIndex: event.event_index,
+    idempotencyKey: event.idempotency_key || undefined,
+  }));
+
+  return parsedEvents;
 }
