@@ -11,7 +11,6 @@ import {
   makeUserInputTextEvent,
   setupConsoleCaptureForTest,
 } from "./agent-core-test-harness.ts";
-import type { ContextItem } from "./context.ts";
 
 describe("AgentCore", () => {
   createAgentCoreTest([])("handles a simple user message and assistant response", async ({ h }) => {

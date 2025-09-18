@@ -9,6 +9,8 @@ import type {
   MonthCode,
 } from "./context-schemas.ts";
 
+export * from "./context-schemas.ts";
+
 export function always() {
   return { type: "always" } satisfies ContextRuleMatcher;
 }

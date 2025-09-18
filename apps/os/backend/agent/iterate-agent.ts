@@ -262,7 +262,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const posthogClient = this.getPosthogClient();
+    const _posthogClient = this.getPosthogClient();
 
     const baseDeps: AgentCoreDeps = {
       getRuleMatchData: (state) => ({
@@ -469,26 +469,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         //     //   },
         //     // }),
         //   // );
-      },
-
-      collectContextItems: async (): Promise<ContextItem[]> => {
-        // Collect context rules - this may include durable object class specific rules (e.g. from SlackAgent)
-        // as well as what's coming from platform.agents.listContextRules
-        const contextRules = await this.#swrGet("contextRules", () => this.getContextRules());
-        return Promise.all(
-          contextRules.map(async (rule) => ({
-            rule,
-            shouldInclude: await evaluateContextRuleMatchers({
-              contextRule: rule,
-              matchAgainst: {
-                agentCoreState: this.agentCore.state,
-                durableObjectClassName: this.constructor.name,
-              },
-            }),
-          })),
-        ).then((results) =>
-          results.filter(({ shouldInclude }) => shouldInclude).map(({ rule }) => rule),
-        );
       },
     };
 

@@ -485,7 +485,7 @@ describe("Slice-specific tests", () => {
           eventSchema: TestSliceOutput,
           eventInputSchema: TestSliceInput,
           initialState: { hasAgentCore: false },
-          async reduce(_state, deps, event) {
+          reduce(_state, deps, event) {
             if (event.type === "TEST:CHECK_DEPS") {
               capturedDeps = deps;
               capturedAgentCore = deps.agentCore;
