@@ -12,6 +12,7 @@ import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { getAgentStub } from "./agent/agent-stub-utils.ts";
+import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -86,6 +87,27 @@ app.get("/api/estate/:estateId/files/:id", getFileHandler);
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 
+// WebSocket endpoint for organization connections
+app.get("/api/ws/:organizationId", async (c) => {
+  const organizationId = c.req.param("organizationId");
+
+  // Get the Durable Object ID for this organization
+  const id = c.env.ORGANIZATION_WEBSOCKET.idFromName(organizationId);
+  const stub = c.env.ORGANIZATION_WEBSOCKET.get(id);
+
+  // Forward the request to the Durable Object
+  const url = new URL(c.req.url);
+  url.searchParams.set("organizationId", organizationId);
+
+  return stub.fetch(
+    new Request(url.toString(), {
+      method: c.req.method,
+      headers: c.req.raw.headers,
+      body: c.req.raw.body,
+    }),
+  );
+});
+
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
   () => import("virtual:react-router/server-build"),
@@ -100,4 +122,4 @@ app.all("*", (c) => {
 
 export default app;
 
-export { IterateAgent, SlackAgent };
+export { IterateAgent, SlackAgent, OrganizationWebSocket };

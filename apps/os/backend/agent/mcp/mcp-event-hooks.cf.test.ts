@@ -1,14 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { MCPServer } from "../tool-schemas.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import {
-  type MCPAddMcpServerEvent,
   type MCPConnection,
   MCPConnectionKey,
   type MCPConnectRequestEvent,
   type MCPDisconnectRequestEvent,
-  type MCPRemoveMcpServerEvent,
 } from "./mcp-slice.ts";
 import {
   mcpManagerCache,
@@ -95,21 +92,11 @@ describe("mcp-event-hooks", () => {
         participants: {},
         toolSpecs: [],
         mcpConnections: {},
-        mcpServers: [],
         ...overrides,
       }) as MergedStateForSlices<CoreAgentSlices>;
 
     const createMockGetFinalRedirectUrl = () =>
       vi.fn().mockResolvedValue("https://test.iterate.com/oauth/callback");
-
-    const createMockParticipant = (userId: string, overrides?: any) => ({
-      internalUserId: userId,
-      email: `${userId}@test.com`,
-      displayName: `User ${userId}`,
-      joinedAt: "2024-01-01T00:00:00.000Z",
-      externalUserMapping: {},
-      ...overrides,
-    });
 
     const createMockConnection = (overrides?: Partial<MCPConnection>): MCPConnection => ({
       integrationSlug: "github",
@@ -122,240 +109,6 @@ describe("mcp-event-hooks", () => {
       prompts: [],
       resources: [],
       ...overrides,
-    });
-
-    describe("MCP:ADD_MCP_SERVERS", () => {
-      it("should create personal connections for each participant", async () => {
-        const event = createEvent<MCPAddMcpServerEvent>({
-          type: "MCP:ADD_MCP_SERVERS",
-          data: {
-            servers: [
-              {
-                serverUrl: "https://github.com/mcp",
-                mode: "personal",
-                integrationSlug: "github",
-                allowedTools: ["search_repos"],
-                allowedPrompts: [],
-                allowedResources: [],
-                requiresAuth: true,
-              } as MCPServer,
-            ],
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-
-        const reducedState = createMockState({
-          participants: {
-            user1: createMockParticipant("user1"),
-            user2: createMockParticipant("user2"),
-          },
-        });
-
-        const result = await runMCPEventHooks({
-          event,
-          reducedState,
-          agentDurableObjectId: "agent123",
-          agentDurableObjectName: "agent123",
-          getFinalRedirectUrl: createMockGetFinalRedirectUrl(),
-        });
-
-        expect(result).toHaveLength(2);
-        expect(result[0]).toMatchObject({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            mode: "personal",
-            userId: "user1",
-            integrationSlug: "github",
-            allowedTools: ["search_repos"],
-            requiresAuth: true,
-          },
-        });
-        expect(result[1]).toMatchObject({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            userId: "user2",
-          },
-        });
-      });
-
-      it("should not add company connection if there are no participants", async () => {
-        const event = createEvent<MCPAddMcpServerEvent>({
-          type: "MCP:ADD_MCP_SERVERS",
-          data: {
-            servers: [
-              {
-                serverUrl: "https://github.com/mcp",
-                mode: "company",
-                integrationSlug: "github",
-                requiresAuth: false,
-              } as MCPServer,
-            ],
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-
-        const result = await runMCPEventHooks({
-          event,
-          reducedState: createMockState({ participants: {} }),
-          agentDurableObjectId: "agent123",
-          agentDurableObjectName: "agent123",
-          getFinalRedirectUrl: createMockGetFinalRedirectUrl(),
-        });
-
-        expect(result).toHaveLength(0);
-      });
-
-      it("should create company connection with participant userid when participants exist", async () => {
-        const event = createEvent<MCPAddMcpServerEvent>({
-          type: "MCP:ADD_MCP_SERVERS",
-          data: {
-            servers: [
-              {
-                serverUrl: "https://github.com/mcp",
-                mode: "company",
-                integrationSlug: "github",
-                requiresAuth: false,
-              } as MCPServer,
-            ],
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-
-        const result = await runMCPEventHooks({
-          event,
-          reducedState: createMockState({
-            participants: {
-              user123: createMockParticipant("user123"),
-            },
-          }),
-          agentDurableObjectId: "agent123",
-          agentDurableObjectName: "agent123",
-          getFinalRedirectUrl: createMockGetFinalRedirectUrl(),
-        });
-
-        expect(result).toHaveLength(1);
-        expect(result[0]).toMatchObject({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            mode: "company",
-            userId: "user123",
-            integrationSlug: "github",
-            requiresAuth: false,
-          },
-        });
-      });
-    });
-
-    describe("MCP:REMOVE_MCP_SERVERS", () => {
-      it("should create disconnect requests for all participants", async () => {
-        const event = createEvent<MCPRemoveMcpServerEvent>({
-          type: "MCP:REMOVE_MCP_SERVERS",
-          data: {
-            servers: [
-              {
-                serverUrl: "https://github.com/mcp",
-                mode: "personal",
-                integrationSlug: "github",
-                requiresAuth: true,
-              } as MCPServer,
-            ],
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-
-        const reducedState = createMockState({
-          participants: {
-            user1: createMockParticipant("user1"),
-            user2: createMockParticipant("user2"),
-          },
-        });
-
-        const result = await runMCPEventHooks({
-          event,
-          reducedState,
-
-          getFinalRedirectUrl: createMockGetFinalRedirectUrl(),
-          agentDurableObjectId: "agent123",
-          agentDurableObjectName: "agent123",
-        });
-
-        expect(result).toHaveLength(2);
-        expect(result[0]).toMatchObject({
-          type: "MCP:DISCONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            userId: "user1",
-          },
-        });
-        expect(result[1]).toMatchObject({
-          type: "MCP:DISCONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            userId: "user2",
-          },
-        });
-      });
-
-      it("should handle multiple servers", async () => {
-        const event = createEvent<MCPRemoveMcpServerEvent>({
-          type: "MCP:REMOVE_MCP_SERVERS",
-          data: {
-            servers: [
-              {
-                serverUrl: "https://github.com/mcp",
-                mode: "personal",
-                integrationSlug: "github",
-                requiresAuth: true,
-              } as MCPServer,
-              {
-                serverUrl: "https://slack.com/mcp",
-                mode: "personal",
-                integrationSlug: "slack",
-                requiresAuth: true,
-              } as MCPServer,
-            ],
-          },
-          metadata: {},
-          triggerLLMRequest: false,
-        });
-
-        const reducedState = createMockState({
-          participants: {
-            user1: createMockParticipant("user1"),
-          },
-        });
-
-        const result = await runMCPEventHooks({
-          event,
-          reducedState,
-
-          getFinalRedirectUrl: createMockGetFinalRedirectUrl(),
-          agentDurableObjectId: "agent123",
-          agentDurableObjectName: "agent123",
-        });
-
-        expect(result).toHaveLength(2);
-        expect(result[0]).toMatchObject({
-          type: "MCP:DISCONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            userId: "user1",
-          },
-        });
-        expect(result[1]).toMatchObject({
-          type: "MCP:DISCONNECT_REQUEST",
-          data: {
-            serverUrl: "https://slack.com/mcp",
-            userId: "user1",
-          },
-        });
-      });
     });
 
     describe("MCP:CONNECT_REQUEST", () => {

@@ -28,7 +28,7 @@ import {
   mcpManagerCache,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput, MCPAddMcpServerEventInput } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
@@ -898,16 +898,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       requiresAuth: input.requiresOAuth || false,
       headers: input.requiresHeadersAuth || undefined,
     };
-
-    const addServerEvent: MCPAddMcpServerEventInput = {
-      type: "MCP:ADD_MCP_SERVERS",
-      data: {
-        servers: [mcpServer],
-      },
-      metadata: {},
-      triggerLLMRequest: false,
-    };
-
     // Check if already connected
     const connectionKey = getConnectionKey({
       serverUrl: formattedServerUrl.toString(),
@@ -919,7 +909,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (existingManager) {
       // Already connected, just add the server to the state
       return {
-        __addAgentCoreEvents: [addServerEvent],
         success: true,
         message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
         addedMcpServer: mcpServer,
@@ -951,7 +940,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
       return {
-        __addAgentCoreEvents: [addServerEvent, ...events],
+        __addAgentCoreEvents: events,
         success: false,
         message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
         addedMcpServer: mcpServer,
@@ -959,7 +948,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     return {
-      __addAgentCoreEvents: [addServerEvent, ...events],
+      __addAgentCoreEvents: events,
       success: true,
       message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
       addedMcpServer: mcpServer,

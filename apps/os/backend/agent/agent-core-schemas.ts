@@ -10,7 +10,6 @@ import {
 import type { Participant } from "./participant-schemas.ts";
 import type { PromptFragment } from "./prompt-fragments.ts";
 import { type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
 
 // ------------------------- Models -------------------------
 
@@ -655,10 +654,6 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
    */
   toolSpecs: ToolSpec[];
   /**
-   * MCP servers available for this agent conversation.
-   */
-  mcpServers: MCPServer[];
-  /**
    * These are fully valid OpenAI function tools that are ready to be used.
    */
   runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
@@ -706,7 +701,6 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   toolSpecs: [],
-  mcpServers: [],
   runtimeTools: [],
   llmRequestStartedAtIndex: null,
   paused: false,
