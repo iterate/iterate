@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { trpc } from "../lib/trpc.ts";
+import { useEstateId } from "../hooks/use-estate.ts";
 
 interface EditableTitleProps {
   value: string;
@@ -102,12 +103,12 @@ function EstateContent() {
   const [isConnected, setIsConnected] = useState(false);
   const [connectedRepo, setConnectedRepo] = useState("");
 
-  // Get user's estate ID
-  const [estateIdData] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
+  // Get estate ID from URL
+  const estateId = useEstateId();
 
   // Get estate details
   const [estate] = trpc.estate.get.useSuspenseQuery({
-    estateId: estateIdData.estateId,
+    estateId: estateId,
   });
 
   // Update estate name mutation with optimistic updates
@@ -115,13 +116,13 @@ function EstateContent() {
   const updateEstateMutation = trpc.estate.updateName.useMutation({
     onMutate: async (newData) => {
       // Cancel any outgoing refetches
-      await utils.estate.get.cancel({ estateId: estateIdData.estateId });
+      await utils.estate.get.cancel({ estateId: estateId! });
 
       // Snapshot the previous value
-      const previousEstate = utils.estate.get.getData({ estateId: estateIdData.estateId });
+      const previousEstate = utils.estate.get.getData({ estateId: estateId! });
 
       // Optimistically update to the new value
-      utils.estate.get.setData({ estateId: estateIdData.estateId }, (old) =>
+      utils.estate.get.setData({ estateId: estateId! }, (old) =>
         old ? { ...old, name: newData.name } : old,
       );
 
@@ -129,12 +130,12 @@ function EstateContent() {
     },
     onError: (_err, _newData, context) => {
       // If the mutation fails, use the context returned from onMutate to roll back
-      utils.estate.get.setData({ estateId: estateIdData.estateId }, context?.previousEstate);
+      utils.estate.get.setData({ estateId: estateId! }, context?.previousEstate);
       toast.error("Failed to update estate name");
     },
     onSettled: () => {
       // Always refetch after error or success to ensure we have the latest data
-      utils.estate.get.invalidate({ estateId: estateIdData.estateId });
+      utils.estate.get.invalidate({ estateId: estateId! });
     },
   });
 
@@ -149,7 +150,7 @@ function EstateContent() {
     }
 
     await updateEstateMutation.mutateAsync({
-      estateId: estateIdData.estateId,
+      estateId: estateId!,
       name: newName.trim(),
     });
 

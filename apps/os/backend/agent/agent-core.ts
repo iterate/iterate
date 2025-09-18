@@ -296,7 +296,7 @@ export class AgentCore<
     ...CORE_INITIAL_REDUCED_STATE,
   } as MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices>;
 
-  recordRawRequest = false;
+  recordRawRequest = true;
 
   private augmentState(
     inputState: typeof this._state,

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
-import { protectedProcedure, router } from "../trpc.ts";
+import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 
 // Define the integration providers we support
@@ -42,12 +42,8 @@ export const getCurrentUserEstateId = async (db: any, userId: string): Promise<s
 
 export const integrationsRouter = router({
   // Get all integrations with their connection status
-  list: protectedProcedure.query(async ({ ctx }) => {
-    // Get current user's estate ID
-    const estateId = await getCurrentUserEstateId(ctx.db, ctx.user.id);
-    if (!estateId) {
-      throw new Error("User has no associated estate");
-    }
+  list: estateProtectedProcedure.query(async ({ ctx, input }) => {
+    const estateId = input.estateId;
 
     // Fetch estate-wide account connections
     const estateAccounts = await ctx.db.query.estateAccountsPermissions.findMany({
@@ -125,14 +121,14 @@ export const integrationsRouter = router({
   }),
 
   // Get details for a specific integration
-  get: protectedProcedure
-    .input(z.object({ providerId: z.string() }))
+  get: estateProtectedProcedure
+    .input(
+      z.object({
+        providerId: z.string(),
+      }),
+    )
     .query(async ({ ctx, input }) => {
-      // Get current user's estate ID
-      const estateId = await getCurrentUserEstateId(ctx.db, ctx.user.id);
-      if (!estateId) {
-        throw new Error("User has no associated estate");
-      }
+      const estateId = input.estateId;
 
       // Fetch estate-wide account connections for this provider
       const estateAccounts = await ctx.db.query.estateAccountsPermissions.findMany({
@@ -168,13 +164,4 @@ export const integrationsRouter = router({
         isConnected: accounts.length > 0,
       };
     }),
-
-  // Get current user's estate ID
-  getCurrentUserEstateId: protectedProcedure.query(async ({ ctx }) => {
-    const estateId = await getCurrentUserEstateId(ctx.db, ctx.user.id);
-    if (!estateId) {
-      throw new Error("User has no associated estate");
-    }
-    return { estateId };
-  }),
 });
