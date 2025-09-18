@@ -5,6 +5,7 @@ import { Badge } from "../components/ui/badge.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { authClient } from "../lib/auth-client.ts";
 import { trpc } from "../lib/trpc.ts";
+import { useEstateId } from "../hooks/use-estate.ts";
 import type { Route } from "./+types/home";
 
 export function meta(_args: Route.MetaArgs) {
@@ -15,22 +16,22 @@ export function meta(_args: Route.MetaArgs) {
 }
 
 function ConnectSlackCard() {
-  const [integrations] = trpc.integrations.list.useSuspenseQuery();
-  const [estateData] = trpc.integrations.getCurrentUserEstateId.useSuspenseQuery();
+  const estateId = useEstateId();
+  const [integrations] = trpc.integrations.list.useSuspenseQuery({ estateId: estateId });
 
   // Check if Slack bot is connected at the estate level
   const slackBotIntegration = integrations.find((i) => i.id === "slack-bot");
   const isConnected = slackBotIntegration?.isConnected || false;
 
   const handleConnectSlack = async () => {
-    if (!estateData.estateId) {
+    if (!estateId) {
       toast.error("Unable to get estate information");
       return;
     }
 
     const result = await authClient.integrations.link.slackBot({
-      estateId: estateData.estateId,
-      callbackURL: "/",
+      estateId: estateId,
+      callbackURL: window.location.pathname + "?success=true",
     });
 
     if (result.error) {

@@ -17,8 +17,7 @@
     "db:migrate": "pnpm -r db:migrate",
     "db:generate": "pnpm -r db:generate",
     "db:studio": "pnpm -r --parallel db:studio",
-    "clean": "rm -rf ./**/node_modules",
-    "ngrok": "doppler run -- sh -c 'ngrok http --url=https://$ITERATE_USER.dev.iterate.com 5173 --log=stdout'"
+    "clean": "rm -rf ./**/node_modules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",

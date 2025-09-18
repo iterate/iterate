@@ -16,6 +16,7 @@ import {
   CollapsibleTrigger,
 } from "../components/ui/collapsible.tsx";
 import { trpc } from "../lib/trpc.ts";
+import { useEstateId } from "../hooks/use-estate.ts";
 import type { Route } from "./+types/integrations";
 
 export function meta(_args: Route.MetaArgs) {
@@ -73,7 +74,14 @@ function ScopesList({ scope }: { scope: string }) {
 }
 
 export default function Integrations() {
-  const { data: integrations, isLoading, error } = trpc.integrations.list.useQuery();
+  const estateId = useEstateId();
+  const {
+    data: integrations,
+    isLoading,
+    error,
+  } = trpc.integrations.list.useQuery({
+    estateId: estateId,
+  });
 
   const handleConnect = (integrationId: string) => {
     // TODO: Implement OAuth flow for connecting integrations

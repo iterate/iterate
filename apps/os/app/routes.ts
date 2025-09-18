@@ -1,11 +1,19 @@
 import { type RouteConfig, index, route } from "@react-router/dev/routes";
 
 export default [
-  index("./routes/home.tsx"),
+  // Public routes (no auth required)
   route("/login", "./routes/login.tsx"),
-  route("/integrations", "./routes/integrations.tsx"),
-  route("/estate", "./routes/estate.tsx"),
-  route("/agents", "./routes/agents-index.tsx"),
-  route("/agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
-  route("*", "./routes/404.tsx"),
+  route("/no-access", "./routes/no-access.tsx"),
+
+  // Root index - will handle redirect logic to org/estate routes
+  index("./routes/root-redirect.tsx"),
+
+  // Protected routes with org/estate prefix
+  route(":organizationId/:estateId", "./routes/estate-layout.tsx", [
+    index("./routes/home.tsx"),
+    route("integrations", "./routes/integrations.tsx"),
+    route("estate", "./routes/estate.tsx"),
+    route("agents", "./routes/agents-index.tsx"),
+    route("agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
+  ]),
 ] satisfies RouteConfig;

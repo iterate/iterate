@@ -25,6 +25,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
     // If no session and not on login page, redirect to login
     if (!session) {
       navigate("/login", { replace: true });
+      return;
     }
   }, [session, isPending, navigate, location.pathname]);
 
