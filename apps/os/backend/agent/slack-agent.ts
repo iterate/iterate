@@ -1,7 +1,7 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
-import { slackAPI } from "../integrations/slack/client.ts";
 import { env as _env, env } from "../../env.ts";
+import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import type {
   AgentCoreDeps,
   AgentCoreEventInput,
@@ -9,7 +9,11 @@ import type {
 } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
-import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
+import {
+  CORE_AGENT_SLICES,
+  IterateAgent,
+  type AgentInstanceDatabaseRecord,
+} from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
@@ -45,29 +49,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return env.SLACK_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
   }
 
-  private slackAPI?: WebClient;
+  protected slackAPI!: WebClient;
 
-  constructor(...args: ConstructorParameters<typeof IterateAgent<SlackAgentSlices>>) {
-    super(...args);
-    // Initialize slackAPI in background
-    this.ctx.waitUntil(
-      (async () => {
-        try {
-          this.slackAPI = await slackAPI();
-        } catch (error) {
-          console.error("[SlackAgent] Failed to initialize Slack API client:", error);
-        }
-      })(),
+  // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
+  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
+    await super.initAfterConstructorBeforeOnStart(params);
+
+    const slackAccessToken = await getSlackAccessTokenForEstate(
+      this.db,
+      this.databaseRecord.estateId,
     );
-  }
-
-  private get slackAPIClient(): WebClient {
-    if (!this.slackAPI) {
-      throw new Error(
-        "Slack API client not yet initialized. Please wait for initialization to complete.",
-      );
+    if (!slackAccessToken) {
+      throw new Error(`Slack access token not set for estate ${this.databaseRecord.estateId}.`);
     }
-    return this.slackAPI;
+    this.slackAPI = new WebClient(slackAccessToken);
   }
 
   protected getSlices(): SlackAgentSlices {
@@ -100,7 +95,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "CORE:LLM_REQUEST_START":
             // Start typing indicator
             this.ctx.waitUntil(
-              this.slackAPIClient.assistant.threads
+              this.slackAPI.assistant.threads
                 .setStatus({
                   channel_id: slackChannelId,
                   thread_ts: slackThreadId,
@@ -115,7 +110,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "CORE:LLM_REQUEST_END":
             // Stop typing indicator by clearing status
             this.ctx.waitUntil(
-              this.slackAPIClient.assistant.threads
+              this.slackAPI.assistant.threads
                 .setStatus({
                   channel_id: slackChannelId,
                   thread_ts: slackThreadId,
@@ -459,7 +454,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       const ts = lastUserMessage.thread_ts || lastUserMessage.ts;
 
       try {
-        const result = await this.slackAPIClient.chat.getPermalink({
+        const result = await this.slackAPI.chat.getPermalink({
           channel: messageChannelId,
           message_ts: ts,
         });
@@ -482,7 +477,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         return undefined;
       }
       try {
-        const result = await this.slackAPIClient.chat.getPermalink({
+        const result = await this.slackAPI.chat.getPermalink({
           channel: channelId,
           message_ts: threadTs,
         });
@@ -512,8 +507,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
-    console.log("onSlackWebhookEventReceived", slackWebhookPayload);
-
     const slackEvent = slackWebhookPayload.event!;
     if (!slackEvent.type) {
       return;
@@ -613,11 +606,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const { endTurn, ...sendInput } = input;
 
-    const result = await this.slackAPIClient.chat.postMessage({
+    const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
       text: sendInput.text,
     });
+
+    if (!result.ok) {
+      throw new Error(`Failed to send Slack message: ${result.error}`);
+    }
 
     // Build magic return properties based on behaviour
     const magic: MagicAgentInstructions = {};
@@ -633,7 +630,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async addSlackReaction(input: Inputs["addSlackReaction"]) {
-    return await this.slackAPIClient.reactions.add({
+    return await this.slackAPI.reactions.add({
       channel: this.agentCore.state.slackChannelId!,
       timestamp: input.messageTs,
       name: input.name,
@@ -641,7 +638,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async removeSlackReaction(input: Inputs["removeSlackReaction"]) {
-    return await this.slackAPIClient.reactions.remove({
+    return await this.slackAPI.reactions.remove({
       channel: this.agentCore.state.slackChannelId!,
       timestamp: input.messageTs,
       name: input.name,
@@ -672,7 +669,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // }
 
   async updateSlackMessage(input: Inputs["updateSlackMessage"]) {
-    return await this.slackAPIClient.chat.update({
+    return await this.slackAPI.chat.update({
       channel: this.agentCore.state.slackChannelId!,
       blocks: [],
       ...input,
@@ -684,7 +681,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       const channel = this.agentCore.state.slackChannelId;
       const ts = await this.mostRecentSlackMessageTs();
       if (channel && ts) {
-        await this.slackAPIClient.reactions.add({
+        await this.slackAPI.reactions.add({
           channel,
           timestamp: ts,
           name: "zipper_mouth_face",

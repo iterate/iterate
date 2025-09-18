@@ -47,7 +47,6 @@ app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // agent websocket endpoint
 app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
-  const estateId = c.req.param("estateId")!;
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
@@ -59,7 +58,8 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
     let agentStub: DurableObjectStub;
     if (agentClassName === "SlackAgent") {
       // Use SlackAgent's inherited method
-      agentStub = await (SlackAgent as any).getStubByName({
+      // @ts-expect-error - TODO couldn't get types to line up
+      agentStub = await SlackAgent.getStubByName({
         db: c.var.db,
         agentInstanceName,
       });

@@ -6,7 +6,6 @@ import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
 import {
-  AgentCoreEvent,
   AgentCoreEventInput,
   FileSharedEventInput,
   type CoreReducedState,
@@ -164,7 +163,6 @@ export const agentsRouter = router({
     // )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      console.log("\n\n\n\n\ngetState", await ctx.agent.databaseRecord);
       return { events, databaseRecord: await ctx.agent.databaseRecord };
     }),
 

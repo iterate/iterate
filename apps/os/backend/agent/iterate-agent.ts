@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
-import { getAgentByName } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
 import { z } from "zod/v4";
@@ -8,13 +7,13 @@ import { z } from "zod/v4";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import { env, type CloudflareEnv } from "../../env.ts";
-import type { DB } from "../db/client.ts";
+import { getDb, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
 import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
-type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -138,31 +137,43 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
   }
 
-  // Internal helper to get stub from existing database record and touch lastActiveAt
-  private static async getStubFromRecord<T extends typeof IterateAgent>(
+  // Internal helper to get stub from existing database record
+  static async getStubFromDatabaseRecord<T extends typeof IterateAgent>(
     this: T,
-    params: {
-      db: DB;
-      record: AgentInstanceDatabaseRecord;
+    record: AgentInstanceDatabaseRecord,
+    options?: {
+      jurisdiction?: DurableObjectJurisdiction;
+      locationHint?: DurableObjectLocationHint;
+      props?: Record<string, unknown>;
     },
   ): Promise<DurableObjectStub<InstanceType<T>>> {
-    const { db, record } = params;
-    const namespace = this.getNamespace();
-    const stub = await getAgentByName(namespace, record.durableObjectName);
-    await stub.setDatabaseRecord(record);
+    // Stolen from agents SDK
+    let namespace = this.getNamespace();
+    if (options?.jurisdiction) {
+      namespace = namespace.jurisdiction(options.jurisdiction);
+    }
+    const id = namespace.idFromName(record.durableObjectName);
+    const stub = namespace.get(id, options);
 
-    // Touch the agent (update lastActiveAt)
-    await db
-      .update(agentInstance)
-      .set({
-        metadata: {
-          ...record.metadata,
-          lastActiveAt: new Date().toISOString(),
-        },
-      })
-      .where(eq(agentInstance.id, record.id));
+    // right after the constructor runs we get in there and initialise all our stuff
+    // (e.g. obtaining a slack access token in the case of a slack agent)
+    await stub.initAfterConstructorBeforeOnStart({ record });
 
-    return stub as DurableObjectStub<InstanceType<T>>;
+    // only now do we do the agents sdk cruft where we hit fetch to initialise party server
+    // with a server name
+    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+    req.headers.set("x-partykit-room", record.durableObjectName);
+    if (options?.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(options?.props));
+    }
+    await stub
+      .fetch(req)
+      .then((res) => res.text())
+      .catch((e) => {
+        console.error("Could not set server name:", e);
+      });
+
+    return stub;
   }
 
   // Get stub for existing agent by name (does not create)
@@ -187,7 +198,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
 
-    return this.getStubFromRecord({ db, record });
+    return this.getStubFromDatabaseRecord(record);
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -216,7 +227,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) => this.getStubFromRecord({ db, record })),
+      matchingAgents.map((record) => this.getStubFromDatabaseRecord(record)),
     );
 
     return stubs;
@@ -251,18 +262,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           className,
           durableObjectName: agentInstanceName,
           durableObjectId: durableObjectId.toString(),
-          metadata: {
-            reason: reason || "Created",
-            createdAt: new Date().toISOString(),
-          },
+          metadata: { reason },
         })
         .onConflictDoUpdate({
           target: agentInstance.durableObjectId,
           set: {
-            metadata: {
-              reason: reason || "Updated",
-              lastActiveAt: new Date().toISOString(),
-            },
+            metadata: { reason },
           },
         })
         .returning();
@@ -273,7 +278,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       }
     }
 
-    return this.getStubFromRecord({ db, record });
+    return this.getStubFromDatabaseRecord(record);
   }
 
   // Get or create stub by route
@@ -300,7 +305,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromRecord({ db, record: existingAgent });
+      return this.getStubFromDatabaseRecord(existingAgent);
     }
 
     // No existing agent for this route, create one with route
@@ -312,18 +317,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         className: this.name,
         durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
-        metadata: {
-          reason: reason || "Created via route",
-          createdAt: new Date().toISOString(),
-        },
+        metadata: { reason },
       })
       .onConflictDoUpdate({
         target: agentInstance.durableObjectId,
         set: {
-          metadata: {
-            reason: reason || "Updated via route",
-            lastActiveAt: new Date().toISOString(),
-          },
+          metadata: { reason },
         },
       })
       .returning();
@@ -334,14 +333,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .values({ agentInstanceId: record.id, routingKey: route })
       .onConflictDoNothing();
 
-    return this.getStubFromRecord({ db, record });
+    return this.getStubFromDatabaseRecord(record);
   }
-  // The database record that is saved for this agent - this will be set via getStubFromRecord immediately after the constructor runs
-  // So before onStart() state hydration
-  #databaseRecord?: typeof agentInstance.$inferSelect;
 
+  protected db: DB;
   // Runtime slice list – inferred from the generic parameter.
-  protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
+  agentCore!: AgentCore<Slices, CoreAgentSlices>;
+  databaseRecord!: AgentInstanceDatabaseRecord;
+
+  // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
+  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
+    const { record } = params;
+    this.databaseRecord = record;
+  }
 
   initialState = {
     reminders: {},
@@ -391,7 +395,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
-
+    this.db = getDb();
     // DO NOT CHANGE THE SCHEMA WITHOUT UPDATING THE MIGRATION LOGIC
     // If you need to change the schema, you can add more columns with separate statements
     this.sql`
@@ -413,18 +417,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
-  }
-
-  // Called by platform after creating or locating the persisted agent record
-  async setDatabaseRecord(record: typeof agentInstance.$inferSelect) {
-    this.#databaseRecord = record;
-  }
-
-  get databaseRecord(): typeof agentInstance.$inferSelect {
-    if (!this.#databaseRecord) {
-      throw new Error("Database record has not been set yet. Call setDatabaseRecord first.");
-    }
-    return this.#databaseRecord;
   }
 
   private posthog: PosthogCloudflare | undefined = undefined;

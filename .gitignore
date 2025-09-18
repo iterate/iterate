@@ -18,3 +18,5 @@ build
 .cursor/rules
 .rules
 .clinerules/
+
+.cache
