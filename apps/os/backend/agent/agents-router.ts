@@ -20,10 +20,7 @@ const agentStubProcedure = protectedProcedure
         .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
-      reason: z
-        .string()
-        .describe("The reason for getting the agent stub - defaults to the request method and path")
-        .optional(),
+      reason: z.string().describe("The reason for getting the agent stub").optional(),
       createIfNotExists: z.boolean().optional().default(true),
       routingKeys: z.array(z.string()).optional().default([]),
     }),
@@ -36,7 +33,7 @@ const agentStubProcedure = protectedProcedure
       durableObjectName: input.agentInstanceName,
       createIfNotExists: input.createIfNotExists,
       routingKeys: input.routingKeys,
-      reason: input.reason || `${ctx.c.req.method} ${ctx.c.req.url}`,
+      reason: input.reason,
       metadata: input.reason ? { reason: input.reason } : undefined,
     });
     return next({ ctx: { ...ctx, agent } });
