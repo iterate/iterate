@@ -13,12 +13,14 @@ import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation } from "./slack-filters.ts";
 import type {
+  AgentCoreEvent,
   LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
 import type {
   SlackInteractionPayload,
+  SlackModalDefinition,
   SlackModalDefinitions,
   SlackWebhookPayload,
 } from "./slack.types.ts";
@@ -91,37 +93,37 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         if (!slackChannelId || !slackThreadId) {
           return;
         }
-        // switch ((payload.event as AgentCoreEvent).type) {
-        //   case "CORE:LLM_REQUEST_START":
-        //     // Start typing indicator
-        //     this.ctx.waitUntil(
-        //       serverTrpc.platform.integrations.slack.setThreadStatus
-        //         .mutate({
-        //           channelId: slackChannelId,
-        //           threadTs: slackThreadId,
-        //           status: "is typing...",
-        //         })
-        //         .catch((error) => {
-        //           console.error("[SlackAgent] Failed to start typing indicator:", error);
-        //         }),
-        //     );
-        //     break;
-        //   case "CORE:LLM_REQUEST_CANCEL":
-        //   case "CORE:LLM_REQUEST_END":
-        //     // Stop typing indicator by clearing status
-        //     this.ctx.waitUntil(
-        //       serverTrpc.platform.integrations.slack.setThreadStatus
-        //         .mutate({
-        //           channelId: slackChannelId,
-        //           threadTs: slackThreadId,
-        //           status: "",
-        //         })
-        //         .catch((error) => {
-        //           console.error("[SlackAgent] Failed to stop typing indicator:", error);
-        //         }),
-        //     );
-        //     break;
-        // }
+        switch ((payload.event as AgentCoreEvent).type) {
+          case "CORE:LLM_REQUEST_START":
+            // Start typing indicator
+            this.ctx.waitUntil(
+              this.slackAPIClient.assistant.threads
+                .setStatus({
+                  channel_id: slackChannelId,
+                  thread_ts: slackThreadId,
+                  status: "is typing...",
+                })
+                .catch((error) => {
+                  console.error("[SlackAgent] Failed to start typing indicator:", error);
+                }),
+            );
+            break;
+          case "CORE:LLM_REQUEST_CANCEL":
+          case "CORE:LLM_REQUEST_END":
+            // Stop typing indicator by clearing status
+            this.ctx.waitUntil(
+              this.slackAPIClient.assistant.threads
+                .setStatus({
+                  channel_id: slackChannelId,
+                  thread_ts: slackThreadId,
+                  status: "",
+                })
+                .catch((error) => {
+                  console.error("[SlackAgent] Failed to stop typing indicator:", error);
+                }),
+            );
+            break;
+        }
       },
       getFinalRedirectUrl: async <S>(_payload: {
         durableObjectInstanceName: string;
@@ -418,106 +420,104 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return events;
   }
 
+  // Not really sure what this is for - seems pretty janky
   async getSlackPermalink(): Promise<string | undefined> {
-    throw new Error("Not implemented");
-    // const state = await this.getState();
-    // const botUserId = state.reducedState?.botUserId;
+    const state = await this.getState();
+    const botUserId = state.reducedState?.botUserId;
 
-    // let lastUserMessage: any = null;
+    let lastUserMessage: any = null;
 
-    // const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
-    // for (let i = events.length; i >= 0; i--) {
-    //   const event = state.events[i];
+    const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
 
-    //   if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") { // todo: remove this check - no longer needed because we're using this.getEventsByType
-    //     const slackEvent = event.data?.payload?.event as SlackEvent;
+      if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
+        const slackEvent = (event.data?.payload as { event?: SlackEvent })?.event;
 
-    //     if (slackEvent?.type === "message") {
-    //       const messageEvent = slackEvent as any;
+        if (slackEvent?.type === "message") {
+          const messageEvent = slackEvent as any;
 
-    //       if (
-    //         !("subtype" in messageEvent) &&
-    //         messageEvent.user &&
-    //         messageEvent.user !== botUserId &&
-    //         messageEvent.channel &&
-    //         messageEvent.ts
-    //       ) {
-    //         lastUserMessage = messageEvent;
-    //         break;
-    //       }
-    //     }
-    //   }
-    // }
+          if (
+            !("subtype" in messageEvent) &&
+            messageEvent.user &&
+            messageEvent.user !== botUserId &&
+            messageEvent.channel &&
+            messageEvent.ts
+          ) {
+            lastUserMessage = messageEvent;
+            break;
+          }
+        }
+      }
+    }
 
-    // if (lastUserMessage) {
-    //   const messageChannelId = lastUserMessage.channel;
-    //   const ts = lastUserMessage.thread_ts || lastUserMessage.ts;
+    if (lastUserMessage) {
+      const messageChannelId = lastUserMessage.channel;
+      const ts = lastUserMessage.thread_ts || lastUserMessage.ts;
 
-    //   try {
-    //     const result = await serverTrpc.platform.integrations.slack.getPermalink.query({
-    //       channelId: messageChannelId,
-    //       ts,
-    //     });
-    //     if (result.success && result.permalink) {
-    //       return result.permalink;
-    //     }
-    //   } catch (error) {
-    //     console.error("Failed to get Slack permalink:", error);
-    //   }
-    // } else {
-    //   // if we can't find any message, get link to the thread
-    //   const channelId = state.reducedState?.slackChannelId;
-    //   const threadTs = state.reducedState?.slackThreadId;
+      try {
+        const result = await this.slackAPIClient.chat.getPermalink({
+          channel: messageChannelId,
+          message_ts: ts,
+        });
+        if (result.ok && result.permalink) {
+          return result.permalink;
+        }
+      } catch (error) {
+        console.error("Failed to get Slack permalink:", error);
+      }
+    } else {
+      // if we can't find any message, get link to the thread
+      const channelId = state.reducedState?.slackChannelId;
+      const threadTs = state.reducedState?.slackThreadId;
 
-    //   if (!channelId || !threadTs) {
-    //     console.error("Channel ID and thread TS are required to get a Slack permalink", {
-    //       channelId,
-    //       threadTs,
-    //     });
-    //     return undefined;
-    //   }
-    //   try {
-    //     const result = await serverTrpc.platform.integrations.slack.getPermalink.query({
-    //       channelId,
-    //       ts: threadTs,
-    //     });
-    //     if (result.success && result.permalink) {
-    //       return result.permalink;
-    //     }
-    //   } catch (error) {
-    //     console.error("Failed to get Slack permalink:", error);
-    //   }
-    // }
-
-    // return undefined;
+      if (!channelId || !threadTs) {
+        console.error("Channel ID and thread TS are required to get a Slack permalink", {
+          channelId,
+          threadTs,
+        });
+        return undefined;
+      }
+      try {
+        const result = await this.slackAPIClient.chat.getPermalink({
+          channel: channelId,
+          message_ts: threadTs,
+        });
+        if (result.ok && result.permalink) {
+          return result.permalink;
+        }
+      } catch (error) {
+        console.error("Failed to get Slack permalink:", error);
+      }
+    }
+    return undefined;
   }
 
-  async storeModalDefinitions(_modalDefinitions: SlackModalDefinitions): Promise<void> {
-    throw new Error("Not implemented");
-    // for (const [actionId, modalDef] of Object.entries(modalDefinitions) as [
-    //   string,
-    //   SlackModalDefinition,
-    // ][]) {
-    //   const agentState = await this.getState();
-    //   const threadTs = agentState?.reducedState?.slackThreadId;
-    //   const modalWithMetadata: SlackModalDefinition = {
-    //     ...modalDef,
-    //     callback_id: modalDef.callback_id || `${actionId}_form`,
-    //     private_metadata: JSON.stringify({
-    //       thread_ts: threadTs,
-    //       action_id: actionId,
-    //     }),
-    //   };
-    //   await this.addEvents([
-    //     {
-    //       type: "SLACK:STORE_MODAL_DEFINITION",
-    //       data: {
-    //         actionId,
-    //         modal: modalWithMetadata,
-    //       },
-    //     },
-    //   ]);
-    // }
+  async storeModalDefinitions(modalDefinitions: SlackModalDefinitions): Promise<void> {
+    for (const [actionId, modalDef] of Object.entries(modalDefinitions) as [
+      string,
+      SlackModalDefinition,
+    ][]) {
+      const agentState = await this.getState();
+      const threadTs = agentState?.reducedState?.slackThreadId;
+      const modalWithMetadata: SlackModalDefinition = {
+        ...modalDef,
+        callback_id: modalDef.callback_id || `${actionId}_form`,
+        private_metadata: JSON.stringify({
+          thread_ts: threadTs,
+          action_id: actionId,
+        }),
+      };
+      await this.addEvents([
+        {
+          type: "SLACK:STORE_MODAL_DEFINITION",
+          data: {
+            actionId,
+            modal: modalWithMetadata,
+          },
+        },
+      ]);
+    }
   }
 
   /**
@@ -695,11 +695,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
-    // Store modal definitions if provided
-    if (input.modalDefinitions) {
-      await this.storeModalDefinitions(input.modalDefinitions);
-    }
-
     const slackThreadId = this.agentCore.state.slackThreadId;
     const slackChannelId = this.agentCore.state.slackChannelId;
 
@@ -731,12 +726,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     };
   }
 
-  async addSlackReaction(_input: Inputs["addSlackReaction"]) {
-    throw new Error("Not implemented");
+  async addSlackReaction(input: Inputs["addSlackReaction"]) {
+    return await this.slackAPIClient.reactions.add({
+      channel: this.agentCore.state.slackChannelId!,
+      timestamp: input.messageTs,
+      name: input.name,
+    });
   }
 
-  async removeSlackReaction(_input: Inputs["removeSlackReaction"]) {
-    throw new Error("Not implemented");
+  async removeSlackReaction(input: Inputs["removeSlackReaction"]) {
+    return await this.slackAPIClient.reactions.remove({
+      channel: this.agentCore.state.slackChannelId!,
+      timestamp: input.messageTs,
+      name: input.name,
+    });
   }
 
   // async uploadAndShareFileInSlack(input: Inputs["uploadAndShareFileInSlack"]) {
@@ -762,29 +765,32 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   //   }
   // }
 
-  async updateSlackMessage(_input: Inputs["updateSlackMessage"]) {
-    throw new Error("Not implemented");
+  async updateSlackMessage(input: Inputs["updateSlackMessage"]) {
+    return await this.slackAPIClient.chat.update({
+      channel: this.agentCore.state.slackChannelId!,
+      blocks: [],
+      ...input,
+    });
   }
 
   async stopRespondingUntilMentioned(_input: Inputs["stopRespondingUntilMentioned"]) {
-    throw new Error("Not implemented");
-    // try {
-    //   const channel = this.agentCore.state.slackChannelId;
-    //   const ts = await this.mostRecentSlackMessageTs();
-    //   if (channel && ts) {
-    //     await serverTrpc.platform.integrations.slack.addSlackReaction.mutate({
-    //       channel,
-    //       timestamp: ts,
-    //       name: "zipper_mouth_face",
-    //     });
-    //   }
-    // } catch (error) {
-    //   console.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
-    // }
-    // return {
-    //   __pauseAgentUntilMentioned: true,
-    //   __triggerLLMRequest: false,
-    // } satisfies MagicAgentInstructions;
+    try {
+      const channel = this.agentCore.state.slackChannelId;
+      const ts = await this.mostRecentSlackMessageTs();
+      if (channel && ts) {
+        await this.slackAPIClient.reactions.add({
+          channel,
+          timestamp: ts,
+          name: "zipper_mouth_face",
+        });
+      }
+    } catch (error) {
+      console.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
+    }
+    return {
+      __pauseAgentUntilMentioned: true,
+      __triggerLLMRequest: false,
+    } satisfies MagicAgentInstructions;
   }
 
   async getUrlContent(_input: Inputs["getUrlContent"]) {

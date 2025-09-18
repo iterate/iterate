@@ -14,7 +14,7 @@ export const slackAgentTools = defineDOTools({
   //   }),
   // },
   sendSlackMessage: {
-    description: `Send a message to a Slack channel to a specific user. Supports rich formatting using blocks, buttons, and interactive elements for structured messages, forms, and other interactive components. Include modalDefinitions to define modals that open when buttons are clicked. Always set ephemeral=false!`,
+    description: `Send a slack message to the thread you are currently active in.`,
     input: z.object({
       text: z.string().describe("The message text (required if blocks not provided)"),
       blocks: z
@@ -64,14 +64,14 @@ export const slackAgentTools = defineDOTools({
   addSlackReaction: {
     description: "Add an emoji reaction to a Slack message",
     input: z.object({
-      ts: z.string().describe("The ts of the message to react to"),
+      messageTs: z.string().describe("The ts of the message to react to"),
       name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
     }),
   },
   removeSlackReaction: {
     description: "Remove an emoji reaction from a Slack message",
     input: z.object({
-      ts: z.string().describe("The ts of the message to remove reaction from"),
+      messageTs: z.string().describe("The ts of the message to remove reaction from"),
       name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
     }),
   },
@@ -93,11 +93,11 @@ export const slackAgentTools = defineDOTools({
     input: z.object({
       ts: z.string().describe("The timestamp of the message to update"),
       text: z.string().optional().describe("Updated message text"),
-      blocks: z
-        .array(z.record(z.string(), z.any()))
-        .optional()
-        .describe("Updated Block Kit blocks"),
-      metadata: z.any().optional().describe("Updated metadata"),
+      // blocks: z
+      //   .array(z.record(z.string(), z.any()))
+      //   .optional()
+      //   .describe("Updated Block Kit blocks"),
+      // metadata: z.any().optional().describe("Updated metadata"),
     }),
   },
   stopRespondingUntilMentioned: {

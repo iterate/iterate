@@ -1,4 +1,4 @@
-import { pgTable, timestamp, text, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
 
@@ -172,3 +172,50 @@ export const organizationUserMembershipRelations = relations(
     }),
   }),
 );
+
+export const agentDurableObjects = pgTable(
+  "agent_durable_objects",
+  (t) => ({
+    id: iterateId("agnt"),
+    estateId: t.text().notNull(),
+    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent"
+    durableObjectName: t.text().notNull(),
+    durableObjectId: t.text().notNull(),
+    metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Global uniqueness for DO identifiers
+    uniqueIndex().on(t.durableObjectName),
+    uniqueIndex().on(t.durableObjectId),
+    // Listing helpers
+    index().on(t.estateId),
+    index().on(t.className),
+  ],
+);
+
+export const agentDurableObjectsRelations = relations(agentDurableObjects, ({ one, many }) => ({
+  estate: one(estate, {
+    fields: [agentDurableObjects.estateId],
+    references: [estate.id],
+  }),
+  routes: many(agentDurableObjectRoutes),
+}));
+
+export const agentDurableObjectRoutes = pgTable(
+  "agent_durable_object_routes",
+  (t) => ({
+    id: iterateId("ador"),
+    routingKey: t.text().notNull(), // e.g. "slack:{threadTs}"
+    agentDurableObjectId: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.routingKey, t.agentDurableObjectId)],
+);
+
+export const agentDurableObjectRoutesRelations = relations(agentDurableObjectRoutes, ({ one }) => ({
+  agentDurableObject: one(agentDurableObjects, {
+    fields: [agentDurableObjectRoutes.agentDurableObjectId],
+    references: [agentDurableObjects.id],
+  }),
+}));

@@ -130,6 +130,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
+  private databaseRecord?: {
+    persistedId: string;
+    estateId: string;
+    className: string;
+    durableObjectName: string;
+    durableObjectId: string;
+    metadata: Record<string, unknown>;
+  };
   // Runtime slice list – inferred from the generic parameter.
   protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
 
@@ -203,6 +211,26 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+  }
+
+  // Called by platform after creating or locating the persisted agent record
+  async setDatabaseRecord(payload: {
+    persistedId: string;
+    estateId: string;
+    className: string;
+    durableObjectName: string;
+    durableObjectId: string;
+    metadata?: Record<string, unknown>;
+  }) {
+    this.databaseRecord = {
+      ...payload,
+      metadata: payload.metadata ?? {},
+    };
+    return { ok: true } as const;
+  }
+
+  getDatabaseRecord() {
+    return this.databaseRecord;
   }
 
   private posthog: PosthogCloudflare | undefined = undefined;
