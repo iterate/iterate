@@ -37,6 +37,7 @@ jobs:
         run: doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        working-directory: apps/os
 
       - name: Deploy
         env:
