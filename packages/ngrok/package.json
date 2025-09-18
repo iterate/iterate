@@ -1,0 +1,18 @@
+{
+  "name": "ngrok",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "doppler run -- node start.ts",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.13.0",
+  "devDependencies": {
+    "@types/node": "^24.4.0"
+  }
+}
