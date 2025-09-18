@@ -3,7 +3,7 @@ import { globSync, readFileSync, accessSync } from "fs";
 import jsonataLib from "jsonata";
 import type { RequireAtLeastOne } from "type-fest";
 import type { PromptFragment } from "./prompt-fragments";
-import type { MCPServerInput, ToolSpec } from "./tool-schemas";
+import type { ToolSpec } from "./tool-schemas";
 
 export type ContextRuleMatcher =
   | {
@@ -158,7 +158,6 @@ export const matchers = {
 export type ContextItem = RequireAtLeastOne<{
   prompt: PromptFragment;
   tools: ToolSpec[];
-  mcpServers: MCPServerInput[];
 }> & {
   id: string;
   description?: string;
