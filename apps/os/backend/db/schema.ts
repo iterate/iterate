@@ -213,8 +213,8 @@ export const organizationUserMembershipRelations = relations(
   }),
 );
 
-export const agentDurableObjects = pgTable(
-  "agent_durable_objects",
+export const agentInstance = pgTable(
+  "agent_instance",
   (t) => ({
     id: iterateId("agnt"),
     estateId: t.text().notNull(),
@@ -234,28 +234,28 @@ export const agentDurableObjects = pgTable(
   ],
 );
 
-export const agentDurableObjectsRelations = relations(agentDurableObjects, ({ one, many }) => ({
+export const agentInstanceRelations = relations(agentInstance, ({ one, many }) => ({
   estate: one(estate, {
-    fields: [agentDurableObjects.estateId],
+    fields: [agentInstance.estateId],
     references: [estate.id],
   }),
-  routes: many(agentDurableObjectRoutes),
+  routes: many(agentInstanceRoute),
 }));
 
-export const agentDurableObjectRoutes = pgTable(
-  "agent_durable_object_routes",
+export const agentInstanceRoute = pgTable(
+  "agent_instance_route",
   (t) => ({
     id: iterateId("ador"),
     routingKey: t.text().notNull(), // e.g. "slack:{threadTs}"
-    agentDurableObjectId: t.text().notNull(),
+    agentInstanceId: t.text().notNull(), // This is actually the `id` column
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.routingKey, t.agentDurableObjectId)],
+  (t) => [uniqueIndex().on(t.routingKey, t.agentInstanceId)],
 );
 
-export const agentDurableObjectRoutesRelations = relations(agentDurableObjectRoutes, ({ one }) => ({
-  agentDurableObject: one(agentDurableObjects, {
-    fields: [agentDurableObjectRoutes.agentDurableObjectId],
-    references: [agentDurableObjects.id],
+export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one }) => ({
+  agentDurableObject: one(agentInstance, {
+    fields: [agentInstanceRoute.agentInstanceId],
+    references: [agentInstance.id],
   }),
 }));

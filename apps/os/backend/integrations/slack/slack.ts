@@ -1,39 +1,103 @@
 import { Hono } from "hono";
+import { eq } from "drizzle-orm";
+import { getAgentByName } from "agents";
 import type { Variables } from "../../worker.ts";
-import { type CloudflareEnv } from "../../../env.ts";
+import { env, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
-import { slackAPI } from "./client.ts";
+import { getDb, type DB } from "../../db/client.ts";
+import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
+async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string }) {
+  console.log("slackTeamIdToEstateId", teamId);
+  // TODO implement properl
+  const estateId = await db.query.estate.findFirst();
+  return estateId?.id;
+}
+
 slackApp.post("/webhook", async (c) => {
+  const db = getDb();
+  // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
   const body = (await c.req.json()) as SlackWebhookPayload;
   // Slack types say this doesn't exist but it was here in v1...
   // if (body.type === "url_verification") {
   //   return c.text(body.challenge);
   // }
 
-  console.log("Slack webhook received:", body);
-
-  if (body.event?.type === "message") {
-    const threadTs = body.event.ts;
-    await (
-      await slackAPI()
-    ).chat.postMessage({
-      thread_ts: threadTs,
-      channel: body.event.channel,
-      text: "HELLO",
-    });
+  // First we get a slack team ID
+  if (!body.team_id || !body.event) {
+    console.warn("Slack webhook received without a team ID", body);
+    return c.text("ok");
   }
 
-  // const agent = await getAgentStub({
-  //   agentInstanceName: "slack-agent2",
-  //   agentClassName: "SlackAgent",
-  //   reason: "Slack webhook received",
-  // });
+  const estateId = await slackTeamIdToEstateId({ db, teamId: body.team_id });
+  if (!estateId) {
+    console.warn(
+      `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
+      body,
+    );
+    return c.text("ok");
+  }
 
-  // await (agent as DurableObjectStub<SlackAgent>).onSlackWebhookEventReceived(body);
-  // TODO: Add Slack we bhook verification and processing logic here
+  // This will throw an error if we didn't gracefully bow out
+  const routingKey = getRoutingKey({
+    payload: body,
+    estateId: estateId,
+  });
+
+  const durableObjectName = `SlackAgent-${routingKey}`;
+  const durableObjectId = env.SLACK_AGENT.idFromName(durableObjectName);
+
+  // look up in the database to get all the agents by routing key
+  const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
+    where: eq(agentInstanceRoute.routingKey, routingKey),
+  });
+
+  if (rest.length > 0) {
+    console.error(`Multiple agents found for routing key ${routingKey}`);
+    return c.text("ok");
+  }
+
+  let agentRecord: typeof agentInstance.$inferSelect;
+
+  if (agentRoute) {
+    [agentRecord] = await db
+      .select()
+      .from(agentInstance)
+      .where(eq(agentInstance.id, agentRoute.agentInstanceId));
+  } else {
+    [agentRecord] = await db
+      .insert(agentInstance)
+      .values({
+        estateId,
+        className: "SlackAgent",
+        // this is an oqaque string as far as the system is concerned, but useful for humans
+        durableObjectName,
+        durableObjectId: durableObjectId.toString(),
+        metadata: {
+          reason: `Slack webhook received`,
+        },
+      })
+      .onConflictDoUpdate({
+        target: agentInstance.durableObjectId,
+        set: {
+          metadata: { reason: `Slack webhook received` },
+        },
+      })
+      .returning();
+
+    await db.insert(agentInstanceRoute).values({
+      agentInstanceId: agentRecord.id,
+      routingKey,
+    });
+  }
+  // TODO replace with what's in getAgentByName and set databaserecord after constructor
+  const agentStub = await getAgentByName(env.SLACK_AGENT, durableObjectName);
+  // onStart and onStateUpdate and all the reducers and all that stuff already ran -- whoops
+
+  await agentStub.setDatabaseRecord(agentRecord);
+  c.executionCtx.waitUntil(agentStub.onSlackWebhookEventReceived(body));
 
   return c.text("ok");
 });
@@ -236,3 +300,32 @@ slackApp.post("/webhook", async (c) => {
 //       break;
 //   }
 // }
+
+function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; estateId: string }) {
+  if (!payload.event || !payload.team_id) {
+    throw new Error("No event or team_id found in slack webhook payload");
+  }
+
+  // routing keys contain the estate ID - so if a slack team is first connected to estate A, and then later B,
+  // then estate B should not get access to the data from estate A
+  const prefix = `slack-${estateId}-team-${payload.team_id}`;
+
+  if (payload.event.type === "message") {
+    return `${prefix}-ts-${"thread_ts" in payload.event ? payload.event.thread_ts : payload.event.ts}`;
+  }
+
+  if (payload.event.type === "reaction_added" || payload.event.type === "reaction_removed") {
+    throw new Error("reaction_added and reaction_removed not implemented");
+    // return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
+    //   messageTs: slackEvent.item.ts,
+    // });
+  }
+
+  console.warn(
+    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
+    payload,
+  );
+  throw new Error(
+    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
+  );
+}

@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
+import { and, eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
@@ -13,6 +14,7 @@ import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { getAgentStub } from "./agent/agent-stub-utils.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
+import { agentInstance } from "./db/schema.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -52,10 +54,26 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
-  const agentStub = await getAgentStub(c.var.db, {
-    estateId,
-    className: agentClassName as "IterateAgent" | "SlackAgent",
+  if (agentClassName !== "IterateAgent" && agentClassName !== "SlackAgent") {
+    return c.json({ error: "Invalid agent class name" }, 400);
+  }
+
+  const agentRecord = await c.var.db.query.agentInstance.findFirst({
+    where: and(
+      eq(agentInstance.estateId, estateId),
+      eq(agentInstance.durableObjectName, agentInstanceName),
+      eq(agentInstance.className, agentClassName),
+    ),
+  });
+
+  if (!agentRecord) {
+    return c.json({ error: "Agent not found" }, 404);
+  }
+
+  const agentStub = await getAgentStub({
+    durableObjectClassName: agentClassName,
     durableObjectName: agentInstanceName,
+    agentRecord,
   });
 
   return agentStub.fetch(c.req.raw);

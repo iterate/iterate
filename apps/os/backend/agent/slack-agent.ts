@@ -504,6 +504,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
+    console.log("onSlackWebhookEventReceived", slackWebhookPayload);
+
     const slackEvent = slackWebhookPayload.event!;
     if (!slackEvent.type) {
       return;
@@ -606,11 +608,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const result = await this.slackAPIClient.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
-      markdown_text: sendInput.text,
-      blocks: [],
-      attachments: [],
+      text: sendInput.text,
     });
-    console.log(result);
 
     // Build magic return properties based on behaviour
     const magic: MagicAgentInstructions = {};
