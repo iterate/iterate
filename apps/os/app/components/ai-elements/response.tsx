@@ -1,6 +1,6 @@
-import { cn } from "../../lib/utils";
 import { type ComponentProps, memo } from "react";
 import { Streamdown } from "streamdown";
+import { cn } from "../../lib/utils";
 
 type ResponseProps = ComponentProps<typeof Streamdown>;
 

@@ -26,6 +26,9 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
+import { useAgent } from "agents/react";
+import clsx from "clsx";
+import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
@@ -104,7 +107,6 @@ import { Response } from "../components/ai-elements/response.tsx";
 import { SerializedObjectCodeBlock } from "../components/serialized-object-code-block.tsx";
 import { AgentReducedState } from "../components/agent-reduced-state.tsx";
 import { PagerDialog } from "../components/pager-dialog.tsx";
-import { useAgent } from "agents/react";
 import type { IterateAgentState } from "../../backend/agent/iterate-agent.ts";
 import type {
   AgentCoreEvent,
@@ -113,9 +115,7 @@ import type {
 } from "../../backend/agent/agent-core-schemas.ts";
 import { isThinking } from "../../backend/agent/agent-core-schemas.ts";
 import { fulltextSearchInObject } from "../../backend/utils/type-helpers.ts";
-import clsx from "clsx";
 import { cn } from "../lib/utils.ts";
-import { useQuery } from "@tanstack/react-query";
 
 // Types and interfaces
 interface FilterState {
@@ -126,10 +126,10 @@ type AgentEvent = AgentCoreEvent;
 
 // Helper function to get color for time delta based on milliseconds
 const getTimeDeltaColor = (ms: number): string => {
-  if (ms <= 100) return "text-gray-400";
-  if (ms <= 500) return "text-gray-500";
-  if (ms <= 1000) return "text-yellow-500";
-  if (ms <= 3000) return "text-orange-500";
+  if (ms <= 100) {return "text-gray-400";}
+  if (ms <= 500) {return "text-gray-500";}
+  if (ms <= 1000) {return "text-yellow-500";}
+  if (ms <= 3000) {return "text-orange-500";}
   return "text-red-500"; // Very long delays (3+ seconds) - red
 };
 
@@ -741,7 +741,7 @@ function ToolCallInjector({
 
   // Extract function tools from reduced state
   const availableTools = useMemo((): ToolDefinition[] => {
-    if (!reducedState?.runtimeTools) return [];
+    if (!reducedState?.runtimeTools) {return [];}
 
     return reducedState.runtimeTools
       .filter((tool: any) => tool.type === "function")
@@ -757,7 +757,7 @@ function ToolCallInjector({
   const selectedTool = selectedToolIndex !== null ? availableTools[selectedToolIndex] : null;
 
   const handleExecuteTool = async () => {
-    if (!selectedTool) return;
+    if (!selectedTool) {return;}
 
     // Filter out undefined values and clean the form data
     const cleanedFormData = Object.fromEntries(
@@ -1031,7 +1031,7 @@ function CoreEventRenderer({
   estateId: string;
   currentUser: { name: string; email: string; image?: string | null };
 }): React.ReactElement | null {
-  if (!event) return null;
+  if (!event) {return null;}
 
   switch (event.type) {
     case "CORE:INITIALIZED_WITH_EVENTS": {
@@ -1156,7 +1156,7 @@ function CoreEventRenderer({
 
       // Format file size
       const formatFileSize = (bytes: number): string => {
-        if (bytes === 0) return "0 B";
+        if (bytes === 0) {return "0 B";}
         const sizes = ["B", "KB", "MB", "GB"];
         const i = Math.floor(Math.log(bytes) / Math.log(1024));
         return `${(bytes / 1024 ** i).toFixed(1)} ${sizes[i]}`;
@@ -1351,7 +1351,7 @@ function FileUploadDialog({
   };
 
   const handleUpload = async () => {
-    if (files.length === 0) return;
+    if (files.length === 0) {return;}
 
     setUploading(true);
     const uploadedFiles: Array<{
@@ -1460,7 +1460,7 @@ function FileUploadDialog({
   };
 
   const formatFileSize = (bytes: number): string => {
-    if (bytes === 0) return "0 B";
+    if (bytes === 0) {return "0 B";}
     const sizes = ["B", "KB", "MB", "GB"];
     const i = Math.floor(Math.log(bytes) / Math.log(1024));
     return `${(bytes / 1024 ** i).toFixed(1)} ${sizes[i]}`;
@@ -1930,7 +1930,7 @@ export default function AgentsPage() {
           <div className="px-4 py-3">
             <PromptInput
               onSubmit={(promptMessage) => {
-                if (!promptMessage.text?.trim()) return;
+                if (!promptMessage.text?.trim()) {return;}
 
                 const messageEvent = {
                   type: "CORE:LLM_INPUT_ITEM" as const,

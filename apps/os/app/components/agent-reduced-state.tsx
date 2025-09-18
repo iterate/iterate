@@ -1,7 +1,7 @@
+import { Globe, Settings, Wrench } from "lucide-react";
 import { Badge } from "./ui/badge.tsx";
 import { Alert, AlertDescription } from "./ui/alert.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
-import { Globe, Settings, Wrench } from "lucide-react";
 import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 
 interface AgentReducedStateProps {
