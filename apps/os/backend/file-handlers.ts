@@ -8,9 +8,6 @@ import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
 
-// TODO: Replace with actual base URL configuration
-const BASE_URL = env.VITE_PUBLIC_URL || "https://platform.iterate.com";
-
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
 export type NewFileRecord = InferInsertModel<typeof files>;
@@ -203,7 +200,7 @@ export const uploadFileFromUrl = async ({
 };
 
 export async function getFilePublicUrl(iterateFileId: string, estateId: string) {
-  return `${BASE_URL}/api/estate/${estateId}/files/${iterateFileId}`;
+  return `${env.VITE_PUBLIC_URL}/api/estate/${estateId}/files/${iterateFileId}`;
 }
 
 export const uploadFile = async ({
