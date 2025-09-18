@@ -13,19 +13,23 @@ jobs:
     if: false
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
-      - uses: actions/checkout@v4
-      - name: Setup Pnpm
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 10.13.0
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: "pnpm"
-          cache-dependency-path: pnpm-lock.yaml
-      - run: pnpm install
+
+      - name: Install dependencies
+        run: pnpm install
+
       - name: Install Doppler CLI
         run: curl -Ls https://cli.doppler.com/install.sh | sh
+
       - name: Deploy
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
