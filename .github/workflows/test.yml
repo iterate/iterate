@@ -24,5 +24,15 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+
+      - name: Setup Doppler
+        run: doppler setup --config 'dev' --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
       - name: Run Tests
-        run: pnpm test
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run -- pnpm test
