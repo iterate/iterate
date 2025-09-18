@@ -30,7 +30,7 @@ function ConnectSlackCard() {
 
     const result = await authClient.integrations.link.slackBot({
       estateId: estateData.estateId,
-      callbackURL: "/?success=true",
+      callbackURL: "/",
     });
 
     if (result.error) {

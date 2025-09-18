@@ -20,6 +20,24 @@ export function LoginProviders() {
     }
   };
 
+  const handleSlackSignIn = async () => {
+    try {
+      console.log("🚀 Attempting Slack sign-in...");
+      const result = await authClient.integrations.directLoginWithSlack({
+        callbackURL: "/",
+      });
+
+      if (result.error || !result.data?.url) {
+        toast.error("Failed to sign in with Slack");
+        return;
+      }
+
+      window.location.href = result.data.url.toString();
+    } catch (error) {
+      console.error("❌ Slack sign-in error:", error);
+    }
+  };
+
   return (
     <div className="w-full space-y-3">
       <Button
@@ -47,6 +65,14 @@ export function LoginProviders() {
           />
         </svg>
         Continue with Google
+      </Button>
+      <Button
+        onClick={handleSlackSignIn}
+        variant="outline"
+        size="lg"
+        className="w-full h-12 text-base font-medium"
+      >
+        Continue with Slack
       </Button>
     </div>
   );

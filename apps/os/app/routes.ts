@@ -7,4 +7,5 @@ export default [
   route("/estate", "./routes/estate.tsx"),
   route("/agents", "./routes/agents-index.tsx"),
   route("/agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
+  route("*", "./routes/404.tsx"),
 ] satisfies RouteConfig;
