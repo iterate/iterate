@@ -27,6 +27,7 @@ export default defineConfig([
     "**/.cursor/",
     "**/.alchemy/",
     "**/components/ui/",
+    "**/components/ai-elements/",
     "**/logs.json",
     "**/worker-configuration.d.ts",
     "**/routeTree.gen.ts",
