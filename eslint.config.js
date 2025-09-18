@@ -30,12 +30,11 @@ export default defineConfig([
     "**/logs.json",
     "**/worker-configuration.d.ts",
     "**/routeTree.gen.ts",
-    "**/db/migrations/",
+    "**/drizzle/migrations/",
     "**/*.d.ts",
     "**/node_modules/",
     "**/dist/",
     "**/build/",
-    "pnpm-lock.yaml",
   ]),
   js.configs.recommended,
   // TypeScript/JavaScript files
@@ -128,6 +127,20 @@ export default defineConfig([
       // A11y rules (mapping from biome a11y rules)
       "jsx-a11y/click-events-have-key-events": "off",
       "jsx-a11y/no-noninteractive-element-to-interactive-role": "off",
+
+      // Custom restricted imports (mapping from biome)
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "next-themes",
+              message:
+                "Use @iterate-com/shared-components/iterate-themes.tsx instead which wraps next-themes and supports subdomain theme syncing",
+            },
+          ],
+        },
+      ],
     },
   },
   // Override for test files (mapping from biome overrides)
@@ -153,17 +166,17 @@ export default defineConfig([
   {
     ignores: [".tmp-ci-build*"],
   },
-  // Override for React Router route files
-  {
-    files: ["**/routes/**", "**/app/root.tsx"],
-    rules: {
-      "react-refresh/only-export-components": "off",
-    },
-  },
   // Override for iterate files (mapping from biome overrides)
   {
     files: ["iterate/**"],
-    ignores: ["**/*.test.ts", "**/test-*.ts"],
+    ignores: [
+      "**/*.test.ts",
+      "**/test-*.ts",
+      "**/test/**",
+      "**/__tests__/**",
+      "**/*e2e-test*",
+      "**/*e2e-eval*",
+    ],
     rules: {
       "no-console": "off",
     },
@@ -295,6 +308,99 @@ export default defineConfig([
               };
             },
           },
+          "prefer-single-object-params": {
+            meta: {
+              docs: {
+                description:
+                  "Encourage functions to accept a single object of named params rather than multiple positional primitives",
+              },
+              type: "suggestion",
+            },
+            create: (context) => {
+              function checkFunction(node) {
+                const params = node.params;
+
+                // Skip if function has 0 or 1 parameters
+                if (params.length <= 1) {
+                  return;
+                }
+
+                const isVariableDeclarator =
+                  node.parent?.type === "VariableDeclarator" ||
+                  node.parent.type === "PropertyDefinition" ||
+                  node.parent.type === "MethodDefinition" ||
+                  node.parent.type === "Property";
+
+                // Skip function expressions that don't have an id, unless they're part of a variable declarator
+                if (node.type === "FunctionExpression" && !node.id) {
+                  if (!isVariableDeclarator) {
+                    return;
+                  }
+                }
+
+                // Skip arrow functions that are not part of a variable declarator (they don't have names)
+                if (node.type === "ArrowFunctionExpression") {
+                  if (!isVariableDeclarator) {
+                    return;
+                  }
+                }
+
+                // Check for 2+ parameters of the same type - these should always use named parameters
+                if (params.length >= 2) {
+                  const types = params.map((param) => param.typeAnnotation?.typeAnnotation?.type);
+                  const primitiveTypes = ["TSStringKeyword", "TSNumberKeyword", "TSBooleanKeyword"];
+
+                  // Check if we have 2+ parameters of the same primitive type
+                  for (const primitiveType of primitiveTypes) {
+                    const countOfType = types.filter((type) => type === primitiveType).length;
+                    if (countOfType >= 2) {
+                      context.report({
+                        node,
+                        message: `Function has ${countOfType} parameters of the same type (${primitiveType.replace("TS", "").replace("Keyword", "").toLowerCase()}). Use a single object parameter with named properties to avoid confusion.`,
+                      });
+                      return;
+                    }
+                  }
+                }
+
+                // For functions with 3+ parameters, always suggest object parameters
+                if (params.length <= 2) {
+                  return;
+                }
+
+                // Skip if this is a higher-order function that returns a function
+                // (these often need multiple parameters for the returned function)
+                if (node.body?.type === "BlockStatement") {
+                  const returnStatement = node.body.body?.find(
+                    (stmt) => stmt.type === "ReturnStatement",
+                  );
+                  if (
+                    returnStatement?.argument?.type === "ArrowFunctionExpression" ||
+                    returnStatement?.argument?.type === "FunctionExpression"
+                  ) {
+                    return;
+                  }
+                } else if (
+                  node.body?.type === "ArrowFunctionExpression" ||
+                  node.body?.type === "FunctionExpression"
+                ) {
+                  return;
+                }
+
+                // Report the violation
+                context.report({
+                  node,
+                  message: `Function has ${params.length} parameters. Consider using a single object parameter with named properties for better readability and maintainability.`,
+                });
+              }
+
+              return {
+                FunctionDeclaration: checkFunction,
+                FunctionExpression: checkFunction,
+                ArrowFunctionExpression: checkFunction,
+              };
+            },
+          },
         },
       },
     },
@@ -303,8 +409,25 @@ export default defineConfig([
     name: "iterate-config",
     rules: {
       "iterate/prefer-const": "error",
+      "iterate/no-public-procedure": "warn",
       "iterate/side-effect-imports-first": "warn",
       "iterate/zod-schema-naming": "error",
+    },
+  },
+  // Apply prefer-single-object-params to non-test files only
+  {
+    name: "iterate-config-prefer-single-object-params",
+    ignores: [
+      "**/*.test.ts",
+      "**/*.test.tsx",
+      "**/test-*.ts",
+      "**/test/**",
+      "**/__tests__/**",
+      "**/*e2e-test*",
+      "**/*e2e-eval*",
+    ],
+    rules: {
+      "iterate/prefer-single-object-params": "warn",
     },
   },
 ]);
