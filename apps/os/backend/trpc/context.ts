@@ -14,6 +14,7 @@ export async function createContext(
     db,
     session,
     user: session?.user || null,
+    env: c.env,
   };
 }
 
