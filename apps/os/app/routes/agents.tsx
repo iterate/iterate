@@ -560,11 +560,11 @@ function EventDetailsContent({
         <TabsTrigger value="state">Reduced State</TabsTrigger>
       </TabsList>
 
-      <TabsContent value="event" className="flex-1 overflow-hidden">
+      <TabsContent value="event" className="flex-1 overflow-auto">
         <SerializedObjectCodeBlock data={event} className="h-full" />
       </TabsContent>
 
-      <TabsContent value="state" className="flex-1 overflow-hidden">
+      <TabsContent value="state" className="flex-1 overflow-auto">
         {isLoadingReducedState ? (
           <div className="flex items-center justify-center h-full bg-muted rounded-lg">
             <Clock className="h-4 w-4 animate-spin mr-2" />

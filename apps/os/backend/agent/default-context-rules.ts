@@ -142,6 +142,20 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
+    id: "asjiosdidsijao",
+    match: matchers.forAgentClass("IterateAgent"),
+    tools: [
+      {
+        type: "agent_durable_object_tool",
+        methodName: "doNothing",
+      },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "reverse",
+      },
+    ],
+  }),
+  defineRule({
     id: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),

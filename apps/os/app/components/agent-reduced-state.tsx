@@ -50,8 +50,8 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
   const mcpConnectionsCount = Object.keys(mcpConnections).length;
 
   return (
-    <Tabs defaultValue="inputItems" className={className}>
-      <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8">
+    <Tabs defaultValue="inputItems" className={`${className} flex flex-col`}>
+      <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8 flex-shrink-0">
         <TabsTrigger value="inputItems" className="flex items-center gap-1 text-xs">
           Input Items
           {totalInputItemsCount > 0 && (
@@ -105,7 +105,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         </TabsTrigger>
       </TabsList>
 
-      <TabsContent value="inputItems" className="mt-4">
+      <TabsContent value="inputItems" className="flex-1 overflow-auto mt-4">
         {totalInputItemsCount === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             No input items or ephemeral prompt fragments
@@ -121,17 +121,17 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="systemPrompt" className="mt-4">
+      <TabsContent value="systemPrompt" className="flex-1 overflow-auto mt-4">
         {!systemPrompt ? (
           <div className="text-center text-muted-foreground py-8">No system prompt set</div>
         ) : (
-          <div className="rounded-md border p-4 bg-muted/30">
+          <div className="rounded-md border p-4 bg-muted/30 h-full overflow-auto">
             <pre className="whitespace-pre-wrap text-sm">{systemPrompt}</pre>
           </div>
         )}
       </TabsContent>
 
-      <TabsContent value="toolSpecs" className="mt-4">
+      <TabsContent value="toolSpecs" className="flex-1 overflow-auto mt-4">
         {toolSpecsCount === 0 ? (
           <div className="text-center text-muted-foreground py-8">No tool specs configured</div>
         ) : (
@@ -139,7 +139,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="runtimeTools" className="mt-4">
+      <TabsContent value="runtimeTools" className="flex-1 overflow-auto mt-4">
         {runtimeToolsCount === 0 ? (
           <div className="text-center text-muted-foreground py-8">No runtime tools loaded</div>
         ) : (
@@ -147,7 +147,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="mcpServers" className="mt-4">
+      <TabsContent value="mcpServers" className="flex-1 overflow-auto mt-4">
         {mcpServersCount === 0 ? (
           <div className="text-center text-muted-foreground py-8">No MCP servers configured</div>
         ) : (
@@ -174,7 +174,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="mcpConnections" className="mt-4">
+      <TabsContent value="mcpConnections" className="flex-1 overflow-auto mt-4">
         {mcpConnectionsCount === 0 ? (
           <div className="text-center text-muted-foreground py-8">
             No MCP connections established
@@ -227,7 +227,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="other" className="mt-4">
+      <TabsContent value="other" className="flex-1 overflow-auto mt-4">
         {Object.keys(otherFields).length === 0 ? (
           <div className="text-center text-muted-foreground py-8">No other fields</div>
         ) : (
@@ -235,7 +235,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         )}
       </TabsContent>
 
-      <TabsContent value="raw" className="mt-4">
+      <TabsContent value="raw" className="flex-1 overflow-auto mt-4">
         <SerializedObjectCodeBlock data={reducedState} className="h-full" />
       </TabsContent>
     </Tabs>
