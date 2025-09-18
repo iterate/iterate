@@ -524,15 +524,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Finds the most recent Slack message timestamp (ts) seen by this agent from webhook events
    */
   protected async mostRecentSlackMessageTs(): Promise<string | null> {
-    const state = await this.getState();
-    for (let i = state.events.length - 1; i >= 0; i--) {
-      const event = state.events[i] as MergedEventInputForSlices<SlackAgentSlices>;
-      if (event?.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
-        const slackEvent = (event.data?.payload as { event?: SlackEvent })?.event;
-        return slackEvent?.type === "message" && typeof slackEvent.ts === "string"
-          ? slackEvent.ts
-          : null;
-      }
+    const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      const slackEvent = (event.data?.payload as { event?: SlackEvent })?.event;
+      return slackEvent?.type === "message" && typeof slackEvent.ts === "string"
+        ? slackEvent.ts
+        : null;
     }
     return null;
   }
