@@ -1,13 +1,15 @@
-import { generateState, parseState, type BetterAuthPlugin } from "better-auth";
+import { type BetterAuthPlugin, type User } from "better-auth";
 import { createAuthEndpoint } from "better-auth/plugins";
 import { sessionMiddleware } from "better-auth/api";
-import { createAuthorizationURL, validateAuthorizationCode } from "better-auth/oauth2";
+import { createAuthorizationURL } from "better-auth/oauth2";
+import { setSessionCookie } from "better-auth/cookies";
 import { z } from "zod";
+import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq } from "drizzle-orm";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
-import { type CloudflareEnv } from "../../env.ts";
+import { env, type CloudflareEnv } from "../../env.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -36,10 +38,83 @@ export const SLACK_BOT_SCOPES = [
   "assistant:write",
 ];
 
+export const SLACK_USER_AUTH_SCOPES = [
+  "identity.email",
+  "identity.basic",
+  "identity.team",
+  "identity.avatar",
+];
+
+export const SlackBotOauthTokenResponse = z.object({
+  access_token: z.string(),
+  bot_user_id: z.string(),
+  team: z.looseObject({
+    id: z.string(),
+    name: z.string(),
+  }),
+  authed_user: z.object({
+    id: z.string(),
+    access_token: z.string(),
+  }),
+});
+export type SlackBotOauthTokenResponse = z.infer<typeof SlackBotOauthTokenResponse>;
+
+export const UserInfoResponse = z.object({
+  user: z.object({
+    id: z.string(),
+    name: z.string(),
+    email: z.string(),
+    image_192: z.string().optional(),
+  }),
+});
+export type UserInfoResponse = z.infer<typeof UserInfoResponse>;
+
 export const integrationsPlugin = () =>
   ({
     id: "integrations",
     endpoints: {
+      directLoginWithSlack: createAuthEndpoint(
+        "/integrations/direct-login-with-slack",
+        {
+          method: "POST",
+          body: z.object({
+            callbackURL: z.string(),
+          }),
+        },
+        async (ctx) => {
+          const state = generateRandomString(32);
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+          const data = JSON.stringify({
+            callbackURL: ctx.body.callbackURL,
+          });
+
+          await ctx.context.internalAdapter.createVerificationValue({
+            expiresAt,
+            identifier: state,
+            value: data,
+          });
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
+          const url = await createAuthorizationURL({
+            id: "slack-bot",
+            options: {
+              clientId: env.SLACK_CLIENT_ID,
+              clientSecret: env.SLACK_CLIENT_SECRET,
+              redirectURI,
+            },
+            redirectURI,
+            authorizationEndpoint: "https://slack.com/oauth/v2/authorize",
+            scopes: SLACK_BOT_SCOPES,
+            state,
+            additionalParams: {
+              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
+            },
+          });
+
+          return ctx.json({ url });
+        },
+      ),
       linkSlackBot: createAuthEndpoint(
         "/integrations/link/slack-bot",
         {
@@ -51,7 +126,7 @@ export const integrationsPlugin = () =>
           use: [sessionMiddleware],
         },
         async (ctx) => {
-          const { estateId } = ctx.body;
+          const { estateId, callbackURL } = ctx.body;
           const session = ctx.context.session;
 
           const {
@@ -81,9 +156,22 @@ export const integrationsPlugin = () =>
             throw new Error("You are not a member of this estate");
           }
 
-          const { state } = await generateState(ctx, {
-            email: `${session.user.email}|${estateId}`,
-            userId: session.user.id,
+          const state = generateRandomString(32);
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+          const data = JSON.stringify({
+            estateId,
+            link: {
+              userId: session.user.id,
+              email: session.user.email,
+            },
+            callbackURL,
+          });
+
+          await ctx.context.internalAdapter.createVerificationValue({
+            expiresAt,
+            identifier: state,
+            value: data,
           });
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
@@ -98,6 +186,9 @@ export const integrationsPlugin = () =>
             authorizationEndpoint: "https://slack.com/oauth/v2/authorize",
             scopes: SLACK_BOT_SCOPES,
             state,
+            additionalParams: {
+              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
+            },
           });
 
           return ctx.json({ url });
@@ -108,12 +199,6 @@ export const integrationsPlugin = () =>
         {
           method: "GET",
           query: z.object({
-            code: z
-              .string()
-              .meta({
-                description: "The OAuth2 code",
-              })
-              .optional(),
             error: z
               .string()
               .meta({
@@ -126,24 +211,38 @@ export const integrationsPlugin = () =>
                 description: "The error description, if any",
               })
               .optional(),
-            state: z
-              .string()
-              .meta({
-                description: "The state parameter from the OAuth2 request",
-              })
-              .optional(),
+            code: z.string().meta({
+              description: "The OAuth2 code",
+            }),
+            state: z.string().meta({
+              description: "The state parameter from the OAuth2 request",
+            }),
           }),
         },
         async (ctx) => {
-          const parsedState = await parseState(ctx);
+          const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
+          if (!value) {
+            return ctx.json({ error: "Invalid state" });
+          }
+
+          const parsedState = z
+            .object({
+              estateId: z.string().optional(),
+              link: z
+                .object({
+                  userId: z.string(),
+                  email: z.string(),
+                })
+                .optional(),
+              callbackURL: z.string(),
+            })
+            .parse(JSON.parse(value.value));
+
           const { link, callbackURL } = parsedState;
+          let estateId = parsedState.estateId;
+
           const code = ctx.query.code;
-          if (!code) {
-            return ctx.json({ error: "No code provided" });
-          }
-          if (!link) {
-            return ctx.json({ error: "No associated user found with the oauth session" });
-          }
+
           const {
             env,
             var: { db },
@@ -151,69 +250,150 @@ export const integrationsPlugin = () =>
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
 
-          const tokens = await validateAuthorizationCode({
-            code,
-            options: {
-              clientId: env.SLACK_CLIENT_ID,
-              clientSecret: env.SLACK_CLIENT_SECRET,
-              redirectURI,
+          const httpBasicAuth = btoa(`${env.SLACK_CLIENT_ID}:${env.SLACK_CLIENT_SECRET}`);
+          const params = new URLSearchParams();
+          params.set("code", code);
+          params.set("redirect_uri", redirectURI);
+
+          const tokenRes = await fetch(`https://slack.com/api/oauth.v2.access`, {
+            method: "POST",
+            body: params.toString(),
+            headers: {
+              Authorization: `Basic ${httpBasicAuth}`,
+              "Content-Type": "application/x-www-form-urlencoded",
             },
-            tokenEndpoint: "https://slack.com/api/oauth.v2.access",
-            redirectURI,
-          }).catch(() => {
-            console.error("Invalid code");
-            return null;
           });
 
-          if (!tokens || !tokens.accessToken) {
+          if (!tokenRes.ok) {
             return ctx.json({ error: "Failed to get tokens" });
           }
 
-          const body = new FormData();
-          body.append("token", tokens.accessToken);
-          const botAuth = await fetch(`https://slack.com/api/auth.test`, {
-            headers: {
-              Authorization: `Bearer ${tokens.accessToken}`,
-              Accept: "application/json",
-            },
-            method: "POST",
-            body,
-          });
+          const tokens = SlackBotOauthTokenResponse.parse(await tokenRes.json());
 
-          if (!botAuth.ok) {
-            return ctx.json({ error: "Failed to authenticate bot" });
+          if (!tokens || !tokens.access_token || !tokens.authed_user.access_token) {
+            return ctx.json({ error: "Failed to get tokens" });
           }
 
-          const botAuthData = (await botAuth.json()) as { user_id: string };
-          const botUserId = botAuthData.user_id;
+          const userInfo = await fetch(`https://slack.com/api/users.identity`, {
+            headers: {
+              Authorization: `Bearer ${tokens.authed_user.access_token}`,
+            },
+          });
 
-          const existingAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          if (!userInfo.ok) {
+            return ctx.json({ error: "Failed to get user info" });
+          }
 
-          let accountId = existingAccount?.id;
-          if (existingAccount) {
-            await ctx.context.internalAdapter.updateAccount(existingAccount.id, {
-              accessToken: tokens.accessToken,
-              refreshToken: tokens.refreshToken,
-              scope: SLACK_BOT_SCOPES.join(" "),
-              accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+          const userInfoData = UserInfoResponse.parse(await userInfo.json());
+
+          const botUserId = tokens.bot_user_id;
+
+          let user: User | null = null;
+
+          if (!link) {
+            const existingUser = await ctx.context.internalAdapter.findUserByEmail(
+              userInfoData.user.email,
+            );
+            if (existingUser) {
+              await ctx.context.internalAdapter.updateUser(existingUser.user.id, {
+                name: userInfoData.user.name,
+                image: userInfoData.user.image_192,
+              });
+              user = existingUser.user;
+            } else {
+              user = await ctx.context.internalAdapter.createUser({
+                email: userInfoData.user.email,
+                name: userInfoData.user.name,
+                image: userInfoData.user.image_192,
+                emailVerified: true,
+              });
+            }
+
+            const existingUserAccount = existingUser?.accounts.find(
+              (account) => account.providerId === "slack",
+            );
+            if (existingUserAccount) {
+              await ctx.context.internalAdapter.updateAccount(existingUserAccount.id, {
+                accessToken: tokens.authed_user.access_token,
+                scope: SLACK_USER_AUTH_SCOPES.join(","),
+                accountId: tokens.authed_user.id,
+              });
+            } else {
+              await ctx.context.internalAdapter.createAccount({
+                providerId: "slack",
+                accountId: userInfoData.user.id,
+                userId: user.id,
+                accessToken: tokens.authed_user.access_token,
+                scope: SLACK_USER_AUTH_SCOPES.join(","),
+              });
+            }
+
+            // When a user is created, an estate and organization is created automatically via hooks
+            // SO we can be sure that the user has only that estate
+            const memberships = await db.query.organizationUserMembership.findFirst({
+              where: eq(schema.organizationUserMembership.userId, user.id),
+              columns: {},
+              with: {
+                organization: {
+                  columns: {},
+                  with: {
+                    estates: {
+                      columns: {
+                        id: true,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+
+            if (!memberships) {
+              // This should never happen
+              return ctx.json({
+                error: "Internal Error: Failed to get estate memberships, this should never happen",
+              });
+            }
+
+            const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
+            await setSessionCookie(ctx, {
+              session,
+              user,
+            });
+
+            estateId = memberships.organization.estates[0].id;
+          } else {
+            const linkedUser = await ctx.context.internalAdapter.findUserByEmail(link.email);
+            if (!linkedUser) {
+              return ctx.json({ error: "Can't find the existing user to link to" });
+            }
+            user = linkedUser.user;
+          }
+
+          if (!user) {
+            return ctx.json({ error: "Failed to get user" });
+          }
+
+          let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          if (botAccount) {
+            await ctx.context.internalAdapter.updateAccount(botAccount.id, {
+              accessToken: tokens.access_token,
+              scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
           } else {
-            const newAccount = await ctx.context.internalAdapter.createAccount({
+            botAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
-              userId: link?.userId,
-              accessToken: tokens.accessToken,
-              refreshToken: tokens.refreshToken,
-              scope: SLACK_BOT_SCOPES.join(" "),
-              accessTokenExpiresAt: tokens.accessTokenExpiresAt,
+              userId: user.id,
+              accessToken: tokens.access_token,
+              scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
-            accountId = newAccount.id;
           }
-          if (!accountId) {
+
+          if (!botAccount) {
             return ctx.json({ error: "Failed to get account id" });
           }
-          const estateId = link?.email.split("|")[1];
+
           if (!estateId) {
             return ctx.json({ error: "Failed to get estate id" });
           }
@@ -221,8 +401,21 @@ export const integrationsPlugin = () =>
           await db
             .insert(schema.estateAccountsPermissions)
             .values({
-              accountId,
+              accountId: botAccount.id,
               estateId,
+            })
+            .onConflictDoNothing();
+
+          await db
+            .insert(schema.providerEstateMapping)
+            .values({
+              internalEstateId: estateId,
+              externalId: tokens.team.id,
+              providerId: "slack-bot",
+              providerMetadata: {
+                botUserId,
+                team: tokens.team,
+              },
             })
             .onConflictDoNothing();
 

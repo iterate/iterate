@@ -29,6 +29,7 @@ export const userRelations = relations(user, ({ many }) => ({
   session: many(session),
   account: many(account),
   organizationUserMembership: many(organizationUserMembership),
+  providerSpecificUserMapping: many(providerUserMapping),
 }));
 
 export const session = pgTable("session", (t) => ({
@@ -113,6 +114,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   }),
   estateAccountsPermissions: many(estateAccountsPermissions),
   files: many(files),
+  providerSpecificEstateMapping: many(providerEstateMapping),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -148,6 +150,44 @@ export const estateAccountsPermissionsRelations = relations(
     }),
   }),
 );
+
+export const providerUserMapping = pgTable(
+  "provider_user_mapping",
+  (t) => ({
+    id: iterateId("pum"),
+    providerId: t.text().notNull(),
+    internalUserId: t.text().notNull(),
+    externalId: t.text().notNull(),
+    providerMetadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.providerId, t.externalId)],
+);
+export const providerUserMappingRelations = relations(providerUserMapping, ({ one }) => ({
+  internalUser: one(user, {
+    fields: [providerUserMapping.internalUserId],
+    references: [user.id],
+  }),
+}));
+
+export const providerEstateMapping = pgTable(
+  "provider_estate_mapping",
+  (t) => ({
+    id: iterateId("pem"),
+    providerId: t.text().notNull(),
+    internalEstateId: t.text().notNull(),
+    externalId: t.text().notNull(),
+    providerMetadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.providerId, t.externalId)],
+);
+export const providerEstateMappingRelations = relations(providerEstateMapping, ({ one }) => ({
+  internalEstate: one(estate, {
+    fields: [providerEstateMapping.internalEstateId],
+    references: [estate.id],
+  }),
+}));
 
 export const organizationUserMembership = pgTable("organization_user_membership", (t) => ({
   id: iterateId("member"),

@@ -15,6 +15,13 @@
       "when": 1758194240513,
       "tag": "0001_sad_vin_gonzales",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1758202480360,
+      "tag": "0002_heavy_sentry",
+      "breakpoints": true
     }
   ]
 }
