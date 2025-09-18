@@ -31,9 +31,9 @@ import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarGroupContent,
-} from "../components/ui/sidebar.tsx";
-import { Button } from "../components/ui/button.tsx";
-import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar.tsx";
+} from "./ui/sidebar.tsx";
+import { Button } from "./ui/button.tsx";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -41,7 +41,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.tsx";
+} from "./ui/dropdown-menu.tsx";
 
 const navigation = [
   {

@@ -5,7 +5,7 @@ import { createAuthorizationURL, validateAuthorizationCode } from "better-auth/o
 import { z } from "zod";
 import { getContext } from "hono/context-storage";
 import { eq } from "drizzle-orm";
-import type { Variables } from "../worker";
+import type { Variables } from "../worker.ts";
 import * as schema from "../db/schema.ts";
 import { type CloudflareEnv } from "../../env.ts";
 

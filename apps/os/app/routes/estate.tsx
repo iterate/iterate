@@ -4,7 +4,7 @@ import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { trpcClient } from "../lib/trpc-client.ts";
-import type { Route } from "./+types/estate";
+import type { Route } from "./+types/estate.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

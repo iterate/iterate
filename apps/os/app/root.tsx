@@ -12,7 +12,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink } from "@trpc/client";
 import { useState } from "react";
 
-import type { Route } from "./+types/root";
+import type { Route } from "./+types/root.ts";
 import { trpc } from "./lib/trpc.ts";
 import { AuthGuard } from "./components/auth-guard.tsx";
 
