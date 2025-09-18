@@ -254,7 +254,7 @@ export const agentInstanceRoute = pgTable(
 );
 
 export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one }) => ({
-  agentDurableObject: one(agentInstance, {
+  agentInstance: one(agentInstance, {
     fields: [agentInstanceRoute.agentInstanceId],
     references: [agentInstance.id],
   }),

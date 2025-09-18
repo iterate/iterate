@@ -6,6 +6,10 @@ import { env, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
+import {
+  extractBotUserIdFromAuthorizations,
+  isBotMentionedInMessage,
+} from "../../agent/slack-agent-utils.ts";
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -52,6 +56,9 @@ slackApp.post("/webhook", async (c) => {
   // look up in the database to get all the agents by routing key
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
     where: eq(agentInstanceRoute.routingKey, routingKey),
+    with: {
+      agentInstance: true,
+    },
   });
 
   if (rest.length > 0) {
@@ -62,11 +69,19 @@ slackApp.post("/webhook", async (c) => {
   let agentRecord: typeof agentInstance.$inferSelect;
 
   if (agentRoute) {
-    [agentRecord] = await db
-      .select()
-      .from(agentInstance)
-      .where(eq(agentInstance.id, agentRoute.agentInstanceId));
+    agentRecord = agentRoute.agentInstance;
   } else {
+    const botUserId = extractBotUserIdFromAuthorizations(body);
+    const isBotMentioned =
+      botUserId && body.event.type === "message"
+        ? isBotMentionedInMessage(body.event, botUserId)
+        : false;
+    const isDM = "channel_type" in body.event && body.event.channel_type === "im";
+
+    if (!isBotMentioned && !isDM) {
+      return c.text("ok");
+    }
+
     [agentRecord] = await db
       .insert(agentInstance)
       .values({
