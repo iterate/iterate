@@ -133,6 +133,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Runtime slice list – inferred from the generic parameter.
   protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
 
+  private databaseRecord?: {
+    persistedId: string;
+    estateId: string;
+    className: string;
+    durableObjectName: string;
+    durableObjectId: string;
+    metadata: Record<string, unknown>;
+  };
+
   initialState = {
     reminders: {},
     recordRawRequest: false,
