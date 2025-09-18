@@ -31,12 +31,16 @@
         "name": "ITERATE_AGENT",
         "class_name": "IterateAgent",
       },
+      {
+        "name": "SLACK_AGENT",
+        "class_name": "SlackAgent",
+      },
     ],
   },
   "migrations": [
     {
       "tag": "2025-01-init-agents",
-      "new_sqlite_classes": ["IterateAgent"],
+      "new_sqlite_classes": ["IterateAgent", "SlackAgent"],
     },
   ],
   /**

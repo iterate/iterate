@@ -1,5 +1,54 @@
 {
   "files.associations": {
     "wrangler.json": "jsonc"
-  }
+  },
+  "terminal.integrated.scrollback": 100000,
+  "[jsonc]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[json]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "editor.formatOnSave": true,
+  "editor.codeActionsOnSave": {
+    "source.fixAll.eslint": "explicit"
+  },
+  "eslint.enable": true,
+  "eslint.rules.customizations": [{ "rule": "*", "severity": "downgrade" }], // errors are yellow, warnings are blue, leaving red for typescript errors
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "typescript.tsdk": "node_modules/typescript/lib",
+  "typescript.preferences.importModuleSpecifierEnding": "auto",
+  "typescript.preferences.preferTypeOnlyAutoImports": true,
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.alchemy": true,
+    "**/.git": true,
+    "**/.repomix-*": true,
+    "**/.next": true,
+    "**/.wrangler": true,
+    "**/routeTree.gen.ts": true,
+    "**/worker-configuration.d.ts": true
+  },
+  "files.readonlyInclude": {
+    "**/routeTree.gen.ts": true
+  },
+  "files.watcherExclude": {
+    "**/routeTree.gen.ts": true,
+    "**/worker-configuration.d.ts": true
+  },
+  "vitest.disableWorkspaceWarning": true
 }

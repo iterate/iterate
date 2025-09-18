@@ -1,28 +1,19 @@
-// @ts-nocheck
+// ------------------------- Event Schemas -------------------------
 
-import { defineAgentCoreSlice } from "@iterate-com/helpers/agent/agent-core";
+import z from "zod";
+import { exhaustiveMatchingGuard, JSONSerializable } from "../utils/type-helpers.ts";
 import {
   agentCoreBaseEventFields,
   agentCoreBaseEventInputFields,
   type CoreReducedState,
-} from "@iterate-com/helpers/agent/agent-core-schemas";
-import { z } from "zod/v4";
-
-import {
-  f,
-  renderPromptFragment,
-  type PromptFragment,
-} from "@iterate-com/helpers/agent/prompt-fragments";
-import { JSONSerializable } from "@iterate-com/helpers/type-helpers";
-import { exhaustiveMatchingGuard } from "@iterate-com/helpers/utils";
-import type { SlackWebhookPayload } from "./slack.types.ts";
+} from "./agent-core-schemas.ts";
+import { SlackInteractionPayload, type SlackWebhookPayload } from "./slack.types.ts";
+import { defineAgentCoreSlice } from "./agent-core.ts";
 import {
   extractBotUserIdFromAuthorizations,
   isBotMentionedInMessage,
 } from "./slack-agent-utils.ts";
-import { SlackInteractionPayload } from "./slack.types.ts";
-
-// ------------------------- Event Schemas -------------------------
+import { f, PromptFragment, renderPromptFragment } from "./prompt-fragments.ts";
 
 // SLACK:WEBHOOK_EVENT_RECEIVED
 export const slackWebhookEventReceivedFields = {
