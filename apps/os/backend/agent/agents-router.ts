@@ -1,7 +1,10 @@
 import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod/v4";
 
+import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
+import { agentInstance } from "../db/schema.ts";
+import { env } from "../../env.ts";
 import {
   AgentCoreEvent,
   AgentCoreEventInput,
@@ -9,7 +12,7 @@ import {
   type CoreReducedState,
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
-import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
+import { getAgentStub } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
@@ -27,19 +30,53 @@ const agentStubProcedure = protectedProcedure
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for getting the agent stub").optional(),
       createIfNotExists: z.boolean().optional().default(true),
-      routingKeys: z.array(z.string()).optional().default([]),
     }),
   )
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
-    const agent = await getAgentStub(ctx.db, {
-      estateId,
-      className: input.agentClassName,
+
+    let record = await ctx.db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.durableObjectName, input.agentInstanceName),
+        eq(agentInstance.className, input.agentClassName),
+      ),
+    });
+
+    if (!record) {
+      if (!input.createIfNotExists) {
+        throw new Error(`Agent instance ${input.agentInstanceName} not found`);
+      }
+
+      const durableObjectId =
+        input.agentClassName === "SlackAgent"
+          ? env.SLACK_AGENT.idFromName(input.agentInstanceName)
+          : env.ITERATE_AGENT.idFromName(input.agentInstanceName);
+
+      [record] = await ctx.db
+        .insert(agentInstance)
+        .values({
+          estateId,
+          durableObjectId: durableObjectId.toString(),
+          className: input.agentClassName,
+          durableObjectName: input.agentInstanceName,
+          metadata: {
+            reason: input.reason || "Created implicitly by agents trpc router (not slack webhook)",
+          },
+        })
+        .onConflictDoNothing()
+        .returning();
+    }
+
+    if (record.estateId !== estateId) {
+      throw new Error(
+        `Agent instance ${input.agentInstanceName} does not belong to estate ${estateId}`,
+      );
+    }
+
+    const agent = await getAgentStub({
       durableObjectName: input.agentInstanceName,
-      createIfNotExists: input.createIfNotExists,
-      routingKeys: input.routingKeys,
-      reason: input.reason,
-      metadata: input.reason ? { reason: input.reason } : undefined,
+      durableObjectClassName: input.agentClassName,
+      agentRecord: record,
     });
     return next({ ctx: { ...ctx, agent } });
   });
@@ -76,17 +113,12 @@ export const agentsRouter = router({
     .input(
       z.object({
         estateId: z.string(),
-        agentClassName: z.enum(["IterateAgent", "SlackAgent"]).optional(),
-        routingKey: z.string().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const agents = await listAgents(ctx.db, {
-        estateId: input.estateId,
-        className: input.agentClassName,
-        routingKey: input.routingKey,
+      return await ctx.db.query.agentInstance.findMany({
+        where: and(eq(agentInstance.estateId, input.estateId)),
       });
-      return agents;
     }),
 
   listContextRules: protectedProcedure
@@ -148,15 +180,16 @@ export const agentsRouter = router({
 
   getState: agentStubProcedure
     .meta({ description: "Get the state of an agent instance" })
-    .output(
-      z.object({
-        events: z.array(AllAgentEventInputSchemas),
-        databaseRecord: z.any(),
-      }),
-    )
+    // .output(
+    //   z.object({
+    //     events: z.array(AllAgentEventInputSchemas),
+    //     databaseRecord: z.any(),
+    //   }),
+    // )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      return { events, databaseRecord: await ctx.agent.getDatabaseRecord() };
+      console.log("\n\n\n\n\ngetState", await ctx.agent.databaseRecord);
+      return { events, databaseRecord: await ctx.agent.databaseRecord };
     }),
 
   getEvents: agentStubProcedure

@@ -10,6 +10,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
+import type { agentInstance } from "../db/schema.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -126,14 +127,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
-  private databaseRecord?: {
-    persistedId: string;
-    estateId: string;
-    className: string;
-    durableObjectName: string;
-    durableObjectId: string;
-    metadata: Record<string, unknown>;
-  };
+  // The database record that is saved for this agent - this will be set by agent-stub-utils.ts immediately after the constructor runs
+  // So before onStart() state hydration
+  #databaseRecord?: typeof agentInstance.$inferSelect;
+
   // Runtime slice list – inferred from the generic parameter.
   protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
 
@@ -210,23 +207,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Called by platform after creating or locating the persisted agent record
-  async setDatabaseRecord(payload: {
-    persistedId: string;
-    estateId: string;
-    className: string;
-    durableObjectName: string;
-    durableObjectId: string;
-    metadata?: Record<string, unknown>;
-  }) {
-    this.databaseRecord = {
-      ...payload,
-      metadata: payload.metadata ?? {},
-    };
-    return { ok: true } as const;
+  async setDatabaseRecord(record: typeof agentInstance.$inferSelect) {
+    this.#databaseRecord = record;
   }
 
-  getDatabaseRecord() {
-    return this.databaseRecord;
+  get databaseRecord(): typeof agentInstance.$inferSelect {
+    if (!this.#databaseRecord) {
+      throw new Error("Database record has not been set yet. Call setDatabaseRecord first.");
+    }
+    return this.#databaseRecord;
   }
 
   private posthog: PosthogCloudflare | undefined = undefined;

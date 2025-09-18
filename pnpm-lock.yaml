@@ -366,11 +366,7 @@ importers:
 
   packages/core: {}
 
-  packages/ngrok:
-    devDependencies:
-      '@types/node':
-        specifier: ^24.4.0
-        version: 24.4.0
+  packages/ngrok: {}
 
   packages/sdk: {}
 
