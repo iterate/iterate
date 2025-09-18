@@ -2,7 +2,12 @@ import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod/v4";
 
 import { protectedProcedure, router } from "../trpc/trpc.ts";
-import { AgentCoreEvent, AgentCoreEventInput, FileSharedEventInput, type CoreReducedState } from "./agent-core-schemas.ts";
+import {
+  AgentCoreEvent,
+  AgentCoreEventInput,
+  FileSharedEventInput,
+  type CoreReducedState,
+} from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
