@@ -6,6 +6,7 @@ import { env, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
+import { SlackAgent } from "../../worker.ts";
 import {
   extractBotUserIdFromAuthorizations,
   isBotMentionedInMessage,
@@ -66,11 +67,7 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  let agentRecord: typeof agentInstance.$inferSelect;
-
-  if (agentRoute) {
-    agentRecord = agentRoute.agentInstance;
-  } else {
+  if (!agentRoute) {
     const botUserId = extractBotUserIdFromAuthorizations(body);
     const isBotMentioned =
       botUserId && body.event.type === "message"
@@ -81,38 +78,18 @@ slackApp.post("/webhook", async (c) => {
     if (!isBotMentioned && !isDM) {
       return c.text("ok");
     }
-
-    [agentRecord] = await db
-      .insert(agentInstance)
-      .values({
-        estateId,
-        className: "SlackAgent",
-        // this is an oqaque string as far as the system is concerned, but useful for humans
-        durableObjectName,
-        durableObjectId: durableObjectId.toString(),
-        metadata: {
-          reason: `Slack webhook received`,
-        },
-      })
-      .onConflictDoUpdate({
-        target: agentInstance.durableObjectId,
-        set: {
-          metadata: { reason: `Slack webhook received` },
-        },
-      })
-      .returning();
-
-    await db.insert(agentInstanceRoute).values({
-      agentInstanceId: agentRecord.id,
-      routingKey,
-    });
   }
-  // TODO replace with what's in getAgentByName and set databaserecord after constructor
-  const agentStub = await getAgentByName(env.SLACK_AGENT, durableObjectName);
-  // onStart and onStateUpdate and all the reducers and all that stuff already ran -- whoops
 
-  await agentStub.setDatabaseRecord(agentRecord);
-  c.executionCtx.waitUntil(agentStub.onSlackWebhookEventReceived(body));
+  // @ts-expect-error - TODO couldn't get types to line up
+  const agentStub = await SlackAgent.getOrCreateStubByRoute({
+    db,
+    estateId,
+    agentInstanceName: durableObjectName,
+    route: routingKey,
+    metadata: { reason: "Slack webhook received" },
+  });
+
+  c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
   return c.text("ok");
 });

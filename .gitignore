@@ -15,3 +15,6 @@ build
 !.dev.vars.example
 .env*
 !.env.example
+.cursor/rules
+.rules
+.clinerules/

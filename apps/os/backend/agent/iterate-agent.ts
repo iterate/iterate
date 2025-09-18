@@ -1,16 +1,20 @@
 import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
+import { getAgentByName } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
 import { z } from "zod/v4";
 
 // Parent directory imports
-import { env as _env, type CloudflareEnv } from "../../env.ts";
+import { and, eq } from "drizzle-orm";
+import { env, type CloudflareEnv } from "../../env.ts";
+import type { DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import type { agentInstance } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -127,7 +131,243 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
-  // The database record that is saved for this agent - this will be set by agent-stub-utils.ts immediately after the constructor runs
+  // Resolve the DO namespace for the concrete subclass at runtime
+  static getNamespace<T extends typeof IterateAgent>(
+    this: T,
+  ): DurableObjectNamespace<InstanceType<T>> {
+    return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  }
+
+  // Get stub for existing agent by name (does not create)
+  static async getStubByName<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      agentInstanceName: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, agentInstanceName } = params;
+    const className = this.name;
+
+    const record = await db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.durableObjectName, agentInstanceName),
+        eq(agentInstance.className, className),
+      ),
+    });
+
+    if (!record) {
+      throw new Error(`Agent instance ${agentInstanceName} not found`);
+    }
+
+    const namespace = this.getNamespace();
+    const stub = await getAgentByName(namespace, record.durableObjectName);
+    await stub.setDatabaseRecord(record);
+    
+    // Touch the agent (update lastActiveAt)
+    await db
+      .update(agentInstance)
+      .set({ 
+        metadata: { 
+          ...record.metadata,
+          lastActiveAt: new Date().toISOString() 
+        } 
+      })
+      .where(eq(agentInstance.id, record.id));
+    
+    return stub as DurableObjectStub<InstanceType<T>>;
+  }
+
+  // Get stubs for agents by routing key (does not create)
+  static async getStubsByRoute<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      routingKey: string;
+      estateId?: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>[]> {
+    const { db, routingKey, estateId } = params;
+    const className = this.name;
+
+    const routes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, routingKey),
+      with: { agentInstance: true },
+    });
+
+    const matchingAgents = routes
+      .map((r) => r.agentInstance)
+      .filter((r) => r.className === className && (!estateId || r.estateId === estateId));
+
+    if (matchingAgents.length > 1) {
+      throw new Error(`Multiple agents found for routing key ${routingKey}`);
+    }
+
+    const namespace = this.getNamespace();
+    const stubs = await Promise.all(
+      matchingAgents.map(async (record) => {
+        const stub = await getAgentByName(namespace, record.durableObjectName);
+        await stub.setDatabaseRecord(record);
+        
+        // Touch the agent (update lastActiveAt)
+        await db
+          .update(agentInstance)
+          .set({ 
+            metadata: { 
+              ...record.metadata,
+              lastActiveAt: new Date().toISOString() 
+            } 
+          })
+          .where(eq(agentInstance.id, record.id));
+        
+        return stub as DurableObjectStub<InstanceType<T>>;
+      }),
+    );
+
+    return stubs;
+  }
+
+  // Get or create stub by name
+  static async getOrCreateStubByName<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      estateId: string;
+      agentInstanceName: string;
+      metadata?: any;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, estateId, agentInstanceName, metadata } = params;
+    const className = this.name;
+
+    let record = await db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.durableObjectName, agentInstanceName),
+        eq(agentInstance.className, className),
+      ),
+    });
+
+    if (!record) {
+      const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+      const [inserted] = await db
+        .insert(agentInstance)
+        .values({
+          estateId,
+          className,
+          durableObjectName: agentInstanceName,
+          durableObjectId: durableObjectId.toString(),
+          metadata: metadata || { createdAt: new Date().toISOString() },
+        })
+        .onConflictDoUpdate({
+          target: agentInstance.durableObjectId,
+          set: { 
+            metadata: { 
+              ...(metadata || {}),
+              lastActiveAt: new Date().toISOString() 
+            } 
+          },
+        })
+        .returning();
+      record = inserted;
+    } else {
+      if (record.estateId !== estateId) {
+        throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
+      }
+      
+      // Touch the agent (update lastActiveAt)
+      await db
+        .update(agentInstance)
+        .set({ 
+          metadata: { 
+            ...record.metadata,
+            lastActiveAt: new Date().toISOString() 
+          } 
+        })
+        .where(eq(agentInstance.id, record.id));
+    }
+
+    const namespace = this.getNamespace();
+    const stub = await getAgentByName(namespace, record.durableObjectName);
+    await stub.setDatabaseRecord(record);
+    return stub as DurableObjectStub<InstanceType<T>>;
+  }
+
+  // Get or create stub by route  
+  static async getOrCreateStubByRoute<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      estateId: string;
+      agentInstanceName: string;
+      route: string;
+      metadata?: any;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, estateId, agentInstanceName, route, metadata } = params;
+    
+    // First check if an agent already exists for this route
+    const existingRoutes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, route),
+      with: { agentInstance: true },
+    });
+
+    const existingAgent = existingRoutes
+      .map((r) => r.agentInstance)
+      .find((r) => r.className === this.name && r.estateId === estateId);
+
+    if (existingAgent) {
+      const namespace = this.getNamespace();
+      const stub = await getAgentByName(namespace, existingAgent.durableObjectName);
+      await stub.setDatabaseRecord(existingAgent);
+      
+      // Touch the agent (update lastActiveAt)
+      await db
+        .update(agentInstance)
+        .set({ 
+          metadata: { 
+            ...existingAgent.metadata,
+            lastActiveAt: new Date().toISOString() 
+          } 
+        })
+        .where(eq(agentInstance.id, existingAgent.id));
+      
+      return stub as DurableObjectStub<InstanceType<T>>;
+    }
+
+    // No existing agent for this route, create one with route
+    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+    const [record] = await db
+      .insert(agentInstance)
+      .values({
+        estateId,
+        className: this.name,
+        durableObjectName: agentInstanceName,
+        durableObjectId: durableObjectId.toString(),
+        metadata: metadata || { createdAt: new Date().toISOString() },
+      })
+      .onConflictDoUpdate({
+        target: agentInstance.durableObjectId,
+        set: { 
+          metadata: { 
+            ...(metadata || {}),
+            lastActiveAt: new Date().toISOString() 
+          } 
+        },
+      })
+      .returning();
+
+    // Create the route association
+    await db
+      .insert(agentInstanceRoute)
+      .values({ agentInstanceId: record.id, routingKey: route })
+      .onConflictDoNothing();
+
+    const namespace = this.getNamespace();
+    const stub = await getAgentByName(namespace, record.durableObjectName);
+    await stub.setDatabaseRecord(record);
+    return stub as DurableObjectStub<InstanceType<T>>;
+  }
+  // The database record that is saved for this agent - this will be set via getStubFromRecord immediately after the constructor runs
   // So before onStart() state hydration
   #databaseRecord?: typeof agentInstance.$inferSelect;
 

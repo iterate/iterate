@@ -1,6 +1,7 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { slackAPI } from "../integrations/slack/client.ts";
+import { env as _env, env } from "../../env.ts";
 import type {
   AgentCoreDeps,
   AgentCoreEventInput,
@@ -28,6 +29,7 @@ import {
   slackWebhookEventToIdempotencyKey,
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
+// Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
 const slackAgentSlices = [...CORE_AGENT_SLICES, slackSlice] as const;
@@ -37,6 +39,12 @@ type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
+  static getNamespace<T extends typeof IterateAgent>(
+    this: T,
+  ): DurableObjectNamespace<InstanceType<T>> {
+    return env.SLACK_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  }
+
   private slackAPI?: WebClient;
 
   constructor(...args: ConstructorParameters<typeof IterateAgent<SlackAgentSlices>>) {
