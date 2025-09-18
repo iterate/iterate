@@ -206,6 +206,9 @@ importers:
       openai:
         specifier: ^5.20.3
         version: 5.20.3(ws@8.18.0)(zod@4.1.8)
+      p-queue:
+        specifier: ^8.1.1
+        version: 8.1.1
       p-suite:
         specifier: ^0.3.0
         version: 0.3.0

@@ -11,7 +11,7 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import { shouldIncludeEventInConversation } from "./slack-filters.ts";
+import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   LlmInputItemEventInput,

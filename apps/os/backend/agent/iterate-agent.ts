@@ -22,23 +22,20 @@ import {
 import { AgentCoreEvent } from "./agent-core-schemas.ts";
 import { evaluateContextRuleMatchers, type ContextItem, type ContextRule } from "./context.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-// import {
-//   rehydrateMCPConnections,
-//   runMCPEventHooks,
-//   handleMCPConnectRequest,
-// } from "./mcp-event-hooks.ts";
-// import { mcpSlice } from "./mcp-slice.ts";
-// import {
-//   MCPConnectRequestEventInput,
-//   MCPAddMcpServerEventInput,
-// } from "./mcp-slice.ts";
+import {
+  runMCPEventHooks,
+  handleMCPConnectRequest,
+  mcpManagerCache,
+} from "./mcp/mcp-event-hooks.ts";
+import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEventInput, MCPAddMcpServerEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-// import type { MCPServer } from "./tool-schemas.ts";
+import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
 // import { getAgentDebugUri } from "./posthog-utils.ts";
@@ -52,8 +49,7 @@ import { defaultContextRules } from "./default-context-rules.ts";
 // Additional agent-specific slices should extend this array via class inheritance.
 // -----------------------------------------------------------------------------
 
-// export const CORE_AGENT_SLICES = [mcpSlice] as const;
-export const CORE_AGENT_SLICES = [] as const;
+export const CORE_AGENT_SLICES = [mcpSlice] as const;
 
 /**
  * Helper type representing the core slices bundled with every IterateAgent.
@@ -398,68 +394,68 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         return console;
       })(),
 
-      // onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
-      //   const event = _event as MergedEventForSlices<Slices>;
-      //   const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
-      //   // Handle MCP side effects for relevant events
-      //   const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;
-      //   type MCPRelevantEvent = (typeof mcpRelevantEvents)[number];
+      onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
+        const event = _event as MergedEventForSlices<Slices>;
+        const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
+        // Handle MCP side effects for relevant events
+        const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;
+        type MCPRelevantEvent = (typeof mcpRelevantEvents)[number];
 
-      //   if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
-      //     const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
-      //     this.ctx.waitUntil(
-      //       (async () => {
-      //         if (reducedState.mcpConnections) {
-      //           const eventsToAdd = await runMCPEventHooks({
-      //             event: mcpEvent,
-      //             reducedState,
-      //             agentDurableObjectId: this.ctx.id.toString(),
-      //             agentDurableObjectName: this.name,
-      //             getFinalRedirectUrl: deps.getFinalRedirectUrl!,
-      //           });
+        if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
+          const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
+          this.ctx.waitUntil(
+            (async () => {
+              if (reducedState.mcpConnections) {
+                const eventsToAdd = await runMCPEventHooks({
+                  event: mcpEvent,
+                  reducedState,
+                  agentDurableObjectId: this.ctx.id.toString(),
+                  agentDurableObjectName: this.name,
+                  getFinalRedirectUrl: deps.getFinalRedirectUrl!,
+                });
 
-      //           for (const eventToAdd of eventsToAdd) {
-      //             await this.agentCore.addEvent(eventToAdd);
-      //           }
-      //         }
-      //       })(),
-      //     );
-      //   }
+                for (const eventToAdd of eventsToAdd) {
+                  await this.agentCore.addEvent(eventToAdd);
+                }
+              }
+            })(),
+          );
+        }
 
-      //   // this.ctx.waitUntil(
-      //     /**
-      //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
-      //      *
-      //      * Unfortunately we hit an issue with the CloudFlare workerd process behaving in an unexpected manner, where fetch() calls would never resolve
-      //      * and so both posthog and braintrust calls would break.
-      //      *
-      //      * We suspect this is related to the way that durable objects handle their own liveliness when handing off to a worker via RPC or Event Queues,
-      //      * causing async work like promises and timers to never process.
-      //      *
-      //      * For more details read this thread:
-      //      * https://iterate-com.slack.com/archives/C06LU7PGK0S/p1754985703369859
-      //      */
-      //     // processPosthogAgentCoreEvent(posthogClient, {
-      //     //   event: `AGENT_CORE_EVENT_ADDED`,
-      //     //   data: {
-      //     //     event,
-      //     //     reducedState,
-      //     //     className: this.constructor.name,
-      //     //     // TODO we don't have the agent instance name here - in the future we will.
-      //     //     // But for now I'm just using the ID to identify the agent instance.
-      //     //     // I think Rahul has some witchcraft in the works to get us the name
-      //     //     agentInstanceName: this.name,
-      //     //     agentDebugURL: getAgentDebugUri({
-      //     //       durableObjectName: this.name,
-      //     //       agentClassName: this.constructor.name,
-      //     //     }),
-      //     //   },
-      //     //   source: {
-      //     //     service: "platform",
-      //     //   },
-      //     // }),
-      //   // );
-      // },
+        //   // this.ctx.waitUntil(
+        //     /**
+        //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
+        //      *
+        //      * Unfortunately we hit an issue with the CloudFlare workerd process behaving in an unexpected manner, where fetch() calls would never resolve
+        //      * and so both posthog and braintrust calls would break.
+        //      *
+        //      * We suspect this is related to the way that durable objects handle their own liveliness when handing off to a worker via RPC or Event Queues,
+        //      * causing async work like promises and timers to never process.
+        //      *
+        //      * For more details read this thread:
+        //      * https://iterate-com.slack.com/archives/C06LU7PGK0S/p1754985703369859
+        //      */
+        //     // processPosthogAgentCoreEvent(posthogClient, {
+        //     //   event: `AGENT_CORE_EVENT_ADDED`,
+        //     //   data: {
+        //     //     event,
+        //     //     reducedState,
+        //     //     className: this.constructor.name,
+        //     //     // TODO we don't have the agent instance name here - in the future we will.
+        //     //     // But for now I'm just using the ID to identify the agent instance.
+        //     //     // I think Rahul has some witchcraft in the works to get us the name
+        //     //     agentInstanceName: this.name,
+        //     //     agentDebugURL: getAgentDebugUri({
+        //     //       durableObjectName: this.name,
+        //     //       agentClassName: this.constructor.name,
+        //     //     }),
+        //     //   },
+        //     //   source: {
+        //     //     service: "platform",
+        //     //   },
+        //     // }),
+        //   // );
+      },
 
       collectContextItems: async (): Promise<ContextItem[]> => {
         // Collect context rules - this may include durable object class specific rules (e.g. from SlackAgent)
@@ -516,23 +512,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       ...this.state,
       reminders: this.state.reminders ?? {},
     });
-
-    // Rehydrate MCP connections after DO restart
-    // This will reconnect any previously connected MCP servers
-    const _reducedState = this.getReducedState();
-
-    // const mcpConnectRequestEvents = rehydrateMCPConnections(
-    //   Object.values(reducedState.mcpConnections || {}),
-    // );
-
-    // Note! If we want to make things a little more deterministic and easier to reason about, we could actually perform the MCP connection here, instead of
-    // just adding the MCP:CONNECT_REQUEST events, which cause the connection to happen in the background. As it is, if we get rehydrated by a webhook, we can
-    // process the incoming message while the MCP connection is still happening in the background. If there are bugs with that, we might want to make the tradeoff
-    // of slowing down onStart by performing the MCP connection here.
-
-    // The MCP:CONNECT_REQUEST events will automatically clear the tools
-    // for each connection before attempting to reconnect
-    // await this.agentCore.addEvents(mcpConnectRequestEvents);
   }
 
   getEvents(): MergedEventForSlices<Slices>[] {
@@ -907,65 +886,85 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
-  // async connectMCPServer(input: Inputs["connectMCPServer"]) {
-  //   const formattedServerUrl = new URL(input.serverUrl);
-  //   if (input.requiresQueryParamsAuth) {
-  //     const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
-  //     formattedServerUrl.search = searchParams.toString();
-  //   }
-  //   const mcpServer: MCPServer = {
-  //     serverUrl: formattedServerUrl.toString(),
-  //     mode: input.mode,
-  //     requiresAuth: input.requiresOAuth || false,
-  //     headers: input.requiresHeadersAuth || undefined,
-  //   };
-  //   const addServerEvent: MCPAddMcpServerEventInput = {
-  //     type: "MCP:ADD_MCP_SERVERS",
-  //     data: {
-  //       servers: [mcpServer],
-  //     },
-  //     metadata: {},
-  //     triggerLLMRequest: false,
-  //   };
+  async connectMCPServer(input: Inputs["connectMCPServer"]) {
+    const formattedServerUrl = new URL(input.serverUrl);
+    if (input.requiresQueryParamsAuth) {
+      const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
+      formattedServerUrl.search = searchParams.toString();
+    }
+    const mcpServer: MCPServer = {
+      serverUrl: formattedServerUrl.toString(),
+      mode: input.mode,
+      requiresAuth: input.requiresOAuth || false,
+      headers: input.requiresHeadersAuth || undefined,
+    };
 
-  //   const connectRequestEvent: MCPConnectRequestEventInput = {
-  //     type: "MCP:CONNECT_REQUEST",
-  //     data: {
-  //       ...mcpServer,
-  //       triggerLLMRequestOnEstablishedConnection: false,
-  //       userId: input.onBehalfOfIterateUserId,
-  //     },
-  //     metadata: {},
-  //     triggerLLMRequest: false,
-  //   };
+    const addServerEvent: MCPAddMcpServerEventInput = {
+      type: "MCP:ADD_MCP_SERVERS",
+      data: {
+        servers: [mcpServer],
+      },
+      metadata: {},
+      triggerLLMRequest: false,
+    };
 
-  //   const events = await handleMCPConnectRequest({
-  //     event: {
-  //       ...connectRequestEvent,
-  //       eventIndex: 0,
-  //       createdAt: new Date().toISOString(),
-  //     },
-  //     agentDurableObjectId: this.ctx.id.toString(),
-  //     agentDurableObjectName: this.name,
-  //     reducedState: this.getReducedState(),
-  //   });
+    // Check if already connected
+    const connectionKey = getConnectionKey({
+      serverUrl: formattedServerUrl.toString(),
+      mode: input.mode,
+      userId: input.onBehalfOfIterateUserId,
+    });
 
-  //   if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-  //     return {
-  //       __addAgentCoreEvents: [addServerEvent, ...events],
-  //       success: false,
-  //       message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
-  //       addedMcpServer: mcpServer,
-  //     };
-  //   }
+    const existingManager = mcpManagerCache.managers.get(connectionKey);
+    if (existingManager) {
+      // Already connected, just add the server to the state
+      return {
+        __addAgentCoreEvents: [addServerEvent],
+        success: true,
+        message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
+        addedMcpServer: mcpServer,
+      };
+    }
 
-  //   return {
-  //     __addAgentCoreEvents: [addServerEvent, ...events],
-  //     success: true,
-  //     message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
-  //     addedMcpServer: mcpServer,
-  //   };
-  // }
+    // Not connected yet, proceed with connection
+    const connectRequestEvent: MCPConnectRequestEventInput = {
+      type: "MCP:CONNECT_REQUEST",
+      data: {
+        ...mcpServer,
+        triggerLLMRequestOnEstablishedConnection: false,
+        userId: input.onBehalfOfIterateUserId,
+      },
+      metadata: {},
+      triggerLLMRequest: false,
+    };
+
+    const events = await handleMCPConnectRequest({
+      event: {
+        ...connectRequestEvent,
+        eventIndex: 0,
+        createdAt: new Date().toISOString(),
+      },
+      agentDurableObjectId: this.ctx.id.toString(),
+      agentDurableObjectName: this.name,
+      reducedState: this.getReducedState(),
+    });
+
+    if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+      return {
+        __addAgentCoreEvents: [addServerEvent, ...events],
+        success: false,
+        message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
+        addedMcpServer: mcpServer,
+      };
+    }
+
+    return {
+      __addAgentCoreEvents: [addServerEvent, ...events],
+      success: true,
+      message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
+      addedMcpServer: mcpServer,
+    };
+  }
 }
 
 // -----------------------------------------------------------------------------
