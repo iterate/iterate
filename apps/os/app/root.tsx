@@ -16,6 +16,7 @@ import type { Route } from "./+types/root";
 import { trpc } from "./lib/trpc.ts";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
+import { Toaster } from "./components/ui/sonner.tsx";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
@@ -103,6 +104,7 @@ export default function App() {
               <Outlet />
             </Suspense>
           </AuthGuard>
+          <Toaster />
         </ThemeProvider>
       </QueryClientProvider>
     </trpc.Provider>

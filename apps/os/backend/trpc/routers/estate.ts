@@ -7,6 +7,7 @@ import {
   router,
 } from "../trpc.ts";
 import { estate } from "../../db/schema.ts";
+import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
 export const estateRouter = router({
   // Check if user has access to a specific estate (non-throwing version)
@@ -83,6 +84,16 @@ export const estateRouter = router({
       if (!updatedEstate[0]) {
         throw new Error("Failed to update estate");
       }
+
+      // Invalidate estate-related queries for all connected clients in the organization
+      // This is an example of how to use WebSocket invalidation
+      await invalidateOrganizationQueries(ctx.env, updatedEstate[0].organizationId, {
+        type: "INVALIDATE",
+        invalidateInfo: {
+          type: "TRPC_QUERY",
+          paths: ["estate.get", "estates.list"], // Invalidate these specific TRPC queries
+        },
+      });
 
       return {
         id: updatedEstate[0].id,

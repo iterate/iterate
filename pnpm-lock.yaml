@@ -236,6 +236,9 @@ importers:
       p-suite:
         specifier: ^0.3.0
         version: 0.3.0
+      partysocket:
+        specifier: ^1.1.5
+        version: 1.1.5
       postgres:
         specifier: ^3.4.7
         version: 3.4.7

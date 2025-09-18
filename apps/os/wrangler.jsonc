@@ -40,12 +40,20 @@
         "name": "SLACK_AGENT",
         "class_name": "SlackAgent",
       },
+      {
+        "name": "ORGANIZATION_WEBSOCKET",
+        "class_name": "OrganizationWebSocket",
+      },
     ],
   },
   "migrations": [
     {
       "tag": "2025-01-init-agents",
       "new_sqlite_classes": ["IterateAgent", "SlackAgent"],
+    },
+    {
+      "tag": "2025-01-websocket",
+      "new_sqlite_classes": ["OrganizationWebSocket"],
     },
   ],
   /**
