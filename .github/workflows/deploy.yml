@@ -26,7 +26,7 @@ jobs:
         run: pnpm install
 
       - name: Install Doppler CLI
-        run: curl -Ls https://cli.doppler.com/install.sh | sh
+        uses: dopplerhq/cli-action@v2
 
       - name: Setup Doppler
         run: doppler setup --config 'prd' --project os
