@@ -7,7 +7,7 @@ import {
   agentCoreBaseEventInputFields,
   type CoreReducedState,
 } from "./agent-core-schemas.ts";
-import { SlackInteractionPayload, type SlackWebhookPayload } from "./slack.types.ts";
+import { type SlackWebhookPayload } from "./slack.types.ts";
 import { defineAgentCoreSlice } from "./agent-core.ts";
 import {
   extractBotUserIdFromAuthorizations,
@@ -55,94 +55,29 @@ export const SlackUpdateSliceStateInput = z.object({
   ...slackUpdateSliceStateFields,
 });
 
-// SLACK:INTERACTION_RECEIVED
-export const slackInteractionReceivedFields = {
-  type: z.literal("SLACK:INTERACTION_RECEIVED"),
-  data: z.object({
-    payload: SlackInteractionPayload, // Full interaction payload from Slack
-    interactionId: z.string(), // Unique ID for this interaction
-    timestamp: z.number(),
-  }),
-};
-
-export const SlackInteractionReceived = z.object({
-  ...agentCoreBaseEventFields,
-  ...slackInteractionReceivedFields,
-});
-
-export const SlackInteractionReceivedInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...slackInteractionReceivedFields,
-});
-
-// SLACK:STORE_MODAL_DEFINITION
-export const slackStoreModalDefinitionFields = {
-  type: z.literal("SLACK:STORE_MODAL_DEFINITION"),
-  data: z.object({
-    actionId: z.string(), // Button action ID that will trigger this modal
-    modal: z.any(), // The complete modal definition to open when button is clicked
-  }),
-};
-
-export const SlackStoreModalDefinition = z.object({
-  ...agentCoreBaseEventFields,
-  ...slackStoreModalDefinitionFields,
-});
-
-export const SlackStoreModalDefinitionInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...slackStoreModalDefinitionFields,
-});
-
 // ------------------------- Discriminated Unions -------------------------
 
 export const SlackSliceEvent = z.discriminatedUnion("type", [
   SlackWebhookEventReceived,
   SlackUpdateSliceState,
-  SlackInteractionReceived,
-  SlackStoreModalDefinition,
 ]);
 
 export const SlackEventInput = z.discriminatedUnion("type", [
   SlackWebhookEventReceivedInput,
   SlackUpdateSliceStateInput,
-  SlackInteractionReceivedInput,
-  SlackStoreModalDefinitionInput,
 ]);
 
 // ------------------------- Types -------------------------
 
 export type SlackWebhookEventReceived = z.infer<typeof SlackWebhookEventReceived>;
 export type SlackUpdateSliceState = z.infer<typeof SlackUpdateSliceState>;
-export type SlackInteractionReceived = z.infer<typeof SlackInteractionReceived>;
 export type SlackSliceEvent = z.infer<typeof SlackSliceEvent>;
 export type SlackSliceEventInput = z.input<typeof SlackEventInput>;
 
 export interface SlackSliceState {
   slackThreadId?: string | null;
   slackChannelId?: string | null;
-  /** Bot user ID extracted from webhook payload authorizations - cached on first webhook event */
   botUserId?: string;
-
-  // Minimal operational state for interactivity
-  interactions?: {
-    // Modal definitions stored when buttons are created, keyed by action_id
-    modalDefinitions: Record<string, any>;
-
-    // Active modal views - one per user
-    modalViews: Record<
-      string,
-      {
-        // keyed by userId (not viewId since we only have one modal per user)
-        viewId: string;
-        userId: string;
-        hash?: string; // For race condition prevention
-        callbackId?: string;
-        privateMetadata?: string; // For carrying data between views
-        openedAt: number;
-      }
-    >;
-  };
 }
 
 export interface SlackSliceDeps {}
@@ -160,10 +95,6 @@ export const slackSlice = defineAgentCoreSlice<{
     slackThreadId: undefined,
     slackChannelId: undefined,
     botUserId: undefined,
-    interactions: {
-      modalDefinitions: {},
-      modalViews: {},
-    },
   },
   reduce(state, _deps, event) {
     const next = { ...state };
@@ -176,17 +107,6 @@ export const slackSlice = defineAgentCoreSlice<{
         if (event.data.slackThreadId !== undefined) {
           next.slackThreadId = event.data.slackThreadId;
         }
-        break;
-      }
-
-      case "SLACK:STORE_MODAL_DEFINITION": {
-        if (!next.interactions) {
-          next.interactions = {
-            modalDefinitions: {},
-            modalViews: {},
-          };
-        }
-        next.interactions.modalDefinitions[event.data.actionId] = event.data.modal;
         break;
       }
 
@@ -226,145 +146,7 @@ export const slackSlice = defineAgentCoreSlice<{
         next.triggerLLMRequest = shouldTriggerLLM && !next.paused;
         break;
       }
-
-      case "SLACK:INTERACTION_RECEIVED": {
-        const { payload, timestamp } = event.data;
-
-        if (!next.interactions) {
-          next.interactions = {
-            modalDefinitions: {},
-            modalViews: {},
-          };
-        }
-
-        switch (payload.type) {
-          case "block_actions": {
-            const shouldTriggerLLM = event.triggerLLMRequest !== false;
-            if (shouldTriggerLLM) {
-              const actions = payload.actions || [];
-              const actionDescriptions = actions.map((a: any) => {
-                const desc = `${a.action_id}${a.value ? `="${a.value}"` : ""}`;
-                return { desc, action: a };
-              });
-
-              const actionTexts = actionDescriptions.map((a) => a.desc).join(", ");
-
-              const promptContent: PromptFragment[] = [];
-              promptContent.push(
-                f(
-                  "action",
-                  `User ${payload.user.name} (${payload.user.id}) clicked button: ${actionTexts}`,
-                ),
-              );
-
-              const messageTs = "message" in payload ? payload.message?.ts : undefined;
-
-              if (messageTs) {
-                promptContent.push(
-                  f("message_update_guidance", [
-                    `If you need to update/edit the message with buttons, use updateSlackMessage with:`,
-                    `- channel: ${payload.channel?.id}`,
-                    `- ts: ${messageTs} (this is the message with buttons, NOT the thread timestamp)`,
-                    `- Use this ts to edit the specific message that contained the buttons`,
-                    `- This will update the message that the user just interacted with`,
-                  ]),
-                );
-              }
-
-              next.inputItems.push({
-                type: "message" as const,
-                role: "user",
-                content: [
-                  {
-                    type: "input_text" as const,
-                    text: renderPromptFragment(f("slack_interaction", promptContent)),
-                  },
-                ],
-              });
-              next.triggerLLMRequest = true;
-            } else {
-              next.triggerLLMRequest = false;
-            }
-            break;
-          }
-
-          case "view_submission": {
-            if (payload.view?.id && payload.user?.id) {
-              const userId = payload.user.id;
-              next.interactions.modalViews[userId] = {
-                viewId: payload.view.id,
-                userId,
-                hash: payload.view.hash,
-                callbackId: payload.view.callback_id,
-                privateMetadata: payload.view.private_metadata,
-                openedAt: timestamp,
-              };
-            }
-
-            const formValues = extractFormValues(payload.view?.state?.values);
-            const modalTitle = payload.view?.title?.text || "Form";
-            const callbackId = payload.view?.callback_id || "unknown";
-
-            next.inputItems.push({
-              type: "message" as const,
-              role: "user",
-              content: [
-                {
-                  type: "input_text" as const,
-                  text: renderPromptFragment(
-                    f("slack_form_submission", [
-                      f(
-                        "modal_info",
-                        `Modal "${modalTitle}" (callback_id: ${callbackId}) was submitted`,
-                      ),
-                      f("form_data", JSON.stringify(formValues, null, 2)),
-                      f(
-                        "instructions",
-                        "Process this form submission and respond appropriately. You may want to send a confirmation message or take action based on the data.",
-                      ),
-                    ]),
-                  ),
-                },
-              ],
-            });
-            next.triggerLLMRequest = true;
-            break;
-          }
-
-          case "view_closed":
-            if (payload.user?.id) {
-              delete next.interactions.modalViews[payload.user.id];
-            }
-            next.triggerLLMRequest = false;
-            break;
-
-          case "shortcut":
-          case "message_action":
-            next.inputItems.push({
-              type: "message" as const,
-              role: "user",
-              content: [
-                {
-                  type: "input_text" as const,
-                  text: renderPromptFragment(
-                    f("slack_interaction", [
-                      f(payload.type, `User triggered ${payload.callback_id || payload.type}`),
-                      ...(payload.message ? [f("message", payload.message.text || "")] : []),
-                    ]),
-                  ),
-                },
-              ],
-            });
-            next.triggerLLMRequest = true;
-            break;
-        }
-        break;
-      }
     }
-
-    // ---------------------------------------------------------------------
-    // Set Slack context as ephemeral prompt fragment
-    // ---------------------------------------------------------------------
 
     // Set the slack context as an ephemeral prompt fragment
     // This will be automatically included in LLM requests as a developer message
@@ -375,9 +157,6 @@ export const slackSlice = defineAgentCoreSlice<{
         botUserId: next.botUserId,
       });
     }
-
-    // Slack is considered initialized once we have a channel ID
-    // No need for a separate flag - the presence of slackChannelId is enough
 
     // CRITICAL: Always force toolChoice to "required" for Slack agent
     // This ensures that the LLM will always attempt to use tools when available,
@@ -392,27 +171,6 @@ export const slackSlice = defineAgentCoreSlice<{
 });
 
 export type SlackSlice = typeof slackSlice;
-
-function extractFormValues(stateValues: any): Record<string, any> {
-  if (!stateValues) {
-    return {};
-  }
-
-  const result: Record<string, any> = {};
-
-  for (const [blockId, block] of Object.entries(stateValues)) {
-    for (const [actionId, element] of Object.entries(block as any)) {
-      const value =
-        (element as any).value ||
-        (element as any).selected_option?.value ||
-        (element as any).selected_options?.map((o: any) => o.value);
-
-      result[`${blockId}.${actionId}`] = value;
-    }
-  }
-
-  return result;
-}
 
 // ---------------------------------------------------------------------------
 // LLM prompt/context engineering below

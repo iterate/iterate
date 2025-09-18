@@ -38,40 +38,6 @@ slackApp.post("/webhook", async (c) => {
   return c.text("ok");
 });
 
-slackApp.post("/interactions", async (_c) => {
-  // // Parse application/x-www-form-urlencoded body
-  // const formData = await c.req.formData();
-  // const payload = JSON.parse(formData.get("payload") as string);
-  // // Generate unique interaction ID
-  // const interactionId = `${payload.team?.id}-${payload.user?.id}-${Date.now()}`;
-  // // Publish to event bus
-  // await c.env.PLATFORM.publishEvent({
-  //   event: `SLACK:INTERACTION_RECEIVED`,
-  //   data: {
-  //     payload,
-  //     interactionId,
-  //     timestamp: Date.now(),
-  //   },
-  //   source: {
-  //     service: "platform",
-  //     metadata: {
-  //       interactionType: payload.type,
-  //       teamId: payload.team?.id,
-  //       userId: payload.user?.id,
-  //       channelId: payload.channel?.id,
-  //     },
-  //   },
-  // });
-  // // Return appropriate acknowledgment based on interaction type
-  // if (payload.type === "view_submission") {
-  //   // For view_submission, we can include response_action in acknowledgment
-  //   // For now, just acknowledge
-  //   return c.json({});
-  // }
-  // // Default acknowledgment for other interaction types
-  // return c.text("");
-});
-
 // async onEventPublished(event: DispatchedEvent) {
 //   switch (event.event) {
 //     case "SYSTEM:APP_INSTALLED": {
@@ -154,7 +120,6 @@ slackApp.post("/interactions", async (_c) => {
 
 //   switch (event.event) {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED":
-//     case "SLACK:INTERACTION_RECEIVED":
 //       break;
 //     default:
 //       return;
@@ -195,28 +160,6 @@ slackApp.post("/interactions", async (_c) => {
 //       }
 //       break;
 //     }
-//     case "SLACK:INTERACTION_RECEIVED": {
-//       const eventData = event.data as any;
-//       const payload = eventData?.payload;
-
-//       if (payload?.message?.thread_ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.message.thread_ts}`;
-//       } else if (payload?.container?.thread_ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.container.thread_ts}`;
-//       } else if (payload?.channel?.id && payload?.message?.ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.message.ts}`;
-//       } else if (payload?.type === "view_submission" && payload?.view?.private_metadata) {
-//         try {
-//           const metadata = JSON.parse(payload.view.private_metadata);
-//           if (metadata.thread_ts) {
-//             slackAgentInstanceName = `SlackAgent ${metadata.thread_ts}`;
-//           }
-//         } catch {
-//           // Ignore parsing errors
-//         }
-//       }
-//       break;
-//     }
 //   }
 
 //   if (!slackAgentInstanceName) {
@@ -249,9 +192,6 @@ slackApp.post("/interactions", async (_c) => {
 //         }
 //         break;
 //       }
-//       case "SLACK:INTERACTION_RECEIVED":
-//         console.log("Skipping interaction - no agent exists for this thread");
-//         return;
 //     }
 //   }
 
@@ -293,9 +233,6 @@ slackApp.post("/interactions", async (_c) => {
 //   switch (event.event) {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED":
 //       await slackAgent.onSlackWebhookEventReceived(event.data as any);
-//       break;
-//     case "SLACK:INTERACTION_RECEIVED":
-//       await slackAgent.onSlackInteractionReceived(event.data as any);
 //       break;
 //   }
 // }
