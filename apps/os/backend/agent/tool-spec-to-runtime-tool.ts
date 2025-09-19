@@ -166,8 +166,7 @@ export function toolSpecsToImplementations<
     }
     if (spec.type === "agent_durable_object_tool") {
       const { methodName, passThroughArgs } = spec;
-      const durableObjectMethod = (params.theDO as any)[methodName];
-      if (typeof durableObjectMethod !== "function") {
+      if (typeof (params.theDO as any)[methodName] !== "function") {
         throw new Error(`methodName ${methodName} is not a function on the Durable Object`);
       }
 
@@ -198,7 +197,7 @@ export function toolSpecsToImplementations<
           if (!validatedArgs.success) {
             throw new Error(`Invalid arguments: ${z.prettifyError(validatedArgs.error)}`);
           }
-          const result = await durableObjectMethod(validatedArgs.data);
+          const result = await (params.theDO as any)[methodName](validatedArgs.data);
           return processMagic(result, spec);
         },
       };

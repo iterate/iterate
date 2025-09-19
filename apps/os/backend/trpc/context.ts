@@ -8,12 +8,11 @@ export async function createContext(
   _opts: FetchCreateContextFnOptions,
 ) {
   const { db, session } = c.var;
-
   return {
-    c,
     db,
     session,
     user: session?.user || null,
+    env: c.env,
   };
 }
 

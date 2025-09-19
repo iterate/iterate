@@ -79,6 +79,7 @@
     "openai": "^5.20.3",
     "p-queue": "^8.1.1",
     "p-suite": "^0.3.0",
+    "partysocket": "^1.1.5",
     "postgres": "^3.4.7",
     "posthog-node": "^5.8.4",
     "react": "^19.1.1",

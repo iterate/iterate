@@ -39,7 +39,7 @@ import {
   type CoreReducedState,
   hashToolSpec,
 } from "./agent-core-schemas.js";
-import { renderPromptFragment } from "./prompt-fragments.ts";
+import { renderPromptFragment } from "./prompt-fragments.js";
 import { MCPServer, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
 

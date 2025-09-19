@@ -17,7 +17,13 @@
     "db:migrate": "pnpm -r db:migrate",
     "db:generate": "pnpm -r db:generate",
     "db:studio": "pnpm -r --parallel db:studio",
-    "clean": "rm -rf ./**/node_modules"
+    "clean": "rm -rf ./**/node_modules",
+    "rules": "vibe-rules install ${VIBE_RULES_EDITOR:-cursor}",
+    "rules:cursor": "pnpm rules",
+    "rules:claudecode": "VIBE_RULES_EDITOR=claude-code pnpm rules",
+    "rules:roo": "VIBE_RULES_EDITOR=roo pnpm rules",
+    "rules:cline": "VIBE_RULES_EDITOR=clinerules pnpm rules",
+    "rules:zed": "VIBE_RULES_EDITOR=zed pnpm rules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
@@ -31,7 +37,11 @@
     "eslint-plugin-react-refresh": "^0.4.20",
     "eslint-plugin-unicorn": "^61.0.2",
     "globals": "^16.4.0",
-    "prettier": "^3.6.2"
+    "prettier": "^3.6.2",
+    "@iterate-com/vibe-rules": "workspace:*"
+  },
+  "dependencies": {
+    "vibe-rules": "^0.3.91"
   },
   "packageManager": "pnpm@10.17.0"
 }

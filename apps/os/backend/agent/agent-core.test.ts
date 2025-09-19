@@ -2591,7 +2591,6 @@ describe("AgentCore ephemeralPromptFragments", () => {
     const contextItem: ContextItem = {
       id: "test-context",
       prompt: f("test", "This is a test prompt"),
-      mcpServers: [],
     };
 
     const deps = createMockDeps([contextItem]);
@@ -2647,13 +2646,11 @@ describe("AgentCore ephemeralPromptFragments", () => {
           id: "test-context",
           prompt: f("context", "This is important ephemeral context data"),
           description: "Test context item",
-          mcpServers: [],
         },
         {
           id: "another-context",
           prompt: f("rule", "Another piece of context information"),
           description: "Another test context",
-          mcpServers: [],
         },
       ];
 
@@ -2724,25 +2721,21 @@ describe("AgentCore ephemeralPromptFragments", () => {
         id: "empty-context",
         prompt: f("empty", ""), // This will render to empty
         description: "Empty context item",
-        mcpServers: [],
       },
       {
         id: "whitespace-context",
         prompt: f("whitespace", "   \n\t   "), // This will render to whitespace only
         description: "Whitespace context item",
-        mcpServers: [],
       },
       {
         id: "null-context",
         prompt: null as any, // This should be filtered out
         description: "Null context item",
-        mcpServers: [],
       },
       {
         id: "valid-context",
         prompt: f("valid", "This is valid context"),
         description: "Valid context item",
-        mcpServers: [],
       },
     ];
 

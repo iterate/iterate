@@ -5,14 +5,10 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "dev": "doppler run -- node start.ts",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "doppler run -- sh -c 'ngrok http --url=https://$ITERATE_USER.dev.iterate.com 5173 --log=stdout'"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.13.0",
-  "devDependencies": {
-    "@types/node": "^24.4.0"
-  }
+  "packageManager": "pnpm@10.13.0"
 }

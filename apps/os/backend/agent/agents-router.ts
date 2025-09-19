@@ -1,16 +1,20 @@
 import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod/v4";
 
+import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
+import { agentInstance } from "../db/schema.ts";
+// import { env } from "../../env.ts";
 import {
-  AgentCoreEvent,
   AgentCoreEventInput,
   FileSharedEventInput,
   type CoreReducedState,
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
-import { getAgentStub, listAgents } from "./agent-stub-utils.ts";
+import { IterateAgent } from "./iterate-agent.ts";
+import { SlackAgent, type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
+import type { MergedEventForSlices } from "./agent-core.ts";
 // import { MCPEventInput } from "./mcp-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { SlackEventInput } from "./slack-slice.ts";
@@ -25,25 +29,30 @@ const agentStubProcedure = protectedProcedure
         .enum(["IterateAgent", "SlackAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
-      reason: z
-        .string()
-        .describe("The reason for getting the agent stub - defaults to the request method and path")
-        .optional(),
-      createIfNotExists: z.boolean().optional().default(true),
-      routingKeys: z.array(z.string()).optional().default([]),
+      reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
     }),
   )
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
-    const agent = await getAgentStub(ctx.db, {
-      estateId,
-      className: input.agentClassName,
-      durableObjectName: input.agentInstanceName,
-      createIfNotExists: input.createIfNotExists,
-      routingKeys: input.routingKeys,
-      reason: input.reason || `${ctx.c.req.method} ${ctx.c.req.url}`,
-      metadata: input.reason ? { reason: input.reason } : undefined,
-    });
+
+    // Always use getOrCreateStubByName - agents are created on demand
+    const agent = await (input.agentClassName === "SlackAgent"
+      ? // @ts-expect-error - TODO couldn't get types to line up
+        SlackAgent.getOrCreateStubByName({
+          db: ctx.db,
+          estateId,
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
+        })
+      : IterateAgent.getOrCreateStubByName({
+          db: ctx.db,
+          estateId,
+          agentInstanceName: input.agentInstanceName,
+          reason: input.reason || "Created via agents router",
+        }));
+
+    // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
+
     return next({ ctx: { ...ctx, agent } });
   });
 
@@ -79,17 +88,12 @@ export const agentsRouter = router({
     .input(
       z.object({
         estateId: z.string(),
-        agentClassName: z.enum(["IterateAgent", "SlackAgent"]).optional(),
-        routingKey: z.string().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const agents = await listAgents(ctx.db, {
-        estateId: input.estateId,
-        className: input.agentClassName,
-        routingKey: input.routingKey,
+      return await ctx.db.query.agentInstance.findMany({
+        where: and(eq(agentInstance.estateId, input.estateId)),
       });
-      return agents;
     }),
 
   listContextRules: protectedProcedure
@@ -151,22 +155,21 @@ export const agentsRouter = router({
 
   getState: agentStubProcedure
     .meta({ description: "Get the state of an agent instance" })
-    .output(
-      z.object({
-        events: z.array(AllAgentEventInputSchemas),
-        databaseRecord: z.any(),
-      }),
-    )
+    // .output(
+    //   z.object({
+    //     events: z.array(AllAgentEventInputSchemas),
+    //     databaseRecord: z.any(),
+    //   }),
+    // )
     .query(async ({ ctx }) => {
       const events = await ctx.agent.getEvents();
-      return { events, databaseRecord: await ctx.agent.getDatabaseRecord() };
+      return { events, databaseRecord: await ctx.agent.databaseRecord };
     }),
 
   getEvents: agentStubProcedure
     .meta({ description: "Get the events of an agent instance" })
-    .output(z.array(AgentCoreEvent))
     .query(async ({ ctx }) => {
-      return await ctx.agent.getEvents();
+      return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
     }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
@@ -277,11 +280,9 @@ export const agentsRouter = router({
           .optional()
           .default([])
           .describe("Tool specifications for the agent"),
-        mcpServers: z.array(z.any()).optional().default([]).describe("MCP servers for the agent"),
       }),
     )
     .mutation(async ({ input, ctx }) => {
-      // Build the events array
       const events: any[] = [
         {
           type: "CORE:SET_SYSTEM_PROMPT",
@@ -298,7 +299,6 @@ export const agentsRouter = router({
         },
       ];
 
-      // Add tool specs if provided
       if (input.toolSpecs.length > 0) {
         events.push({
           type: "CORE:ADD_TOOL_SPECS",
@@ -308,16 +308,6 @@ export const agentsRouter = router({
         });
       }
 
-      if (input.mcpServers.length > 0) {
-        events.push({
-          type: "MCP:ADD_MCP_SERVERS",
-          data: {
-            servers: input.mcpServers,
-          },
-        });
-      }
-
-      // Send all events
       return await ctx.agent.addEvents(events);
     }),
 

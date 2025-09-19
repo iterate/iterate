@@ -15,6 +15,7 @@ import { authClient } from "../lib/auth-client.ts";
 import { trpc } from "../lib/trpc.ts";
 import { setSelectedEstate } from "../lib/estate-cookie.ts";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
+import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 
 import {
   Sidebar,
@@ -206,6 +207,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const getEstateUrl = useEstateUrl();
   const estateId = useEstateId();
+  const { isConnected } = useOrganizationWebSocket();
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
@@ -251,8 +253,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
           <SidebarFooter className="border-t p-4">
             <div className="flex items-center gap-2 mb-3">
-              <div className="size-2 rounded-full bg-green-500"></div>
-              <span className="text-sm text-muted-foreground">Connected</span>
+              <div
+                className={`size-2 rounded-full ${isConnected ? "bg-green-500" : "bg-orange-500"}`}
+              ></div>
+              <span className="text-sm text-muted-foreground">
+                {isConnected ? "Connected" : "Connecting..."}
+              </span>
             </div>
             <EstateSwitcher />
             <UserSwitcher />

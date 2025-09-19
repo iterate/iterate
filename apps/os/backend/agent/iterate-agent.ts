@@ -5,11 +5,15 @@ import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-
 import { z } from "zod/v4";
 
 // Parent directory imports
-import { env as _env, type CloudflareEnv } from "../../env.ts";
+import { and, eq } from "drizzle-orm";
+import { env, type CloudflareEnv } from "../../env.ts";
+import { getDb, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
+import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -28,7 +32,7 @@ import {
   mcpManagerCache,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput, MCPAddMcpServerEventInput } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
@@ -130,17 +134,223 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
-  // Runtime slice list – inferred from the generic parameter.
-  protected agentCore!: AgentCore<Slices, CoreAgentSlices>;
+  override observability = undefined;
 
-  private databaseRecord?: {
-    persistedId: string;
-    estateId: string;
-    className: string;
-    durableObjectName: string;
-    durableObjectId: string;
-    metadata: Record<string, unknown>;
-  };
+  // Resolve the DO namespace for the concrete subclass at runtime
+  static getNamespace<T extends typeof IterateAgent>(
+    this: T,
+  ): DurableObjectNamespace<InstanceType<T>> {
+    return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  }
+
+  // Internal helper to get stub from existing database record
+  static async getStubFromDatabaseRecord<T extends typeof IterateAgent>(
+    this: T,
+    record: AgentInstanceDatabaseRecord,
+    options?: {
+      jurisdiction?: DurableObjectJurisdiction;
+      locationHint?: DurableObjectLocationHint;
+      props?: Record<string, unknown>;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    // Stolen from agents SDK
+    let namespace = this.getNamespace();
+    if (options?.jurisdiction) {
+      namespace = namespace.jurisdiction(options.jurisdiction);
+    }
+    const stub = namespace.getByName(record.durableObjectName, options);
+
+    // right after the constructor runs we get in there and initialise all our stuff
+    // (e.g. obtaining a slack access token in the case of a slack agent)
+    await stub.initAfterConstructorBeforeOnStart({ record });
+
+    // only now do we do the agents sdk cruft where we hit fetch to initialise party server
+    // with a server name
+    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+    req.headers.set("x-partykit-room", record.durableObjectName);
+    if (options?.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(options?.props));
+    }
+    await stub
+      .fetch(req)
+      .then((res) => res.text())
+      .catch((e) => {
+        console.error("Could not set server name:", e);
+      });
+
+    return stub;
+  }
+
+  // Get stub for existing agent by name (does not create)
+  static async getStubByName<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      agentInstanceName: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, agentInstanceName } = params;
+    const className = this.name;
+
+    const record = await db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.durableObjectName, agentInstanceName),
+        eq(agentInstance.className, className),
+      ),
+    });
+
+    if (!record) {
+      throw new Error(`Agent instance ${agentInstanceName} not found`);
+    }
+
+    return this.getStubFromDatabaseRecord(record);
+  }
+
+  // Get stubs for agents by routing key (does not create)
+  static async getStubsByRoute<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      routingKey: string;
+      estateId?: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>[]> {
+    const { db, routingKey, estateId } = params;
+    const className = this.name;
+
+    const routes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, routingKey),
+      with: { agentInstance: true },
+    });
+
+    const matchingAgents = routes
+      .map((r) => r.agentInstance)
+      .filter((r) => r.className === className && (!estateId || r.estateId === estateId));
+
+    if (matchingAgents.length > 1) {
+      throw new Error(`Multiple agents found for routing key ${routingKey}`);
+    }
+
+    const stubs = await Promise.all(
+      matchingAgents.map((record) => this.getStubFromDatabaseRecord(record)),
+    );
+
+    return stubs;
+  }
+
+  // Get or create stub by name
+  static async getOrCreateStubByName<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      estateId: string;
+      agentInstanceName: string;
+      reason?: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, estateId, agentInstanceName, reason } = params;
+    const className = this.name;
+
+    let record = await db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.durableObjectName, agentInstanceName),
+        eq(agentInstance.className, className),
+      ),
+    });
+
+    if (!record) {
+      const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+      const [inserted] = await db
+        .insert(agentInstance)
+        .values({
+          estateId,
+          className,
+          durableObjectName: agentInstanceName,
+          durableObjectId: durableObjectId.toString(),
+          metadata: { reason },
+        })
+        .onConflictDoUpdate({
+          target: agentInstance.durableObjectId,
+          set: {
+            metadata: { reason },
+          },
+        })
+        .returning();
+      record = inserted;
+    } else {
+      if (record.estateId !== estateId) {
+        throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
+      }
+    }
+
+    return this.getStubFromDatabaseRecord(record);
+  }
+
+  // Get or create stub by route
+  static async getOrCreateStubByRoute<T extends typeof IterateAgent>(
+    this: T,
+    params: {
+      db: DB;
+      estateId: string;
+      agentInstanceName: string;
+      route: string;
+      reason?: string;
+    },
+  ): Promise<DurableObjectStub<InstanceType<T>>> {
+    const { db, estateId, agentInstanceName, route, reason } = params;
+
+    // First check if an agent already exists for this route
+    const existingRoutes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, route),
+      with: { agentInstance: true },
+    });
+
+    const existingAgent = existingRoutes
+      .map((r) => r.agentInstance)
+      .find((r) => r.className === this.name && r.estateId === estateId);
+
+    if (existingAgent) {
+      return this.getStubFromDatabaseRecord(existingAgent);
+    }
+
+    // No existing agent for this route, create one with route
+    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+    const [record] = await db
+      .insert(agentInstance)
+      .values({
+        estateId,
+        className: this.name,
+        durableObjectName: agentInstanceName,
+        durableObjectId: durableObjectId.toString(),
+        metadata: { reason },
+      })
+      .onConflictDoUpdate({
+        target: agentInstance.durableObjectId,
+        set: {
+          metadata: { reason },
+        },
+      })
+      .returning();
+
+    // Create the route association
+    await db
+      .insert(agentInstanceRoute)
+      .values({ agentInstanceId: record.id, routingKey: route })
+      .onConflictDoNothing();
+
+    return this.getStubFromDatabaseRecord(record);
+  }
+
+  protected db: DB;
+  // Runtime slice list – inferred from the generic parameter.
+  agentCore!: AgentCore<Slices, CoreAgentSlices>;
+  databaseRecord!: AgentInstanceDatabaseRecord;
+
+  // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
+  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
+    const { record } = params;
+    this.databaseRecord = record;
+  }
 
   initialState = {
     reminders: {},
@@ -190,7 +400,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
-
+    this.db = getDb();
     // DO NOT CHANGE THE SCHEMA WITHOUT UPDATING THE MIGRATION LOGIC
     // If you need to change the schema, you can add more columns with separate statements
     this.sql`
@@ -212,26 +422,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
-  }
-
-  // Called by platform after creating or locating the persisted agent record
-  async setDatabaseRecord(payload: {
-    persistedId: string;
-    estateId: string;
-    className: string;
-    durableObjectName: string;
-    durableObjectId: string;
-    metadata?: Record<string, unknown>;
-  }) {
-    this.databaseRecord = {
-      ...payload,
-      metadata: payload.metadata ?? {},
-    };
-    return { ok: true } as const;
-  }
-
-  getDatabaseRecord() {
-    return this.databaseRecord;
   }
 
   private posthog: PosthogCloudflare | undefined = undefined;
@@ -534,13 +724,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async onStart(): Promise<void> {
     // Call parent onStart to ensure persistence completes
     await super.onStart();
-
-    const events = this.getEvents();
-    if (events.length === 0) {
+    const event = this.getEvents();
+    if (event.length === 0) {
       // new agent, fetch initial context rules, along with tool schemas etc.
-      events.push(await this.getInitialContextRulesEvent());
+      event.push(await this.getInitialContextRulesEvent());
     }
-    await this.agentCore.initializeWithEvents(events);
+    await this.agentCore.initializeWithEvents(event);
 
     this.setState({
       ...this.state,
@@ -930,16 +1119,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       requiresAuth: input.requiresOAuth || false,
       headers: input.requiresHeadersAuth || undefined,
     };
-
-    const addServerEvent: MCPAddMcpServerEventInput = {
-      type: "MCP:ADD_MCP_SERVERS",
-      data: {
-        servers: [mcpServer],
-      },
-      metadata: {},
-      triggerLLMRequest: false,
-    };
-
     // Check if already connected
     const connectionKey = getConnectionKey({
       serverUrl: formattedServerUrl.toString(),
@@ -951,7 +1130,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (existingManager) {
       // Already connected, just add the server to the state
       return {
-        __addAgentCoreEvents: [addServerEvent],
         success: true,
         message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
         addedMcpServer: mcpServer,
@@ -983,7 +1161,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
       return {
-        __addAgentCoreEvents: [addServerEvent, ...events],
+        __addAgentCoreEvents: events,
         success: false,
         message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
         addedMcpServer: mcpServer,
@@ -991,7 +1169,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     return {
-      __addAgentCoreEvents: [addServerEvent, ...events],
+      __addAgentCoreEvents: events,
       success: true,
       message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
       addedMcpServer: mcpServer,

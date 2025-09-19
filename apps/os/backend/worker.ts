@@ -11,7 +11,7 @@ import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
-import { getAgentStub } from "./agent/agent-stub-utils.ts";
+import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -47,17 +47,37 @@ app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // agent websocket endpoint
 app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
-  const estateId = c.req.param("estateId")!;
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
-  const agentStub = await getAgentStub(c.var.db, {
-    estateId,
-    className: agentClassName as "IterateAgent" | "SlackAgent",
-    durableObjectName: agentInstanceName,
-  });
+  if (agentClassName !== "IterateAgent" && agentClassName !== "SlackAgent") {
+    return c.json({ error: "Invalid agent class name" }, 400);
+  }
 
-  return agentStub.fetch(c.req.raw);
+  try {
+    let agentStub: DurableObjectStub;
+    if (agentClassName === "SlackAgent") {
+      // Use SlackAgent's inherited method
+      // @ts-expect-error - TODO couldn't get types to line up
+      agentStub = await SlackAgent.getStubByName({
+        db: c.var.db,
+        agentInstanceName,
+      });
+    } else {
+      agentStub = await IterateAgent.getStubByName({
+        db: c.var.db,
+        agentInstanceName,
+      });
+    }
+    return agentStub.fetch(c.req.raw);
+  } catch (error) {
+    const message = (error as Error).message || "Unknown error";
+    if (message.includes("not found")) {
+      return c.json({ error: "Agent not found" }, 404);
+    }
+    console.error("Failed to get agent stub:", error);
+    return c.json({ error: "Failed to connect to agent" }, 500);
+  }
 });
 
 // tRPC endpoint
@@ -86,6 +106,27 @@ app.get("/api/estate/:estateId/files/:id", getFileHandler);
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 
+// WebSocket endpoint for organization connections
+app.get("/api/ws/:organizationId", async (c) => {
+  const organizationId = c.req.param("organizationId");
+
+  // Get the Durable Object ID for this organization
+  const id = c.env.ORGANIZATION_WEBSOCKET.idFromName(organizationId);
+  const stub = c.env.ORGANIZATION_WEBSOCKET.get(id);
+
+  // Forward the request to the Durable Object
+  const url = new URL(c.req.url);
+  url.searchParams.set("organizationId", organizationId);
+
+  return stub.fetch(
+    new Request(url.toString(), {
+      method: c.req.method,
+      headers: c.req.raw.headers,
+      body: c.req.raw.body,
+    }),
+  );
+});
+
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
   () => import("virtual:react-router/server-build"),
@@ -100,4 +141,4 @@ app.all("*", (c) => {
 
 export default app;
 
-export { IterateAgent, SlackAgent };
+export { IterateAgent, SlackAgent, OrganizationWebSocket };

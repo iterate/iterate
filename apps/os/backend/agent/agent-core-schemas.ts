@@ -10,7 +10,6 @@ import {
 import type { Participant } from "./participant-schemas.ts";
 import type { PromptFragment } from "./prompt-fragments.ts";
 import { type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
 import { ContextRule } from "./context-schemas.ts";
 
 // ------------------------- Models -------------------------

@@ -1,75 +1,111 @@
 import { Hono } from "hono";
-import type { Variables } from "../../worker.ts";
+import { and, eq } from "drizzle-orm";
 import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
-import { slackAPI } from "./client.ts";
+import { getDb, type DB } from "../../db/client.ts";
+import * as schema from "../../db/schema.ts";
 
-export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+import { SlackAgent } from "../../agent/slack-agent.ts";
+import {
+  extractBotUserIdFromAuthorizations,
+  isBotMentionedInMessage,
+} from "../../agent/slack-agent-utils.ts";
+
+export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
+
+async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string }) {
+  const result = await db
+    .select({
+      estateId: schema.providerEstateMapping.internalEstateId,
+    })
+    .from(schema.providerEstateMapping)
+    .where(
+      and(
+        eq(schema.providerEstateMapping.externalId, teamId),
+        eq(schema.providerEstateMapping.providerId, "slack-bot"),
+      ),
+    )
+    .limit(1);
+
+  return result[0]?.estateId ?? null;
+}
 
 slackApp.post("/webhook", async (c) => {
+  const db = getDb();
+  // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
   const body = (await c.req.json()) as SlackWebhookPayload;
   // Slack types say this doesn't exist but it was here in v1...
   // if (body.type === "url_verification") {
   //   return c.text(body.challenge);
   // }
 
-  console.log("Slack webhook received:", body);
-
-  if (body.event?.type === "message") {
-    const threadTs = body.event.ts;
-    await (
-      await slackAPI()
-    ).chat.postMessage({
-      thread_ts: threadTs,
-      channel: body.event.channel,
-      text: "HELLO",
-    });
+  // First we get a slack team ID
+  if (!body.team_id || !body.event) {
+    console.warn("Slack webhook received without a team ID", body);
+    return c.text("ok");
   }
 
-  // const agent = await getAgentStub({
-  //   agentInstanceName: "slack-agent2",
-  //   agentClassName: "SlackAgent",
-  //   reason: "Slack webhook received",
-  // });
+  // Ignore reaction events for now to avoid unnecessary errors/recursion during dev
+  if (body.event.type === "reaction_added" || body.event.type === "reaction_removed") {
+    // TODO re-insert this once we've got reaction handling working
+    return c.text("ok");
+  }
 
-  // await (agent as DurableObjectStub<SlackAgent>).onSlackWebhookEventReceived(body);
-  // TODO: Add Slack we bhook verification and processing logic here
+  const estateId = await slackTeamIdToEstateId({ db, teamId: body.team_id });
+  if (!estateId) {
+    console.warn(
+      `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
+      body,
+    );
+    return c.text("ok");
+  }
+
+  // This will throw an error if we didn't gracefully bow out
+  const routingKey = getRoutingKey({
+    payload: body,
+    estateId: estateId,
+  });
+
+  const durableObjectName = `SlackAgent-${routingKey}`;
+
+  // look up in the database to get all the agents by routing key
+  const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
+    where: eq(schema.agentInstanceRoute.routingKey, routingKey),
+    with: {
+      agentInstance: true,
+    },
+  });
+
+  if (rest.length > 0) {
+    console.error(`Multiple agents found for routing key ${routingKey}`);
+    return c.text("ok");
+  }
+
+  if (!agentRoute) {
+    const botUserId = extractBotUserIdFromAuthorizations(body);
+    const isBotMentioned =
+      botUserId && body.event.type === "message"
+        ? isBotMentionedInMessage(body.event, botUserId)
+        : false;
+    const isDM = "channel_type" in body.event && body.event.channel_type === "im";
+
+    if (!isBotMentioned && !isDM) {
+      return c.text("ok");
+    }
+  }
+
+  // @ts-expect-error - TODO couldn't get types to line up
+  const agentStub = await SlackAgent.getOrCreateStubByRoute({
+    db,
+    estateId,
+    agentInstanceName: durableObjectName,
+    route: routingKey,
+    reason: "Slack webhook received",
+  });
+
+  c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
   return c.text("ok");
-});
-
-slackApp.post("/interactions", async (_c) => {
-  // // Parse application/x-www-form-urlencoded body
-  // const formData = await c.req.formData();
-  // const payload = JSON.parse(formData.get("payload") as string);
-  // // Generate unique interaction ID
-  // const interactionId = `${payload.team?.id}-${payload.user?.id}-${Date.now()}`;
-  // // Publish to event bus
-  // await c.env.PLATFORM.publishEvent({
-  //   event: `SLACK:INTERACTION_RECEIVED`,
-  //   data: {
-  //     payload,
-  //     interactionId,
-  //     timestamp: Date.now(),
-  //   },
-  //   source: {
-  //     service: "platform",
-  //     metadata: {
-  //       interactionType: payload.type,
-  //       teamId: payload.team?.id,
-  //       userId: payload.user?.id,
-  //       channelId: payload.channel?.id,
-  //     },
-  //   },
-  // });
-  // // Return appropriate acknowledgment based on interaction type
-  // if (payload.type === "view_submission") {
-  //   // For view_submission, we can include response_action in acknowledgment
-  //   // For now, just acknowledge
-  //   return c.json({});
-  // }
-  // // Default acknowledgment for other interaction types
-  // return c.text("");
 });
 
 // async onEventPublished(event: DispatchedEvent) {
@@ -154,7 +190,6 @@ slackApp.post("/interactions", async (_c) => {
 
 //   switch (event.event) {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED":
-//     case "SLACK:INTERACTION_RECEIVED":
 //       break;
 //     default:
 //       return;
@@ -195,28 +230,6 @@ slackApp.post("/interactions", async (_c) => {
 //       }
 //       break;
 //     }
-//     case "SLACK:INTERACTION_RECEIVED": {
-//       const eventData = event.data as any;
-//       const payload = eventData?.payload;
-
-//       if (payload?.message?.thread_ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.message.thread_ts}`;
-//       } else if (payload?.container?.thread_ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.container.thread_ts}`;
-//       } else if (payload?.channel?.id && payload?.message?.ts) {
-//         slackAgentInstanceName = `SlackAgent ${payload.message.ts}`;
-//       } else if (payload?.type === "view_submission" && payload?.view?.private_metadata) {
-//         try {
-//           const metadata = JSON.parse(payload.view.private_metadata);
-//           if (metadata.thread_ts) {
-//             slackAgentInstanceName = `SlackAgent ${metadata.thread_ts}`;
-//           }
-//         } catch {
-//           // Ignore parsing errors
-//         }
-//       }
-//       break;
-//     }
 //   }
 
 //   if (!slackAgentInstanceName) {
@@ -249,9 +262,6 @@ slackApp.post("/interactions", async (_c) => {
 //         }
 //         break;
 //       }
-//       case "SLACK:INTERACTION_RECEIVED":
-//         console.log("Skipping interaction - no agent exists for this thread");
-//         return;
 //     }
 //   }
 
@@ -294,8 +304,34 @@ slackApp.post("/interactions", async (_c) => {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED":
 //       await slackAgent.onSlackWebhookEventReceived(event.data as any);
 //       break;
-//     case "SLACK:INTERACTION_RECEIVED":
-//       await slackAgent.onSlackInteractionReceived(event.data as any);
-//       break;
 //   }
 // }
+
+function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; estateId: string }) {
+  if (!payload.event || !payload.team_id) {
+    throw new Error("No event or team_id found in slack webhook payload");
+  }
+
+  // routing keys contain the estate ID - so if a slack team is first connected to estate A, and then later B,
+  // then estate B should not get access to the data from estate A
+  const prefix = `slack-${estateId}-team-${payload.team_id}`;
+
+  if (payload.event.type === "message") {
+    return `${prefix}-ts-${"thread_ts" in payload.event ? payload.event.thread_ts : payload.event.ts}`;
+  }
+
+  if (payload.event.type === "reaction_added" || payload.event.type === "reaction_removed") {
+    throw new Error("reaction_added and reaction_removed not implemented");
+    // return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
+    //   messageTs: slackEvent.item.ts,
+    // });
+  }
+
+  console.warn(
+    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
+    payload,
+  );
+  throw new Error(
+    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
+  );
+}
