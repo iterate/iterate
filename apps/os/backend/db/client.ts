@@ -17,3 +17,5 @@ const pg = () =>
 export const getDb = () => drizzle(pg(), { schema, casing: "snake_case" });
 
 export type DB = ReturnType<typeof getDb>;
+
+export * as schema from "./schema.ts";

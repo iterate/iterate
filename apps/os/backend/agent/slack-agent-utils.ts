@@ -192,35 +192,6 @@ export async function handleChannelJoinedEvent(_params: { channelId: string; bot
   // }
 }
 
-export async function reactToSlackWebhook(_slackWebhookPayload: SlackWebhookPayload) {
-  // const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
-  // if (!botUserId || !slackWebhookPayload.event) {
-  //   return;
-  // }
-  // const messageMetadata = await getMessageMetadata(slackWebhookPayload.event);
-  // if (!messageMetadata) {
-  //   return;
-  // }
-  // const shouldInclude = shouldIncludeEventInConversation(slackWebhookPayload.event, botUserId);
-  // if (shouldInclude && slackWebhookPayload.event.type === "message") {
-  //   if (messageMetadata.channel && messageMetadata.messageTs) {
-  //     const isMentioned = isBotMentionedInMessage(slackWebhookPayload.event, botUserId);
-  //     if (isMentioned) {
-  //       await serverTrpc.platform.integrations.slack.addSlackReaction
-  //         .mutate({
-  //           channel: messageMetadata.channel,
-  //           timestamp: messageMetadata.messageTs,
-  //           name: "eyes",
-  //         })
-  //         .then(
-  //           () => console.log("[SlackAgent] Added eyes reaction"),
-  //           (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
-  //         );
-  //     }
-  //   }
-  // }
-}
-
 /**
  * Determines if a Slack event should be included in the agent's conversation context.
  * This is called within the reducer when processing SLACK:WEBHOOK_EVENT_RECEIVED events

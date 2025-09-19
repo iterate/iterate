@@ -33,9 +33,6 @@ export function LoginPrompt() {
     <CenterCenter>
       <div className="w-full max-w-[1000px] px-4 py-8 sm:p-8">
         <div className="flex flex-col items-center justify-center space-y-6 sm:space-y-8 text-center">
-          <h1 className="text-3xl sm:text-4xl lg:text-[48px] font-semibold tracking-tight leading-tight px-4 sm:px-0">
-            OS for Autonomous Startups
-          </h1>
           <div
             className="relative flex h-[300px] sm:h-[400px] lg:h-[600px] w-full items-center justify-center overflow-hidden px-8 sm:px-12 lg:px-16"
             ref={containerRef}

@@ -6,7 +6,7 @@ import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { env, type CloudflareEnv } from "../../env.ts";
-import { getDb, type DB } from "../db/client.ts";
+import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
@@ -454,22 +454,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       toolSpecsToImplementations: (specs: ToolSpec[]) => {
         return toolSpecsToImplementations({ toolSpecs: specs, theDO: this });
       },
-      onLLMStreamResponseStreamingChunk: (chunk: any) => {
-        // Broadcast OpenAI streaming chunk to all connected clients using SDK's broadcast
-        try {
-          this.broadcast(
-            JSON.stringify({
-              type: "openai_response_chunk",
-              content: chunk,
-              timestamp: Date.now(),
-            }),
-          );
-        } catch (error) {
-          // During HMR, broadcast might fail - log but don't crash
-          console.warn("Failed to broadcast OpenAI chunk during HMR:", error);
-        }
-      },
-
       // TODO: somebody who understands this more than me needs to fix this type
       // @ts-expect-error
       uploadFile: async (_data: {
@@ -714,19 +698,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return true;
     });
     return dedupedRules;
-    // Fetch context rules from the platform
-    // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
-    //   trpcCallableBuilder.platform.agents.listContextRules.build(),
-    //   {},
-    // );
-
-    // // Type guard to ensure platformRules is an array
-    // if (!Array.isArray(rulesFromSkinnyRepo)) {
-    //   console.warn("Expected platform context rules to be an array, got:", rulesFromSkinnyRepo);
-    //   return [];
-    // }
-
-    // return rulesFromSkinnyRepo;
   }
 
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
@@ -887,8 +858,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   doNothing() {
     return {};
   }
-  getAgentDebugURL() {
-    return { debugURL: `${this.env.VITE_PUBLIC_URL}/agents/${this.constructor.name}/${this.name}` };
+  async getAgentDebugURL() {
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+      columns: {
+        organizationId: true,
+        id: true,
+      },
+    });
+    if (!estate) {
+      throw new Error("Estate not found");
+    }
+    return {
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+    };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
     const { message, type, when } = input;
