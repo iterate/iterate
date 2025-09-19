@@ -237,7 +237,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarFooter>
         </Sidebar>
 
-        <SidebarInset className="flex-1">
+        <SidebarInset>
           <header className="flex h-16 items-center gap-4 border-b px-6">
             <SidebarTrigger />
             {/* TODO Breadcrumbs */}
