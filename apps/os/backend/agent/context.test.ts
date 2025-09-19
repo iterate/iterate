@@ -521,7 +521,7 @@ describe("evaluateContextRuleMatchers", () => {
   it.each(cases)("$description", async (testCase) => {
     // Create a ContextRule object from the test case
     const contextRule: ContextRule = {
-      id: "test-rule",
+      key: "test-rule",
       prompt: "test prompt",
     };
 
@@ -597,7 +597,7 @@ describe("timeWindow matcher", () => {
 
   it("Only Fridays (UTC)", async () => {
     const rule: ContextRule = {
-      id: "fridays",
+      key: "fridays",
       prompt: "p",
       match: matchers.timeWindow({ weekdays: ["FR"] }),
     };
@@ -626,7 +626,7 @@ describe("timeWindow matcher", () => {
 
   it("Night 22:00–06:00 (UTC) cross-midnight", async () => {
     const rule: ContextRule = {
-      id: "night",
+      key: "night",
       prompt: "p",
       match: matchers.timeWindow({ timeOfDay: { start: "22:00", end: "06:00" } }),
     };
@@ -666,7 +666,7 @@ describe("timeWindow matcher", () => {
 
   it("Exact minute 11/11 11:11 (UTC)", async () => {
     const rule: ContextRule = {
-      id: "exact-11-11",
+      key: "exact-11-11",
       prompt: "p",
       match: matchers.timeWindow({ exact: { month: 11, day: 11, hour: 11, minute: 11 } }),
     };

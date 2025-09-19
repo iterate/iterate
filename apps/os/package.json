@@ -2,6 +2,9 @@
   "name": "@iterate-com/os",
   "private": true,
   "type": "module",
+  "exports": {
+    "./sdk": "./sdk/index.ts"
+  },
   "scripts": {
     "build": "react-router build",
     "cf-typegen": "wrangler types",

@@ -159,7 +159,7 @@ export type ContextItem = RequireAtLeastOne<{
   prompt: PromptFragment;
   tools: ToolSpec[];
 }> & {
-  id: string;
+  key: string;
   description?: string;
 };
 
@@ -174,6 +174,8 @@ export type ContextRule = ContextItem & {
 };
 
 export const defineRule = <Rule extends ContextRule>(rule: Rule) => rule;
+
+export const defineRules = <Rules extends ContextRule[]>(rules: Rules) => rules;
 
 /**
  * Evaluates whether a context rule should be applied based on its matchers.
@@ -451,7 +453,7 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
       // Get relative path from config directory and remove .md extension
       return defineRule({
-        id: filePath.replace(/\.md$/, ""),
+        key: filePath.replace(/\.md$/, ""),
         prompt: fileContent,
         ...overrides,
       });
