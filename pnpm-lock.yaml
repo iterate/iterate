@@ -303,6 +303,9 @@ importers:
       ts-pattern:
         specifier: ^5.8.0
         version: 5.8.0
+      tsx:
+        specifier: ^4.20.5
+        version: 4.20.5
       type-fest:
         specifier: ^5.0.0
         version: 5.0.0
@@ -12665,7 +12668,6 @@ snapshots:
       get-tsconfig: 4.10.1
     optionalDependencies:
       fsevents: 2.3.3
-    optional: true
 
   tsyringe@4.10.0:
     dependencies:

@@ -12,7 +12,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute, iterateConfig } from "../db/schema.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 import {
   AgentCore,
@@ -749,7 +749,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    return await defaultContextRules();
+    const db = this.db;
+    const defaultRules = await defaultContextRules();
+    const rulesFromDb = await db.query.iterateConfig.findFirst({
+      where: eq(iterateConfig.estateId, this.databaseRecord.estateId),
+    });
+    const rules = [...defaultRules, ...(rulesFromDb?.config?.contextRules ?? [])];
+    const seenIds = new Set<string>();
+    const dedupedRules = rules.filter((rule: ContextRule) => {
+      if (seenIds.has(rule.key)) {
+        return false;
+      }
+      seenIds.add(rule.key);
+      return true;
+    });
+    return dedupedRules;
     // Fetch context rules from the platform
     // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
     //   trpcCallableBuilder.platform.agents.listContextRules.build(),

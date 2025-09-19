@@ -290,3 +290,17 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
     references: [estate.id],
   }),
 }));
+
+export const iterateConfig = pgTable("iterate_config", (t) => ({
+  id: iterateId("icfg"),
+  config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+  estateId: t.text().notNull(),
+  ...withTimestamps,
+}));
+
+export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
+  estate: one(estate, {
+    fields: [iterateConfig.estateId],
+    references: [estate.id],
+  }),
+}));
