@@ -20,10 +20,12 @@
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
+    "@cloudflare/sandbox": "^0.3.1",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/search": "^6.5.11",
     "@codemirror/view": "^6.38.2",
+    "@hono/zod-validator": "^0.7.3",
     "@hookform/resolvers": "^5.2.2",
     "@radix-ui/react-accordion": "^1.2.12",
     "@radix-ui/react-alert-dialog": "^1.1.15",

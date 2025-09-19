@@ -30,6 +30,13 @@
       "localConnectionString": "postgres://postgres:postgres@localhost:5432/iterate",
     },
   ],
+  "containers": [
+    {
+      "class_name": "Sandbox",
+      "image": "./backend/sandbox/Dockerfile",
+      "instance_type": "standard",
+    },
+  ],
   "durable_objects": {
     "bindings": [
       {
@@ -44,6 +51,10 @@
         "name": "ORGANIZATION_WEBSOCKET",
         "class_name": "OrganizationWebSocket",
       },
+      {
+        "name": "SANDBOX",
+        "class_name": "Sandbox",
+      },
     ],
   },
   "migrations": [
@@ -54,6 +65,10 @@
     {
       "tag": "2025-01-websocket",
       "new_sqlite_classes": ["OrganizationWebSocket"],
+    },
+    {
+      "tag": "2025-01-sandbox",
+      "new_sqlite_classes": ["Sandbox"],
     },
   ],
   /**
