@@ -161,10 +161,10 @@ export const defaultContextRules = async () => [
       //   type: "agent_durable_object_tool",
       //   methodName: "doNothing",
       // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "connectMCPServer",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "connectMCPServer",
+      },
       {
         type: "agent_durable_object_tool",
         methodName: "getAgentDebugURL",
