@@ -158,18 +158,72 @@ app.post("/api/webhooks/github", async (c) => {
     // Parse the webhook payload
     const event = JSON.parse(payload);
     const eventType = c.req.header("X-GitHub-Event");
-    console.log("eventType", eventType);
-    // We only care about push events for now
-    if (eventType !== "push") {
-      return c.json({ message: "Event type not handled" }, 200);
+    console.log("Received GitHub webhook event:", eventType);
+
+    // Extract repository information (common across event types)
+    const repoId = event.repository?.id;
+    if (!repoId) {
+      console.error("Missing repository information");
+      return c.json({ error: "Invalid webhook payload - no repository" }, 400);
     }
 
-    // Extract repository and commit information
-    const repoId = event.repository?.id;
-    const commitHash = event.after || event.head_commit?.id;
-    const commitMessage = event.head_commit?.message || "No commit message";
-    const ref = event.ref; // e.g., "refs/heads/main"
-    const branch = ref?.replace("refs/heads/", "");
+    let commitHash: string | undefined;
+    let commitMessage: string | undefined;
+    let branch: string | undefined;
+
+    // Handle different event types
+    if (eventType === "push") {
+      // Push event - direct code push
+      commitHash = event.after || event.head_commit?.id;
+      commitMessage = event.head_commit?.message || "No commit message";
+      const ref = event.ref; // e.g., "refs/heads/main"
+      branch = ref?.replace("refs/heads/", "");
+    } else if (eventType === "check_suite") {
+      // Check suite event - triggered by push or PR
+      console.log(`Check suite event: action=${event.action}, status=${event.check_suite?.status}`);
+
+      // Log the structure to understand what data is available
+      console.log(
+        "Check suite data:",
+        JSON.stringify(
+          {
+            head_sha: event.check_suite?.head_sha,
+            head_branch: event.check_suite?.head_branch,
+            head_commit: event.check_suite?.head_commit,
+          },
+          null,
+          2,
+        ),
+      );
+
+      if (event.action !== "completed" || event.check_suite?.status !== "completed") {
+        console.log(
+          `Ignoring check_suite with action=${event.action} status=${event.check_suite?.status}`,
+        );
+        return c.json({ message: "Check suite not completed" }, 200);
+      }
+      commitHash = event.check_suite?.head_sha;
+      commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
+      branch = event.check_suite?.head_branch;
+    } else if (eventType === "workflow_run") {
+      // GitHub Actions workflow run
+      if (event.action !== "completed" || event.workflow_run?.status !== "completed") {
+        console.log(
+          `Ignoring workflow_run with action=${event.action} status=${event.workflow_run?.status}`,
+        );
+        return c.json({ message: "Workflow not completed" }, 200);
+      }
+      if (event.workflow_run?.conclusion !== "success") {
+        console.log(`Ignoring failed workflow with conclusion=${event.workflow_run?.conclusion}`);
+        return c.json({ message: "Workflow did not succeed" }, 200);
+      }
+      commitHash = event.workflow_run?.head_sha;
+      commitMessage = event.workflow_run?.head_commit?.message || "Workflow run";
+      branch = event.workflow_run?.head_branch;
+    } else {
+      console.log(`Event type ${eventType} not handled`);
+      return c.json({ message: `Event type ${eventType} not handled` }, 200);
+    }
 
     if (!repoId || !commitHash) {
       console.error("Missing repository or commit information");
@@ -182,13 +236,13 @@ app.post("/api/webhooks/github", async (c) => {
       console.log(`No estate found for repository ${repoId}`);
       return c.json({ message: "Repository not connected to any estate" }, 200);
     }
-    console.log("estate", branch, estate.connectedRepoRef);
+
     // Only process if the push is to the configured branch
-    if (branch !== estate.connectedRepoRef) {
+    if (branch && branch !== estate.connectedRepoRef) {
       console.log(
-        `Ignoring push to branch ${branch}, estate configured for ${estate.connectedRepoRef}`,
+        `Ignoring event on branch ${branch}, estate configured for ${estate.connectedRepoRef}`,
       );
-      return c.json({ message: "Push not to configured branch" }, 200);
+      return c.json({ message: "Event not on configured branch" }, 200);
     }
 
     // Get the GitHub installation for this estate
@@ -206,8 +260,8 @@ app.post("/api/webhooks/github", async (c) => {
       .insert(schemas.builds)
       .values({
         status: "in_progress",
-        commitHash,
-        commitMessage,
+        commitHash: commitHash!, // We've already checked this is defined above
+        commitMessage: commitMessage || "No commit message",
         webhookIterateId: event.id || `webhook-${Date.now()}`,
         estateId: estate.id,
         iterateWorkflowRunId: event.workflow_run?.id?.toString(),
