@@ -4,6 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
@@ -16,6 +17,13 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
+import {
+  validateGithubWebhookSignature,
+  getEstateByRepoId,
+  getGithubInstallationForEstate,
+  getGithubInstallationToken,
+} from "./integrations/github/github-utils.ts";
+import * as schemas from "./db/schema.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -123,6 +131,171 @@ app.get("/api/ws/:organizationId", async (c) => {
   );
 });
 
+// GitHub webhook handler
+app.post("/api/webhooks/github", async (c) => {
+  try {
+    // Get the webhook payload and signature
+    const signature = c.req.header("X-Hub-Signature-256");
+    const payload = await c.req.text();
+    console.log("got webhook payload", payload);
+    // Validate the webhook signature
+    if (!c.env.GITHUB_WEBHOOK_SECRET) {
+      console.error("GITHUB_WEBHOOK_SECRET not configured");
+      return c.json({ error: "Webhook secret not configured" }, 500);
+    }
+
+    const isValid = validateGithubWebhookSignature(
+      payload,
+      signature || null,
+      c.env.GITHUB_WEBHOOK_SECRET,
+    );
+
+    if (!isValid) {
+      console.error("Invalid webhook signature");
+      return c.json({ error: "Invalid signature" }, 401);
+    }
+
+    // Parse the webhook payload
+    const event = JSON.parse(payload);
+    const eventType = c.req.header("X-GitHub-Event");
+
+    // We only care about push events for now
+    if (eventType !== "push") {
+      return c.json({ message: "Event type not handled" }, 200);
+    }
+
+    // Extract repository and commit information
+    const repoId = event.repository?.id;
+    const commitHash = event.after || event.head_commit?.id;
+    const commitMessage = event.head_commit?.message || "No commit message";
+    const ref = event.ref; // e.g., "refs/heads/main"
+    const branch = ref?.replace("refs/heads/", "");
+
+    if (!repoId || !commitHash) {
+      console.error("Missing repository or commit information");
+      return c.json({ error: "Invalid webhook payload" }, 400);
+    }
+
+    // Find the estate connected to this repository
+    const estate = await getEstateByRepoId(c.var.db, repoId);
+    if (!estate) {
+      console.log(`No estate found for repository ${repoId}`);
+      return c.json({ message: "Repository not connected to any estate" }, 200);
+    }
+
+    // Only process if the push is to the configured branch
+    if (branch !== estate.connectedRepoRef) {
+      console.log(
+        `Ignoring push to branch ${branch}, estate configured for ${estate.connectedRepoRef}`,
+      );
+      return c.json({ message: "Push not to configured branch" }, 200);
+    }
+
+    // Get the GitHub installation for this estate
+    const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
+    if (!githubInstallation) {
+      console.error(`No GitHub installation found for estate ${estate.id}`);
+      return c.json({ error: "GitHub installation not found" }, 500);
+    }
+
+    // Get an installation access token
+    const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // Create an in-progress build log
+    const [build] = await c.var.db
+      .insert(schemas.builds)
+      .values({
+        status: "in_progress",
+        commitHash,
+        commitMessage,
+        webhookIterateId: event.id || `webhook-${Date.now()}`,
+        estateId: estate.id,
+        iterateWorkflowRunId: event.workflow_run?.id?.toString(),
+      })
+      .returning();
+
+    // Construct the repository URL
+    const repoUrl = event.repository?.html_url || event.repository?.url;
+    if (!repoUrl) {
+      await c.var.db
+        .update(schemas.builds)
+        .set({
+          status: "failed",
+          completedAt: new Date(),
+          output: { stderr: "Repository URL not found in webhook payload" },
+        })
+        .where(eq(schemas.builds.id, build.id));
+
+      return c.json({ error: "Repository URL not found" }, 400);
+    }
+
+    // Run the configuration in the sandbox
+    const result = await runConfigInSandbox(c.env, {
+      githubRepoUrl: repoUrl,
+      githubToken: installationToken,
+      branch: estate.connectedRepoRef || "main",
+      commitHash,
+      workingDirectory: estate.connectedRepoPath || undefined,
+    });
+
+    // Determine build status based on result
+    const buildStatus = "error" in result ? "failed" : "complete";
+    const output =
+      "error" in result ? { stderr: result.error, details: result.details } : result.output;
+
+    // Update the build log with the result
+    await c.var.db
+      .update(schemas.builds)
+      .set({
+        status: buildStatus,
+        completedAt: new Date(),
+        output,
+      })
+      .where(eq(schemas.builds.id, build.id));
+
+    // Store the configuration in the iterateConfig table if successful
+    if (buildStatus === "complete" && "stdout" in output && output.stdout) {
+      try {
+        // Parse the output to extract the configuration
+        const configData = JSON.parse(output.stdout);
+
+        // Upsert the config - always overwrite if it exists
+        await c.var.db
+          .insert(schemas.iterateConfig)
+          .values({
+            config: configData,
+            estateId: estate.id,
+          })
+          .onConflictDoUpdate({
+            target: schemas.iterateConfig.estateId,
+            set: {
+              config: configData,
+            },
+          });
+      } catch (parseError) {
+        console.error("Failed to parse configuration output:", parseError);
+        // The build succeeded but we couldn't parse the config
+        // This is logged but not treated as a build failure
+      }
+    }
+
+    return c.json({
+      message: "Webhook processed",
+      buildId: build.id,
+      status: buildStatus,
+    });
+  } catch (error) {
+    console.error("GitHub webhook error:", error);
+    return c.json(
+      {
+        error: "Internal server error",
+        details: error instanceof Error ? error.message : "Unknown error",
+      },
+      500,
+    );
+  }
+});
+
 // Test build endpoint for sandbox
 app.post(
   "/api/test-build",
@@ -136,6 +309,7 @@ app.post(
           message: "Invalid GitHub repository URL format",
         }),
       githubToken: z.string().min(1, "GitHub token is required"),
+      branch: z.string().optional(),
       commitHash: z
         .string()
         .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")

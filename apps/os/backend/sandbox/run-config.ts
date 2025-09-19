@@ -6,6 +6,7 @@ export interface RunConfigOptions {
   githubRepoUrl: string;
   githubToken: string;
   commitHash?: string;
+  branch?: string;
   workingDirectory?: string;
 }
 
@@ -32,7 +33,7 @@ export async function runConfigInSandbox(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const { githubRepoUrl, githubToken, commitHash, workingDirectory } = options;
+  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory } = options;
 
   // Get sandbox instance
   const sandboxId = typeid("build").toString();
@@ -49,8 +50,35 @@ export async function runConfigInSandbox(
     };
   }
 
-  // Checkout specific commit if provided
-  if (commitHash) {
+  // Checkout specific branch or commit
+  if (branch) {
+    // Checkout the branch
+    const checkoutCommand = `cd /tmp/repo && git checkout ${branch}`;
+    const checkoutResult = await sandbox.exec(checkoutCommand);
+
+    if (checkoutResult.exitCode !== 0) {
+      return {
+        error: "Failed to checkout branch",
+        details: checkoutResult.stderr,
+        commitHash: branch,
+      };
+    }
+
+    // If a specific commit hash is also provided, checkout that commit on the branch
+    if (commitHash) {
+      const checkoutCommitCommand = `cd /tmp/repo && git checkout ${commitHash}`;
+      const checkoutCommitResult = await sandbox.exec(checkoutCommitCommand);
+
+      if (checkoutCommitResult.exitCode !== 0) {
+        return {
+          error: "Failed to checkout commit",
+          details: checkoutCommitResult.stderr,
+          commitHash,
+        };
+      }
+    }
+  } else if (commitHash) {
+    // Only checkout commit if no branch specified
     const checkoutCommand = `cd /tmp/repo && git checkout ${commitHash}`;
     const checkoutResult = await sandbox.exec(checkoutCommand);
 

@@ -14,6 +14,13 @@ export type CloudflareEnv = Env & {
   GITHUB_APP_CLIENT_SECRET: string;
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_APP_SLUG: string;
+  GITHUB_WEBHOOK_SECRET: string;
+
+  // temporarily using this old env var i found in doppler until i can hook up to better auth accounts table
+  SLACK_PROXY_BOT_TOKEN: string;
+
+  // Durable Object bindings
+  ORGANIZATION_WEBSOCKET: DurableObjectNamespace;
 };
 
 export const env = _env as CloudflareEnv;
