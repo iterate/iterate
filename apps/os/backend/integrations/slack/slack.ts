@@ -66,6 +66,10 @@ slackApp.post("/webhook", async (c) => {
     estateId: estateId,
   });
 
+  if (!routingKey) {
+    return c.text(`No routing key found for event ${body.event.type}`);
+  }
+
   const durableObjectName = `SlackAgent-${routingKey}`;
 
   // look up in the database to get all the agents by routing key
@@ -195,7 +199,7 @@ slackApp.post("/webhook", async (c) => {
 //       return;
 //   }
 
-//   let slackAgentInstanceName: string | null = null;
+//   let slackAgentInstanceName: string || case null = n":
 //   switch (event.event) {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED": {
 //       const eventData = event.data as any;
@@ -327,11 +331,93 @@ function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; es
     // });
   }
 
-  console.warn(
-    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
-    payload,
-  );
-  throw new Error(
-    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
-  );
+  switch (payload.event.type) {
+    case "user_change":
+    case "app_deleted":
+    case "app_home_opened":
+    case "app_installed":
+    case "app_mention":
+    case "app_rate_limited":
+    case "app_requested":
+    case "app_uninstalled_team":
+    case "app_uninstalled":
+    case "assistant_thread_context_changed":
+    case "assistant_thread_started":
+    case "call_rejected":
+    case "channel_archive":
+    case "channel_created":
+    case "channel_deleted":
+    case "channel_history_changed":
+    case "channel_id_changed":
+    case "channel_left":
+    case "channel_rename":
+    case "channel_shared":
+    case "channel_unarchive":
+    case "channel_unshared":
+    case "dnd_updated":
+    case "dnd_updated_user":
+    case "email_domain_changed":
+    case "emoji_changed":
+    case "function_executed":
+    case "grid_migration_finished":
+    case "grid_migration_started":
+    case "group_archive":
+    case "group_close":
+    case "group_history_changed":
+    case "group_left":
+    case "group_open":
+    case "group_rename":
+    case "im_close":
+    case "im_created":
+    case "im_history_changed":
+    case "im_open":
+    case "link_shared":
+    case "message_metadata_deleted":
+    case "message_metadata_posted":
+    case "message_metadata_updated":
+    case "pin_added":
+    case "pin_removed":
+    case "star_added":
+    case "star_removed":
+    case "subteam_created":
+    case "subteam_members_changed":
+    case "subteam_self_added":
+    case "subteam_self_removed":
+    case "subteam_updated":
+    case "team_domain_change":
+    case "team_join":
+    case "team_rename":
+    case "tokens_revoked":
+    case "workflow_deleted":
+    case "workflow_published":
+    case "workflow_step_deleted":
+    case "workflow_step_execute":
+    case "workflow_unpublished":
+    case "file_change":
+    case "file_comment_deleted":
+    case "file_created":
+    case "file_deleted":
+    case "file_public":
+    case "file_shared":
+    case "file_unshared":
+    case "group_deleted":
+    case "group_unarchive":
+    case "invite_requested":
+    case "member_joined_channel":
+    case "member_left_channel":
+    case "shared_channel_invite_accepted":
+    case "shared_channel_invite_approved":
+    case "shared_channel_invite_declined":
+    case "shared_channel_invite_received":
+    case "shared_channel_invite_requested":
+    case "team_access_granted":
+    case "team_access_revoked":
+    case "user_huddle_changed":
+    case "user_profile_changed":
+    case "user_status_changed":
+      return null;
+    default:
+      payload.event satisfies never;
+      break;
+  }
 }
