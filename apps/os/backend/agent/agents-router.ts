@@ -38,12 +38,12 @@ const agentStubProcedure = protectedProcedure
     // Always use getOrCreateStubByName - agents are created on demand
     const agent = await (input.agentClassName === "SlackAgent"
       ? // @ts-expect-error - TODO couldn't get types to line up
-        SlackAgent.getOrCreateStubByName({
+        (SlackAgent.getOrCreateStubByName({
           db: ctx.db,
           estateId,
           agentInstanceName: input.agentInstanceName,
           reason: input.reason || "Created via agents router",
-        })
+        }) as never)
       : IterateAgent.getOrCreateStubByName({
           db: ctx.db,
           estateId,
@@ -53,7 +53,16 @@ const agentStubProcedure = protectedProcedure
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 
-    return next({ ctx: { ...ctx, agent } });
+    return next({
+      ctx: {
+        ...ctx,
+        agent: agent as {} as Omit<typeof agent, "getEvents"> & {
+          // todo: figure out why cloudflare doesn't like the return type of getEvents - it neverifies it becaue of something that can't cross the boundary?
+          // although this is still useful anyway, to help remind us to always call `await` even though if calling getEvents in-process, it's synchronous
+          getEvents: () => Promise<ReturnType<IterateAgent["getEvents"]>>;
+        },
+      },
+    });
   });
 
 // Define a schema for context rules

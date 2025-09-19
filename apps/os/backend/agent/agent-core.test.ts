@@ -2611,15 +2611,6 @@ describe("onEventAdded callback state timing", () => {
 });
 
 describe("AgentCore ephemeralPromptFragments", () => {
-  const createMockDeps = (contextItems: ContextItem[] = []): AgentCoreDeps => ({
-    storeEvents: vi.fn(),
-    background: vi.fn(),
-    getOpenAIClient: vi.fn(),
-    toolSpecsToImplementations: vi.fn(() => []),
-    getRuleMatchData: vi.fn((agentCoreState) => ({ agentCoreState })),
-    console,
-  });
-
   createAgentCoreTest([])(
     "should render ephemeral context items into the system prompt",
     async ({ h }) => {
