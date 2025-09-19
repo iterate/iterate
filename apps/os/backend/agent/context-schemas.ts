@@ -92,11 +92,11 @@ export type ContextItem = RequireAtLeastOne<{
   tools: ToolSpec[];
   mcpServers: MCPServerInput[];
 }> & {
-  id: string;
+  key: string;
   description?: string;
 };
 export const ContextItem = z.object({
-  id: z.string(),
+  key: z.string(),
   description: z.string().optional(),
   prompt: PromptFragment.optional(),
   tools: z.array(ToolSpec).optional(),

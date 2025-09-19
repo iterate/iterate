@@ -711,7 +711,7 @@ export class AgentCore<
       case "CORE:ADD_CONTEXT_RULES": {
         next.contextRules = {
           ...next.contextRules,
-          ...Object.fromEntries(event.data.rules.map((item) => [item.id, item])),
+          ...Object.fromEntries(event.data.rules.map((item) => [item.key, item])),
         };
         break;
       }

@@ -984,7 +984,7 @@ describe("mcp-slice", () => {
           data: {
             rules: [
               {
-                id: "custom-tool-rule",
+                key: "custom-tool-rule",
                 tools: [{ type: "agent_durable_object_tool", methodName: "custom_tool" }],
               },
             ],

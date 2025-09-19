@@ -643,7 +643,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async refreshContextRules() {
     const event = await this.getAddContextRulesEvent();
     const existingRules = this.agentCore.state.contextRules;
-    const upToDate = event.data.rules.every((r) => R.isDeepEqual(r, existingRules[r.id]));
+    const upToDate = event.data.rules.every((r) => R.isDeepEqual(r, existingRules[r.key]));
     if (!upToDate) {
       this.addEvent(event); // only worth adding if it's going to have an effect
     }

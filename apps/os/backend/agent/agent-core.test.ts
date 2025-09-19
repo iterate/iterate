@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { pluckFields } from "../utils/test-helpers/test-utils.ts";
-import { AgentCore, type AgentCoreDeps } from "./agent-core.ts";
+import { AgentCore } from "./agent-core.ts";
 import { f } from "./prompt-fragments.ts";
 import {
   CoreTestHarness,
@@ -56,7 +56,7 @@ describe("AgentCore", () => {
         data: {
           rules: [
             {
-              id: "test-rule",
+              key: "test-rule",
               tools: [
                 {
                   type: "agent_durable_object_tool",
@@ -131,7 +131,7 @@ describe("AgentCore", () => {
       data: {
         rules: [
           {
-            id: "test-rule",
+            key: "test-rule",
             tools: [
               {
                 type: "agent_durable_object_tool",
@@ -212,7 +212,7 @@ describe("AgentCore", () => {
       data: {
         rules: [
           {
-            id: "test-rule",
+            key: "test-rule",
             tools: [
               {
                 type: "agent_durable_object_tool",
@@ -309,7 +309,7 @@ describe("AgentCore", () => {
       data: {
         rules: [
           {
-            id: "test-rule",
+            key: "test-rule",
             tools: [
               {
                 type: "agent_durable_object_tool",
@@ -456,7 +456,7 @@ describe("AgentCore", () => {
       data: {
         rules: [
           {
-            id: "test-rule",
+            key: "test-rule",
             tools: [toolSpec1, toolSpec2],
           },
         ],
@@ -621,7 +621,7 @@ describe("AgentCore", () => {
       data: {
         rules: [
           {
-            id: "test-rule",
+            key: "test-rule",
             tools: [
               {
                 type: "agent_durable_object_tool",
@@ -1021,7 +1021,7 @@ describe("AgentCore", () => {
         data: {
           rules: [
             {
-              id: "test-rule",
+              key: "test-rule",
               tools: [
                 {
                   type: "agent_durable_object_tool",
