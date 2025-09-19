@@ -3,13 +3,11 @@ import {
   Home as HomeIcon,
   Settings,
   Users,
-  ChevronDown,
   FileText,
   LogOut,
-  User,
-  CreditCard,
   Building2,
   Check,
+  ChevronsUpDown,
 } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
 import { trpc } from "../lib/trpc.ts";
@@ -32,7 +30,6 @@ import {
   SidebarGroupLabel,
   SidebarGroupContent,
 } from "../components/ui/sidebar.tsx";
-import { Button } from "../components/ui/button.tsx";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar.tsx";
 import {
   DropdownMenu,
@@ -65,65 +62,14 @@ interface Estate {
   organizationId: string;
 }
 
-function EstateSwitcher() {
+function UserSwitcher() {
+  const [user] = trpc.user.me.useSuspenseQuery();
   const [estates] = trpc.estates.list.useSuspenseQuery();
   const navigate = useNavigate();
   const params = useParams();
   const currentEstateId = params.estateId;
 
   const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
-
-  const handleEstateSwitch = (estate: Estate) => {
-    // Save the new selection to cookie
-    setSelectedEstate(estate.organizationId, estate.id);
-
-    // Get the current path within the estate
-    const currentPath = window.location.pathname;
-    const pathParts = currentPath.split("/").slice(3); // Remove org/estate parts
-    const subPath = pathParts.join("/");
-
-    // Navigate to the same page in the new estate
-    navigate(`/${estate.organizationId}/${estate.id}${subPath ? `/${subPath}` : ""}`);
-  };
-
-  if (!currentEstate) {
-    return null;
-  }
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="w-full justify-start gap-2 px-2 py-1.5 h-auto mb-2">
-          <Building2 className="size-4 text-muted-foreground" />
-          <div className="flex-1 text-left">
-            <div className="font-medium text-sm">{currentEstate.name}</div>
-          </div>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56" side="top" align="start">
-        <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {estates?.map((estate: Estate) => (
-          <DropdownMenuItem
-            key={estate.id}
-            onClick={() => handleEstateSwitch(estate)}
-            className="flex items-center justify-between"
-          >
-            <div className="flex items-center gap-2">
-              <Building2 className="size-4" />
-              <div className="font-medium">{estate.name}</div>
-            </div>
-            {currentEstateId === estate.id && <Check className="size-4" />}
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-function UserSwitcher() {
-  const [user] = trpc.user.me.useSuspenseQuery();
 
   const handleLogout = async () => {
     try {
@@ -147,6 +93,19 @@ function UserSwitcher() {
     }
   };
 
+  const handleEstateSwitch = (estate: Estate) => {
+    // Save the new selection to cookie
+    setSelectedEstate(estate.organizationId, estate.id);
+
+    // Get the current path within the estate
+    const currentPath = window.location.pathname;
+    const pathParts = currentPath.split("/").slice(3); // Remove org/estate parts
+    const subPath = pathParts.join("/");
+
+    // Navigate to the same page in the new estate
+    navigate(`/${estate.organizationId}/${estate.id}${subPath ? `/${subPath}` : ""}`);
+  };
+
   // Generate initials from name
   const getInitials = (name: string) => {
     return name
@@ -158,29 +117,54 @@ function UserSwitcher() {
   };
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="w-full justify-start gap-2 px-2 py-1.5 h-auto">
-          <Avatar className="size-8">
-            <AvatarImage src={user.image || ""} />
-            <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-600 text-white font-medium">
-              {getInitials(user.name)}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 text-left">
-            <div className="font-medium">{user.name}</div>
-            <div className="text-xs text-muted-foreground">{user.email}</div>
-          </div>
-          <ChevronDown className="size-4 text-muted-foreground" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56" side="top" align="start">
-        <DropdownMenuItem onClick={handleLogout}>
-          <LogOut className="mr-2 h-4 w-4" />
-          <span>Log out</span>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <SidebarMenuButton
+              size="lg"
+              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+            >
+              <Avatar className="h-8 w-8 rounded-lg">
+                <AvatarImage src={user.image || ""} alt={user.name} />
+                <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+              </Avatar>
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-medium">{user.name}</span>
+                <span className="truncate text-xs">{user.email}</span>
+              </div>
+              <ChevronsUpDown className="ml-auto size-4" />
+            </SidebarMenuButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent className="w-56" side="top" align="start">
+            {currentEstate && (
+              <>
+                <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
+                {estates?.map((estate: Estate) => (
+                  <DropdownMenuItem
+                    key={estate.id}
+                    onClick={() => handleEstateSwitch(estate)}
+                    className="flex items-center justify-between"
+                    disabled={currentEstateId === estate.id}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Building2 className="size-4" />
+                      <span>{estate.name}</span>
+                    </div>
+                    {currentEstateId === estate.id && <Check className="size-4" />}
+                  </DropdownMenuItem>
+                ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            <DropdownMenuItem onClick={handleLogout}>
+              <LogOut className="mr-2 h-4 w-4" />
+              <span>Log out</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
@@ -197,19 +181,27 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
         <Sidebar className="border-r">
-          <SidebarHeader className="border-b px-6 py-4">
-            <div className="flex items-center gap-2">
-              <img src="/logo.svg" alt="Iterate" className="size-8 text-white" />
-              <span className="font-semibold text-lg">Iterate</span>
-            </div>
-          </SidebarHeader>
+          <SidebarContent>
+            <SidebarHeader>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton size="lg" asChild>
+                    <a href="#">
+                      <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
+                        <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
+                      </div>
+                      <div className="grid flex-1 text-left leading-tight">
+                        <span className="truncate font-medium">iterate</span>
+                      </div>
+                    </a>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarHeader>
 
-          <SidebarContent className="px-4 py-4">
             {navigation.map((section) => (
               <SidebarGroup key={section.title}>
-                <SidebarGroupLabel className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
-                  {section.title}
-                </SidebarGroupLabel>
+                <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {section.items.map((item) => (
@@ -220,7 +212,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                             (item.path && location.pathname.endsWith(item.path)) ||
                             (item.path === "" && location.pathname.endsWith(`/${estateId}/`))
                           }
-                          className="w-full justify-start gap-3 px-3 py-2 rounded-lg"
                         >
                           <Link to={getEstateUrl(item.path)}>
                             <item.icon className="size-4" />
@@ -235,14 +226,13 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             ))}
           </SidebarContent>
 
-          <SidebarFooter className="border-t p-4">
+          <SidebarFooter>
             {!isConnected && (
               <div className="flex items-center gap-2 mb-3 px-3">
                 <div className={`size-2 rounded-full bg-orange-500`}></div>
-                <span className="text-sm text-muted-foreground">Sync connecting...</span>
+                <span className="text-sm text-muted-foreground">Convex connecting...</span>
               </div>
             )}
-            <EstateSwitcher />
             <UserSwitcher />
           </SidebarFooter>
         </Sidebar>
@@ -250,12 +240,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         <SidebarInset className="flex-1">
           <header className="flex h-16 items-center gap-4 border-b px-6">
             <SidebarTrigger />
-            <div className="flex-1">
-              <h1 className="text-xl font-semibold">Platform</h1>
-            </div>
+            {/* TODO Breadcrumbs */}
           </header>
 
-          <main className="flex-1">{children}</main>
+          <main>{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>
