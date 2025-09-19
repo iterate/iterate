@@ -187,22 +187,22 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "stopRespondingUntilMentioned",
       },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "addSlackReaction",
-      // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "removeSlackReaction",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "addSlackReaction",
+      },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "removeSlackReaction",
+      },
       // {
       //   type: "agent_durable_object_tool",
       //   methodName: "uploadAndShareFileInSlack",
       // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "updateSlackMessage",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "updateSlackMessage",
+      },
       // {
       //   type: "agent_durable_object_tool",
       //   methodName: "getUrlContent",
