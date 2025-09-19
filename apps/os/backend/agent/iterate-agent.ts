@@ -4,6 +4,7 @@ import { z } from "zod/v4";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
+import * as R from "remeda";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -21,7 +22,7 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent } from "./agent-core-schemas.ts";
+import { AgentCoreEvent, type AddContextRulesEvent } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -568,6 +569,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           );
         }
 
+        if (event.type === "CORE:LLM_REQUEST_END") {
+          // fairly arbitrarily, refresh context rules after each LLM request so the agent will have updated instructions by next time
+          // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
+          // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
+          this.ctx.waitUntil(this.refreshContextRules());
+        }
+
         //   // this.ctx.waitUntil(
         //     /**
         //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
@@ -624,7 +632,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
 
-  async getInitialContextRulesEvent() {
+  async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
     const rules = await this.getContextRules();
     return {
       type: "CORE:ADD_CONTEXT_RULES",
@@ -632,8 +640,17 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       metadata: {},
       triggerLLMRequest: false,
       createdAt: new Date().toISOString(),
-      eventIndex: 0,
+      eventIndex: this.getEvents().length,
     } satisfies AgentCoreEvent;
+  }
+
+  async refreshContextRules() {
+    const event = await this.getAddContextRulesEvent();
+    const existingRules = this.agentCore.state.contextRules;
+    const upToDate = event.data.rules.every((r) => R.isDeepEqual(r, existingRules[r.id]));
+    if (!upToDate) {
+      this.addEvent(event); // only worth adding if it's going to have an effect
+    }
   }
 
   /**
@@ -645,7 +662,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const event = this.getEvents();
     if (event.length === 0) {
       // new agent, fetch initial context rules, along with tool schemas etc.
-      event.push(await this.getInitialContextRulesEvent());
+      event.push(await this.getAddContextRulesEvent());
     }
     await this.agentCore.initializeWithEvents(event);
 

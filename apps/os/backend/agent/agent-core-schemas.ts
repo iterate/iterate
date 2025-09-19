@@ -301,6 +301,8 @@ export const AddContextRulesEventInput = z.object({
   ...agentCoreBaseEventInputFields,
   ...addContextRulesEventFields,
 });
+export type AddContextRulesEvent = z.infer<typeof AddContextRulesEvent>;
+export type AddContextRulesEventInput = z.input<typeof AddContextRulesEventInput>;
 
 // CORE:REMOVE_TOOL_SPECS
 const removeToolSpecsEventFields = {
@@ -668,6 +670,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
    * These are fully valid OpenAI function tools that are ready to be used.
    */
   // todo: consider whether we could get away with moving to contextRules instead - we end up having to merge the toolSpecsWithSchemas into here anyway
+  // but there are also other ways to add runtime tools, like from MCP servers, so keeping for now. but we need to be a bit careful about deduplicating them.
   runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
   llmRequestStartedAtIndex: number | null;
   paused: boolean;
