@@ -182,7 +182,7 @@ app.post("/api/webhooks/github", async (c) => {
       console.log(`No estate found for repository ${repoId}`);
       return c.json({ message: "Repository not connected to any estate" }, 200);
     }
-
+    console.log("estate", branch, estate.connectedRepoRef);
     // Only process if the push is to the configured branch
     if (branch !== estate.connectedRepoRef) {
       console.log(
