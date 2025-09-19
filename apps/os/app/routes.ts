@@ -16,4 +16,7 @@ export default [
     route("agents", "./routes/agents-index.tsx"),
     route("agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
   ]),
+
+  // Catch-all route for 404
+  route("*", "./routes/404.tsx"),
 ] satisfies RouteConfig;

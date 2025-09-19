@@ -15,6 +15,7 @@ import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
+import { githubApp } from "./integrations/github/router.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -98,6 +99,7 @@ app.get("/api/estate/:estateId/files/:id", getFileHandler);
 
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
+app.route("/api/integrations/github", githubApp);
 
 // WebSocket endpoint for organization connections
 app.get("/api/ws/:organizationId", async (c) => {

@@ -10,6 +10,10 @@ export type CloudflareEnv = Env & {
   GOOGLE_CLIENT_SECRET: string;
   SLACK_CLIENT_ID: string;
   SLACK_CLIENT_SECRET: string;
+  GITHUB_APP_CLIENT_ID: string;
+  GITHUB_APP_CLIENT_SECRET: string;
+  GITHUB_APP_PRIVATE_KEY: string;
+  GITHUB_APP_SLUG: string;
 
   // temporarily using this old env var i found in doppler until i can hook up to better auth accounts table
   SLACK_PROXY_BOT_TOKEN: string;
