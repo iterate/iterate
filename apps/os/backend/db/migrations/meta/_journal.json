@@ -50,6 +50,13 @@
       "when": 1758299591603,
       "tag": "0006_smooth_zarek",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1758316888035,
+      "tag": "0007_heavy_paper_doll",
+      "breakpoints": true
     }
   ]
 }
