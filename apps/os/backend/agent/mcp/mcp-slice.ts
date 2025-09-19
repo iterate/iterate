@@ -285,8 +285,8 @@ function updateRuntimeTools<TEventInput = AgentCoreEventInput>(params: {
   state: CoreReducedState<TEventInput> & MCPSliceState;
   newConnections: Record<MCPConnectionKey, MCPConnection>;
   deps: MCPSliceDeps;
-}) {
-  const { state, newConnections, deps } = params;
+}): typeof params.state.namespacedRuntimeTools {
+  const { newConnections, deps } = params;
   const newRuntimeTools = generateRuntimeToolsFromConnections(
     newConnections,
     deps.uploadFile ||
@@ -296,11 +296,7 @@ function updateRuntimeTools<TEventInput = AgentCoreEventInput>(params: {
     deps.lazyConnectionDeps,
   );
 
-  const existingNonMCPTools = state.runtimeTools.filter((tool) => {
-    return tool.type !== "function" || tool.metadata?.source !== "mcp";
-  });
-
-  return [...existingNonMCPTools, ...newRuntimeTools];
+  return { ...params.state.namespacedRuntimeTools, mcp: newRuntimeTools };
 }
 
 // ------------------------- Slice Dependencies -------------------------
@@ -356,7 +352,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         return {
           mcpConnections: { ...rest },
           pendingConnections: newPendingConnections,
-          runtimeTools: updatedRuntimeTools,
+          namespacedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems],
         };
       }
@@ -392,7 +388,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         return {
           mcpConnections: newConnections,
           pendingConnections: newPendingConnections,
-          runtimeTools: updatedRuntimeTools,
+          namespacedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, connectionMessage],
           // Only trigger LLM if no more pending connections
           triggerLLMRequest: newPendingConnections.length === 0,
@@ -408,7 +404,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
         return {
           mcpConnections: newConnections,
-          runtimeTools: updatedRuntimeTools,
+          namespacedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems],
         };
       }
@@ -430,7 +426,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
         return {
           mcpConnections: newConnections,
-          runtimeTools: updatedRuntimeTools,
+          namespacedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems],
         };
       }
@@ -465,7 +461,7 @@ export const mcpSlice = defineAgentCoreSlice<{
         return {
           mcpConnections: newConnections,
           pendingConnections: newPendingConnections,
-          runtimeTools: updatedRuntimeTools,
+          namespacedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, errorMessage],
           // Only trigger LLM if no more pending connections
           triggerLLMRequest: newPendingConnections.length === 0,

@@ -668,10 +668,13 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
   contextRules: Record<string, ContextRule>;
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
+   * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
+   * This is *partially* derived from contextRules, but also from other sources like MCP servers. Might want rethinking some day for that reason.
    */
-  // todo: consider whether we could get away with moving to contextRules instead - we end up having to merge the toolSpecsWithSchemas into here anyway
-  // but there are also other ways to add runtime tools, like from MCP servers, so keeping for now. but we need to be a bit careful about deduplicating them.
-  runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
+  namespacedRuntimeTools: Record<
+    "context-rule" | "mcp",
+    RuntimeTool<TEventInput | AgentCoreEventInput>[]
+  >;
   llmRequestStartedAtIndex: number | null;
   paused: boolean;
   /**
@@ -703,6 +706,9 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
    * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
    */
   toolSpecs: ToolSpec[];
+
+  /** Flat list of runtime tools available for the agent. Derived from namespacedRuntimeTools. */
+  runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
   /**
    * MCP servers available for this agent conversation. Derived from contextRules.
    */
@@ -730,7 +736,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   contextRules: {},
-  runtimeTools: [],
+  namespacedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,
   triggerLLMRequest: false,

@@ -108,7 +108,7 @@ export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEventInput> = Functi
   execute: LocalFunctionToolExecuteFunction<TEventInput>;
   isAsync?: boolean; // If true, tool execution creates an ASYNC_TOOL_CALL_CREATED event
   metadata?: {
-    source?: "mcp" | "trpc" | "durable-object" | "worker";
+    source?: "mcp" | "context-rule";
     toolSpecHash?: string;
   };
 };

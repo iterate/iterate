@@ -130,7 +130,7 @@ export function toolSpecsToImplementations(params: {
       const tool: RuntimeTool = {
         type: "function",
         name: spec.overrideName || sanitizeToolName(spec.methodName),
-        metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
+        metadata: { source: "context-rule", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,

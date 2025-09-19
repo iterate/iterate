@@ -37,7 +37,6 @@ import {
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
-  hashToolSpec,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
 import { MCPServer, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
@@ -299,52 +298,31 @@ export class AgentCore<
   ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
     const next: AugmentedCoreReducedState = {
       ...inputState,
-      runtimeTools: [...inputState.runtimeTools],
+      runtimeTools: [],
       ephemeralPromptFragments: {},
       toolSpecs: [],
       mcpServers: [],
       rawKeys: Object.keys(inputState),
     };
-    for (const contextRule of Object.values(next.contextRules)) {
+
+    const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
       const matchAgainst = this.deps.getRuleMatchData(next);
       const isMatched = evaluateContextRuleMatchers({ contextRule, matchAgainst });
-      // todo: consider global matchers? Might be nice to be able to say `globalRuleMatchers: [matchers.jsonata("name = /linear-related/")]
+      return isMatched;
+    });
+    const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
+    next.namespacedRuntimeTools = {
+      ...next.namespacedRuntimeTools,
+      "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
+    };
+    next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
+    next.mcpServers = [
+      ...next.mcpServers,
+      ...enabledContextRules.flatMap((rule) => rule.mcpServers || []),
+    ];
 
-      if (!isMatched) {
-        continue;
-      }
-
-      if (contextRule.prompt) {
-        next.ephemeralPromptFragments[contextRule.id] = contextRule.prompt;
-      }
-      if (contextRule.tools) {
-        const existingToolSpecHashes = new Set(
-          inputState.runtimeTools
-            .map((tool) => ("metadata" in tool ? tool.metadata?.toolSpecHash : undefined)!)
-            .filter(Boolean),
-        );
-        const newToolSpecs = contextRule.tools.filter(
-          (tool) => !existingToolSpecHashes.has(hashToolSpec(tool)),
-        );
-        next.toolSpecs = [...next.toolSpecs, ...contextRule.tools];
-        const implementations = this.deps.toolSpecsToImplementations(newToolSpecs);
-        next.runtimeTools = [...next.runtimeTools, ...implementations];
-      }
-      if (contextRule.mcpServers) {
-        // Only add MCP servers that aren't already present (based on serverUrl equality)
-        const existingMcpServerUrls = new Set(next.mcpServers.map((server) => server.serverUrl));
-        const newMcpServers = contextRule.mcpServers.filter(
-          (server) => !existingMcpServerUrls.has(server.serverUrl),
-        );
-
-        if (newMcpServers.length > 0) {
-          next.mcpServers = [
-            ...next.mcpServers,
-            ...newMcpServers.map((server) => MCPServer.parse(server)),
-          ];
-        }
-      }
-    }
+    // todo: figure out how to deduplicate these in case of name collisions?
+    next.runtimeTools = Object.values(next.namespacedRuntimeTools).flat();
     return next as unknown as MergedStateForSlices<Slices> &
       MergedStateForSlices<CoreSlices> &
       AugmentedCoreReducedState;
