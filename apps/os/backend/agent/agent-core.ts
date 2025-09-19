@@ -299,7 +299,7 @@ export class AgentCore<
   private augmentState(
     inputState: typeof this._state,
   ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
-    const next: AugmentedCoreReducedState & { rawKeys: string[] } = {
+    const next: AugmentedCoreReducedState = {
       ...inputState,
       runtimeTools: [...inputState.runtimeTools],
       ephemeralPromptFragments: {},

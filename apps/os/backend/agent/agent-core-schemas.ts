@@ -714,6 +714,8 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
    * slices to continuously update their context item. Derived from contextRules.
    */
   ephemeralPromptFragments: Record<string, PromptFragment>;
+  /** The keys on the original, un-augmented state. Can be used to get the original state without the derived props. */
+  rawKeys: string[];
 }
 
 // Note: We cannot use createZodSchemaThatSatisfies for CoreReducedState because:
