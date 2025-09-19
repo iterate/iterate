@@ -15,10 +15,14 @@ async function main() {
   const code = `console.log(JSON.stringify((await import(${JSON.stringify(fileUrl)})).default, null, 2));`;
 
   // Run node synchronously with module eval and TS stripping
-  const result = spawnSync('pnpx', ['tsx', '--input-type=module', '--experimental-strip-types', '-e', code], {
-    stdio: 'inherit',
-    cwd: process.cwd()
-  });
+  const result = spawnSync(
+    "pnpx",
+    ["tsx", "--input-type=module", "--experimental-strip-types", "-e", code],
+    {
+      stdio: "inherit",
+      cwd: process.cwd(),
+    },
+  );
 
   process.exit(result.status ?? 0);
 }
