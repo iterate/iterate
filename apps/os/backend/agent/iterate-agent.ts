@@ -130,6 +130,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   extends CloudflareAgent<CloudflareEnv, IterateAgentState>
   implements ToolsInterface
 {
+  override observability = undefined;
+
   // Resolve the DO namespace for the concrete subclass at runtime
   static getNamespace<T extends typeof IterateAgent>(
     this: T,
@@ -152,8 +154,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (options?.jurisdiction) {
       namespace = namespace.jurisdiction(options.jurisdiction);
     }
-    const id = namespace.idFromName(record.durableObjectName);
-    const stub = namespace.get(id, options);
+    const stub = namespace.getByName(record.durableObjectName, options);
 
     // right after the constructor runs we get in there and initialise all our stuff
     // (e.g. obtaining a slack access token in the case of a slack agent)
@@ -694,7 +695,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async onStart(): Promise<void> {
     // Call parent onStart to ensure persistence completes
     await super.onStart();
-
     const event = this.getEvents();
     await this.agentCore.initializeWithEvents(event);
 
