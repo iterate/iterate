@@ -40,7 +40,8 @@ export async function runConfigInSandbox(
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
   // Clone the repository using the provided token
-  const cloneCommand = `git clone https://${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo`;
+  // For GitHub App installation tokens, use x-access-token as the username
+  const cloneCommand = `git clone https://x-access-token:${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo`;
   const cloneResult = await sandbox.exec(cloneCommand);
 
   if (cloneResult.exitCode !== 0) {
