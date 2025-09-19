@@ -34,7 +34,7 @@ export function LoginPrompt() {
       <div className="w-full max-w-[1000px] px-4 py-8 sm:p-8">
         <div className="flex flex-col items-center justify-center space-y-6 sm:space-y-8 text-center">
           <div
-            className="relative flex h-[300px] sm:h-[400px] lg:h-[600px] w-full items-center justify-center overflow-hidden px-8 sm:px-12 lg:px-16"
+            className="relative flex h-[300px] sm:h-[400px] lg:h-[600px] w-full min-w-[320px] sm:min-w-[600px] lg:min-w-[900px] items-center justify-center overflow-hidden px-8 sm:px-12 lg:px-16"
             ref={containerRef}
           >
             {/* Render beams first so they appear behind the logos */}
@@ -86,7 +86,7 @@ export function LoginPrompt() {
               />
             </div>
 
-            <div className="relative flex size-full max-w-7xl max-h-[400px] sm:max-h-[450px] lg:max-h-[550px] items-center justify-center">
+            <div className="relative flex w-full h-full max-w-7xl max-h-[400px] sm:max-h-[450px] lg:max-h-[550px] items-center justify-center">
               {/* Center Iterate Logo */}
               <div
                 ref={div4Ref}

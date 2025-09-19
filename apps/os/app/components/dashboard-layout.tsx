@@ -175,21 +175,6 @@ function UserSwitcher() {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent className="w-56" side="top" align="start">
-        <DropdownMenuLabel>My Account</DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem>
-          <User className="mr-2 h-4 w-4" />
-          <span>Profile</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <CreditCard className="mr-2 h-4 w-4" />
-          <span>Billing</span>
-        </DropdownMenuItem>
-        <DropdownMenuItem>
-          <Settings className="mr-2 h-4 w-4" />
-          <span>Settings</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
         <DropdownMenuItem onClick={handleLogout}>
           <LogOut className="mr-2 h-4 w-4" />
           <span>Log out</span>
@@ -217,7 +202,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <img src="/logo.svg" alt="Iterate" className="size-8 text-white" />
               <span className="font-semibold text-lg">Iterate</span>
             </div>
-            <div className="text-xs text-muted-foreground mt-1">Autopilot engaged</div>
           </SidebarHeader>
 
           <SidebarContent className="px-4 py-4">
@@ -252,14 +236,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter className="border-t p-4">
-            <div className="flex items-center gap-2 mb-3">
-              <div
-                className={`size-2 rounded-full ${isConnected ? "bg-green-500" : "bg-orange-500"}`}
-              ></div>
-              <span className="text-sm text-muted-foreground">
-                {isConnected ? "Connected" : "Connecting..."}
-              </span>
-            </div>
+            {!isConnected && (
+              <div className="flex items-center gap-2 mb-3 px-3">
+                <div className={`size-2 rounded-full bg-orange-500`}></div>
+                <span className="text-sm text-muted-foreground">Sync connecting...</span>
+              </div>
+            )}
             <EstateSwitcher />
             <UserSwitcher />
           </SidebarFooter>
