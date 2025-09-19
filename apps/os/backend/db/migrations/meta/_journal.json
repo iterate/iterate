@@ -57,6 +57,13 @@
       "when": 1758316888035,
       "tag": "0007_heavy_paper_doll",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1758317063885,
+      "tag": "0008_useful_wallop",
+      "breakpoints": true
     }
   ]
 }

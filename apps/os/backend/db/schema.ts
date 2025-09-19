@@ -296,12 +296,16 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
   }),
 }));
 
-export const iterateConfig = pgTable("iterate_config", (t) => ({
-  id: iterateId("icfg"),
-  config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
-  estateId: t.text().notNull(),
-  ...withTimestamps,
-}));
+export const iterateConfig = pgTable(
+  "iterate_config",
+  (t) => ({
+    id: iterateId("icfg"),
+    config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+    estateId: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId)],
+);
 
 export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
   estate: one(estate, {
