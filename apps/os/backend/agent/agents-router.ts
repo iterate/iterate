@@ -38,12 +38,12 @@ const agentStubProcedure = protectedProcedure
     // Always use getOrCreateStubByName - agents are created on demand
     const agent = await (input.agentClassName === "SlackAgent"
       ? // @ts-expect-error - TODO couldn't get types to line up
-        (SlackAgent.getOrCreateStubByName({
+        SlackAgent.getOrCreateStubByName({
           db: ctx.db,
           estateId,
           agentInstanceName: input.agentInstanceName,
           reason: input.reason || "Created via agents router",
-        }) as never)
+        })
       : IterateAgent.getOrCreateStubByName({
           db: ctx.db,
           estateId,

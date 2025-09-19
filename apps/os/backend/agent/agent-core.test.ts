@@ -51,18 +51,6 @@ describe("AgentCore", () => {
       });
 
       // Add the tool spec to the agent
-      // await h.agentCore.addEvent({
-      //   type: "CORE:ADD_CONTEXT_RULES",
-      //   data: {
-      //     specs: [
-      //       {
-      //         type: "agent_durable_object_tool",
-      //         methodName: "calculate",
-      //       },
-      //     ],
-      //   },
-      // });
-
       h.agentCore.addEvent({
         type: "CORE:ADD_CONTEXT_RULES",
         data: {
