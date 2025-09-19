@@ -1,7 +1,7 @@
 import type { RequireAtLeastOne } from "type-fest";
 import { z } from "zod";
 import { PromptFragment } from "./prompt-fragments.ts";
-import { MCPServer, ToolSpec, type MCPServerInput } from "./tool-schemas.ts";
+import { ToolSpec } from "./tool-schemas.ts";
 
 export type ContextRuleMatcher =
   | { type: "always" }
@@ -90,7 +90,6 @@ export type TimeWindow = z.infer<typeof TimeWindow>;
 export type ContextItem = RequireAtLeastOne<{
   prompt: PromptFragment;
   tools: ToolSpec[];
-  mcpServers: MCPServerInput[];
 }> & {
   key: string;
   description?: string;
@@ -100,7 +99,6 @@ export const ContextItem = z.object({
   description: z.string().optional(),
   prompt: PromptFragment.optional(),
   tools: z.array(ToolSpec).optional(),
-  mcpServers: z.array(MCPServer).optional(),
 }) satisfies z.ZodType<{
   [K in keyof ContextItem]: ContextItem[K];
 }>;

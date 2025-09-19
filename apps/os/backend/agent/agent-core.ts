@@ -307,16 +307,20 @@ export class AgentCore<
       const matchAgainst = this.deps.getRuleMatchData(next);
       return evaluateContextRuleMatchers({ contextRule, matchAgainst });
     });
+    // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
+    // into the LLM instructions for this request. These are ephemeral and recomputed per request.
+    for (const rule of enabledContextRules) {
+      if (rule.prompt) {
+        next.ephemeralPromptFragments[rule.key] = rule.prompt;
+      }
+    }
     const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
     next.groupedRuntimeTools = {
       ...next.groupedRuntimeTools,
       "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
     };
     next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
-    next.mcpServers = [
-      ...next.mcpServers,
-      ...enabledContextRules.flatMap((rule) => rule.mcpServers || []),
-    ];
+    next.mcpServers = [...next.mcpServers];
 
     // todo: figure out how to deduplicate these in case of name collisions?
     next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
