@@ -215,7 +215,6 @@ app.post("/api/webhooks/github", async (c) => {
 
     // Get an installation access token
     const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-    console.log(`Got installation token for estate ${estate.id}`);
     // Create an in-progress build log
     const [build] = await c.var.db
       .insert(schemas.builds)
