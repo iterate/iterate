@@ -331,7 +331,8 @@ function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; es
     // });
   }
 
-  switch (payload.event.type) {
+  const eventType = payload.event.type;
+  switch (eventType) {
     case "user_change":
     case "app_deleted":
     case "app_home_opened":
@@ -417,7 +418,8 @@ function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; es
     case "user_status_changed":
       return null;
     default:
-      payload.event satisfies never;
-      break;
+      eventType satisfies never;
+      console.warn(`Unexpected event type ${eventType} - no routing key will be created`);
+      return null;
   }
 }
