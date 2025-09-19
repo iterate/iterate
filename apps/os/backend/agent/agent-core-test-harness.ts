@@ -254,6 +254,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
     );
 
     const coreDeps: AgentCoreDeps = {
+      getRuleMatchData: (state) => ({ agentCoreState: state }),
       storeEvents: this.storeEventsMock,
       background: this.backgroundMock,
       getOpenAIClient: this.getOpenAIClientMock,
