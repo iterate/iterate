@@ -307,8 +307,7 @@ export class AgentCore<
 
     const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
       const matchAgainst = this.deps.getRuleMatchData(next);
-      const isMatched = evaluateContextRuleMatchers({ contextRule, matchAgainst });
-      return isMatched;
+      return evaluateContextRuleMatchers({ contextRule, matchAgainst });
     });
     const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
     next.namespacedRuntimeTools = {
