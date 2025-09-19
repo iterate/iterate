@@ -158,7 +158,7 @@ app.post("/api/webhooks/github", async (c) => {
     // Parse the webhook payload
     const event = JSON.parse(payload);
     const eventType = c.req.header("X-GitHub-Event");
-
+    console.log("eventType", eventType);
     // We only care about push events for now
     if (eventType !== "push") {
       return c.json({ message: "Event type not handled" }, 200);
