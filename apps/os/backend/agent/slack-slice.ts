@@ -152,10 +152,13 @@ export const slackSlice = defineAgentCoreSlice<{
     // This will be automatically included in LLM requests as a developer message
     // and reset on each reducer run
     if (next.slackChannelId) {
-      next.ephemeralPromptFragments["slack-context"] = createSlackContextForState({
-        state: next,
-        botUserId: next.botUserId,
-      });
+      next.contextRules["slack-context"] = {
+        id: "slack-context",
+        prompt: createSlackContextForState({
+          state: next,
+          botUserId: next.botUserId,
+        }),
+      };
     }
 
     // CRITICAL: Always force toolChoice to "required" for Slack agent
