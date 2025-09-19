@@ -1,6 +1,6 @@
 import { defineConfig } from "@iterate-com/sdk";
 
-export default defineConfig({
+const config = defineConfig({
   contextRules: [
     {
       key: "sample-pirate",
@@ -8,3 +8,4 @@ export default defineConfig({
     },
   ],
 });
+export default config;
