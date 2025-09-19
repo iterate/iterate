@@ -214,8 +214,6 @@ export interface AgentCoreSlice<Spec extends AgentCoreSliceSpec = AgentCoreSlice
   > | void;
 }
 
-type Awaitable<T> = T | Promise<T>;
-
 // -----------------------------------------------------------------------------
 // Helper type machinery (refactored to spec object) -------------------------
 // -----------------------------------------------------------------------------

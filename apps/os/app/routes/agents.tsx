@@ -568,7 +568,7 @@ function EventDetailsContent({
             <span className="text-sm text-muted-foreground">Loading reduced state...</span>
           </div>
         ) : reducedStateQuery.isSuccess ? (
-          <AgentReducedState reducedState={reducedStateQuery.data} className="h-full" />
+          <AgentReducedState reducedState={reducedStateQuery.data as never} className="h-full" />
         ) : (
           <div className="text-xs bg-muted p-4 rounded-lg h-full flex items-center justify-center">
             <span className="text-muted-foreground">

@@ -12,10 +12,11 @@ import {
 // These tests are focused on compile-time type safety, not runtime behavior
 function createMockDeps(): AgentCoreDeps {
   return {
+    getRuleMatchData: (state) => ({ agentCoreStae: state }),
     storeEvents: () => {},
     background: () => {},
     getOpenAIClient: async () => ({}) as any,
-    toolSpecsToImplementations: async () => [] as any,
+    toolSpecsToImplementations: () => [],
     console: console,
   };
 }
@@ -75,7 +76,7 @@ describe("AgentCore with ONE slice", () => {
     eventSchema: TestSliceOutput,
     eventInputSchema: TestSliceInput,
     initialState: { isActive: false },
-    async reduce(_state, _deps, event) {
+    reduce(_state, _deps, event) {
       switch (event.type) {
         case "TEST:ACTION_START":
           return { isActive: true };
@@ -175,7 +176,7 @@ describe("AgentCore with TWO slices", () => {
     eventSchema: Slice1Output,
     eventInputSchema: Slice1Input,
     initialState: { count: 0 },
-    async reduce(state, _deps, event) {
+    reduce(state, _deps, event) {
       if (event.type === "SLICE1:ACTION") {
         return { count: state.count + (event as any).data.value };
       }
@@ -223,7 +224,7 @@ describe("AgentCore with TWO slices", () => {
     eventSchema: Slice2Output,
     eventInputSchema: Slice2Input,
     initialState: { status: "idle" },
-    async reduce(_state, _deps, event) {
+    reduce(_state, _deps, event) {
       switch (event.type) {
         case "SLICE2:START":
           return { status: "running" };
@@ -322,7 +323,7 @@ describe("with slice dependencies", () => {
       eventSchema: ParentSliceEventOutput,
       eventInputSchema: ParentSliceEventInput,
       initialState: { parentName: "initial" },
-      async reduce(_state, _deps, event) {
+      reduce(_state, _deps, event) {
         if (event.type === "PARENT:SET_NAME") {
           return { parentName: (event as any).data.name };
         }
@@ -356,7 +357,7 @@ describe("with slice dependencies", () => {
       eventSchema: ChildSliceEventOutput,
       eventInputSchema: ChildSliceEventInput,
       initialState: { childStatus: "idle" },
-      async reduce(state, deps, event) {
+      reduce(state, deps, event) {
         if (event.type === "CHILD:GET_PARENT_NAME") {
           // Access parent state and deps
           const parentNameFromState = state.parentName; // Should be typed!
@@ -422,7 +423,7 @@ describe("Slice-specific tests", () => {
         name: "testSlice",
         eventSchema: SliceOutput,
         eventInputSchema: SliceInput,
-        reduce: async () => {},
+        reduce: () => {},
       });
 
       const agent = new AgentCore({ deps: createMockDeps(), slices: [testSlice] });
@@ -550,7 +551,7 @@ describe("Slice-specific tests", () => {
           eventSchema: FailingSliceOutput,
           eventInputSchema: FailingSliceInput,
           initialState: { isOk: true },
-          reduce: async (_state: any, _deps: any, event: any) => {
+          reduce: (_state, _deps, event) => {
             if (event.type === "FAILING:TEST" && event.data?.shouldFail) {
               throw new Error("Slice reducer intentionally failed");
             }
