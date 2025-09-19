@@ -94,24 +94,24 @@ describe("AgentCore with ONE slice", () => {
 
     // INVALID: Single events - still no primitives
     // @ts-expect-error - string not allowed
-    await expect(agent.addEvent("string")).rejects.toThrow();
+    expect(() => agent.addEvent("string")).toThrow();
     // @ts-expect-error - boolean not allowed
-    await expect(agent.addEvent(true)).rejects.toThrow();
+    expect(() => agent.addEvent(true)).toThrow();
     // @ts-expect-error - number not allowed
-    await expect(agent.addEvent(42)).rejects.toThrow();
+    expect(() => agent.addEvent(42)).toThrow();
 
     // INVALID: Single events - wrong event types
     // @ts-expect-error - invalid event type
-    await expect(agent.addEvent({ type: "MADE_UP:EVENT" })).rejects.toThrow();
+    expect(() => agent.addEvent({ type: "MADE_UP:EVENT" })).toThrow();
     // @ts-expect-error - missing required data
-    await expect(agent.addEvent({ type: "TEST:ACTION_END" })).rejects.toThrow();
-    await expect(
+    expect(() => agent.addEvent({ type: "TEST:ACTION_END" })).toThrow();
+    expect(() =>
       agent.addEvent({
         type: "TEST:ACTION_START",
         // @ts-expect-error - wrong data
         data: { result: "wrong" }, // This is ACTION_END data
       }),
-    ).rejects.toThrow();
+    ).toThrow();
 
     // VALID: Single events
     await agent.addEvent({ type: "CORE:PAUSE_LLM_REQUESTS" });
@@ -125,21 +125,21 @@ describe("AgentCore with ONE slice", () => {
     });
 
     // @ts-expect-error - array with bad events
-    await expect(agent.addEvents(["not", "events", 123])).rejects.toThrow();
-    await expect(
+    expect(() => agent.addEvents(["not", "events", 123])).toThrow();
+    expect(() =>
       agent.addEvents([
         { type: "TEST:ACTION_START", data: { config: {} } },
         // @ts-expect-error - wrong data
         { type: "BOGUS:EVENT" },
       ]),
-    ).rejects.toThrow();
-    await expect(
+    ).toThrow();
+    expect(() =>
       agent.addEvents([
         { type: "CORE:PAUSE_LLM_REQUESTS" },
         // @ts-expect-error - missing data
         { type: "TEST:ACTION_END" },
       ]),
-    ).rejects.toThrow();
+    ).toThrow();
 
     // VALID: Arrays of mixed events
     await agent.addEvents([
@@ -242,22 +242,22 @@ describe("AgentCore with TWO slices", () => {
 
     // INVALID: Single events - primitives
     // @ts-expect-error - string not allowed
-    await expect(agent.addEvent("not an event")).rejects.toThrow();
+    expect(() => agent.addEvent("not an event")).toThrow();
     // @ts-expect-error - number not allowed
-    await expect(agent.addEvent(123)).rejects.toThrow();
+    expect(() => agent.addEvent(123)).toThrow();
 
     // INVALID: Single events - wrong types
     // @ts-expect-error - made up event
-    await expect(agent.addEvent({ type: "UNKNOWN:EVENT" })).rejects.toThrow();
+    expect(() => agent.addEvent({ type: "UNKNOWN:EVENT" })).toThrow();
     // @ts-expect-error - missing data
-    await expect(agent.addEvent({ type: "SLICE2:END" })).rejects.toThrow();
-    await expect(
+    expect(() => agent.addEvent({ type: "SLICE2:END" })).toThrow();
+    expect(() =>
       agent.addEvent({
         type: "SLICE1:ACTION",
         // @ts-expect-error - wrong data
         data: { success: true }, // SLICE2:END data
       }),
-    ).rejects.toThrow();
+    ).toThrow();
 
     // VALID: Single events from all sources
     await agent.addEvent({ type: "CORE:PAUSE_LLM_REQUESTS" });
@@ -266,19 +266,19 @@ describe("AgentCore with TWO slices", () => {
     await agent.addEvent({ type: "SLICE2:END", data: { success: false } });
 
     // INVALID: Arrays with bad events
-    await expect(agent.addEvents(["string", 42, null] as any)).rejects.toThrow();
-    await expect(
+    expect(() => agent.addEvents(["string", 42, null] as any)).toThrow();
+    expect(() =>
       agent.addEvents([
         { type: "SLICE1:ACTION", data: { value: 1 } },
         { type: "FAKE:TYPE" },
       ] as any),
-    ).rejects.toThrow();
-    await expect(
+    ).toThrow();
+    expect(() =>
       agent.addEvents([
         { type: "SLICE2:START", data: { value: 99 } }, // wrong data
         { type: "SLICE1:ACTION", data: { name: "bad" } }, // wrong data
       ] as any),
-    ).rejects.toThrow();
+    ).toThrow();
 
     // VALID: Arrays mixing all event types
     await agent.addEvents([
@@ -574,12 +574,12 @@ describe("Slice-specific tests", () => {
         const initialIsOk = (h.agentCore.state as any).isOk;
 
         // Try to add an event that will cause the slice reducer to fail
-        await expect(
+        expect(() =>
           h.agentCore.addEvent({
             type: "FAILING:TEST",
             data: { shouldFail: true },
           }),
-        ).rejects.toThrow("Slice reducer intentionally failed");
+        ).toThrow("Slice reducer intentionally failed");
 
         // Check that slice state was rolled back
         expect((h.agentCore.state as any).isOk).toEqual(initialIsOk);
