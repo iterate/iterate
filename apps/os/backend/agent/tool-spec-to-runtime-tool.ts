@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import type { JSONSchema } from "zod/v4/core";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { makeJSONSchemaOpenAICompatible } from "./zod-to-openai-json-schema.ts";
-import type { AgentCoreEventInput } from "./agent-core-schemas.ts";
+import { hashToolSpec, type AgentCoreEventInput } from "./agent-core-schemas.ts";
 import { doToolToRuntimeJsonSchema, type DOToolDef, type DOToolDefinitions } from "./do-tools.ts";
 import {
   type AgentDurableObjectToolSpec,
@@ -92,59 +92,6 @@ export type DOWithToolDefinitions = {
   toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
 };
 
-export function toolSpecsWithSchemasToImplementations(params: {
-  do: DOWithToolDefinitions;
-  toolSpecs: { spec: ToolSpec; inputSchema: {} | null }[];
-}) {
-  const { toolSpecs } = params;
-
-  return toolSpecs.map(({ spec, inputSchema }): RuntimeTool => {
-    // Handle openai_builtin tools immediately
-    if (spec.type === "openai_builtin") {
-      return spec.openAITool;
-    }
-
-    if (spec.type === "agent_durable_object_tool") {
-      spec = { ...spec, overrideName: spec.overrideName || spec.methodName };
-      const { methodName, passThroughArgs } = spec;
-      const toolDefinitions = params.do.toolDefinitions();
-      if (!(methodName in toolDefinitions)) {
-        throw new Error(`methodName ${methodName} not found in doToolDefinitions`);
-      }
-      const def = toolDefinitions[methodName] as unknown as DOToolDef<{}, any>;
-      const doToolRuntimeJsonSchema = doToolToRuntimeJsonSchema(def);
-      const inputJsonSchema = fiddleWithJsonSchema(
-        inputSchema || spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema,
-        spec,
-      );
-      return {
-        type: "function",
-        name: spec.overrideName || sanitizeToolName(spec.methodName),
-        metadata: { source: "durable-object" },
-        parameters: inputJsonSchema,
-        // we default strict mode to false because then we can allow the LLM to call us with "any object"
-        strict: false,
-        description: spec.overrideDescription || def?.description || null,
-        execute: async (_openaiExecuteParams, methodParams) => {
-          const combinedArgs = { ...(methodParams as {}), ...(passThroughArgs as {}) };
-          const validatedArgs = def?.input
-            ? def.input.safeParse(combinedArgs)
-            : ({ success: true, data: combinedArgs } as const);
-          if (!validatedArgs.success) {
-            throw new Error(`Invalid arguments: ${z.prettifyError(validatedArgs.error)}`);
-          }
-          const result = await (params.do as {} as Record<string, Function>)[methodName](
-            validatedArgs.data,
-          );
-          return processMagic(result, spec);
-        },
-      };
-    }
-
-    throw new Error(`Callable not implemented.`);
-  });
-}
-
 /**
  * Batch convert tool specifications to their runtime implementations
  *
@@ -152,11 +99,10 @@ export function toolSpecsWithSchemasToImplementations(params: {
  * @returns A promise that resolves to an array of runtime tool implementations
  */
 // todo: move this to agent.ts - it's only used there
-export function toolSpecsToImplementations<
-  T extends {
-    toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
-  },
->(params: { toolSpecs: ToolSpec[]; theDO: T }): RuntimeTool[] {
+export function toolSpecsToImplementations(params: {
+  toolSpecs: ToolSpec[];
+  theDO: DOWithToolDefinitions;
+}): RuntimeTool[] {
   return params.toolSpecs.reduce((acc, spec) => {
     if (spec.type === "openai_builtin") {
       return [...acc, spec.openAITool];
@@ -184,7 +130,7 @@ export function toolSpecsToImplementations<
       const tool: RuntimeTool = {
         type: "function",
         name: spec.overrideName || sanitizeToolName(spec.methodName),
-        metadata: { source: "durable-object" },
+        metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,

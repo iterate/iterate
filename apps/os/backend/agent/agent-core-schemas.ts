@@ -9,7 +9,7 @@ import {
 } from "./openai-response-schemas.ts";
 import type { Participant } from "./participant-schemas.ts";
 import type { PromptFragment } from "./prompt-fragments.ts";
-import { type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
+import { type MCPServer, type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
 import { ContextRule } from "./context-schemas.ts";
 
 // ------------------------- Models -------------------------
@@ -289,26 +289,17 @@ export const AddToolSpecsEventInput = z.object({
   ...addToolSpecsEventFields,
 });
 
-export const ContextRuleWithToolSpecsWithSchemas = ContextRule.omit({ tools: true }).extend({
-  tools: z
-    .array(z.object({ spec: ToolSpec, inputSchema: z.looseObject({}).nullable() }))
-    .optional(),
-});
-export type ContextRuleWithToolSpecsWithSchemas = z.infer<
-  typeof ContextRuleWithToolSpecsWithSchemas
->;
-
-const addContextItemsEventFields = {
-  type: z.literal("CORE:ADD_CONTEXT_ITEMS"), // todo: rename to ADD_CONTEXT_RULES
-  data: z.object({ items: z.array(ContextRuleWithToolSpecsWithSchemas) }),
+const addContextRulesEventFields = {
+  type: z.literal("CORE:ADD_CONTEXT_RULES"),
+  data: z.object({ items: z.array(ContextRule) }),
 };
-export const AddContextItemsEvent = z.object({
+export const AddContextRulesEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...addContextItemsEventFields,
+  ...addContextRulesEventFields,
 });
-export const AddContextItemsEventInput = z.object({
+export const AddContextRulesEventInput = z.object({
   ...agentCoreBaseEventInputFields,
-  ...addContextItemsEventFields,
+  ...addContextRulesEventFields,
 });
 
 // CORE:REMOVE_TOOL_SPECS
@@ -503,7 +494,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   LlmOutputItemEvent,
   SetSystemPromptEvent,
   SetMetadataEvent,
-  AddContextItemsEvent,
+  AddContextRulesEvent,
   SetModelOptsEvent,
   InternalErrorEvent,
   LogEvent,
@@ -525,7 +516,7 @@ export const agentCoreEventInputSchemasUndiscriminated = [
   LlmOutputItemEventInput,
   SetSystemPromptEventInput,
   SetMetadataEventInput,
-  AddContextItemsEventInput,
+  AddContextRulesEventInput,
   SetModelOptsEventInput,
   InternalErrorEventInput,
   LogEventInput,
@@ -672,7 +663,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
   modelOpts: ModelOpts;
 
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
-  contextRules: Record<string, ContextRuleWithToolSpecsWithSchemas>;
+  contextRules: Record<string, ContextRule>;
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
    */

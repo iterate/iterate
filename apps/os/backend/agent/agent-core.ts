@@ -136,9 +136,7 @@ export interface AgentCoreDeps {
   /** Lazily construct an OpenAI client */
   getOpenAIClient(): Promise<OpenAI>;
   /** Batch resolve tool specs to runtime implementations */
-  toolSpecsWithSchemasToImplementations: (
-    specs: { spec: ToolSpec; inputSchema: {} | null }[],
-  ) => RuntimeTool[];
+  toolSpecsToImplementations: (specs: ToolSpec[]) => RuntimeTool[];
   /** Upload a file and return its ID and metadata - used for agent-to-user file sharing */
   uploadFile?: (data: {
     content: ReadableStream;
@@ -322,12 +320,16 @@ export class AgentCore<
         next.ephemeralPromptFragments[contextRule.id] = contextRule.prompt;
       }
       if (contextRule.tools) {
-        const existingToolSpecHashes = new Set(next.toolSpecs.map((spec) => hashToolSpec(spec)));
-        const newToolSpecs = contextRule.tools.filter(
-          (tool) => !existingToolSpecHashes.has(hashToolSpec(tool.spec)),
+        const existingToolSpecHashes = new Set(
+          inputState.runtimeTools
+            .map((tool) => ("metadata" in tool ? tool.metadata?.toolSpecHash : undefined)!)
+            .filter(Boolean),
         );
-        next.toolSpecs = [...next.toolSpecs, ...contextRule.tools.map((t) => t.spec)];
-        const implementations = this.deps.toolSpecsWithSchemasToImplementations(newToolSpecs);
+        const newToolSpecs = contextRule.tools.filter(
+          (tool) => !existingToolSpecHashes.has(hashToolSpec(tool)),
+        );
+        next.toolSpecs = [...next.toolSpecs, ...contextRule.tools];
+        const implementations = this.deps.toolSpecsToImplementations(newToolSpecs);
         next.runtimeTools = [...next.runtimeTools, ...implementations];
       }
       if (contextRule.mcpServers) {
@@ -732,7 +734,7 @@ export class AgentCore<
         next.systemPrompt = event.data.prompt;
         break;
 
-      case "CORE:ADD_CONTEXT_ITEMS": {
+      case "CORE:ADD_CONTEXT_RULES": {
         next.contextRules = {
           ...next.contextRules,
           ...Object.fromEntries(event.data.items.map((item) => [item.id, item])),

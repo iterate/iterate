@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
-import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
 import { z } from "zod/v4";
 
 // Parent directory imports
@@ -23,8 +21,7 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent, type ContextRuleWithToolSpecsWithSchemas } from "./agent-core-schemas.ts";
-import { evaluateContextRuleMatchers } from "./context.ts";
+import { AgentCoreEvent } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -37,12 +34,9 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
-import {
-  toolSpecsToImplementations,
-  toolSpecsWithSchemasToImplementations,
-} from "./tool-spec-to-runtime-tool.ts";
+import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { ContextItem, ContextRule } from "./context-schemas.ts";
+import type { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -357,42 +351,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     recordRawRequest: false,
   };
 
-  #swrCacheMinTimeToStale = 1000 * 60;
-  /** don't use directly, use #swrGet instead, which makes sure background work prevents the process from dying until it's done */
-  #rawSwrCache = createStaleWhileRevalidateCache({
-    minTimeToStale: this.#swrCacheMinTimeToStale,
-    storage: {
-      // todo: use this.sql`insert into swr_cache ...` instead. remove from state
-      getItem: (key) => {
-        const [result] = this.sql<string>`select json from swr_cache where key = ${key}`;
-        try {
-          return typeof result === "string" ? JSON.parse(result) : undefined;
-        } catch (e) {
-          console.warn(`Failed to parse JSON for key ${key}: ${result}: ${String(e)}`);
-          return undefined;
-        }
-      },
-      setItem: (key, value) => {
-        this.sql`
-          insert into swr_cache (key, json)
-          values (${key}, ${JSON.stringify(value)})
-          on conflict (key)
-          do update set json = excluded.json
-        `;
-      },
-      removeItem: (key) => {
-        this.sql`delete from swr_cache where key = ${key}`;
-      },
-    },
-  });
-  async #swrGet<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const retrieved = await this.#rawSwrCache.retrieve(key);
-    if (retrieved.cachedAge > this.#swrCacheMinTimeToStale) {
-      this.ctx.waitUntil(this.#rawSwrCache(key, fn)); // make sure process doesn't die until this is retrieved
-    }
-    return this.#rawSwrCache(key, fn).then((r) => r.value);
-  }
-
   onStateUpdate(state: IterateAgentState, source: "server") {
     super.onStateUpdate(state, source);
     this.agentCore.recordRawRequest = state.recordRawRequest;
@@ -518,25 +476,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         });
       },
 
-      toolSpecsWithSchemasToImplementations: (specs) => {
-        // dumb cast to expose protected properties
-        return toolSpecsWithSchemasToImplementations({ do: this, toolSpecs: specs });
+      toolSpecsToImplementations: (specs: ToolSpec[]) => {
+        return toolSpecsToImplementations({ toolSpecs: specs, theDO: this });
       },
-
-      toolSpecsToImplementations: async (specs: ToolSpec[]) => {
-        const cacheKey = `toolSpecsToImplementations-${createHash("md5").update(JSON.stringify(specs)).digest("hex")}`;
-        return this.#swrGet(
-          cacheKey,
-          async () =>
-            await toolSpecsToImplementations({
-              toolSpecs: specs,
-              // todo: move toolSpecsToImplementations to just be an instance method on this class
-              // cast is silly - env is protected on this class.
-              theDO: this as typeof this & { env: CloudflareEnv },
-            }),
-        );
-      },
-
       onLLMStreamResponseStreamingChunk: (chunk: any) => {
         // Broadcast OpenAI streaming chunk to all connected clients using SDK's broadcast
         try {
@@ -684,33 +626,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async getInitialContextRulesEvent() {
     const rules = await this.getContextRules();
-    const tools = rules.flatMap(
-      (rule, ruleIndex) =>
-        rule.tools?.map((tool, toolIndex) => ({ tool, ruleIndex, toolIndex })) || [],
-    );
-    const self = this as typeof this & { env: IterateAgent["env"] };
-    const runtimeTools = await toolSpecsToImplementations({
-      theDO: self,
-      toolSpecs: tools.map(({ tool }) => tool),
-    });
-    const jsonSchemas = Object.fromEntries(
-      tools.map(({ ruleIndex, toolIndex }, i) => [
-        `${ruleIndex}-${toolIndex}`,
-        runtimeTools[i].type === "function" ? runtimeTools[i].parameters : null,
-      ]),
-    );
-    const rulesWithToolsWithSchemas = rules.map(
-      (rule, ruleIndex): ContextRuleWithToolSpecsWithSchemas => ({
-        ...rule,
-        tools: rule.tools?.map((tool, toolIndex) => ({
-          spec: tool,
-          inputSchema: jsonSchemas[`${ruleIndex}-${toolIndex}`],
-        })),
-      }),
-    );
     return {
-      type: "CORE:ADD_CONTEXT_ITEMS",
-      data: { items: rulesWithToolsWithSchemas },
+      type: "CORE:ADD_CONTEXT_RULES",
+      data: { items: rules },
       metadata: {},
       triggerLLMRequest: false,
       createdAt: new Date().toISOString(),
