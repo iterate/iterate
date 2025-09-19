@@ -690,8 +690,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         contextRules: [],
       },
     };
-    // const rulesFromDb = await db.query.iterateConfig.findFirst({
-    //   where: eq(iterateConfig.estateId, this.databaseRecord.estateId),
+    // const rulesFromDb = await this.db.query.iterateConfig.findFirst({
+    //   where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
     // });
     const rules = [...defaultRules, ...(rulesFromDb?.config?.contextRules ?? [])];
     const seenIds = new Set<string>();
