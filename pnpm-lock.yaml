@@ -371,11 +371,25 @@ importers:
         specifier: ^4.37.0
         version: 4.37.0(@cloudflare/workers-types@4.20250913.0)
 
-  packages/core: {}
+  estates/garple:
+    devDependencies:
+      '@iterate-com/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
+  estates/sample-pirate:
+    devDependencies:
+      '@iterate-com/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
 
   packages/ngrok: {}
 
-  packages/sdk: {}
+  packages/sdk:
+    dependencies:
+      '@iterate-com/os':
+        specifier: workspace:*
+        version: link:../../apps/os
 
   vibe-rules:
     devDependencies:

@@ -2605,12 +2605,12 @@ describe("AgentCore ephemeralPromptFragments", () => {
       // Set up context items that should be rendered
       const contextItems: ContextItem[] = [
         {
-          id: "test-context",
+          key: "test-context",
           prompt: f("context", "This is important ephemeral context data"),
           description: "Test context item",
         },
         {
-          id: "another-context",
+          key: "another-context",
           prompt: f("rule", "Another piece of context information"),
           description: "Another test context",
         },
@@ -2669,22 +2669,22 @@ describe("AgentCore ephemeralPromptFragments", () => {
     // Set up context items including some that will render to empty strings
     const contextItems: ContextItem[] = [
       {
-        id: "empty-context",
+        key: "empty-context",
         prompt: f("empty", ""), // This will render to empty
         description: "Empty context item",
       },
       {
-        id: "whitespace-context",
+        key: "whitespace-context",
         prompt: f("whitespace", "   \n\t   "), // This will render to whitespace only
         description: "Whitespace context item",
       },
       {
-        id: "null-context",
+        key: "null-context",
         prompt: null as any, // This should be filtered out
         description: "Null context item",
       },
       {
-        id: "valid-context",
+        key: "valid-context",
         prompt: f("valid", "This is valid context"),
         description: "Valid context item",
       },

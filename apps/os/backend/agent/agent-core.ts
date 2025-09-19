@@ -39,7 +39,7 @@ import {
   type CoreReducedState,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
-import { MCPServer, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
+import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
 
 /**
@@ -290,8 +290,6 @@ export class AgentCore<
   private _state = {
     ...CORE_INITIAL_REDUCED_STATE,
   } as MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices>;
-
-  recordRawRequest = true;
 
   private augmentState(
     inputState: typeof this._state,
@@ -642,7 +640,7 @@ export class AgentCore<
             type: "CORE:LLM_REQUEST_START",
             eventIndex: this._events.length,
             createdAt: new Date().toISOString(),
-            data: this.recordRawRequest ? { rawRequest: responsesAPIParams } : {},
+            data: { rawRequest: responsesAPIParams },
             metadata: {},
             triggerLLMRequest: false,
           } satisfies AgentCoreEvent;

@@ -68,7 +68,7 @@ const agentStubProcedure = protectedProcedure
 // Define a schema for context rules
 // TODO not sure why this is here and not in context.ts ...
 const ContextRule = z.object({
-  id: z.string(),
+  key: z.string(),
   description: z.string().optional(),
   prompt: z.any().optional(),
   tools: z.array(z.any()).optional().default([]),
@@ -114,53 +114,19 @@ export const agentsRouter = router({
       const rulesFromDb: z.infer<typeof ContextRule>[] = [];
       // Merge and dedupe rules by slug, preferring the first occurrence (defaultContextRules first)
       const allRules = [...(await defaultContextRules()), ...rulesFromDb];
-      const seenSlugs = new Set<string>();
+      const seenKeys = new Set<string>();
       const dedupedRules = allRules.filter((rule) => {
-        if (typeof rule.id !== "string") {
+        if (typeof rule.key !== "string") {
           return false;
         }
-        if (seenSlugs.has(rule.id)) {
+        if (seenKeys.has(rule.key)) {
           return false;
         }
-        seenSlugs.add(rule.id);
+        seenKeys.add(rule.key);
         return true;
       });
       return dedupedRules;
     }),
-
-  // replaceEstateSpecificContextRules: protectedProcedure
-  //   .input(z.array(ContextRule))
-  //   .mutation(async ({ input }) => {
-  //     // Insert the new context rules
-  //     const rulesToInsert = input.map((rule) => ({
-  //       slug: rule.id,
-  //       serializedRule: rule,
-  //     })) satisfies (typeof contextRules.$inferInsert)[];
-  //     await db.batch([
-  //       db.delete(contextRules),
-  //       ...(rulesToInsert.length > 0 ? [db.insert(contextRules).values(rulesToInsert)] : []),
-  //     ]);
-  //     console.log(`${rulesToInsert.length} rules replaced!`);
-
-  //     return {
-  //       success: true,
-  //       rulesReplaced: rulesToInsert.length,
-  //     };
-  //   }),
-  // getAgentById: protectedProcedure
-  //   .meta({ description: "Get the name of an agent instance by its id" })
-  //   .input(z.object({ id: z.string() }))
-  //   .query(async ({ input, ctx }) => {
-  //     const agentRecord = await getPersistedAgentById(input.id, {
-  //       db: db,
-  //       table: durableObjectInstances,
-  //       reason: `${ctx.c.req.method} ${ctx.c.req.path}`,
-  //     });
-  //     if (!agentRecord) {
-  //       throw new Error(`Agent with ID ${input.id} not found`);
-  //     }
-  //     return agentRecord;
-  //   }),
 
   getState: agentStubProcedure
     .meta({ description: "Get the state of an agent instance" })

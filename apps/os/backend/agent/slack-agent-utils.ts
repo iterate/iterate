@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
 import type { SlackEvent } from "@slack/types";
+import { eq, asc } from "drizzle-orm";
+import type { DB } from "../db/client.ts";
+import { slackWebhookEvent } from "../db/schema.ts";
 import type { SlackWebhookPayload } from "./slack.types";
 
 export function getMentionedExternalUserIds(body: string) {
@@ -25,44 +28,56 @@ export function isBotMentionedInMessage(
   return false;
 }
 
-export async function getThreadId(slackEvent: SlackEvent) {
-  if (slackEvent.type === "message" || slackEvent.type === "app_mention") {
-    return "thread_ts" in slackEvent ? slackEvent.thread_ts : slackEvent.ts;
-  }
-  if (slackEvent.type === "reaction_added" || slackEvent.type === "reaction_removed") {
-    throw new Error("Not implemented");
-    // return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
-    //   messageTs: slackEvent.item.ts,
-    // });
-  }
-
-  return null;
-}
-
-export async function getMessageMetadata(slackEvent: SlackEvent) {
+export async function getMessageMetadata(
+  slackEvent: SlackEvent,
+  db: DB,
+): Promise<{
+  channel: string | undefined;
+  threadTs: string | undefined;
+  ts: string | undefined;
+}> {
+  const ts = extractTs(slackEvent)!;
   switch (slackEvent.type) {
     case "app_mention":
     case "message": {
       const threadTs =
-        "thread_ts" in slackEvent && slackEvent.thread_ts ? slackEvent.thread_ts : slackEvent.ts;
+        "thread_ts" in slackEvent && slackEvent.thread_ts ? slackEvent.thread_ts : ts;
       return {
         channel: slackEvent.channel,
         threadTs: threadTs,
-        messageTs: slackEvent.ts,
+        ts: ts,
       };
     }
     case "reaction_added":
     case "reaction_removed": {
-      const threadTs = await getThreadId(slackEvent);
+      const parentMessageTs = slackEvent.item.ts;
+      const parentMessage = await db
+        .select({ threadTs: slackWebhookEvent.thread_ts, ts: slackWebhookEvent.ts })
+        .from(slackWebhookEvent)
+        .where(eq(slackWebhookEvent.ts, parentMessageTs))
+        .orderBy(asc(slackWebhookEvent.ts))
+        .limit(1);
+      if (parentMessage.length === 0) {
+        return {
+          channel: slackEvent.item.channel,
+          threadTs: undefined,
+          ts: undefined,
+        };
+      }
+      const threadTs = parentMessage[0].threadTs || parentMessage[0].ts;
 
       return {
         channel: slackEvent.item.channel,
-        threadTs: threadTs || slackEvent.item.ts,
-        messageTs: slackEvent.item.ts,
+        threadTs: threadTs || undefined,
+        ts: ts,
       };
     }
     default:
-      return null;
+      return {
+        channel: extractChannelId(slackEvent),
+        threadTs: "thread_ts" in slackEvent ? slackEvent.thread_ts : ts,
+        ts: undefined,
+      };
   }
 }
 
@@ -385,3 +400,42 @@ export function shouldIncludeEventInConversation(
     }
   }
 }
+
+export const extractUserId = (event: SlackEvent): string | undefined => {
+  if (!("user" in event)) {
+    return undefined;
+  }
+  const user = event.user;
+  if (typeof user === "string") {
+    return user;
+  }
+  if (user && typeof user === "object" && "id" in user && typeof user.id === "string") {
+    return user.id;
+  }
+  return undefined;
+};
+
+export const extractChannelId = (event: SlackEvent): string | undefined => {
+  if (!("channel" in event)) {
+    return undefined;
+  }
+  const channel = event.channel;
+  if (typeof channel === "string") {
+    return channel;
+  }
+  if (channel && typeof channel === "object" && "id" in channel && typeof channel.id === "string") {
+    return channel.id;
+  }
+  return undefined;
+};
+
+export const extractTs = (event: SlackEvent): string | undefined => {
+  let ts: string | undefined = undefined;
+  if ("ts" in event) {
+    ts = event.ts;
+  }
+  if (!ts && "event_ts" in event) {
+    ts = event.event_ts;
+  }
+  return ts;
+};

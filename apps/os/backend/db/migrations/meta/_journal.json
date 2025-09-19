@@ -29,6 +29,13 @@
       "when": 1758221230616,
       "tag": "0003_gifted_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1758288982828,
+      "tag": "0004_loose_tyrannus",
+      "breakpoints": true
     }
   ]
 }

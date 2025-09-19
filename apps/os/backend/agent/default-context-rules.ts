@@ -142,7 +142,7 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
-    id: "reverse-tool",
+    key: "reverse-tool",
     match: matchers.always(),
     tools: [
       {
@@ -152,7 +152,7 @@ export const defaultContextRules = async () => [
     ],
   }),
   defineRule({
-    id: "@iterate-com/slack-default-context-rules",
+    key: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
@@ -161,10 +161,10 @@ export const defaultContextRules = async () => [
       //   type: "agent_durable_object_tool",
       //   methodName: "doNothing",
       // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "connectMCPServer",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "connectMCPServer",
+      },
       {
         type: "agent_durable_object_tool",
         methodName: "getAgentDebugURL",
@@ -235,7 +235,7 @@ export const defaultContextRules = async () => [
     ],
   }),
   {
-    id: "using-linear",
+    key: "using-linear",
     prompt: dedent`
       When using Linear tools:
       - When displaying Linear issues, use: "<issue.url|issue.identifier>: title".
@@ -250,7 +250,7 @@ export const defaultContextRules = async () => [
     match: matchers.hasMCPConnection("mcp.linear.app"),
   },
   {
-    id: "presenting-notion-results",
+    key: "presenting-notion-results",
     prompt: dedent`
       When displaying Notion search results:
       - Use bullet points (•) instead of hyphens (-) for search results
