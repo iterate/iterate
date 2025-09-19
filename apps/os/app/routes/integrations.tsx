@@ -82,8 +82,16 @@ export default function Integrations() {
   } = trpc.integrations.list.useQuery({
     estateId: estateId,
   });
+  const { mutateAsync: startGithubAppInstallFlow } =
+    trpc.integrations.startGithubAppInstallFlow.useMutation();
 
-  const handleConnect = (integrationId: string) => {
+  const handleConnect = async (integrationId: string) => {
+    if (integrationId === "github-app") {
+      const { installationUrl } = await startGithubAppInstallFlow({
+        estateId: estateId,
+      });
+      window.location.href = installationUrl.toString();
+    }
     // TODO: Implement OAuth flow for connecting integrations
     // This would redirect to the auth provider's OAuth URL
     console.log(`Connect to ${integrationId}`);

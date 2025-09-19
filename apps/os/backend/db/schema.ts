@@ -105,6 +105,9 @@ export const estate = pgTable("estate", (t) => ({
   id: iterateId("est"),
   name: t.text().notNull(),
   organizationId: t.text().notNull(),
+  connectedRepoId: t.integer(),
+  connectedRepoRef: t.text(),
+  connectedRepoPath: t.text(),
   ...withTimestamps,
 }));
 

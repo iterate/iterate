@@ -228,6 +228,9 @@ importers:
       isbot:
         specifier: ^5.1.30
         version: 5.1.30
+      jose:
+        specifier: ^6.1.0
+        version: 6.1.0
       jsonata:
         specifier: github:mmkal/jsonata#e892b028ccb52d795cf29468e6a12c81db029c90
         version: https://codeload.github.com/mmkal/jsonata/tar.gz/e892b028ccb52d795cf29468e6a12c81db029c90

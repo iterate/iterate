@@ -6,6 +6,13 @@ import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { trpc } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select.tsx";
 
 interface EditableTitleProps {
   value: string;
@@ -100,14 +107,19 @@ export function meta() {
 
 function EstateContent() {
   const [isEditing, setIsEditing] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
-  const [connectedRepo, setConnectedRepo] = useState("");
 
   // Get estate ID from URL
   const estateId = useEstateId();
 
   // Get estate details
   const [estate] = trpc.estate.get.useSuspenseQuery({
+    estateId: estateId,
+  });
+
+  const [connectedRepo] = trpc.integrations.getGithubRepoForEstate.useSuspenseQuery({
+    estateId: estateId,
+  });
+  const { data: repos } = trpc.integrations.listAvailableGithubRepos.useQuery({
     estateId: estateId,
   });
 
@@ -157,10 +169,19 @@ function EstateContent() {
     setIsEditing(false);
   };
 
-  const handleConnectGitHub = () => {
-    // Simulate connecting to GitHub
-    setIsConnected(true);
-    setConnectedRepo("nickblow/my-estate-repo");
+  const setGithubRepoForEstateMutation = trpc.integrations.setGithubRepoForEstate.useMutation();
+  const handleSelectRepo = (repoId: string) => {
+    setGithubRepoForEstateMutation.mutate(
+      {
+        estateId: estateId!,
+        repoId: parseInt(repoId),
+      },
+      {
+        onError: () => {
+          toast.error("Failed to set GitHub repository for estate");
+        },
+      },
+    );
   };
 
   const handleGoToGitHub = () => {
@@ -200,12 +221,12 @@ function EstateContent() {
         </div>
 
         {/* Connection Status */}
-        {isConnected ? (
+        {connectedRepo ? (
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
               <span className="text-green-700 dark:text-green-300 font-medium">
-                Connected to {connectedRepo}
+                Connected to #{connectedRepo.toString()}
               </span>
             </div>
 
@@ -219,14 +240,18 @@ function EstateContent() {
             </Button>
           </div>
         ) : (
-          <Button
-            size="lg"
-            className="bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold px-8 py-4 h-12"
-            onClick={handleConnectGitHub}
-          >
-            Connect GitHub
-            <ArrowRight className="h-4 w-4 ml-3" />
-          </Button>
+          <Select onValueChange={handleSelectRepo}>
+            <SelectTrigger>
+              <SelectValue placeholder="Select a repository" />
+            </SelectTrigger>
+            <SelectContent>
+              {repos?.map((repo) => (
+                <SelectItem key={repo.id} value={repo.id.toString()}>
+                  {repo.full_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         )}
       </div>
     </DashboardLayout>
