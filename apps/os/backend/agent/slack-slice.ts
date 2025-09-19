@@ -153,7 +153,7 @@ export const slackSlice = defineAgentCoreSlice<{
     // and reset on each reducer run
     if (next.slackChannelId) {
       next.contextRules["slack-context"] = {
-        id: "slack-context",
+        key: "slack-context",
         prompt: createSlackContextForState({
           state: next,
           botUserId: next.botUserId,
