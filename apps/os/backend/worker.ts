@@ -137,7 +137,7 @@ app.post("/api/webhooks/github", async (c) => {
     // Get the webhook payload and signature
     const signature = c.req.header("X-Hub-Signature-256");
     const payload = await c.req.text();
-    console.log("got webhook payload", payload);
+
     // Validate the webhook signature
     if (!c.env.GITHUB_WEBHOOK_SECRET) {
       console.error("GITHUB_WEBHOOK_SECRET not configured");
@@ -158,72 +158,37 @@ app.post("/api/webhooks/github", async (c) => {
     // Parse the webhook payload
     const event = JSON.parse(payload);
     const eventType = c.req.header("X-GitHub-Event");
-    console.log("Received GitHub webhook event:", eventType);
 
-    // Extract repository information (common across event types)
+    // We only handle check_suite events from GitHub Apps
+    if (eventType !== "check_suite") {
+      // Silently ignore other event types
+      return c.json({ message: "Event type not relevant" }, 200);
+    }
+
+    // Extract repository information
     const repoId = event.repository?.id;
     if (!repoId) {
       console.error("Missing repository information");
       return c.json({ error: "Invalid webhook payload - no repository" }, 400);
     }
 
-    let commitHash: string | undefined;
-    let commitMessage: string | undefined;
-    let branch: string | undefined;
-
-    // Handle different event types
-    if (eventType === "push") {
-      // Push event - direct code push
-      commitHash = event.after || event.head_commit?.id;
-      commitMessage = event.head_commit?.message || "No commit message";
-      const ref = event.ref; // e.g., "refs/heads/main"
-      branch = ref?.replace("refs/heads/", "");
-    } else if (eventType === "check_suite") {
-      // Check suite event - triggered by push or PR
-      console.log(`Check suite event: action=${event.action}, status=${event.check_suite?.status}`);
-
-      // Process check_suite events when they're created/requested (not just when completed)
-      // This allows us to trigger builds immediately when code is pushed
-      if (
-        event.action === "requested" ||
-        event.action === "rerequested" ||
-        event.action === "completed"
-      ) {
-        commitHash = event.check_suite?.head_sha;
-        commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
-        branch = event.check_suite?.head_branch;
-
-        console.log(
-          `Processing check_suite: branch=${branch}, commit=${commitHash?.substring(0, 7)}, message="${commitMessage}"`,
-        );
-      } else {
-        console.log(`Ignoring check_suite with action=${event.action}`);
-        return c.json({ message: "Check suite action not relevant" }, 200);
-      }
-    } else if (eventType === "workflow_run") {
-      // GitHub Actions workflow run
-      if (event.action !== "completed" || event.workflow_run?.status !== "completed") {
-        console.log(
-          `Ignoring workflow_run with action=${event.action} status=${event.workflow_run?.status}`,
-        );
-        return c.json({ message: "Workflow not completed" }, 200);
-      }
-      if (event.workflow_run?.conclusion !== "success") {
-        console.log(`Ignoring failed workflow with conclusion=${event.workflow_run?.conclusion}`);
-        return c.json({ message: "Workflow did not succeed" }, 200);
-      }
-      commitHash = event.workflow_run?.head_sha;
-      commitMessage = event.workflow_run?.head_commit?.message || "Workflow run";
-      branch = event.workflow_run?.head_branch;
-    } else {
-      console.log(`Event type ${eventType} not handled`);
-      return c.json({ message: `Event type ${eventType} not handled` }, 200);
+    // Only process relevant check_suite actions
+    if (event.action !== "requested" && event.action !== "rerequested") {
+      // Silently ignore completed, in_progress, etc.
+      return c.json({ message: "Check suite action not relevant" }, 200);
     }
 
-    if (!repoId || !commitHash) {
-      console.error("Missing repository or commit information");
-      return c.json({ error: "Invalid webhook payload" }, 400);
+    // Extract commit information from check_suite
+    const commitHash = event.check_suite?.head_sha;
+    const commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
+    const branch = event.check_suite?.head_branch;
+
+    if (!commitHash) {
+      console.error("Missing commit information in check_suite");
+      return c.json({ error: "Invalid webhook payload - no commit hash" }, 400);
     }
+
+    console.log(`Processing check_suite: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
 
     // Find the estate connected to this repository
     const estate = await getEstateByRepoId(c.var.db, repoId);
