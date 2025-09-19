@@ -133,22 +133,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   override observability = undefined;
 
   // Resolve the DO namespace for the concrete subclass at runtime
-  static getNamespace<T extends typeof IterateAgent>(
-    this: T,
-  ): DurableObjectNamespace<InstanceType<T>> {
-    return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  static getNamespace() {
+    return env.ITERATE_AGENT;
   }
 
   // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord<T extends typeof IterateAgent>(
-    this: T,
+  static async getStubFromDatabaseRecord(
     record: AgentInstanceDatabaseRecord,
     options?: {
       jurisdiction?: DurableObjectJurisdiction;
       locationHint?: DurableObjectLocationHint;
       props?: Record<string, unknown>;
     },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  ) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
     if (options?.jurisdiction) {
@@ -178,13 +175,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Get stub for existing agent by name (does not create)
-  static async getStubByName<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      agentInstanceName: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getStubByName(params: { db: DB; agentInstanceName: string }) {
     const { db, agentInstanceName } = params;
     const className = this.name;
 
@@ -203,14 +194,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Get stubs for agents by routing key (does not create)
-  static async getStubsByRoute<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      routingKey: string;
-      estateId?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>[]> {
+  static async getStubsByRoute(params: { db: DB; routingKey: string; estateId?: string }) {
     const { db, routingKey, estateId } = params;
     const className = this.name;
 
@@ -231,19 +215,16 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       matchingAgents.map((record) => this.getStubFromDatabaseRecord(record)),
     );
 
-    return stubs;
+    return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
   }
 
   // Get or create stub by name
-  static async getOrCreateStubByName<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      estateId: string;
-      agentInstanceName: string;
-      reason?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getOrCreateStubByName(params: {
+    db: DB;
+    estateId: string;
+    agentInstanceName: string;
+    reason?: string;
+  }) {
     const { db, estateId, agentInstanceName, reason } = params;
     const className = this.name;
 
@@ -283,16 +264,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Get or create stub by route
-  static async getOrCreateStubByRoute<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      estateId: string;
-      agentInstanceName: string;
-      route: string;
-      reason?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getOrCreateStubByRoute(params: {
+    db: DB;
+    estateId: string;
+    agentInstanceName: string;
+    route: string;
+    reason?: string;
+  }) {
     const { db, estateId, agentInstanceName, route, reason } = params;
 
     // First check if an agent already exists for this route

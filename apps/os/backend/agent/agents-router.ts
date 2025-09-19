@@ -35,21 +35,17 @@ const agentStubProcedure = protectedProcedure
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
+    const getOrCreateStubParams: Parameters<typeof IterateAgent.getOrCreateStubByName>[0] = {
+      db: ctx.db,
+      estateId,
+      agentInstanceName: input.agentInstanceName,
+      reason: input.reason || "Created via agents router",
+    };
     // Always use getOrCreateStubByName - agents are created on demand
-    const agent = await (input.agentClassName === "SlackAgent"
-      ? // @ts-expect-error - TODO couldn't get types to line up
-        SlackAgent.getOrCreateStubByName({
-          db: ctx.db,
-          estateId,
-          agentInstanceName: input.agentInstanceName,
-          reason: input.reason || "Created via agents router",
-        })
-      : IterateAgent.getOrCreateStubByName({
-          db: ctx.db,
-          estateId,
-          agentInstanceName: input.agentInstanceName,
-          reason: input.reason || "Created via agents router",
-        }));
+    const agent =
+      input.agentClassName === "SlackAgent"
+        ? await SlackAgent.getOrCreateStubByName(getOrCreateStubParams)
+        : await IterateAgent.getOrCreateStubByName(getOrCreateStubParams);
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 

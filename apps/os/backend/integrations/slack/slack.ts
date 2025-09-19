@@ -94,7 +94,6 @@ slackApp.post("/webhook", async (c) => {
     }
   }
 
-  // @ts-expect-error - TODO couldn't get types to line up
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
