@@ -65,9 +65,11 @@ slackApp.post("/webhook", async (c) => {
 
   c.executionCtx.waitUntil(
     // deterministically react to the webhook as early as possible (eyes emoji)
-    getSlackAccessTokenForEstate(db, estateId).then((slackToken) =>
-      reactToSlackWebhook(body, new WebClient(slackToken!), messageMetadata),
-    ),
+    getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
+      if (slackToken) {
+        await reactToSlackWebhook(body, new WebClient(slackToken), messageMetadata);
+      }
+    }),
   );
 
   c.executionCtx.waitUntil(
