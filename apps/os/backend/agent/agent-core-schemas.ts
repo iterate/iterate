@@ -671,7 +671,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
    * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
    * This is *partially* derived from contextRules, but also from other sources like MCP servers. Might want rethinking some day for that reason.
    */
-  namespacedRuntimeTools: Record<
+  groupedRuntimeTools: Record<
     "context-rule" | "mcp",
     RuntimeTool<TEventInput | AgentCoreEventInput>[]
   >;
@@ -707,7 +707,7 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
    */
   toolSpecs: ToolSpec[];
 
-  /** Flat list of runtime tools available for the agent. Derived from namespacedRuntimeTools. */
+  /** Flat list of runtime tools available for the agent. Derived from groupedRuntimeTools. */
   runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
   /**
    * MCP servers available for this agent conversation. Derived from contextRules.
@@ -736,7 +736,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   contextRules: {},
-  namespacedRuntimeTools: { "context-rule": [], mcp: [] },
+  groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,
   triggerLLMRequest: false,

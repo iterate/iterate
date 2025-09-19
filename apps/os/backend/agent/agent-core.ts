@@ -310,8 +310,8 @@ export class AgentCore<
       return evaluateContextRuleMatchers({ contextRule, matchAgainst });
     });
     const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
-    next.namespacedRuntimeTools = {
-      ...next.namespacedRuntimeTools,
+    next.groupedRuntimeTools = {
+      ...next.groupedRuntimeTools,
       "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
     };
     next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
@@ -321,7 +321,7 @@ export class AgentCore<
     ];
 
     // todo: figure out how to deduplicate these in case of name collisions?
-    next.runtimeTools = Object.values(next.namespacedRuntimeTools).flat();
+    next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
     return next as unknown as MergedStateForSlices<Slices> &
       MergedStateForSlices<CoreSlices> &
       AugmentedCoreReducedState;
