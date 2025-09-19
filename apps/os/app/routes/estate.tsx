@@ -1,5 +1,19 @@
 import React, { useState } from "react";
-import { Github, ArrowRight, Edit2, Check, X, Loader2, Trash2 } from "lucide-react";
+import {
+  Github,
+  ArrowRight,
+  Edit2,
+  Check,
+  X,
+  Loader2,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  Clock,
+  CheckCircle,
+  XCircle,
+  RefreshCw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
@@ -112,6 +126,7 @@ function EstateContent() {
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [repoPath, setRepoPath] = useState<string>("/");
   const [repoBranch, setRepoBranch] = useState<string>("main");
+  const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
 
   // Get estate ID from URL
   const estateId = useEstateId();
@@ -135,6 +150,11 @@ function EstateContent() {
       estateId: estateId,
     }),
   );
+
+  const { data: builds, isLoading: buildsLoading } = trpc.estate.getBuilds.useQuery({
+    estateId: estateId,
+    limit: 10,
+  });
 
   // Initialize form values when connected repo data loads
   React.useEffect(() => {
@@ -245,6 +265,54 @@ function EstateContent() {
   const handleGoToGitHub = () => {
     // Open GitHub
     window.open("https://github.com", "_blank");
+  };
+
+  const toggleBuildExpanded = (buildId: string) => {
+    setExpandedBuilds((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(buildId)) {
+        newSet.delete(buildId);
+      } else {
+        newSet.add(buildId);
+      }
+      return newSet;
+    });
+  };
+
+  const getBuildStatusIcon = (status: string) => {
+    switch (status) {
+      case "complete":
+        return <CheckCircle className="h-5 w-5 text-green-600" />;
+      case "failed":
+        return <XCircle className="h-5 w-5 text-red-600" />;
+      case "in_progress":
+        return <RefreshCw className="h-5 w-5 text-blue-600 animate-spin" />;
+      default:
+        return <Clock className="h-5 w-5 text-gray-600" />;
+    }
+  };
+
+  const getBuildStatusColor = (status: string) => {
+    switch (status) {
+      case "complete":
+        return "text-green-700 bg-green-50 dark:text-green-400 dark:bg-green-900/20";
+      case "failed":
+        return "text-red-700 bg-red-50 dark:text-red-400 dark:bg-red-900/20";
+      case "in_progress":
+        return "text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20";
+      default:
+        return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
+    }
+  };
+
+  const formatDate = (date: Date | string) => {
+    const d = new Date(date);
+    return d.toLocaleString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
   };
 
   const handleDisconnect = () => {
@@ -434,6 +502,99 @@ function EstateContent() {
                 )}
               </Button>
             </div>
+          </div>
+        )}
+
+        {/* Build History Section */}
+        {connectedRepo && (
+          <div className="mt-12">
+            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">
+              Build History
+            </h3>
+
+            {buildsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+              </div>
+            ) : builds && builds.length > 0 ? (
+              <div className="space-y-3">
+                {builds.map((build) => {
+                  const isExpanded = expandedBuilds.has(build.id);
+                  return (
+                    <div
+                      key={build.id}
+                      className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+                    >
+                      <button
+                        onClick={() => toggleBuildExpanded(build.id)}
+                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          {isExpanded ? (
+                            <ChevronDown className="h-5 w-5 text-gray-500" />
+                          ) : (
+                            <ChevronRight className="h-5 w-5 text-gray-500" />
+                          )}
+                          {getBuildStatusIcon(build.status)}
+                          <div className="text-left">
+                            <div className="font-medium text-gray-900 dark:text-gray-100">
+                              {build.commitMessage}
+                            </div>
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
+                            </div>
+                          </div>
+                        </div>
+                        <span
+                          className={`px-3 py-1 rounded-full text-sm font-medium ${getBuildStatusColor(build.status)}`}
+                        >
+                          {build.status.replace("_", " ")}
+                        </span>
+                      </button>
+
+                      {isExpanded && (
+                        <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                          <div className="space-y-2 text-sm">
+                            <div>
+                              <span className="font-medium text-gray-700 dark:text-gray-300">
+                                Commit:{" "}
+                              </span>
+                              <span className="font-mono text-gray-600 dark:text-gray-400">
+                                {build.commitHash}
+                              </span>
+                            </div>
+                            {build.completedAt && (
+                              <div>
+                                <span className="font-medium text-gray-700 dark:text-gray-300">
+                                  Completed:{" "}
+                                </span>
+                                <span className="text-gray-600 dark:text-gray-400">
+                                  {formatDate(build.completedAt)}
+                                </span>
+                              </div>
+                            )}
+                            {build.output && (
+                              <div className="mt-3">
+                                <div className="font-medium text-gray-700 dark:text-gray-300 mb-2">
+                                  Output:
+                                </div>
+                                <pre className="bg-gray-900 text-gray-100 p-3 rounded-md overflow-x-auto text-xs">
+                                  {JSON.stringify(build.output, null, 2)}
+                                </pre>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                No builds yet. Push code to your repository to trigger a build.
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -24,6 +24,7 @@ import {
   getGithubInstallationToken,
 } from "./integrations/github/github-utils.ts";
 import * as schemas from "./db/schema.ts";
+import { invalidateOrganizationQueries } from "./utils/websocket-utils.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -266,6 +267,25 @@ app.post("/api/webhooks/github", async (c) => {
         output,
       })
       .where(eq(schemas.builds.id, build.id));
+
+    // Get the organization ID from the estate
+    const estateWithOrg = await c.var.db.query.estate.findFirst({
+      where: eq(schemas.estate.id, estate.id),
+      with: {
+        organization: true,
+      },
+    });
+
+    // Invalidate organization queries to refresh the UI
+    if (estateWithOrg?.organization) {
+      await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
+        type: "INVALIDATE",
+        invalidateInfo: {
+          type: "TRPC_QUERY",
+          paths: ["estate.getBuilds"],
+        },
+      });
+    }
 
     // Store the configuration in the iterateConfig table if successful
     if (buildStatus === "complete" && "stdout" in output && output.stdout) {
