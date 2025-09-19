@@ -158,7 +158,7 @@ const llmRequestStartEventFields = {
   type: z.literal("CORE:LLM_REQUEST_START"),
   data: z
     .object({
-      /** Optional raw request sent to OpenAI - should only be expected to be presented when explicitly enabled, because these payloads are big */
+      /** Raw request sent to OpenAI */
       rawRequest: z.unknown().optional(),
     })
     .optional(),

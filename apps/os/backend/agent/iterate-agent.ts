@@ -107,7 +107,6 @@ type ReminderMetadata = z.infer<typeof ReminderMetadata>;
 export const IterateAgentState = z.object({
   reminders: z.record(z.string(), ReminderMetadata).default({}).optional(),
   braintrustParentSpanExportedId: z.string().optional(),
-  recordRawRequest: z.boolean().default(false),
 });
 
 export type IterateAgentState = z.infer<typeof IterateAgentState>;
@@ -350,7 +349,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   initialState = {
     reminders: {},
-    recordRawRequest: false,
   };
 
   #swrCacheMinTimeToStale = 1000 * 60;
@@ -387,11 +385,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       this.ctx.waitUntil(this.#rawSwrCache(key, fn)); // make sure process doesn't die until this is retrieved
     }
     return this.#rawSwrCache(key, fn).then((r) => r.value);
-  }
-
-  onStateUpdate(state: IterateAgentState, source: "server") {
-    super.onStateUpdate(state, source);
-    this.agentCore.recordRawRequest = state.recordRawRequest;
   }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
@@ -474,7 +467,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         this.setState({
           reminders: this.state.reminders ?? {},
           braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
-          recordRawRequest: this.state.recordRawRequest,
         });
 
         // Broadcast the new events to all connected clients
