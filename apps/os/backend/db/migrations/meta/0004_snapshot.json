@@ -1,5 +1,5 @@
 {
-  "id": "eb2d29a5-addd-43c7-aa18-e34b76f5a95f",
+  "id": "5aa66e50-990a-499c-917a-c3ade50657ee",
   "prevId": "14ca92ba-a437-4fc9-a098-00511cdf384f",
   "version": "7",
   "dialect": "postgresql",
@@ -793,8 +793,8 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.slack_webhook_events": {
-      "name": "slack_webhook_events",
+    "public.slack_webhook_event": {
+      "name": "slack_webhook_event",
       "schema": "",
       "columns": {
         "id": {
@@ -900,8 +900,8 @@
           "method": "btree",
           "with": {}
         },
-        "slack_webhook_events_estate_id_index": {
-          "name": "slack_webhook_events_estate_id_index",
+        "slack_webhook_event_estate_id_index": {
+          "name": "slack_webhook_event_estate_id_index",
           "columns": [
             {
               "expression": "estate_id",

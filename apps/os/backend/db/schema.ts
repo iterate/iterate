@@ -263,7 +263,7 @@ export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one 
 }));
 
 export const slackWebhookEvent = pgTable(
-  "slack_webhook_events",
+  "slack_webhook_event",
   (t) => ({
     id: iterateId("slackevent"),
     data: t.jsonb().$type<SlackEvent>().notNull(),

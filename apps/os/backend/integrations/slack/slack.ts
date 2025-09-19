@@ -338,6 +338,6 @@ async function getRoutingKey({
   if (!payload.event || !payload.team_id) {
     throw new Error("No event or team_id found in slack webhook payload");
   }
-  const prefix = `slack-${estateId}-team-${payload.team_id}`;
-  return `${prefix}-ts-${threadTs}`;
+  const suffix = `slack-${estateId}-team-${payload.team_id}`;
+  return `ts-${threadTs}-${suffix}`;
 }

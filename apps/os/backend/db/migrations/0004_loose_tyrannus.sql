@@ -1,4 +1,4 @@
-CREATE TABLE "slack_webhook_events" (
+CREATE TABLE "slack_webhook_event" (
 	"id" text PRIMARY KEY NOT NULL,
 	"data" jsonb NOT NULL,
 	"ts" text,
@@ -12,5 +12,5 @@ CREATE TABLE "slack_webhook_events" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX "channel_or_thread_messages" ON "slack_webhook_events" USING btree ("channel","ts","thread_ts","type");--> statement-breakpoint
-CREATE INDEX "slack_webhook_events_estate_id_index" ON "slack_webhook_events" USING btree ("estate_id");
+CREATE INDEX "channel_or_thread_messages" ON "slack_webhook_event" USING btree ("channel","ts","thread_ts","type");--> statement-breakpoint
+CREATE INDEX "slack_webhook_event_estate_id_index" ON "slack_webhook_event" USING btree ("estate_id");

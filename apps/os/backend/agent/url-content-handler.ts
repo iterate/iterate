@@ -14,7 +14,7 @@ interface UrlTypeInfo {
 
 function extractDetailsFromSlackLink(url: string) {
   const url = new URL(input.link);
-  const [, , channelId, pts] = url.pathname.split("/");
+  const [_whateverThisIs, _andThisToo, channelId, pts] = url.pathname.split("/");
   const ts = pts.slice(1);
   const threadTs = url.searchParams.get("thread_ts");
 
