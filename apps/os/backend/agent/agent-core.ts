@@ -299,8 +299,6 @@ export class AgentCore<
     mentionedParticipants: {},
   } as MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices>;
 
-  recordRawRequest = true;
-
   get state(): Readonly<typeof this._state> {
     return this._state;
   }
@@ -640,7 +638,7 @@ export class AgentCore<
             type: "CORE:LLM_REQUEST_START",
             eventIndex: this._events.length,
             createdAt: new Date().toISOString(),
-            data: this.recordRawRequest ? { rawRequest: responsesAPIParams } : {},
+            data: { rawRequest: responsesAPIParams },
             metadata: {},
             triggerLLMRequest: false,
           } satisfies AgentCoreEvent;
