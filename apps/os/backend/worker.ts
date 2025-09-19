@@ -229,6 +229,25 @@ app.post("/api/webhooks/github", async (c) => {
       })
       .returning();
 
+    // Get the organization ID from the estate for WebSocket invalidation
+    const estateWithOrg = await c.var.db.query.estate.findFirst({
+      where: eq(schemas.estate.id, estate.id),
+      with: {
+        organization: true,
+      },
+    });
+
+    // Invalidate organization queries to show the new in-progress build
+    if (estateWithOrg?.organization) {
+      await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
+        type: "INVALIDATE",
+        invalidateInfo: {
+          type: "TRPC_QUERY",
+          paths: ["estate.getBuilds"],
+        },
+      });
+    }
+
     // Construct the repository URL
     const repoUrl = event.repository?.html_url || event.repository?.url;
     if (!repoUrl) {
@@ -268,15 +287,8 @@ app.post("/api/webhooks/github", async (c) => {
       })
       .where(eq(schemas.builds.id, build.id));
 
-    // Get the organization ID from the estate
-    const estateWithOrg = await c.var.db.query.estate.findFirst({
-      where: eq(schemas.estate.id, estate.id),
-      with: {
-        organization: true,
-      },
-    });
-
-    // Invalidate organization queries to refresh the UI
+    // Invalidate organization queries to show the completed/failed build
+    // (We already have estateWithOrg from earlier)
     if (estateWithOrg?.organization) {
       await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
         type: "INVALIDATE",
