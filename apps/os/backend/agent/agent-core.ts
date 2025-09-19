@@ -34,13 +34,13 @@ import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
   AgentCoreEventInput,
+  type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
-  hashToolSpec,
 } from "./agent-core-schemas.js";
-import { PromptFragment, renderPromptFragment } from "./prompt-fragments.js";
+import { renderPromptFragment } from "./prompt-fragments.js";
 import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
-import type { ContextItem } from "./context.ts";
+import { evaluateContextRuleMatchers } from "./context.ts";
 
 /**
  * AgentCoreSliceSpec – single generic object describing a slice.
@@ -135,7 +135,7 @@ export interface AgentCoreDeps {
   /** Lazily construct an OpenAI client */
   getOpenAIClient(): Promise<OpenAI>;
   /** Batch resolve tool specs to runtime implementations */
-  toolSpecsToImplementations: (specs: ToolSpec[]) => Promise<RuntimeTool[]>;
+  toolSpecsToImplementations: (specs: ToolSpec[]) => RuntimeTool[];
   /** Upload a file and return its ID and metadata - used for agent-to-user file sharing */
   uploadFile?: (data: {
     content: ReadableStream;
@@ -167,7 +167,7 @@ export interface AgentCoreDeps {
    * Optional hook to collect context items (prompts and tools) that should be
    * included in LLM requests. Called right before making each LLM request.
    */
-  collectContextItems?: () => Promise<ContextItem[]>;
+  getRuleMatchData: (state: CoreReducedState) => unknown;
   /**
    * Optional hook to get the final redirect URL for any authorization flows.
    */
@@ -206,14 +206,12 @@ export interface AgentCoreSlice<Spec extends AgentCoreSliceSpec = AgentCoreSlice
       SliceDepsOf<Spec> &
       MergedDepsForSlices<SliceDependsOnOf<Spec>> & { agentCore: AgentCoreMinimal<Spec> },
     event: AgentCoreEvent | z.infer<SliceEventSchemaOf<Spec>>,
-  ): Awaitable<Partial<
+  ): Partial<
     CoreReducedState<z.input<SliceEventInputSchemaOf<Spec>>> &
       SliceStateOf<Spec> &
       MergedStateForSlices<SliceDependsOnOf<Spec>, z.input<SliceEventInputSchemaOf<Spec>>>
-  > | void>;
+  > | void;
 }
-
-type Awaitable<T> = T | Promise<T>;
 
 // -----------------------------------------------------------------------------
 // Helper type machinery (refactored to spec object) -------------------------
@@ -289,18 +287,47 @@ export class AgentCore<
   // Each AgentCore instance must get its own copy of array/object fields to avoid
   // accidental shared mutable state between different durable object instances.
   // We therefore create fresh copies for the problematic properties.
-  private _state: MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> = {
+  private _state = {
     ...CORE_INITIAL_REDUCED_STATE,
-    inputItems: [],
-    toolSpecs: [],
-    ephemeralPromptFragments: {},
-    metadata: {},
-    runtimeTools: [],
-    mentionedParticipants: {},
   } as MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices>;
 
-  get state(): Readonly<typeof this._state> {
-    return this._state;
+  private augmentState(
+    inputState: typeof this._state,
+  ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
+    const next: AugmentedCoreReducedState = {
+      ...inputState,
+      runtimeTools: [],
+      ephemeralPromptFragments: {},
+      toolSpecs: [],
+      mcpServers: [],
+      rawKeys: Object.keys(inputState),
+    };
+
+    const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
+      const matchAgainst = this.deps.getRuleMatchData(next);
+      return evaluateContextRuleMatchers({ contextRule, matchAgainst });
+    });
+    const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
+    next.groupedRuntimeTools = {
+      ...next.groupedRuntimeTools,
+      "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
+    };
+    next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
+    next.mcpServers = [
+      ...next.mcpServers,
+      ...enabledContextRules.flatMap((rule) => rule.mcpServers || []),
+    ];
+
+    // todo: figure out how to deduplicate these in case of name collisions?
+    next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
+
+    return next as unknown as MergedStateForSlices<Slices> &
+      MergedStateForSlices<CoreSlices> &
+      AugmentedCoreReducedState;
+  }
+
+  get state() {
+    return this.augmentState(this._state);
   }
 
   // Event log ---------------------------------------------------------------
@@ -313,7 +340,6 @@ export class AgentCore<
   private readonly deps: MergedDepsForSlices<Slices>;
   private readonly slices: Readonly<Slices>;
 
-  // Mutex to serialise addEvent calls
   private readonly _mutex = new Mutex();
 
   // Combined Zod schema for validating any incoming event
@@ -388,13 +414,7 @@ export class AgentCore<
 
       // Clear current state
       this._events = [];
-      this._state = {
-        ...CORE_INITIAL_REDUCED_STATE,
-        inputItems: [],
-        toolSpecs: [],
-        runtimeTools: [],
-        ephemeralPromptFragments: {},
-      } as typeof this._state;
+      this._state = { ...CORE_INITIAL_REDUCED_STATE } as typeof this._state;
 
       // Re-initialize slice states
       for (const slice of this.slices) {
@@ -417,7 +437,7 @@ export class AgentCore<
 
           // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
           this._events.push(validated);
-          this._state = await this.runReducersOnSingleEvent(this._state, validated);
+          this._state = this.runReducersOnSingleEvent(this._state, validated);
         }
       }
 
@@ -437,7 +457,7 @@ export class AgentCore<
       } as const;
       // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
       this._events.push(initializedEvent);
-      this._state = await this.runReducersOnSingleEvent(this._state, initializedEvent);
+      this._state = this.runReducersOnSingleEvent(this._state, initializedEvent);
 
       // Invoke callback for initialized event
       if (this.deps.onEventAdded) {
@@ -465,9 +485,9 @@ export class AgentCore<
   }
 
   /** btw this returns an array */
-  async addEvent(
+  addEvent(
     event: MergedEventInputForSlices<Slices> | MergedEventInputForSlices<CoreSlices>,
-  ): Promise<{ eventIndex: number }[]> {
+  ): { eventIndex: number }[] {
     return this.addEvents([event]);
   }
 
@@ -486,18 +506,14 @@ export class AgentCore<
    * Nonetheless, it is an async function, becaue the reducers can be async
    * (e.g. to query some service to find out what the input schema for a certain trpc procedure tool is)
    */
-  async addEvents(
+  addEvents(
     events: MergedEventInputForSlices<Slices>[] | MergedEventInputForSlices<CoreSlices>[],
-  ): Promise<{ eventIndex: number }[]> {
+  ): { eventIndex: number }[] {
     // Check if initialized
     if (!this._initialized) {
       throw new Error("[AgentCore] Cannot add events before calling initializeWithEvents");
     }
 
-    // Only one batch of events can be added at any point in time!
-    const beforeMutex = performance.now();
-    const release = await this._mutex.acquire();
-    const mutexAcquireMs = performance.now() - beforeMutex;
     try {
       const originalEvents = [...this._events];
       const originalState = { ...this._state };
@@ -509,8 +525,6 @@ export class AgentCore<
       try {
         // Parse all events first
         for (const ev of events) {
-          const timings: Record<string, number> = {};
-          timings.batchMutexAcquireMs = mutexAcquireMs;
           // Check for idempotency key deduplication
           if (ev.idempotencyKey && this._seenIdempotencyKeys.has(ev.idempotencyKey)) {
             this.deps.console.warn(
@@ -534,24 +548,12 @@ export class AgentCore<
           this._events.push(parsed);
 
           // run core reducer and all slice reducers in sequence to update the state
-          const beforeReducers = performance.now();
-          this._state = await this.runReducersOnSingleEvent(this._state, parsed, timings);
-          timings.reducers = performance.now() - beforeReducers;
+          this._state = this.runReducersOnSingleEvent(this._state, parsed);
 
-          // Ensure metadata exists before setting timings
-          if (!parsed.metadata) {
-            parsed.metadata = {};
-          }
-          parsed.metadata = {
-            ...parsed.metadata,
-            timings: { ...(parsed.metadata?.timings as {}), ...timings },
-          };
+          parsed.metadata ||= {};
 
           // Store the event and its reduced state for later callback invocation
-          eventsAddedThisBatch.push({
-            event: parsed,
-            reducedState: { ...this._state },
-          });
+          eventsAddedThisBatch.push({ event: parsed, reducedState: { ...this._state } });
         }
 
         // Only invoke callbacks after we're sure the batch succeeded
@@ -586,7 +588,7 @@ export class AgentCore<
 
         // Run reducers on the error event itself
         // This ensures the error event is properly processed
-        this._state = await this.runReducersOnSingleEvent(this._state, errorEvent);
+        this._state = this.runReducersOnSingleEvent(this._state, errorEvent);
 
         // Invoke callback for error event
         if (this.deps.onEventAdded) {
@@ -624,7 +626,7 @@ export class AgentCore<
             } as const;
             // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
             this._events.push(cancelEvent);
-            this._state = await this.runReducersOnSingleEvent(this._state, cancelEvent);
+            this._state = this.runReducersOnSingleEvent(this._state, cancelEvent);
 
             // Invoke callback for cancel event
             if (this.deps.onEventAdded) {
@@ -644,7 +646,7 @@ export class AgentCore<
           } satisfies AgentCoreEvent;
           // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
           this._events.push(startEvent);
-          this._state = await this.runReducersOnSingleEvent(this._state, startEvent);
+          this._state = this.runReducersOnSingleEvent(this._state, startEvent);
 
           // Invoke callback for start event
           if (this.deps.onEventAdded) {
@@ -663,8 +665,6 @@ export class AgentCore<
       // Finally, make sure the callback to actually store all the new events is called
       // TODO fix this
       this.deps.storeEvents(this._events);
-      // And release the lock (meaning any waiting calls to .addEvents() can now proceed)
-      release();
     }
   }
 
@@ -672,25 +672,16 @@ export class AgentCore<
   // Reducer execution helpers
   // -------------------------------------------------------------------------
 
-  private async runReducersOnSingleEvent(
+  private runReducersOnSingleEvent(
     currentState: MergedStateForSlices<Slices>,
     event: MergedEventForSlices<Slices>,
-    timings: Record<string, number> = {},
   ) {
-    const beforeCoreReducer = performance.now();
     // First run built-in core reducer
-    let newState = (await this.reduceCore(
-      currentState,
-      event,
-      timings,
-    )) as MergedStateForSlices<Slices>;
-    timings.reducers_core = performance.now() - beforeCoreReducer;
+    let newState = this.reduceCore(currentState, event) as MergedStateForSlices<Slices>;
 
     // Then every slice reducer
     for (const slice of this.slices) {
-      const beforeSliceReducer = performance.now();
-      const update = await slice.reduce(newState, { ...this.deps, agentCore: this }, event);
-      timings[`reducers_slice_${slice.name}`] = performance.now() - beforeSliceReducer;
+      const update = slice.reduce(newState, { ...this.deps, agentCore: this }, event);
       if (update) {
         newState = { ...newState, ...update };
       }
@@ -699,53 +690,8 @@ export class AgentCore<
     return deepCloneWithFunctionRefs(newState);
   }
 
-  private async reduceCore(
-    state: CoreReducedState,
-    event: AgentCoreEvent,
-    timings: Record<string, number>,
-  ): Promise<CoreReducedState> {
+  private reduceCore(state: CoreReducedState, event: AgentCoreEvent): CoreReducedState {
     const next: CoreReducedState = { ...state };
-
-    // Reset ephemeralContextItems at the start of each reducer run
-    next.ephemeralPromptFragments = {};
-
-    // Take the opportunity to re-check whether there are new context items
-    // TODO this isn't v efficient and these should probably be cached
-    // TODO we can now allow agent core slices to also implement collectContextItems
-    // and massively improve all the crufty code we have
-    if (this.deps.collectContextItems) {
-      const beforeCollectContextItems = performance.now();
-      const contextItems = await this.deps.collectContextItems();
-      timings.reducers_core_collectContextItems = performance.now() - beforeCollectContextItems;
-      // to make it a bit easier to read in LLM traces, we take all the prompt fragments
-      // from all the context items and turn them into a single large ephemeral prompt fragment
-      // (that shows up as a single role=developer message in the LLM request)
-      const collectedPromptFragments: PromptFragment[] = [];
-      for (const [index, item] of contextItems.entries()) {
-        if (item.prompt) {
-          collectedPromptFragments.push(item.prompt);
-        }
-        if (item.tools) {
-          // Only add tool specs that aren't already present (based on normalized hashing)
-          // This here doesn't work if we use JSON.stringify instead of hashToolSpec - not clear why
-          const existingToolSpecHashes = new Set(next.toolSpecs.map((spec) => hashToolSpec(spec)));
-          const newToolSpecs = item.tools.filter(
-            (tool) => !existingToolSpecHashes.has(hashToolSpec(tool)),
-          );
-
-          const beforeToolSpecs = performance.now();
-          if (newToolSpecs.length > 0) {
-            next.toolSpecs = [...next.toolSpecs, ...newToolSpecs];
-            const implementations = await this.deps.toolSpecsToImplementations(newToolSpecs);
-            next.runtimeTools = [...next.runtimeTools, ...implementations];
-            timings[`reducers_core_toolSpecs_contextItem${index}_batch`] =
-              performance.now() - beforeToolSpecs;
-          }
-          timings[`reducers_core_toolSpecs_${index}`] = performance.now() - beforeToolSpecs;
-        }
-      }
-      next.ephemeralPromptFragments["context-items"] = collectedPromptFragments;
-    }
 
     // Any event with triggerLLMRequest: true sets the state flag to true
     // UNLESS we are paused
@@ -762,38 +708,11 @@ export class AgentCore<
         next.systemPrompt = event.data.prompt;
         break;
 
-      case "CORE:ADD_TOOL_SPECS": {
-        next.toolSpecs = [...next.toolSpecs, ...event.data.specs];
-        const beforeToolSpecs = performance.now();
-        const implementations = await this.deps.toolSpecsToImplementations(event.data.specs);
-        next.runtimeTools = [...next.runtimeTools, ...implementations];
-        timings[`reducers_core_toolSpecsSwitch_batch`] = performance.now() - beforeToolSpecs;
-        break;
-      }
-
-      case "CORE:REMOVE_TOOL_SPECS": {
-        const hashesToRemove = new Set(
-          event.data.specs.map((spec: ToolSpec) => hashToolSpec(spec)),
-        );
-
-        // Filter both toolSpecs and runtimeTools to make sure they remain in sync
-        const newToolSpecs: ToolSpec[] = [];
-        const newRuntimeTools: RuntimeTool[] = [];
-
-        for (let i = 0; i < next.toolSpecs.length; i++) {
-          const spec = next.toolSpecs[i];
-          const runtimeTool = next.runtimeTools[i];
-
-          if (spec && !hashesToRemove.has(hashToolSpec(spec))) {
-            newToolSpecs.push(spec);
-            if (runtimeTool) {
-              newRuntimeTools.push(runtimeTool);
-            }
-          }
-        }
-
-        next.toolSpecs = newToolSpecs;
-        next.runtimeTools = newRuntimeTools;
+      case "CORE:ADD_CONTEXT_RULES": {
+        next.contextRules = {
+          ...next.contextRules,
+          ...Object.fromEntries(event.data.rules.map((item) => [item.key, item])),
+        };
         break;
       }
 
@@ -1045,10 +964,12 @@ export class AgentCore<
 
       case "CORE:INTERNAL_ERROR":
       case "CORE:INITIALIZED_WITH_EVENTS":
+      case "CORE:LOG":
         // Just log, no state change needed
         break;
 
       default:
+        event satisfies never;
         // Unknown event types are ignored (could be slice events)
         this.deps.console.warn(
           `[AgentCore] Unknown core event type: ${(event as AgentCoreEvent).type}`,
@@ -1108,11 +1029,8 @@ export class AgentCore<
         // https://iterate-com.slack.com/archives/C06LU7PGK0S/p1757362465658609
         // the cost of this is that if the matched context items change,
         // we bust the LLM cache and get a slower/more expensive response.
-        ...Object.entries(this._state.ephemeralPromptFragments).map(([key, promptFragment]) =>
-          renderPromptFragment({
-            tag: key,
-            content: promptFragment,
-          }),
+        ...Object.entries(this.state.ephemeralPromptFragments).map(([key, promptFragment]) =>
+          renderPromptFragment({ tag: key, content: promptFragment }),
         ),
       ]),
       input: unsortedInput
@@ -1120,7 +1038,7 @@ export class AgentCore<
         .sort((a, b) => a.score - b.score)
         .map((x) => x.item),
       parallel_tool_calls: true,
-      tools: this._state.runtimeTools,
+      tools: this.state.runtimeTools,
     };
   }
 
@@ -1185,11 +1103,15 @@ export class AgentCore<
 
         // single-use helper functions are kinda here just to make the diff more readable. if you are wondering if you can get rid of them, the answer is likely yes.
 
-        const functionCallItemToEvents = async (
-          item: Extract<typeof chunk.item, { type: "function_call" }>,
-          result: Awaited<ReturnType<typeof this.tryInvokeLocalFunctionTool>>,
-          executionTimeMs: number,
-        ): Promise<AgentCoreEventInput[]> => {
+        const functionCallItemToEvents = async ({
+          item,
+          result,
+          executionTimeMs,
+        }: {
+          item: Extract<typeof chunk.item, { type: "function_call" }>;
+          result: Awaited<ReturnType<AgentCore<Slices>["tryInvokeLocalFunctionTool"]>>;
+          executionTimeMs: number;
+        }): Promise<AgentCoreEventInput[]> => {
           const lastNonFunctionCallItem = rawChunks.findLast(
             (c) => c.item.type !== "function_call",
           )?.item;
@@ -1284,7 +1206,7 @@ export class AgentCore<
           eventPromises.push(
             this.tryInvokeLocalFunctionTool(item).then((result) => {
               const executionTimeMs = Math.round(performance.now() - startTime);
-              return functionCallItemToEvents(item, result, executionTimeMs);
+              return functionCallItemToEvents({ item, result, executionTimeMs });
             }),
           );
         } else {
@@ -1346,7 +1268,7 @@ export class AgentCore<
         addEvents?: MergedEventInputForSlices<Slices>[];
       }
   > {
-    const tools = this._state.runtimeTools;
+    const tools = this.state.runtimeTools;
     const tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
       this.deps.console.error("Tool not found or not local:", tool);
@@ -1387,17 +1309,11 @@ export class AgentCore<
    * Get the reduced state at a specific event index by replaying events.
    * This is useful for debugging and inspecting historical state.
    */
-  async getReducedStateAtEventIndex(eventIndex: number): Promise<MergedStateForSlices<Slices>> {
+  getReducedStateAtEventIndex(eventIndex: number) {
     // TODO: Call this function from initializeWithEvents
 
     // Start with initial state
-    let tempState: MergedStateForSlices<Slices> = {
-      ...CORE_INITIAL_REDUCED_STATE,
-      inputItems: [],
-      toolSpecs: [],
-      runtimeTools: [],
-      ephemeralPromptFragments: {},
-    } as MergedStateForSlices<Slices>;
+    let tempState = { ...CORE_INITIAL_REDUCED_STATE } as typeof this._state;
 
     // Add initial slice states
     for (const slice of this.slices) {
@@ -1409,10 +1325,10 @@ export class AgentCore<
     // Replay events up to the specified index
     const eventsToReplay = this._events.slice(0, eventIndex + 1);
     for (const event of eventsToReplay) {
-      tempState = await this.runReducersOnSingleEvent(tempState, event);
+      tempState = this.runReducersOnSingleEvent(tempState, event);
     }
 
-    return tempState;
+    return this.augmentState(tempState);
   }
 }
 
@@ -1464,11 +1380,11 @@ export function defineAgentCoreSlice<Spec extends AgentCoreSliceSpec>(def: {
       SliceDepsOf<Spec> &
       MergedDepsForSlices<SliceDependsOnOf<Spec>> & { agentCore: AgentCoreMinimal<Spec> },
     event: AgentCoreEvent | z.infer<SliceEventSchemaOf<Spec>>,
-  ) => Awaitable<Partial<
+  ) => Partial<
     CoreReducedState<z.input<SliceEventInputSchemaOf<Spec>>> &
       SliceStateOf<Spec> &
       MergedStateForSlices<SliceDependsOnOf<Spec>, z.input<SliceEventInputSchemaOf<Spec>>>
-  > | void>;
+  > | void;
 }): AgentCoreSlice<Spec> {
   const { eventSchema, eventInputSchema, initialState, reduce } = def;
 

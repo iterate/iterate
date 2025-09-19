@@ -534,17 +534,19 @@ describe("evaluateContextRuleMatchers", () => {
       contextRule.match = maybeMatch;
     }
 
-    const resultPromise = evaluateContextRuleMatchers({
-      contextRule,
-      matchAgainst: testCase.matchAgainst || {
-        agentCoreState: testCase.state,
-        durableObjectClassName: "TestAgent",
-      },
-    });
+    const getResult = () =>
+      evaluateContextRuleMatchers({
+        contextRule,
+        matchAgainst: testCase.matchAgainst || {
+          agentCoreState: testCase.state,
+          durableObjectClassName: "TestAgent",
+        },
+      });
+
     if (testCase.throws) {
-      await expect(resultPromise).rejects.toBeDefined();
+      expect(() => getResult()).toThrow();
     } else {
-      const result = await resultPromise;
+      const result = getResult();
       if (result !== testCase.expected) {
         // Provide detailed error message for debugging
         const matcherDescriptions =
@@ -602,7 +604,7 @@ describe("timeWindow matcher", () => {
       match: matchers.timeWindow({ weekdays: ["FR"] }),
     };
     vi.setSystemTime(new Date("2024-07-05T12:00:00Z")); // Friday
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: {
@@ -610,10 +612,10 @@ describe("timeWindow matcher", () => {
           durableObjectClassName: "TestAgent",
         },
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
 
     vi.setSystemTime(new Date("2024-07-04T12:00:00Z")); // Thursday
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: {
@@ -621,7 +623,7 @@ describe("timeWindow matcher", () => {
           durableObjectClassName: "TestAgent",
         },
       }),
-    ).resolves.toBe(false);
+    ).toBe(false);
   });
 
   it("Night 22:00–06:00 (UTC) cross-midnight", async () => {
@@ -632,36 +634,36 @@ describe("timeWindow matcher", () => {
     };
 
     vi.setSystemTime(new Date("2024-07-01T21:59:00Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(false);
+    ).toBe(false);
 
     vi.setSystemTime(new Date("2024-07-01T22:00:00Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
 
     vi.setSystemTime(new Date("2024-07-02T05:59:00Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
 
     vi.setSystemTime(new Date("2024-07-02T06:00:00Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(false);
+    ).toBe(false);
   });
 
   it("Exact minute 11/11 11:11 (UTC)", async () => {
@@ -672,19 +674,19 @@ describe("timeWindow matcher", () => {
     };
 
     vi.setSystemTime(new Date("2024-11-11T11:11:05Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(true);
+    ).toBe(true);
 
     vi.setSystemTime(new Date("2024-11-11T11:12:00Z"));
-    await expect(
+    expect(
       evaluateContextRuleMatchers({
         contextRule: rule,
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
-    ).resolves.toBe(false);
+    ).toBe(false);
   });
 });

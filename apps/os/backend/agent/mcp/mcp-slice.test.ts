@@ -979,14 +979,14 @@ describe("mcp-slice", () => {
           toolCallResult: { success: true },
         }));
 
-        await h.agentCore.addEvent({
-          type: "CORE:ADD_TOOL_SPECS",
+        h.agentCore.addEvent({
+          type: "CORE:ADD_CONTEXT_RULES",
           data: {
-            specs: [
+            rules: [
               {
-                type: "agent_durable_object_tool",
-                methodName: "custom_tool",
-              } as any,
+                key: "custom-tool-rule",
+                tools: [{ type: "agent_durable_object_tool", methodName: "custom_tool" }],
+              },
             ],
           },
         });

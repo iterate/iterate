@@ -194,7 +194,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
 
   readonly storeEventsMock = vi.fn();
   readonly backgroundMock = vi.fn();
-  readonly toolSpecToImplementationMock = vi.fn();
+  readonly toolSpecToImplementationMock = vi.fn((_specs: ToolSpec[]): RuntimeTool[] => []);
   readonly getOpenAIClientMock = vi.fn();
 
   readonly agentCore: AgentCore<Slices>;
@@ -222,7 +222,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
     this.getOpenAIClientMock.mockResolvedValue(this.openAIClient as any as OpenAI);
 
     this.toolSpecToImplementationMock.mockImplementation(
-      async (specs: ToolSpec[]): Promise<RuntimeTool[]> => {
+      (specs: ToolSpec[]): Array<RuntimeTool> => {
         const runtimeTools: RuntimeTool[] = [];
 
         for (const spec of specs) {
@@ -254,6 +254,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
     );
 
     const coreDeps: AgentCoreDeps = {
+      getRuleMatchData: (state) => ({ agentCoreState: state }),
       storeEvents: this.storeEventsMock,
       background: this.backgroundMock,
       getOpenAIClient: this.getOpenAIClientMock,
