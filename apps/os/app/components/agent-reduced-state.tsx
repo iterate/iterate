@@ -1,17 +1,18 @@
 import { Globe, Settings, Wrench } from "lucide-react";
+import type { AugmentedCoreReducedState } from "../../backend/agent/agent-core-schemas.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Alert, AlertDescription } from "./ui/alert.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 
 interface AgentReducedStateProps {
-  reducedState: any;
+  reducedState: AugmentedCoreReducedState;
   className?: string;
 }
 
 export function AgentReducedState({ reducedState, className }: AgentReducedStateProps) {
   const rawReducedState = Object.fromEntries(
-    reducedState.rawKeys.map((key: string) => [key, reducedState[key]]),
+    reducedState.rawKeys.map((key) => [key, reducedState[key as keyof AugmentedCoreReducedState]]),
   );
   // Extract fields for different tabs
   const inputItems = reducedState?.inputItems || [];
@@ -20,7 +21,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
   const toolSpecs = reducedState?.toolSpecs || [];
   const runtimeTools = reducedState?.runtimeTools || [];
   const mcpServers = reducedState?.mcpServers || [];
-  const mcpConnections = reducedState?.mcpConnections || {};
+  const mcpConnections = (reducedState as any)?.mcpConnections || {};
 
   // Extract fields for the "other" tab (everything except the above)
   const otherFields = Object.entries(reducedState || {}).reduce(
