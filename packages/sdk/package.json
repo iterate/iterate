@@ -1,4 +1,15 @@
 {
   "name": "@iterate-com/sdk",
-  "type": "module"
+  "type": "module",
+  "main": "./src/sdk.ts",
+  "bin": {
+    "iterate": "./cli.js"
+  },
+  "exports": {
+    ".": "./src/sdk.ts",
+    "./tsconfig.json": "./tsconfig.json"
+  },
+  "dependencies": {
+    "@iterate-com/os": "workspace:*"
+  }
 }
