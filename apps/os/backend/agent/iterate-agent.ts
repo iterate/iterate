@@ -628,7 +628,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const rules = await this.getContextRules();
     return {
       type: "CORE:ADD_CONTEXT_RULES",
-      data: { items: rules },
+      data: { rules },
       metadata: {},
       triggerLLMRequest: false,
       createdAt: new Date().toISOString(),

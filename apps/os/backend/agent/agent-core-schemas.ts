@@ -291,7 +291,7 @@ export const AddToolSpecsEventInput = z.object({
 
 const addContextRulesEventFields = {
   type: z.literal("CORE:ADD_CONTEXT_RULES"),
-  data: z.object({ items: z.array(ContextRule) }),
+  data: z.object({ rules: z.array(ContextRule) }),
 };
 export const AddContextRulesEvent = z.object({
   ...agentCoreBaseEventFields,
