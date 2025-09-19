@@ -199,7 +199,7 @@ slackApp.post("/webhook", async (c) => {
 //       return;
 //   }
 
-//   let slackAgentInstanceName: string || case null = n":
+//   let slackAgentInstanceName: string || null
 //   switch (event.event) {
 //     case "SLACK:WEBHOOK_EVENT_RECEIVED": {
 //       const eventData = event.data as any;
