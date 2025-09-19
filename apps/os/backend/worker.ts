@@ -55,20 +55,10 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
   }
 
   try {
-    let agentStub: DurableObjectStub;
-    if (agentClassName === "SlackAgent") {
-      // Use SlackAgent's inherited method
-      // @ts-expect-error - TODO couldn't get types to line up
-      agentStub = await SlackAgent.getStubByName({
-        db: c.var.db,
-        agentInstanceName,
-      });
-    } else {
-      agentStub = await IterateAgent.getStubByName({
-        db: c.var.db,
-        agentInstanceName,
-      });
-    }
+    const agentStub =
+      agentClassName === "SlackAgent"
+        ? await SlackAgent.getStubByName({ db: c.var.db, agentInstanceName })
+        : await IterateAgent.getStubByName({ db: c.var.db, agentInstanceName });
     return agentStub.fetch(c.req.raw);
   } catch (error) {
     const message = (error as Error).message || "Unknown error";
