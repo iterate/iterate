@@ -389,12 +389,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
-  estates/iterate:
-    devDependencies:
-      '@iterate-com/sdk':
-        specifier: workspace:*
-        version: link:../../packages/sdk
-
   estates/sample-pirate:
     devDependencies:
       '@iterate-com/sdk':
