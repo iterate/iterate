@@ -12,17 +12,13 @@ async function main() {
   const absolutePath = resolve(process.cwd(), inputPath);
   const fileUrl = pathToFileURL(absolutePath).href;
 
-  const code = `console.log(JSON.stringify((await import(${JSON.stringify(fileUrl)})).default, null, 2));`;
+  const code = `import(${JSON.stringify(fileUrl)}).then(m => console.log(JSON.stringify(m.default, null, 2)));`;
 
   // Run node synchronously with module eval and TS stripping
-  const result = spawnSync(
-    "pnpx",
-    ["tsx", "--input-type=module", "--experimental-strip-types", "-e", code],
-    {
-      stdio: "inherit",
-      cwd: process.cwd(),
-    },
-  );
+  const result = spawnSync("pnpx", ["--silent", "tsx", "--eval", code], {
+    stdio: "inherit",
+    cwd: process.cwd(),
+  });
 
   process.exit(result.status ?? 0);
 }

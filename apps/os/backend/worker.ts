@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
+import { zValidator } from "@hono/zod-validator";
+import { z } from "zod";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
@@ -12,6 +14,7 @@ import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
+import { runConfigInSandbox } from "./sandbox/run-config.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -117,6 +120,58 @@ app.get("/api/ws/:organizationId", async (c) => {
   );
 });
 
+// Test build endpoint for sandbox
+app.post(
+  "/api/test-build",
+  zValidator(
+    "json",
+    z.object({
+      githubRepoUrl: z
+        .string()
+        .url()
+        .regex(/^https:\/\/github\.com\/[\w-]+\/[\w.-]+$/, {
+          message: "Invalid GitHub repository URL format",
+        }),
+      githubToken: z.string().min(1, "GitHub token is required"),
+      commitHash: z
+        .string()
+        .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
+        .optional(),
+      workingDirectory: z
+        .string()
+        .refine(
+          (val) => !val || !val.startsWith("/"),
+          "Working directory should be a relative path within the repository",
+        )
+        .optional(),
+    }),
+  ),
+  async (c) => {
+    try {
+      const body = c.req.valid("json");
+
+      // Run the configuration in the sandbox
+      const result = await runConfigInSandbox(c.env, body);
+
+      // Return appropriate status code based on the result
+      if ("error" in result) {
+        return c.json(result, 400);
+      }
+
+      return c.json(result);
+    } catch (error) {
+      console.error("Test build error:", error);
+      return c.json(
+        {
+          error: "Internal server error during build test",
+          details: error instanceof Error ? error.message : "Unknown error",
+        },
+        500,
+      );
+    }
+  },
+);
+
 const requestHandler = createRequestHandler(
   //@ts-expect-error - this is a virtual module
   () => import("virtual:react-router/server-build"),
@@ -132,3 +187,4 @@ app.all("*", (c) => {
 export default app;
 
 export { IterateAgent, SlackAgent, OrganizationWebSocket };
+export { Sandbox } from "@cloudflare/sandbox";
