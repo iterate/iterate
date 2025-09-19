@@ -103,7 +103,7 @@ export default defineConfig([
       "default-param-last": "error",
       "no-else-return": "off",
       "prefer-arrow-callback": "off",
-      curly: ["error", "all"],
+      curly: "off",
 
       // Import rules
       "import/extensions": ["error", "ignorePackages"],
