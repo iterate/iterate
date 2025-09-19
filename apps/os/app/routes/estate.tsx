@@ -573,16 +573,6 @@ function EstateContent() {
                                 </span>
                               </div>
                             )}
-                            {build.output && (
-                              <div className="mt-3">
-                                <div className="font-medium text-gray-700 dark:text-gray-300 mb-2">
-                                  Output:
-                                </div>
-                                <pre className="bg-gray-900 text-gray-100 p-3 rounded-md overflow-x-auto text-xs">
-                                  {JSON.stringify(build.output, null, 2)}
-                                </pre>
-                              </div>
-                            )}
                           </div>
                         </div>
                       )}
