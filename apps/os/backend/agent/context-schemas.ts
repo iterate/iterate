@@ -116,5 +116,7 @@ export const ContextRule = z.preprocess(
      */
     match: ContextRuleMatcher.or(z.array(ContextRuleMatcher)).optional(),
   }),
-);
-export type ContextRule = z.infer<typeof ContextRule>;
+) as z.ZodType<ContextRule>;
+export type ContextRule = z.infer<typeof ContextItem> & {
+  match?: ContextRuleMatcher | ContextRuleMatcher[];
+};
