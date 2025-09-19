@@ -38,9 +38,9 @@ slackApp.post("/webhook", async (c) => {
   // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
   const body = (await c.req.json()) as SlackWebhookPayload;
   // Slack types say this doesn't exist but it was here in v1...
-  // if (body.type === "url_verification") {
-  //   return c.text(body.challenge);
-  // }
+  if ("type" in body && body.type === "url_verification" && "challenge" in body) {
+    return c.text(body.challenge as string);
+  }
 
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
