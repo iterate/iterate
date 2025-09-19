@@ -105,13 +105,16 @@ export const ContextItem = z.object({
   [K in keyof ContextItem]: ContextItem[K];
 }>;
 
-export const ContextRule = ContextItem.extend({
-  /**
-   * Matcher for when this context rule should apply.
-   * Prefer providing a single matcher and compose with matchers.and/or/not.
-   *
-   * If an array is provided, it is treated as matchers.or(...array).
-   */
-  match: ContextRuleMatcher.or(z.array(ContextRuleMatcher)).optional(),
-});
+export const ContextRule = z.preprocess(
+  (input: { key?: string; id?: string }) => ({ ...input, key: input.key ?? input.id }),
+  ContextItem.extend({
+    /**
+     * Matcher for when this context rule should apply.
+     * Prefer providing a single matcher and compose with matchers.and/or/not.
+     *
+     * If an array is provided, it is treated as matchers.or(...array).
+     */
+    match: ContextRuleMatcher.or(z.array(ContextRuleMatcher)).optional(),
+  }),
+);
 export type ContextRule = z.infer<typeof ContextRule>;
