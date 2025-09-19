@@ -1,7 +1,9 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
+import { and, asc, eq, or } from "drizzle-orm";
 import { env as _env, env } from "../../env.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import { slackWebhookEvent } from "../db/schema.ts";
 import type {
   AgentCoreDeps,
   AgentCoreEventInput,
@@ -28,11 +30,11 @@ import {
   extractBotUserIdFromAuthorizations,
   getMentionedExternalUserIds,
   getMessageMetadata,
-  getThreadId,
   isBotMentionedInMessage,
   slackWebhookEventToIdempotencyKey,
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
+import { renderPromptFragment } from "./prompt-fragments.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -194,70 +196,76 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Fetches previous messages in a Slack thread and returns an LLM input item event
    */
   public async getSlackThreadHistoryInputEvents(
-    _threadTs: string,
+    threadTs: string,
   ): Promise<LlmInputItemEventInput[]> {
-    return [];
-    // const timings: Record<string, number> = { startTime: performance.now() };
-    // const previousMessages = await serverTrpc.platform.integrations.slack.getMessagesInThread.query(
-    //   {
-    //     threadTs: threadTs,
-    //   },
-    // );
-    // timings.getMessagesInThread = performance.now() - timings.startTime;
+    const timings: Record<string, number> = { startTime: performance.now() };
+    const previousMessages = await this.db
+      .select()
+      .from(slackWebhookEvent)
+      .where(
+        and(
+          or(eq(slackWebhookEvent.thread_ts, threadTs), eq(slackWebhookEvent.ts, threadTs)),
+          eq(slackWebhookEvent.type, "message"),
+        ),
+      )
+      .orderBy(asc(slackWebhookEvent.ts));
+    timings.getMessagesInThread = performance.now() - timings.startTime;
 
-    // type TextMessage = StoredSlackWebhook & { data: { text: string; ts: string; user: string } };
-    // const filteredPreviousMessages = previousMessages.filter(
-    //   (m): m is TextMessage => "text" in m.data && "ts" in m.data && "user" in m.data,
-    // );
-    // const dedupedPreviousMessages = Object.values(
-    //   Object.fromEntries(filteredPreviousMessages.map((m) => [m.data.ts, m])), // Use ts as key for deduplication
-    // ).sort((a, b) => parseFloat(a.data.ts) - parseFloat(b.data.ts)); // Sort by timestamp
+    type TextMessage = typeof slackWebhookEvent.$inferSelect & {
+      data: { text: string; ts: string; user: string };
+    };
+    const filteredPreviousMessages = previousMessages.filter(
+      (m): m is TextMessage => "text" in m.data && "ts" in m.data && "user" in m.data,
+    );
+    const dedupedPreviousMessages = Object.values(
+      Object.fromEntries(filteredPreviousMessages.map((m) => [m.data.ts, m])), // Use ts as key for deduplication
+    ).sort((a, b) => parseFloat(a.data.ts) - parseFloat(b.data.ts)); // Sort by timestamp
 
-    // // Generate context for mid-thread joins
-    // const context = renderPromptFragment({
-    //   tag: "slack_channel_context",
-    //   content: [
-    //     "You should use the previous messages in the thread to understand the context of the current message.",
-    //     // Deduplicate messages by ts and format them
-    //     ...(previousMessages.length > 0
-    //       ? [
-    //           "Previous messages:",
-    //           ...dedupedPreviousMessages.map((m) => {
-    //             return (
-    //               JSON.stringify(
-    //                 {
-    //                   user: m.data.user,
-    //                   text: m.data.text,
-    //                   ts: m.data.ts,
-    //                   createdAt: new Date(parseFloat(m.data.ts) * 1000).toISOString(),
-    //                 },
-    //                 null,
-    //                 2,
-    //               ) + "\n"
-    //             );
-    //           }),
-    //         ]
-    //       : []),
-    //   ],
-    // });
+    // Generate context for mid-thread joins
+    const context = renderPromptFragment({
+      tag: "slack_channel_context",
+      content: [
+        "You should use the previous messages in the thread to understand the context of the current message.",
+        // Deduplicate messages by ts and format them
+        ...(previousMessages.length > 0
+          ? [
+              "Previous messages:",
+              ...dedupedPreviousMessages.map((m) => {
+                return (
+                  JSON.stringify(
+                    {
+                      user: m.data.user,
+                      text: m.data.text,
+                      ts: m.data.ts,
+                      createdAt: new Date(parseFloat(m.data.ts) * 1000).toISOString(),
+                    },
+                    null,
+                    2,
+                  ) + "\n"
+                );
+              }),
+            ]
+          : []),
+      ],
+    });
 
-    // return [
-    //   {
-    //     type: "CORE:LLM_INPUT_ITEM",
-    //     data: {
-    //       type: "message",
-    //       role: "developer",
-    //       content: [
-    //         {
-    //           type: "input_text",
-    //           text: context,
-    //         },
-    //       ],
-    //     },
-    //     triggerLLMRequest: false,
-    //     metadata: { timings },
-    //   },
-    // ];
+    return [
+      {
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: context,
+            },
+          ],
+        },
+        triggerLLMRequest: false,
+        metadata: { timings },
+      },
+    ];
   }
 
   /**
@@ -508,12 +516,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
     const slackEvent = slackWebhookPayload.event!;
-    if (!slackEvent.type) {
-      return;
-    }
+    const messageMetadata = await getMessageMetadata(slackEvent, this.db);
 
-    const messageMetadata = await getMessageMetadata(slackEvent);
-    if (!messageMetadata) {
+    if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
       return;
     }
 
@@ -525,7 +530,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const currentState = this.agentCore.state;
     const isSlackInitialized = !!currentState.slackChannelId;
-    const isThreadStarter = messageMetadata.messageTs === messageMetadata.threadTs;
+    const isThreadStarter = messageMetadata.ts === messageMetadata.threadTs;
 
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
 
@@ -712,9 +717,4 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     // };
     // return await serverTrpc.platform.defaultTools.exaSearch.mutate(searchRequest);
   }
-}
-
-export async function getAgentInstanceNamesForSlackWebhook(slackEvent: SlackEvent) {
-  const threadId = await getThreadId(slackEvent);
-  return threadId ? `SlackAgent ${threadId}` : null;
 }

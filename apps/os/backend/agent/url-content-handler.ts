@@ -2,7 +2,6 @@
 import { randomUUID } from "node:crypto";
 import type { AgentCoreEventInput } from "@iterate-com/helpers/agent/agent-core-schemas";
 import { env } from "../legacy-agent/env.ts";
-import type { StoredSlackWebhook } from "../db/schema.ts";
 import { serverTrpc } from "../legacy-agent/trpc/trpc.ts";
 
 type UrlType = "slack" | "webpage" | "file";
@@ -11,6 +10,15 @@ interface UrlTypeInfo {
   type: UrlType;
   contentType?: string;
   slackMatch?: RegExpMatchArray;
+}
+
+function extractDetailsFromSlackLink(url: string) {
+  const url = new URL(input.link);
+  const [_whateverThisIs, _andThisToo, channelId, pts] = url.pathname.split("/");
+  const ts = pts.slice(1);
+  const threadTs = url.searchParams.get("thread_ts");
+
+  return { ts: `${ts.slice(0, -6)}.${ts.slice(-6)}`, channelId, threadTs };
 }
 
 async function determineUrlType(url: string, headResponse?: Response): Promise<UrlTypeInfo> {
@@ -47,19 +55,19 @@ async function determineUrlType(url: string, headResponse?: Response): Promise<U
   };
 }
 
-async function handleSlackUrl(url: string, _slackMatch: RegExpMatchArray) {
+async function handleSlackUrl(params: { url: string; db: DB }) {
   try {
-    const {
-      threadTs,
-      ts: messageTs,
-      channelId,
-    } = await serverTrpc.platform.integrations.slack.extractDetailsFromSlackLink.query({
-      link: url,
-    });
-    const history: StoredSlackWebhook[] =
-      await serverTrpc.platform.integrations.slack.getMessagesInThread.query({
-        threadTs: threadTs ?? messageTs,
-      });
+    const { threadTs, channelId } = extractDetailsFromSlackLink(params.url);
+    const history = await params.db
+      .select()
+      .from(slackWebhookEvent)
+      .where(
+        and(
+          or(eq(slackWebhookEvent.thread_ts, threadTs), eq(slackWebhookEvent.ts, threadTs)),
+          eq(slackWebhookEvent.type, "message"),
+        ),
+      )
+      .orderBy(asc(slackWebhookEvent.ts));
     const formattedMessages = history.flatMap((h) => {
       if ("text" in h.data) {
         return [
@@ -201,12 +209,20 @@ async function handleFileUrl(url: string, contentType: string) {
   };
 }
 
-export async function getUrlContent(options: { url: string; shouldMakeScreenshot?: boolean }) {
+export async function getUrlContent(options: {
+  url: string;
+  shouldMakeScreenshot?: boolean;
+  db: DB;
+}) {
   const { url, shouldMakeScreenshot = false } = options;
   const urlInfo = await determineUrlType(url);
   switch (urlInfo.type) {
     case "slack":
-      return await handleSlackUrl(url, urlInfo.slackMatch!);
+      return await handleSlackUrl({
+        url,
+        slackMatch: urlInfo.slackMatch!,
+        db,
+      });
     case "webpage":
       return await handleWebpageUrl(url, shouldMakeScreenshot);
     case "file":
