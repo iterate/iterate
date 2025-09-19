@@ -39,6 +39,13 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         working-directory: apps/os
 
+      - name: Run database migrations
+        run: |
+          export PSCALE_DATABASE_URL=$(doppler secrets get DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING --plain)
+          pnpm db:migrate
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
       - name: Deploy
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
