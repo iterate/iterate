@@ -1,6 +1,7 @@
 import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
+import type { SlackEvent } from "@slack/web-api";
 
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
@@ -115,6 +116,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   estateAccountsPermissions: many(estateAccountsPermissions),
   files: many(files),
   providerSpecificEstateMapping: many(providerEstateMapping),
+  slackWebhookEvents: many(slackWebhookEvent),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -257,5 +259,34 @@ export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one 
   agentInstance: one(agentInstance, {
     fields: [agentInstanceRoute.agentInstanceId],
     references: [agentInstance.id],
+  }),
+}));
+
+export const slackWebhookEvent = pgTable(
+  "slack_webhook_events",
+  (t) => ({
+    id: iterateId("slackevent"),
+    data: t.jsonb().$type<SlackEvent>().notNull(),
+    ts: t.text("ts"),
+    thread_ts: t.text("thread_ts"),
+    channel: t.text("channel"),
+    type: t.text("type"),
+    subtype: t.text("subtype"),
+    user: t.text("user"),
+    estateId: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (table) => [
+    // channel queries use all 4 of these columns, thread queries use the same except for channel
+    index("channel_or_thread_messages").on(table.channel, table.ts, table.thread_ts, table.type),
+    // Estate queries
+    index().on(table.estateId),
+  ],
+);
+
+export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one }) => ({
+  estate: one(estate, {
+    fields: [slackWebhookEvent.estateId],
+    references: [estate.id],
   }),
 }));

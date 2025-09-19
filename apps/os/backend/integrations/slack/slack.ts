@@ -8,8 +8,11 @@ import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
 import {
   extractBotUserIdFromAuthorizations,
+  extractUserId,
+  getMessageMetadata,
   isBotMentionedInMessage,
 } from "../../agent/slack-agent-utils.ts";
+import { slackWebhookEvent } from "../../db/schema.ts";
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
@@ -45,12 +48,6 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  // Ignore reaction events for now to avoid unnecessary errors/recursion during dev
-  if (body.event.type === "reaction_added" || body.event.type === "reaction_removed") {
-    // TODO re-insert this once we've got reaction handling working
-    return c.text("ok");
-  }
-
   const estateId = await slackTeamIdToEstateId({ db, teamId: body.team_id });
   if (!estateId) {
     console.warn(
@@ -60,10 +57,32 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  // This will throw an error if we didn't gracefully bow out
-  const routingKey = getRoutingKey({
+  const messageMetadata = await getMessageMetadata(body.event, db);
+
+  c.executionCtx.waitUntil(
+    db
+      .insert(slackWebhookEvent)
+      .values({
+        data: body.event,
+        ts: messageMetadata.ts,
+        thread_ts: messageMetadata.threadTs,
+        type: "type" in body.event ? body.event.type : null,
+        subtype: "subtype" in body.event ? body.event.subtype : null,
+        user: extractUserId(body.event),
+        channel: messageMetadata.channel,
+        estateId: estateId,
+      })
+      .returning(),
+  );
+
+  if (!messageMetadata.threadTs) {
+    return c.text("ok");
+  }
+
+  const routingKey = await getRoutingKey({
     payload: body,
     estateId: estateId,
+    threadTs: messageMetadata.threadTs,
   });
 
   const durableObjectName = `SlackAgent-${routingKey}`;
@@ -307,31 +326,18 @@ slackApp.post("/webhook", async (c) => {
 //   }
 // }
 
-function getRoutingKey({ payload, estateId }: { payload: SlackWebhookPayload; estateId: string }) {
+async function getRoutingKey({
+  payload,
+  estateId,
+  threadTs,
+}: {
+  payload: SlackWebhookPayload;
+  estateId: string;
+  threadTs: string;
+}) {
   if (!payload.event || !payload.team_id) {
     throw new Error("No event or team_id found in slack webhook payload");
   }
-
-  // routing keys contain the estate ID - so if a slack team is first connected to estate A, and then later B,
-  // then estate B should not get access to the data from estate A
   const prefix = `slack-${estateId}-team-${payload.team_id}`;
-
-  if (payload.event.type === "message") {
-    return `${prefix}-ts-${"thread_ts" in payload.event ? payload.event.thread_ts : payload.event.ts}`;
-  }
-
-  if (payload.event.type === "reaction_added" || payload.event.type === "reaction_removed") {
-    throw new Error("reaction_added and reaction_removed not implemented");
-    // return await serverTrpc.platform.integrations.slack.getThreadTsForMessage.query({
-    //   messageTs: slackEvent.item.ts,
-    // });
-  }
-
-  console.warn(
-    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
-    payload,
-  );
-  throw new Error(
-    "Didn't know how to turn this slack webhook payload into a routing key and durable object name",
-  );
+  return `${prefix}-ts-${threadTs}`;
 }
