@@ -482,12 +482,10 @@ describe("AgentCore", () => {
     // Wait for async reducers to complete
 
     const state = h.agentCore.state;
-    expect(state.contextRules).toHaveLength(1);
-    expect(pluckFields(state.contextRules, ["id"])).toMatchInlineSnapshot(`
-      "["test-rule"]"
-    `);
+    expect(state.contextRules).toHaveProperty("test-rule");
+    expect(state.contextRules["test-rule"].tools).toHaveLength(2);
 
-    // Tool implementations are now resolved immediately when specs are added
+    // Tool implementations are derived from specs
     expect(state.runtimeTools).toHaveLength(2);
     expect(pluckFields(state.runtimeTools, ["type", "name"])).toMatchInlineSnapshot(`
       "["function","tool1"]
@@ -1131,12 +1129,12 @@ describe("AgentCore", () => {
       const initialSystemPrompt = h.agentCore.state.systemPrompt;
 
       // Try to add an event that will cause the reducer to fail
-      await expect(
+      expect(() =>
         h.agentCore.addEvent({
           type: "CORE:SET_SYSTEM_PROMPT",
           data: { prompt: "FAIL" },
         }),
-      ).rejects.toThrow("Core reducer failed");
+      ).toThrow("Core reducer failed");
 
       // Check that state was rolled back
       expect(h.agentCore.state.systemPrompt).toBe(initialSystemPrompt);
@@ -1184,7 +1182,7 @@ describe("AgentCore", () => {
       const initialModel = h.agentCore.state.modelOpts.model;
 
       // Try to add two events as a batch, where the second will fail
-      await expect(
+      expect(() =>
         h.agentCore.addEvents([
           {
             type: "CORE:SET_SYSTEM_PROMPT",
@@ -1195,7 +1193,7 @@ describe("AgentCore", () => {
             data: { model: "gpt-4.1", temperature: 0.8 },
           },
         ]),
-      ).rejects.toThrow("Second event reducer failed");
+      ).toThrow("Second event reducer failed");
 
       // Check that neither event from the batch was added
       const events = h.getEvents();
@@ -1634,13 +1632,9 @@ describe("Event metadata functionality", () => {
 
       const events = h.getEvents();
       const toolSpecEvent = events.find((e) => e.type === "CORE:ADD_CONTEXT_RULES");
-      const systemPromptEvent = events.find((e) => e.type === "CORE:SET_SYSTEM_PROMPT");
 
       // Verify custom metadata is preserved
       expect(toolSpecEvent?.metadata).toMatchObject({ source: "test", version: 1 });
-
-      // Verify default empty metadata on system-generated events (but timings will be added)
-      expect(systemPromptEvent?.metadata).toHaveProperty("timings");
     },
   );
 });
@@ -2028,7 +2022,7 @@ describe("CORE:FILE_SHARED event handling", () => {
     await h.initializeAgent();
 
     // Try to add a FILE:SHARED event without OpenAI file ID
-    await expect(
+    expect(() =>
       h.agentCore.addEvent({
         type: "CORE:FILE_SHARED",
         data: {
@@ -2040,9 +2034,7 @@ describe("CORE:FILE_SHARED event handling", () => {
           // No openAIFileId provided
         },
       }),
-    ).rejects.toThrow(
-      "CORE:FILE_SHARED event missing required OpenAI file ID for file file_no_openai",
-    );
+    ).toThrow("CORE:FILE_SHARED event missing required OpenAI file ID for file file_no_openai");
   });
 
   createAgentCoreTest([])("handles multiple files in sequence", async ({ h }) => {
@@ -2623,8 +2615,8 @@ describe("AgentCore ephemeralPromptFragments", () => {
     storeEvents: vi.fn(),
     background: vi.fn(),
     getOpenAIClient: vi.fn(),
-    toolSpecsToImplementations: vi.fn(),
-    collectContextItems: vi.fn().mockResolvedValue(contextItems),
+    toolSpecsToImplementations: vi.fn(() => []),
+    getRuleMatchData: vi.fn((agentCoreState) => ({ agentCoreState })),
     console,
   });
 

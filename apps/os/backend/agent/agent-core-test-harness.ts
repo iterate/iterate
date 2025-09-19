@@ -194,7 +194,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
 
   readonly storeEventsMock = vi.fn();
   readonly backgroundMock = vi.fn();
-  readonly toolSpecToImplementationMock = vi.fn();
+  readonly toolSpecToImplementationMock = vi.fn((_specs: ToolSpec[]): RuntimeTool[] => []);
   readonly getOpenAIClientMock = vi.fn();
 
   readonly agentCore: AgentCore<Slices>;
@@ -221,37 +221,35 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
 
     this.getOpenAIClientMock.mockResolvedValue(this.openAIClient as any as OpenAI);
 
-    this.toolSpecToImplementationMock.mockImplementation(
-      async (specs: ToolSpec[]): Promise<RuntimeTool[]> => {
-        const runtimeTools: RuntimeTool[] = [];
+    this.toolSpecToImplementationMock.mockImplementation((specs: ToolSpec[]): RuntimeTool[] => {
+      const runtimeTools: RuntimeTool[] = [];
 
-        for (const spec of specs) {
-          // OpenAI builtin tools are returned directly without mocks
-          if (spec.type === "openai_builtin") {
-            runtimeTools.push(spec.openAITool);
-            continue;
-          }
-
-          let name: string;
-          if (spec.type === "agent_durable_object_tool") {
-            name = spec.methodName;
-          } else if (spec.type === "serialized_callable_tool") {
-            name = spec.overrideName ?? "callback_tool";
-          } else {
-            name = "unknown";
-          }
-
-          const mockedTool = this.mockedTools.get(name);
-          if (mockedTool) {
-            runtimeTools.push(mockedTool);
-          } else {
-            throw new Error(`No mock registered for tool ${name}`);
-          }
+      for (const spec of specs) {
+        // OpenAI builtin tools are returned directly without mocks
+        if (spec.type === "openai_builtin") {
+          runtimeTools.push(spec.openAITool);
+          continue;
         }
 
-        return runtimeTools;
-      },
-    );
+        let name: string;
+        if (spec.type === "agent_durable_object_tool") {
+          name = spec.methodName;
+        } else if (spec.type === "serialized_callable_tool") {
+          name = spec.overrideName ?? "callback_tool";
+        } else {
+          name = "unknown";
+        }
+
+        const mockedTool = this.mockedTools.get(name);
+        if (mockedTool) {
+          runtimeTools.push(mockedTool);
+        } else {
+          throw new Error(`No mock registered for tool ${name}`);
+        }
+      }
+
+      return runtimeTools;
+    });
 
     const coreDeps: AgentCoreDeps = {
       getRuleMatchData: (state) => ({ agentCoreState: state }),
