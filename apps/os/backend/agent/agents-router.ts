@@ -8,7 +8,7 @@ import { agentInstance } from "../db/schema.ts";
 import {
   AgentCoreEventInput,
   FileSharedEventInput,
-  type CoreReducedState,
+  type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { IterateAgent } from "./iterate-agent.ts";
@@ -220,7 +220,9 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return (await ctx.agent.getReducedStateAtEventIndex(input.eventIndex)) as CoreReducedState;
+      return (await ctx.agent.getReducedStateAtEventIndex(
+        input.eventIndex,
+      )) as AugmentedCoreReducedState;
     }),
 
   // listAgentInstances: protectedProcedure

@@ -22,7 +22,11 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent, type AddContextRulesEvent } from "./agent-core-schemas.ts";
+import {
+  AgentCoreEvent,
+  type AddContextRulesEvent,
+  type AugmentedCoreReducedState,
+} from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -758,7 +762,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   /*
    * Get the reduced state at a specific event index
    */
-  async getReducedStateAtEventIndex(eventIndex: number) {
+  async getReducedStateAtEventIndex(eventIndex: number): Promise<AugmentedCoreReducedState> {
     return this.agentCore.getReducedStateAtEventIndex(eventIndex);
   }
 

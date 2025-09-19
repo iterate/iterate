@@ -10,6 +10,9 @@ interface AgentReducedStateProps {
 }
 
 export function AgentReducedState({ reducedState, className }: AgentReducedStateProps) {
+  const rawReducedState = Object.fromEntries(
+    reducedState.rawKeys.map((key: string) => [key, reducedState[key]]),
+  );
   // Extract fields for different tabs
   const inputItems = reducedState?.inputItems || [];
   const ephemeralPromptFragments = reducedState?.ephemeralPromptFragments || {};
@@ -51,7 +54,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
 
   return (
     <Tabs defaultValue="inputItems" className={`${className} flex flex-col`}>
-      <TabsList className="grid w-full grid-cols-4 lg:grid-cols-8 flex-shrink-0">
+      <TabsList className="grid w-full grid-cols-4 lg:grid-cols-9 flex-shrink-0">
         <TabsTrigger value="inputItems" className="flex items-center gap-1 text-xs">
           Input Items
           {totalInputItemsCount > 0 && (
@@ -102,6 +105,9 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         </TabsTrigger>
         <TabsTrigger value="raw" className="text-xs">
           Raw
+        </TabsTrigger>
+        <TabsTrigger value="augmented" className="text-xs">
+          Augmented
         </TabsTrigger>
       </TabsList>
 
@@ -236,6 +242,10 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
       </TabsContent>
 
       <TabsContent value="raw" className="flex-1 overflow-auto mt-4">
+        <SerializedObjectCodeBlock data={rawReducedState} className="h-full" />
+      </TabsContent>
+
+      <TabsContent value="augmented" className="flex-1 overflow-auto mt-4">
         <SerializedObjectCodeBlock data={reducedState} className="h-full" />
       </TabsContent>
     </Tabs>

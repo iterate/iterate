@@ -540,18 +540,15 @@ function EventDetailsContent({
   const eventIndex = event.eventIndex;
 
   // Get reduced state at this event index
-  const { data: eventReducedState, isLoading: isLoadingReducedState } =
-    trpc.agents.getReducedStateAtEventIndex.useQuery(
-      {
-        estateId,
-        agentInstanceName,
-        agentClassName: agentClassName,
-        eventIndex: eventIndex,
-      },
-      {
-        enabled: eventIndex !== undefined,
-      },
-    );
+  const reducedStateQuery = trpc.agents.getReducedStateAtEventIndex.useQuery(
+    {
+      estateId,
+      agentInstanceName,
+      agentClassName: agentClassName,
+      eventIndex: eventIndex,
+    },
+    { enabled: eventIndex !== undefined },
+  );
 
   return (
     <Tabs defaultValue="event" className="flex flex-col h-full">
@@ -565,16 +562,19 @@ function EventDetailsContent({
       </TabsContent>
 
       <TabsContent value="state" className="flex-1 overflow-auto">
-        {isLoadingReducedState ? (
+        {reducedStateQuery.isLoading ? (
           <div className="flex items-center justify-center h-full bg-muted rounded-lg">
             <Clock className="h-4 w-4 animate-spin mr-2" />
             <span className="text-sm text-muted-foreground">Loading reduced state...</span>
           </div>
-        ) : eventReducedState ? (
-          <AgentReducedState reducedState={eventReducedState} className="h-full" />
+        ) : reducedStateQuery.isSuccess ? (
+          <AgentReducedState reducedState={reducedStateQuery.data} className="h-full" />
         ) : (
           <div className="text-xs bg-muted p-4 rounded-lg h-full flex items-center justify-center">
-            <span className="text-muted-foreground">Failed to load reduced state</span>
+            <span className="text-muted-foreground">
+              Failed to load reduced state{" "}
+              {reducedStateQuery.error?.message || `Status: ${reducedStateQuery.status}`}
+            </span>
           </div>
         )}
       </TabsContent>
