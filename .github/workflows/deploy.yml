@@ -29,7 +29,7 @@ jobs:
         uses: dopplerhq/cli-action@v2
 
       - name: Setup Doppler
-        run: doppler setup --config 'prd' --project os
+        run: doppler setup --config 'dev' --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
