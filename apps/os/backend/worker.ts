@@ -182,29 +182,24 @@ app.post("/api/webhooks/github", async (c) => {
       // Check suite event - triggered by push or PR
       console.log(`Check suite event: action=${event.action}, status=${event.check_suite?.status}`);
 
-      // Log the structure to understand what data is available
-      console.log(
-        "Check suite data:",
-        JSON.stringify(
-          {
-            head_sha: event.check_suite?.head_sha,
-            head_branch: event.check_suite?.head_branch,
-            head_commit: event.check_suite?.head_commit,
-          },
-          null,
-          2,
-        ),
-      );
+      // Process check_suite events when they're created/requested (not just when completed)
+      // This allows us to trigger builds immediately when code is pushed
+      if (
+        event.action === "requested" ||
+        event.action === "rerequested" ||
+        event.action === "completed"
+      ) {
+        commitHash = event.check_suite?.head_sha;
+        commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
+        branch = event.check_suite?.head_branch;
 
-      if (event.action !== "completed" || event.check_suite?.status !== "completed") {
         console.log(
-          `Ignoring check_suite with action=${event.action} status=${event.check_suite?.status}`,
+          `Processing check_suite: branch=${branch}, commit=${commitHash?.substring(0, 7)}, message="${commitMessage}"`,
         );
-        return c.json({ message: "Check suite not completed" }, 200);
+      } else {
+        console.log(`Ignoring check_suite with action=${event.action}`);
+        return c.json({ message: "Check suite action not relevant" }, 200);
       }
-      commitHash = event.check_suite?.head_sha;
-      commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
-      branch = event.check_suite?.head_branch;
     } else if (eventType === "workflow_run") {
       // GitHub Actions workflow run
       if (event.action !== "completed" || event.workflow_run?.status !== "completed") {
