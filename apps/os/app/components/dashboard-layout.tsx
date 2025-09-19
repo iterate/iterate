@@ -42,6 +42,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
+import { Skeleton } from "./ui/skeleton.tsx";
 
 const navigation = [
   {
@@ -66,12 +67,12 @@ interface Estate {
 }
 
 function EstateSwitcher() {
-  const [estates] = trpc.estates.list.useSuspenseQuery();
+  const estatesQuery = trpc.estates.list.useQuery();
   const navigate = useNavigate();
   const params = useParams();
   const currentEstateId = params.estateId;
 
-  const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
+  const currentEstate = estatesQuery.data?.find((e: Estate) => e.id === currentEstateId) || null;
 
   const handleEstateSwitch = (estate: Estate) => {
     // Save the new selection to cookie
@@ -86,9 +87,8 @@ function EstateSwitcher() {
     navigate(`/${estate.organizationId}/${estate.id}${subPath ? `/${subPath}` : ""}`);
   };
 
-  if (!currentEstate) {
-    return null;
-  }
+  if (estatesQuery.isLoading) return <Skeleton className="w-full h-10" />;
+  if (!currentEstate) return null;
 
   return (
     <DropdownMenu>
@@ -104,7 +104,7 @@ function EstateSwitcher() {
       <DropdownMenuContent className="w-56" side="top" align="start">
         <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        {estates?.map((estate: Estate) => (
+        {estatesQuery.data?.map((estate: Estate) => (
           <DropdownMenuItem
             key={estate.id}
             onClick={() => handleEstateSwitch(estate)}
@@ -123,7 +123,7 @@ function EstateSwitcher() {
 }
 
 function UserSwitcher() {
-  const [user] = trpc.user.me.useSuspenseQuery();
+  const userQuery = trpc.user.me.useQuery();
 
   const handleLogout = async () => {
     try {
@@ -156,6 +156,10 @@ function UserSwitcher() {
       .toUpperCase()
       .slice(0, 2);
   };
+
+  if (userQuery.isLoading) return <Skeleton className="w-full h-10" />;
+  if (!userQuery.data) return null;
+  const user = userQuery.data;
 
   return (
     <DropdownMenu>

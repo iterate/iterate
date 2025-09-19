@@ -17,6 +17,7 @@ import {
 } from "../components/ui/table.tsx";
 import { trpc } from "../lib/trpc.ts";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
+import { Skeleton } from "../components/ui/skeleton.tsx";
 
 type SortField = "name" | "className" | "createdAt";
 type SortDirection = "asc" | "desc";
@@ -29,7 +30,7 @@ function AgentInstancesTable() {
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
 
-  const [agents] = trpc.agents.list.useSuspenseQuery({
+  const agentsQuery = trpc.agents.list.useQuery({
     estateId: estateId,
   });
 
@@ -46,8 +47,10 @@ function AgentInstancesTable() {
       setSortDirection("desc");
     }
   };
+  const agents = agentsQuery.data;
 
   const sortedAndFilteredData = useMemo(() => {
+    if (!agents) return [];
     const filtered = agents.filter((agent) =>
       agent.durableObjectName.toLowerCase().includes(filter.toLowerCase()),
     );
@@ -85,7 +88,9 @@ function AgentInstancesTable() {
     return filtered;
   }, [agents, filter, sortField, sortDirection]);
 
-  if (agents.length === 0) {
+  if (agentsQuery.isLoading) return <Skeleton className="w-full h-10" />;
+  if (!agents) return <>{agentsQuery.status}</>;
+  if (agents?.length === 0) {
     return (
       <div className="text-center py-8">
         <Bot className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
