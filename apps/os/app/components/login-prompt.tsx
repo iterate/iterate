@@ -1,6 +1,5 @@
 import { useRef, type ComponentPropsWithRef } from "react";
 import { cn } from "../lib/utils.ts";
-import { CenterCenter } from "./center-center.tsx";
 import { AnimatedBeam } from "./ui/animated-beam.tsx";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { LoginProviders } from "./auth-components.tsx";
@@ -30,7 +29,7 @@ export function LoginPrompt() {
   const div7Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
 
   return (
-    <CenterCenter>
+    <div className="flex h-full w-full items-center justify-center">
       <div className="w-full max-w-[1000px] px-4 py-8 sm:p-8">
         <div className="flex flex-col items-center justify-center space-y-6 sm:space-y-8 text-center">
           <div
@@ -166,6 +165,6 @@ export function LoginPrompt() {
           </div>
         </div>
       </div>
-    </CenterCenter>
+    </div>
   );
 }

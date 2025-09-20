@@ -3,7 +3,6 @@ import { useNavigate } from "react-router";
 import { Bot, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Badge } from "../components/ui/badge.tsx";
@@ -217,45 +216,43 @@ export default function AgentsIndexPage() {
   };
 
   return (
-    <DashboardLayout>
-      <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
-        <Card className="bg-muted/30">
-          <CardHeader>
-            <CardTitle>Create New Agent</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-2 relative">
-              <div className="relative flex-1">
-                <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
-                  <Bot size={16} className="text-muted-foreground" />
-                </div>
-                <Input
-                  id="agent-name"
-                  ref={inputRef}
-                  value={agentName}
-                  onChange={(e) => setAgentName(e.target.value)}
-                  placeholder="Enter agent durable object instance name"
-                  className="flex-1 pl-10"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      handleNavigate();
-                    }
-                  }}
-                />
+    <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
+      <Card className="bg-muted/30">
+        <CardHeader>
+          <CardTitle>Create New Agent</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex gap-2 relative">
+            <div className="relative flex-1">
+              <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                <Bot size={16} className="text-muted-foreground" />
               </div>
-              <Button onClick={handleNavigate} disabled={!agentName.trim()}>
-                Go
-              </Button>
+              <Input
+                id="agent-name"
+                ref={inputRef}
+                value={agentName}
+                onChange={(e) => setAgentName(e.target.value)}
+                placeholder="Enter agent durable object instance name"
+                className="flex-1 pl-10"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleNavigate();
+                  }
+                }}
+              />
             </div>
-          </CardContent>
-        </Card>
+            <Button onClick={handleNavigate} disabled={!agentName.trim()}>
+              Go
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
-        <Card>
-          <CardContent className="pt-6">
-            <AgentInstancesTable />
-          </CardContent>
-        </Card>
-      </div>
-    </DashboardLayout>
+      <Card>
+        <CardContent className="pt-6">
+          <AgentInstancesTable />
+        </CardContent>
+      </Card>
+    </div>
   );
 }

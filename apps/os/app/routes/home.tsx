@@ -10,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
@@ -98,12 +97,10 @@ function ConnectSlackCard() {
 
 export default function Home() {
   return (
-    <DashboardLayout>
-      <div className="p-6">
-        <div className="w-full max-w-sm lg:max-w-md">
-          <ConnectSlackCard />
-        </div>
+    <div className="p-6">
+      <div className="w-full max-w-sm lg:max-w-md">
+        <ConnectSlackCard />
       </div>
-    </DashboardLayout>
+    </div>
   );
 }

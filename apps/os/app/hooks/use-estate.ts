@@ -37,6 +37,19 @@ export function useEstateId(): string {
   return estateId;
 }
 
+export function useOrganizationId(): string {
+  const params = useParams();
+  const organizationId = params.organizationId;
+
+  if (!organizationId) {
+    throw new Error(
+      "useOrganizationId() can only be used on pages with organization ID in the URL path (/:organizationId/:estateId/*)",
+    );
+  }
+
+  return organizationId;
+}
+
 // Hook to format navigation URLs with current org/estate
 export function useEstateUrl() {
   const params = useParams();

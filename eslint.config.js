@@ -123,7 +123,7 @@ export default defineConfig([
 
       // React rules
       ...reactHooks.configs.recommended.rules,
-      "react-hooks/exhaustive-deps": "off",
+      "react-hooks/exhaustive-deps": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
       // A11y rules (mapping from biome a11y rules)

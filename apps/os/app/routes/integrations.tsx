@@ -10,7 +10,6 @@ import {
   CardDescription,
 } from "../components/ui/card.tsx";
 import { Badge } from "../components/ui/badge.tsx";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -102,15 +101,18 @@ export default function Integrations() {
     console.log(`Connect to ${integrationId}`);
   };
 
-  if (isLoading) {
-    return (
-      <DashboardLayout>
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
+  return (
+    <div className="max-w-6xl mx-auto p-6">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">Integrations</h1>
+        <p className="text-muted-foreground text-lg">
+          Connect your accounts to enable integrations across the platform
+        </p>
+      </div>
+
+      {/* Loading State */}
+      {isLoading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[...Array(2)].map((_, i) => (
             <Card key={i} className="animate-pulse">
@@ -129,40 +131,15 @@ export default function Integrations() {
             </Card>
           ))}
         </div>
-      </DashboardLayout>
-    );
-  }
+      )}
 
-  if (error) {
-    return (
-      <DashboardLayout>
-        <div className="max-w-6xl mx-auto p-6">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-            <p className="text-muted-foreground text-lg">
-              Connect your accounts to enable integrations across the platform
-            </p>
-          </div>
-          <div className="text-red-500">Error loading integrations: {error.message}</div>
-        </div>
-      </DashboardLayout>
-    );
-  }
+      {/* Error State */}
+      {error && <div className="text-red-500">Error loading integrations: {error.message}</div>}
 
-  return (
-    <DashboardLayout>
-      <div className="max-w-6xl mx-auto p-6">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
-
-        {/* Integration Cards */}
+      {/* Success State - Integration Cards */}
+      {!isLoading && !error && integrations && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {integrations?.map((integration) => (
+          {integrations.map((integration) => (
             <Card key={integration.id} className="relative">
               <CardHeader className="pb-4">
                 <div className="flex items-start justify-between">
@@ -261,7 +238,7 @@ export default function Integrations() {
             </Card>
           ))}
         </div>
-      </div>
-    </DashboardLayout>
+      )}
+    </div>
   );
 }
