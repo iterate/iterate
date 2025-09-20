@@ -1,10 +1,11 @@
 import React, { useState } from "react";
 import { Github, ArrowRight, Edit2, Check, X, Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
-import { trpc } from "../lib/trpc.ts";
+import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import {
   Select,
@@ -110,46 +111,63 @@ function EstateContent() {
 
   // Get estate ID from URL
   const estateId = useEstateId();
+  const trpc = useTRPC();
+  const queryClient = useQueryClient();
 
   // Get estate details
-  const [estate] = trpc.estate.get.useSuspenseQuery({
-    estateId: estateId,
-  });
+  const { data: estate } = useSuspenseQuery(
+    trpc.estate.get.queryOptions({
+      estateId: estateId,
+    }),
+  );
 
-  const [connectedRepo] = trpc.integrations.getGithubRepoForEstate.useSuspenseQuery({
-    estateId: estateId,
-  });
-  const { data: repos } = trpc.integrations.listAvailableGithubRepos.useQuery({
-    estateId: estateId,
-  });
+  const { data: connectedRepo } = useSuspenseQuery(
+    trpc.integrations.getGithubRepoForEstate.queryOptions({
+      estateId: estateId,
+    }),
+  );
+  const { data: repos } = useSuspenseQuery(
+    trpc.integrations.listAvailableGithubRepos.queryOptions({
+      estateId: estateId,
+    }),
+  );
 
-  // Update estate name mutation with optimistic updates
-  const utils = trpc.useUtils();
-  const updateEstateMutation = trpc.estate.updateName.useMutation({
-    onMutate: async (newData) => {
-      // Cancel any outgoing refetches
-      await utils.estate.get.cancel({ estateId: estateId! });
+  const updateEstateMutation = useMutation(
+    trpc.estate.updateName.mutationOptions({
+      onMutate: async (newData) => {
+        // Cancel any outgoing refetches
+        await queryClient.cancelQueries({
+          queryKey: trpc.estate.get.queryKey({ estateId: estateId! }),
+        });
 
-      // Snapshot the previous value
-      const previousEstate = utils.estate.get.getData({ estateId: estateId! });
+        // Snapshot the previous value
+        const previousEstate = queryClient.getQueryData(
+          trpc.estate.get.queryKey({ estateId: estateId! }),
+        );
 
-      // Optimistically update to the new value
-      utils.estate.get.setData({ estateId: estateId! }, (old) =>
-        old ? { ...old, name: newData.name } : old,
-      );
+        // Optimistically update to the new value
+        queryClient.setQueryData(trpc.estate.get.queryKey({ estateId: estateId! }), (old) =>
+          old ? { ...old, name: newData.name } : old,
+        );
 
-      return { previousEstate };
-    },
-    onError: (_err, _newData, context) => {
-      // If the mutation fails, use the context returned from onMutate to roll back
-      utils.estate.get.setData({ estateId: estateId! }, context?.previousEstate);
-      toast.error("Failed to update estate name");
-    },
-    onSettled: () => {
-      // Always refetch after error or success to ensure we have the latest data
-      utils.estate.get.invalidate({ estateId: estateId! });
-    },
-  });
+        return { previousEstate };
+      },
+      onError: (_err, _newData, context) => {
+        // If the mutation fails, use the context returned from onMutate to roll back
+        queryClient.setQueryData(
+          trpc.estate.get.queryKey({ estateId: estateId! }),
+          context?.previousEstate,
+        );
+        toast.error("Failed to update estate name");
+      },
+      onSettled: () => {
+        // Always refetch after error or success to ensure we have the latest data
+        queryClient.invalidateQueries({
+          queryKey: trpc.estate.get.queryKey({ estateId: estateId! }),
+        });
+      },
+    }),
+  );
 
   const handleToggleEdit = () => {
     setIsEditing(!isEditing);
@@ -169,7 +187,9 @@ function EstateContent() {
     setIsEditing(false);
   };
 
-  const setGithubRepoForEstateMutation = trpc.integrations.setGithubRepoForEstate.useMutation();
+  const setGithubRepoForEstateMutation = useMutation(
+    trpc.integrations.setGithubRepoForEstate.mutationOptions({}),
+  );
   const handleSelectRepo = (repoId: string) => {
     setGithubRepoForEstateMutation.mutate(
       {

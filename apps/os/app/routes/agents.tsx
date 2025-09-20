@@ -25,7 +25,8 @@ import {
 } from "lucide-react";
 import { useAgent } from "agents/react";
 import clsx from "clsx";
-import { trpc } from "../lib/trpc.ts";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useTRPC } from "../lib/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
@@ -539,15 +540,19 @@ function EventDetailsContent({
 }) {
   const eventIndex = event.eventIndex;
 
+  const trpc = useTRPC();
+
   // Get reduced state at this event index
-  const reducedStateQuery = trpc.agents.getReducedStateAtEventIndex.useQuery(
-    {
-      estateId,
-      agentInstanceName,
-      agentClassName: agentClassName,
-      eventIndex: eventIndex,
-    },
-    { enabled: eventIndex !== undefined },
+  const reducedStateQuery = useQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions(
+      {
+        estateId,
+        agentInstanceName,
+        agentClassName: agentClassName,
+        eventIndex: eventIndex,
+      },
+      { enabled: eventIndex !== undefined },
+    ),
   );
 
   return (
@@ -720,14 +725,18 @@ function ToolCallInjector({
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [triggerLLMRequest, setTriggerLLMRequest] = useState(true);
 
-  const injectToolCallMutation = trpc.agents.injectToolCall.useMutation({
-    onSuccess: () => {
-      onClose();
-    },
-    onError: (error) => {
-      console.error("Failed to inject tool call:", error);
-    },
-  });
+  const trpc = useTRPC();
+
+  const injectToolCallMutation = useMutation(
+    trpc.agents.injectToolCall.mutationOptions({
+      onSuccess: () => {
+        onClose();
+      },
+      onError: (error) => {
+        console.error("Failed to inject tool call:", error);
+      },
+    }),
+  );
 
   // Extract function tools from reduced state
   const availableTools = useMemo((): ToolDefinition[] => {
@@ -1333,7 +1342,9 @@ function FileUploadDialog({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Map<File, number>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const addEventsMutation = trpc.agents.addEvents.useMutation();
+
+  const trpc = useTRPC();
+  const addEventsMutation = useMutation(trpc.agents.addEvents.mutationOptions({}));
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -1554,7 +1565,8 @@ export default function AgentsPage() {
   const { agentClassName, durableObjectName } = params;
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
-  const [currentUser] = trpc.user.me.useSuspenseQuery();
+  const trpc = useTRPC();
+  const { data: currentUser } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   if (
     !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
@@ -1574,11 +1586,13 @@ export default function AgentsPage() {
   const [isWebsocketConnected, setIsWebsocketConnected] = useState(false);
 
   // Get initial events
-  const [initialEvents] = trpc.agents.getEvents.useSuspenseQuery({
-    estateId,
-    agentInstanceName: durableObjectName,
-    agentClassName,
-  });
+  const { data: initialEvents } = useSuspenseQuery(
+    trpc.agents.getEvents.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+    }),
+  );
 
   const [events, setEvents] = useState<AgentCoreEvent[]>(
     initialEvents as unknown as AgentCoreEvent[],
@@ -1615,19 +1629,21 @@ export default function AgentsPage() {
   }, [agentConnection]);
 
   // Mutations
-  const addEventsMutation = trpc.agents.addEvents.useMutation();
+  const addEventsMutation = useMutation(trpc.agents.addEvents.mutationOptions({}));
 
   // Get current reduced state
-  const { data: reducedState } = trpc.agents.getReducedStateAtEventIndex.useQuery(
-    {
-      estateId,
-      agentInstanceName: durableObjectName,
-      agentClassName,
-      eventIndex: (events.length ?? 0) - 1,
-    },
-    {
-      enabled: !!agentState,
-    },
+  const { data: reducedState } = useQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions(
+      {
+        estateId,
+        agentInstanceName: durableObjectName,
+        agentClassName,
+        eventIndex: (events.length ?? 0) - 1,
+      },
+      {
+        enabled: !!agentState,
+      },
+    ),
   );
 
   // Filter events

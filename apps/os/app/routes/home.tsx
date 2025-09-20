@@ -1,5 +1,6 @@
 import { CheckCircle, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import {
@@ -11,7 +12,7 @@ import {
 } from "../components/ui/card.tsx";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { authClient } from "../lib/auth-client.ts";
-import { trpc } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import type { Route } from "./+types/home";
 
@@ -24,7 +25,10 @@ export function meta(_args: Route.MetaArgs) {
 
 function ConnectSlackCard() {
   const estateId = useEstateId();
-  const [integrations] = trpc.integrations.list.useSuspenseQuery({ estateId: estateId });
+  const trpc = useTRPC();
+  const { data: integrations } = useSuspenseQuery(
+    trpc.integrations.list.queryOptions({ estateId: estateId }),
+  );
 
   // Check if Slack bot is connected at the estate level
   const slackBotIntegration = integrations.find((i) => i.id === "slack-bot");

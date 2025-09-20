@@ -1,5 +1,6 @@
 import { ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import {
   Card,
@@ -15,7 +16,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../components/ui/collapsible.tsx";
-import { trpc } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import type { Route } from "./+types/integrations";
 
@@ -75,15 +76,19 @@ function ScopesList({ scope }: { scope: string }) {
 
 export default function Integrations() {
   const estateId = useEstateId();
+  const trpc = useTRPC();
   const {
     data: integrations,
     isLoading,
     error,
-  } = trpc.integrations.list.useQuery({
-    estateId: estateId,
-  });
-  const { mutateAsync: startGithubAppInstallFlow } =
-    trpc.integrations.startGithubAppInstallFlow.useMutation();
+  } = useQuery(
+    trpc.integrations.list.queryOptions({
+      estateId: estateId,
+    }),
+  );
+  const { mutateAsync: startGithubAppInstallFlow } = useMutation(
+    trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
+  );
 
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {

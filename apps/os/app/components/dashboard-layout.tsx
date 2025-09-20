@@ -9,8 +9,9 @@ import {
   Check,
   ChevronsUpDown,
 } from "lucide-react";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
-import { trpc } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 import { setSelectedEstate } from "../lib/estate-cookie.ts";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
@@ -63,8 +64,9 @@ interface Estate {
 }
 
 function UserSwitcher() {
-  const [user] = trpc.user.me.useSuspenseQuery();
-  const [estates] = trpc.estates.list.useSuspenseQuery();
+  const trpc = useTRPC();
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
   const navigate = useNavigate();
   const params = useParams();
   const currentEstateId = params.estateId;
