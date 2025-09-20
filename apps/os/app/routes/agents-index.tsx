@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { Bot, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
@@ -15,8 +16,8 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table.tsx";
-import { trpc } from "../lib/trpc.ts";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
+import { useTRPC } from "../lib/trpc.ts";
 
 type SortField = "name" | "className" | "createdAt";
 type SortDirection = "asc" | "desc";
@@ -28,10 +29,9 @@ function AgentInstancesTable() {
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
+  const trpc = useTRPC();
 
-  const [agents] = trpc.agents.list.useSuspenseQuery({
-    estateId: estateId,
-  });
+  const { data: agents } = useSuspenseQuery(trpc.agents.list.queryOptions({ estateId }));
 
   const handleRowClick = (params: { agentName: string; className: string }) => {
     const { agentName, className } = params;

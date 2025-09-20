@@ -80,6 +80,7 @@ app.all("/api/trpc/*", (c) => {
     endpoint: "/api/trpc",
     req: c.req.raw,
     router: appRouter,
+    allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
   });
 });
@@ -175,7 +176,7 @@ app.post(
 );
 
 const requestHandler = createRequestHandler(
-  //@ts-expect-error - this is a virtual module
+  // @ts-ignore - this is a virtual module
   () => import("virtual:react-router/server-build"),
   import.meta.env.MODE,
 );
