@@ -4,8 +4,7 @@ import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
-import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import {
   Select,
@@ -210,71 +209,69 @@ function EstateContent() {
   };
 
   return (
-    <DashboardLayout>
-      <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
-        {/* Editable Title */}
-        <div className="mb-12">
-          <EditableTitle
-            value={estate.name}
-            isEditing={isEditing}
-            onToggleEdit={handleToggleEdit}
-            onSave={handleSave}
-            isLoading={updateEstateMutation.isPending}
-          />
-          <p className="text-slate-600 dark:text-slate-300 text-lg">
-            Connect your GitHub repository to manage your digital estate
-          </p>
-        </div>
-
-        {/* GitHub Connection */}
-        <div className="mb-8">
-          <div className="w-20 h-20 mb-6 rounded-2xl bg-gray-900 flex items-center justify-center">
-            <Github className="w-10 h-10 text-white" />
-          </div>
-
-          <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect GitHub</h2>
-
-          <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed mb-8">
-            Connect your GitHub account to automatically manage your digital estate, backup
-            important repositories, and ensure your code legacy is preserved.
-          </p>
-        </div>
-
-        {/* Connection Status */}
-        {connectedRepo ? (
-          <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
-              <span className="text-green-700 dark:text-green-300 font-medium">
-                Connected to #{connectedRepo.toString()}
-              </span>
-            </div>
-
-            <Button
-              size="lg"
-              className="bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold px-8 py-4 h-12"
-              onClick={handleGoToGitHub}
-            >
-              Go to GitHub
-              <ArrowRight className="h-4 w-4 ml-3" />
-            </Button>
-          </div>
-        ) : (
-          <Select onValueChange={handleSelectRepo}>
-            <SelectTrigger>
-              <SelectValue placeholder="Select a repository" />
-            </SelectTrigger>
-            <SelectContent>
-              {repos?.map((repo) => (
-                <SelectItem key={repo.id} value={repo.id.toString()}>
-                  {repo.full_name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        )}
+    <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
+      {/* Editable Title */}
+      <div className="mb-12">
+        <EditableTitle
+          value={estate.name}
+          isEditing={isEditing}
+          onToggleEdit={handleToggleEdit}
+          onSave={handleSave}
+          isLoading={updateEstateMutation.isPending}
+        />
+        <p className="text-slate-600 dark:text-slate-300 text-lg">
+          Connect your GitHub repository to manage your digital estate
+        </p>
       </div>
-    </DashboardLayout>
+
+      {/* GitHub Connection */}
+      <div className="mb-8">
+        <div className="w-20 h-20 mb-6 rounded-2xl bg-gray-900 flex items-center justify-center">
+          <Github className="w-10 h-10 text-white" />
+        </div>
+
+        <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect GitHub</h2>
+
+        <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed mb-8">
+          Connect your GitHub account to automatically manage your digital estate, backup important
+          repositories, and ensure your code legacy is preserved.
+        </p>
+      </div>
+
+      {/* Connection Status */}
+      {connectedRepo ? (
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
+            <span className="text-green-700 dark:text-green-300 font-medium">
+              Connected to #{connectedRepo.toString()}
+            </span>
+          </div>
+
+          <Button
+            size="lg"
+            className="bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold px-8 py-4 h-12"
+            onClick={handleGoToGitHub}
+          >
+            Go to GitHub
+            <ArrowRight className="h-4 w-4 ml-3" />
+          </Button>
+        </div>
+      ) : (
+        <Select onValueChange={handleSelectRepo}>
+          <SelectTrigger>
+            <SelectValue placeholder="Select a repository" />
+          </SelectTrigger>
+          <SelectContent>
+            {repos?.map((repo) => (
+              <SelectItem key={repo.id} value={repo.id.toString()}>
+                {repo.full_name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
+    </div>
   );
 }
 

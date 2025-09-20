@@ -13,9 +13,8 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { setSelectedEstate } from "../lib/estate-cookie.ts";
-import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
+import { useEstateId, useEstateUrl, useOrganizationId } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
-
 import {
   Sidebar,
   SidebarContent,
@@ -178,7 +177,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const getEstateUrl = useEstateUrl();
   const estateId = useEstateId();
-  const { isConnected } = useOrganizationWebSocket();
+  const organizationId = useOrganizationId();
+  const ws = useOrganizationWebSocket(organizationId, estateId);
+
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
@@ -188,14 +189,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton size="lg" asChild>
-                    <a href="/">
+                    <Link to="/">
                       <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
                         <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
                       </div>
                       <div className="grid flex-1 text-left leading-tight">
                         <span className="truncate font-medium">iterate</span>
                       </div>
-                    </a>
+                    </Link>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
@@ -229,10 +230,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter>
-            {!isConnected && (
+            {ws.readyState !== ws.OPEN && (
               <div className="flex items-center gap-2 mb-3 px-3">
                 <div className={`size-2 rounded-full bg-orange-500`}></div>
-                <span className="text-sm text-muted-foreground">Convex connecting...</span>
+                <span className="text-sm text-muted-foreground">Websocket connecting...</span>
               </div>
             )}
             <UserSwitcher />
