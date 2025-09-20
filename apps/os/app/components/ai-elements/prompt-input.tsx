@@ -8,7 +8,6 @@ import {
   SquareIcon,
   XIcon,
 } from "lucide-react";
-import { nanoid } from "nanoid";
 import {
   type ChangeEventHandler,
   Children,
@@ -29,22 +28,17 @@ import {
   useRef,
   useState,
 } from "react";
-import { Button } from "../../components/ui/button";
+import { typeid } from "typeid-js";
+import { Button } from "../ui/button.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "../../components/ui/dropdown-menu";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select";
-import { Textarea } from "../../components/ui/textarea";
-import { cn } from "../../lib/utils";
+} from "../ui/dropdown-menu.tsx";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.tsx";
+import { Textarea } from "../ui/textarea.tsx";
+import { cn } from "../../lib/utils.ts";
 
 type AttachmentsContext = {
   files: (FileUIPart & { id: string })[];
@@ -272,7 +266,7 @@ export const PromptInput = forwardRef<HTMLFormElement, PromptInputProps>(
           const next: (FileUIPart & { id: string })[] = [];
           for (const file of capped) {
             next.push({
-              id: nanoid(),
+              id: typeid("file").toString(),
               type: "file",
               url: URL.createObjectURL(file),
               mediaType: file.type,
