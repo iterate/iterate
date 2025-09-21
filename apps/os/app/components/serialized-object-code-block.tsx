@@ -140,14 +140,15 @@ export function SerializedObjectCodeBlock({
   const extensions: CodeMirrorProps["extensions"] = [
     basicSetup,
     lang(),
-    search(),
+    search({ top: true }),
     keymap.of(searchKeymap),
     EditorView.editable.of(false), // This is enough for readonly
+    EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcuts
   ];
 
   return (
     <div className="relative">
-      <div className={clsx("rounded overflow-hidden", className)}>
+      <div className={clsx("rounded overflow-hidden overflow-y-auto", className)}>
         <CodeMirror value={code} extensions={extensions} />
       </div>
 

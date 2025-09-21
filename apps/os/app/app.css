@@ -118,3 +118,23 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* CodeMirror search panel sticky positioning */
+.cm-search.cm-panel {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 10 !important;
+  background: hsl(var(--background)) !important;
+  border-bottom: 1px solid hsl(var(--border)) !important;
+  margin: 0 !important;
+  padding: 8px !important;
+}
+
+/* Ensure the CodeMirror editor container allows for sticky positioning */
+.cm-editor {
+  position: relative !important;
+}
+
+.cm-scroller {
+  overflow: auto !important;
+}
