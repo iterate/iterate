@@ -6,7 +6,7 @@ import type { CoreAgentSlices } from "../iterate-agent.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb } from "../../db/client.ts";
 import { env } from "../../../env.ts";
-import { BetterAuthMCPOAuthProvider } from "./better-auth-mcp-oauth-provider.ts";
+import { BetterAuthMCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
   type MCPConnection,
@@ -39,7 +39,6 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   estateId: string;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: MergedStateForSlices<CoreAgentSlices>;
   }) => Promise<string | undefined>;
 }
 
@@ -93,16 +92,13 @@ async function formatStringWithDependencyFromIntegrationSystem(params: {
 function getIntegrationSlugFromServerUrl(serverUrl: string) {
   try {
     const url = new URL(serverUrl);
-    // Create a cleaner slug by removing protocol and replacing special chars
     const hostnameAndPath = url.hostname + url.pathname;
-    // Replace common special characters with hyphens for a cleaner slug
     return hostnameAndPath
       .replace(/[/.:]/g, "-") // Replace /, ., : with -
       .replace(/[^a-zA-Z0-9-]/g, "") // Remove any other special chars
       .replace(/-+/g, "-") // Replace multiple hyphens with single hyphen
       .replace(/^-|-$/g, ""); // Remove leading/trailing hyphens
   } catch {
-    // Fallback for invalid URLs
     return serverUrl
       .replace(/[^a-zA-Z0-9]/g, "-")
       .replace(/-+/g, "-")
@@ -244,7 +240,6 @@ export async function handleMCPConnectRequest(
   const requiredDependencies = [...new Set(allMissingDependencies)];
   const finalRedirectUrl = await params.getFinalRedirectUrl?.({
     durableObjectInstanceName: agentDurableObjectName,
-    reducedState: reducedState,
   });
 
   if (allMissingDependencies.length > 0) {
@@ -278,6 +273,14 @@ export async function handleMCPConnectRequest(
   const db = getDb();
   const auth = getAuth(db);
 
+  const oauthCallbackUrl = await params.getFinalRedirectUrl?.({
+    durableObjectInstanceName: agentDurableObjectName,
+  });
+
+  const agentClassName = agentDurableObjectName.startsWith("SlackAgent-")
+    ? "SlackAgent"
+    : "IterateAgent";
+
   const oauthProvider = requiresAuth
     ? new BetterAuthMCPOAuthProvider({
         auth,
@@ -286,6 +289,9 @@ export async function handleMCPConnectRequest(
         estateId: estateId,
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: formattedServerUrl,
+        callbackURL:
+          oauthCallbackUrl ||
+          `${env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`,
         env: { VITE_PUBLIC_URL: env.VITE_PUBLIC_URL },
         reconnect,
         agentDurableObjectId,
@@ -308,7 +314,6 @@ export async function handleMCPConnectRequest(
       },
     };
 
-    // Add reconnect parameters if available
     if (reconnect) {
       connectOptions.reconnect = reconnect;
     }
@@ -325,9 +330,7 @@ export async function handleMCPConnectRequest(
     ]);
   } catch (error) {
     if (requiresAuth) {
-      // clear tokens and re-setup oauth flow
       oauthProvider?.clearTokens();
-      // await oauthProvider?.setupOAuthFlow();
     }
 
     if (requiresAuth && oauthProvider?.authUrl) {
@@ -539,7 +542,6 @@ export async function getOrCreateMCPConnection(params: {
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: MergedStateForSlices<CoreAgentSlices>;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
   const { connectionKey, connection } = params;
@@ -660,7 +662,6 @@ export async function lazyConnectMCPServer(params: {
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: MergedStateForSlices<CoreAgentSlices>;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPClientManager | undefined> & { events?: MCPEventHookReturnEvent[] }> {
   const { connectionKey } = params;

@@ -531,7 +531,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           console.warn("Failed to broadcast OpenAI chunk during HMR:", error);
         }
       },
-
       // TODO: somebody who understands this more than me needs to fix this type
       // @ts-expect-error
       uploadFile: async (_data: {
@@ -564,10 +563,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         return `${this.env.VITE_PUBLIC_URL}/api/uploads/${fileId}`;
       },
 
-      getFinalRedirectUrl: async <S>(payload: {
-        durableObjectInstanceName: string;
-        reducedState: S;
-      }) => {
+      getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
         return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
       },
 
@@ -660,6 +656,16 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           results.filter(({ shouldInclude }) => shouldInclude).map(({ rule }) => rule),
         );
       },
+
+      lazyConnectionDeps: {
+        agentDurableObjectId: this.ctx.id.toString(),
+        estateId: this.databaseRecord.estateId,
+        getAgentDurableObjectName: () => this.name,
+        getReducedState: () => this.agentCore.state,
+        getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
+          return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
+        },
+      },
     };
 
     const extraDeps = this.getExtraDependencies(baseDeps);
@@ -679,20 +685,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * and add additional functionality but maintain the old logic.
    */
   protected getExtraDependencies(_deps: AgentCoreDeps): Partial<MergedDepsForSlices<Slices>> {
-    // Provide MCPSliceDeps
-    const mcpDeps = {
-      env: this.env,
-      uploadFile: _deps.uploadFile,
-      lazyConnectionDeps: {
-        agentDurableObjectId: this.ctx.id.toString(),
-        estateId: this.databaseRecord.estateId,
-        getAgentDurableObjectName: () => this.name,
-        getReducedState: () => this.agentCore.state,
-        getFinalRedirectUrl: _deps.getFinalRedirectUrl,
-      },
-    };
-
-    return mcpDeps as unknown as Partial<MergedDepsForSlices<Slices>>;
+    return {};
   }
 
   /**

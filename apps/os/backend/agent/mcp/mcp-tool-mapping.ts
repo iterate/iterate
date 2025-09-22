@@ -340,7 +340,6 @@ export interface LazyConnectionDeps {
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: MergedStateForSlices<CoreAgentSlices>;
   }) => Promise<string | undefined>;
 }
 

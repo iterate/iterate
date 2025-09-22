@@ -83,13 +83,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       onEventAdded: <E, S>(payload: {
         event: E;
         reducedState: S;
-        getFinalRedirectUrl?: <S>(payload: {
+        getFinalRedirectUrl?: (payload: {
           durableObjectInstanceName: string;
-          reducedState: S;
         }) => Promise<string | undefined>;
       }) => {
         deps?.onEventAdded?.(payload);
-        const { slackChannelId, slackThreadId } = payload.reducedState as SlackSliceState;
+        const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
         if (!slackChannelId || !slackThreadId) {
           return;
         }
@@ -125,10 +124,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
         }
       },
-      getFinalRedirectUrl: async <S>(_payload: {
-        durableObjectInstanceName: string;
-        reducedState: S;
-      }) => {
+      getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
       },
     };

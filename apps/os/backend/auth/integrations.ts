@@ -7,15 +7,11 @@ import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq } from "drizzle-orm";
-import { typeid } from "typeid-js";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
-import { BetterAuthMCPOAuthProvider } from "../agent/mcp/better-auth-mcp-oauth-provider.ts";
-import { getDb } from "../db/client.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
-import { getAuth } from "./auth.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -79,56 +75,7 @@ export const integrationsPlugin = () =>
   ({
     id: "integrations",
     endpoints: {
-      // MCP OAuth endpoints
-      initiateMCPOAuth: createAuthEndpoint(
-        "/integrations/mcp/initiate",
-        {
-          method: "POST",
-          body: z.object({
-            integrationSlug: z.string(),
-            serverUrl: z.string(),
-            estateId: z.string(),
-            callbackURL: z.string(),
-            clientId: z.string().optional(),
-            authUrl: z.string().url(),
-          }),
-          use: [sessionMiddleware],
-        },
-        async (ctx) => {
-          const { integrationSlug, serverUrl, estateId, callbackURL, clientId, authUrl } = ctx.body;
-          const session = ctx.context.session;
-
-          // Generate state for OAuth flow
-          const state = generateRandomString(32);
-          const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-          const stateData = {
-            integrationSlug,
-            serverUrl,
-            estateId,
-            userId: session.user.id,
-            callbackURL,
-            clientId,
-          };
-
-          // Store state in verification table
-          await ctx.context.internalAdapter.createVerificationValue({
-            expiresAt,
-            identifier: state,
-            value: JSON.stringify(stateData),
-          });
-
-          // Parse auth URL and append state
-          const authUrlObj = new URL(authUrl);
-          authUrlObj.searchParams.set("state", state);
-
-          return ctx.json({
-            redirectUrl: authUrlObj.toString(),
-            state,
-          });
-        },
-      ),
-
+      // MCP OAuth callback endpoint
       callbackMCP: createAuthEndpoint(
         "/integrations/callback/mcp",
         {
@@ -166,19 +113,16 @@ export const integrationsPlugin = () =>
           };
 
           if (state) {
-            // Retrieve state from verification table
             const stateValue = await ctx.context.internalAdapter.findVerificationValue(state);
             if (!stateValue) {
               return ctx.json({ error: "Invalid or expired state" }, { status: 400 });
             }
             stateData = JSON.parse(stateValue.value);
           } else {
-            // Handle missing state parameter (some MCP servers don't preserve it)
             console.warn(
               "MCP OAuth callback received without state parameter - this is a security risk",
             );
 
-            // For development, we'll return an error with helpful information
             return ctx.json(
               {
                 error: "Missing state parameter",
@@ -192,11 +136,9 @@ export const integrationsPlugin = () =>
           }
 
           const {
-            env,
             var: { db },
           } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
 
-          // Verify user has access to the estate
           const estate = await db.query.estate.findFirst({
             where: eq(schema.estate.id, stateData.estateId),
             with: {
@@ -236,16 +178,12 @@ export const integrationsPlugin = () =>
             );
           }
 
-          // Clean up the state
           await ctx.context.internalAdapter.deleteVerificationValue(state);
 
-          // If we have agent DO information, trigger reconnect
           if (stateData.agentDurableObjectId && stateData.agentDurableObjectName) {
             try {
-              // Determine the agent class from the instance name
               const isSlackAgent = stateData.agentDurableObjectName.startsWith("SlackAgent-");
 
-              // Get the agent stub using the appropriate class
               let agentStub: any;
               if (isSlackAgent) {
                 // Use SlackAgent's inherited method
@@ -261,7 +199,6 @@ export const integrationsPlugin = () =>
                 });
               }
 
-              // Trigger reconnect with OAuth code
               await agentStub.addEvents([
                 {
                   type: "MCP:CONNECT_REQUEST",
@@ -272,144 +209,23 @@ export const integrationsPlugin = () =>
                     integrationSlug: stateData.integrationSlug,
                     requiresAuth: true,
                     reconnect: {
-                      id: stateData.serverId || stateData.integrationSlug, // serverId might not be available yet
+                      id: stateData.serverId,
                       oauthClientId: stateData.clientId,
                       oauthCode: code,
                     },
                   },
                 },
               ]);
-
-              console.log("MCP OAuth callback - triggered reconnect", {
-                integrationSlug: stateData.integrationSlug,
-                userId: stateData.userId,
-                estateId: stateData.estateId,
-                agentDurableObjectId: stateData.agentDurableObjectId,
-                hasCode: !!code,
-              });
             } catch (error) {
               console.error("Failed to trigger agent reconnect:", error);
-              // Fall through to redirect even if agent reconnect fails
             }
           }
 
-          // Redirect back to the callback URL
           const redirectUrl = new URL(stateData.callbackURL);
           redirectUrl.searchParams.set("mcp_oauth_complete", "true");
           redirectUrl.searchParams.set("server_url", stateData.serverUrl);
           redirectUrl.searchParams.set("integration_slug", stateData.integrationSlug);
           return ctx.redirect(redirectUrl.toString());
-        },
-      ),
-
-      getMCPConnections: createAuthEndpoint(
-        "/integrations/mcp/connections",
-        {
-          method: "GET",
-          query: z.object({
-            estateId: z.string(),
-          }),
-          use: [sessionMiddleware],
-        },
-        async (ctx) => {
-          const { estateId } = ctx.query;
-          const session = ctx.context.session;
-
-          const {
-            var: { db },
-          } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
-
-          // Verify user has access to the estate
-          const member = await db.query.estate.findFirst({
-            where: eq(schema.estate.id, estateId),
-            columns: {},
-            with: {
-              organization: {
-                columns: {},
-                with: {
-                  members: {
-                    columns: {
-                      userId: true,
-                    },
-                    where: eq(schema.organizationUserMembership.userId, session.user.id),
-                  },
-                },
-              },
-            },
-          });
-
-          if (!member || member.organization.members.length === 0) {
-            return ctx.json({ error: "You are not a member of this estate" }, { status: 403 });
-          }
-
-          // Get all MCP connections for the estate
-          const connections = await db.query.estateAccountsPermissions.findMany({
-            where: eq(schema.estateAccountsPermissions.estateId, estateId),
-            with: {
-              account: true,
-            },
-          });
-
-          const mcpConnections = connections
-            .filter((conn) => conn.account.providerId.startsWith("mcp-"))
-            .map((conn) => ({
-              accountId: conn.account.id,
-              integrationSlug: conn.account.providerId.replace("mcp-", ""),
-              hasValidToken: !!conn.account.accessToken,
-              tokenExpiresAt: conn.account.accessTokenExpiresAt?.toISOString(),
-              createdAt: conn.account.createdAt.toISOString(),
-              updatedAt: conn.account.updatedAt.toISOString(),
-            }));
-
-          return ctx.json({ connections: mcpConnections });
-        },
-      ),
-
-      disconnectMCP: createAuthEndpoint(
-        "/integrations/mcp/disconnect",
-        {
-          method: "POST",
-          body: z.object({
-            accountId: z.string(),
-            estateId: z.string(),
-          }),
-          use: [sessionMiddleware],
-        },
-        async (ctx) => {
-          const { accountId, estateId } = ctx.body;
-          const session = ctx.context.session;
-
-          const {
-            var: { db },
-          } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
-
-          // Verify user has access to the estate
-          const member = await db.query.estate.findFirst({
-            where: eq(schema.estate.id, estateId),
-            columns: {},
-            with: {
-              organization: {
-                columns: {},
-                with: {
-                  members: {
-                    columns: {
-                      userId: true,
-                    },
-                    where: eq(schema.organizationUserMembership.userId, session.user.id),
-                  },
-                },
-              },
-            },
-          });
-
-          if (!member || member.organization.members.length === 0) {
-            return ctx.json({ error: "You are not a member of this estate" }, { status: 403 });
-          }
-
-          // Delete the account (this will cascade to estate permissions)
-          await db.delete(schema.account).where(eq(schema.account.id, accountId));
-
-          return ctx.json({ success: true });
         },
       ),
 
