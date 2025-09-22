@@ -12,7 +12,9 @@ import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
 import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
+  contextRules: ContextRule[];
+};
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -187,12 +189,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eq(agentInstance.className, className),
       ),
     });
-
     if (!record) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
+    const contextRules = await this.getRulesFromDB(db, record.estateId);
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({ ...record, contextRules });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -202,7 +204,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
-      with: { agentInstance: true },
+      with: { agentInstance: { with: { estate: { with: { iterateConfigs: true } } } } },
     });
 
     const matchingAgents = routes
@@ -214,7 +216,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) => this.getStubFromDatabaseRecord(record)),
+      matchingAgents.map((record) =>
+        this.getStubFromDatabaseRecord({
+          ...record,
+          contextRules: record.estate.iterateConfigs[0]?.config?.contextRules ?? [],
+        }),
+      ),
     );
 
     return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
@@ -261,8 +268,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
     }
+    const contextRules = await this.getRulesFromDB(db, estateId);
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({ ...record, contextRules });
   }
 
   // Get or create stub by route
@@ -280,13 +288,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: eq(agentInstanceRoute.routingKey, route),
       with: { agentInstance: true },
     });
+    const contextRules = await this.getRulesFromDB(db, estateId);
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromDatabaseRecord(existingAgent);
+      return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
     }
 
     // No existing agent for this route, create one with route
@@ -314,7 +323,17 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .values({ agentInstanceId: record.id, routingKey: route })
       .onConflictDoNothing();
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({
+      ...record,
+      contextRules,
+    });
+  }
+
+  static async getRulesFromDB(db: DB, estateId: string): Promise<ContextRule[]> {
+    const config = await db.query.iterateConfig.findFirst({
+      where: eq(schema.iterateConfig.estateId, estateId),
+    });
+    return config?.config?.contextRules ?? [];
   }
 
   protected db: DB;
@@ -685,15 +704,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   protected async getContextRules(): Promise<ContextRule[]> {
     // const db = this.db;
     const defaultRules = await defaultContextRules();
-    const rulesFromDb = {
-      config: {
-        contextRules: [],
-      },
-    };
-    // const rulesFromDb = await this.db.query.iterateConfig.findFirst({
+    // todo: uncomment this - with a timeout + warning when it's too slow, it suggests we have some kind of deadlock
+    // when querying the db during do initialisation
+    // const dbConfig = await this.db.query.iterateConfig.findFirst({
     //   where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
     // });
-    const rules = [...defaultRules, ...(rulesFromDb?.config?.contextRules ?? [])];
+    const rules = [...defaultRules, ...this.databaseRecord.contextRules];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
       if (seenIds.has(rule.key)) {
