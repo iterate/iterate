@@ -22,12 +22,29 @@ export const EstateSpecifierFromString = z
   })
   .pipe(EstateSpecifier);
 
+const examples = [
+  `A github repo: git:some-org/some-repo`,
+  `A github repo with a https url: https://github.com/some-org/some-repo`,
+  `A github repo with a ref: git:some-org/some-repo#some-ref`,
+  `A github repo with a path: git:some-org/some-repo#some-ref&path:some/path`,
+  `A github repo with a path and a ref: git:some-org/some-repo#some-ref&path:some/path`,
+];
+
 export const parseSpecifier = (specifier: string): EstateSpecifier => {
-  const url = new URL(specifier);
+  let url;
+  try {
+    url = new URL(specifier);
+  } catch (e) {
+    throw new Error(
+      `Can't parse specifier: ${specifier}. Examples of valid specifiers:\n${examples.join("\n")}`,
+    );
+  }
   if (url.protocol === "https:" && url.hostname === "github.com") {
     // ok this looks like a github https url, that's fine
   } else if (url.protocol !== "git:" && url.protocol !== "github:") {
-    throw new Error(`Invalid protocol: ${url.protocol}. Only git: and github: are supported.`);
+    throw new Error(
+      `Invalid protocol: ${url.protocol}. Only git: and github: and https://github.com are supported. Examples of valid specifiers:\n${examples.join("\n")}`,
+    );
   }
   const ownerAndRepo = url.pathname
     .replace(/^https:\/\/github\.com\//, "")
