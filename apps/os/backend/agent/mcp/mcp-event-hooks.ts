@@ -7,7 +7,6 @@ import type { CoreAgentSlices } from "../iterate-agent.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
-import { env } from "../../../env.ts";
 import { BetterAuthMCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
@@ -306,9 +305,9 @@ export async function handleMCPConnectRequest(
         callbackURL:
           finalRedirectUrl ||
           (organizationId
-            ? `${env.VITE_PUBLIC_URL}/${organizationId}/${estateId}/agents/${agentClassName}/${agentDurableObjectName}`
-            : `${env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`),
-        env: { VITE_PUBLIC_URL: env.VITE_PUBLIC_URL },
+            ? `${import.meta.env.VITE_PUBLIC_URL}/${organizationId}/${estateId}/agents/${agentClassName}/${agentDurableObjectName}`
+            : `${import.meta.env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`),
+        env: { VITE_PUBLIC_URL: import.meta.env.VITE_PUBLIC_URL },
         reconnect,
         agentDurableObjectId,
         agentDurableObjectName,

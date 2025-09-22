@@ -290,3 +290,5 @@ export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
     return verification.value;
   }
 }
+
+export { BetterAuthMCPOAuthProvider as MCPOAuthProvider };
