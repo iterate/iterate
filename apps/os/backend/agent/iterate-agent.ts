@@ -704,11 +704,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   protected async getContextRules(): Promise<ContextRule[]> {
     // const db = this.db;
     const defaultRules = await defaultContextRules();
-    // const rulesFromDb = {
-    //   config: {
-    //     contextRules: [],
-    //   },
-    // };
+    // todo: uncomment this - with a timeout + warning when it's too slow, it suggests we have some kind of deadlock
+    // when querying the db during do initialisation
     // const dbConfig = await this.db.query.iterateConfig.findFirst({
     //   where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
     // });
