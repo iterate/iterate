@@ -12,6 +12,7 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
+import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -100,24 +101,20 @@ export const integrationsPlugin = () =>
             );
           }
 
-          let stateData: {
-            integrationSlug: string;
-            serverUrl: string;
-            estateId: string;
-            userId: string;
-            callbackURL: string;
-            clientId?: string;
-            agentDurableObjectId?: string;
-            agentDurableObjectName?: string;
-            serverId?: string;
-          };
+          let stateData: z.infer<typeof MCPOAuthState>;
 
           if (state) {
             const stateValue = await ctx.context.internalAdapter.findVerificationValue(state);
             if (!stateValue) {
               return ctx.json({ error: "Invalid or expired state" }, { status: 400 });
             }
-            stateData = JSON.parse(stateValue.value);
+
+            try {
+              stateData = MCPOAuthState.parse(JSON.parse(stateValue.value));
+            } catch (parseError) {
+              console.error("Invalid MCP OAuth state data:", parseError);
+              return ctx.json({ error: "Invalid state data format" }, { status: 400 });
+            }
           } else {
             console.warn(
               "MCP OAuth callback received without state parameter - this is a security risk",
@@ -180,22 +177,16 @@ export const integrationsPlugin = () =>
 
           await ctx.context.internalAdapter.deleteVerificationValue(state);
 
-          if (stateData.agentDurableObjectId && stateData.agentDurableObjectName) {
+          if (stateData.agentDurableObject) {
             try {
-              const isSlackAgent = stateData.agentDurableObjectName.startsWith("SlackAgent-");
-
-              let agentStub: any;
-              if (isSlackAgent) {
-                agentStub = await SlackAgent.getStubByName({
-                  db,
-                  agentInstanceName: stateData.agentDurableObjectName,
-                });
-              } else {
-                agentStub = await IterateAgent.getStubByName({
-                  db,
-                  agentInstanceName: stateData.agentDurableObjectName,
-                });
-              }
+              const params = {
+                db,
+                agentInstanceName: stateData.agentDurableObject.durableObjectName,
+              };
+              const agentStub =
+                stateData.agentDurableObject.className === "SlackAgent"
+                  ? await SlackAgent.getStubByName(params)
+                  : await IterateAgent.getStubByName(params);
 
               await agentStub.addEvents([
                 {
@@ -207,7 +198,7 @@ export const integrationsPlugin = () =>
                     integrationSlug: stateData.integrationSlug,
                     requiresAuth: true,
                     reconnect: {
-                      id: stateData.serverId || stateData.serverUrl,
+                      id: "cloudflare-requires-some-id",
                       oauthClientId: stateData.clientId,
                       oauthCode: code,
                     },
@@ -219,11 +210,11 @@ export const integrationsPlugin = () =>
             }
           }
 
-          const redirectUrl = new URL(stateData.callbackURL);
-          redirectUrl.searchParams.set("mcp_oauth_complete", "true");
-          redirectUrl.searchParams.set("server_url", stateData.serverUrl);
-          redirectUrl.searchParams.set("integration_slug", stateData.integrationSlug);
-          return ctx.redirect(redirectUrl.toString());
+          if (!stateData.callbackURL) {
+            return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
+          }
+
+          return ctx.redirect(stateData.callbackURL.toString());
         },
       ),
 
@@ -379,18 +370,7 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Invalid state" });
           }
 
-          const parsedState = z
-            .object({
-              estateId: z.string().optional(),
-              link: z
-                .object({
-                  userId: z.string(),
-                  email: z.string(),
-                })
-                .optional(),
-              callbackURL: z.string(),
-            })
-            .parse(JSON.parse(value.value));
+          const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
 
           const { link, callbackURL } = parsedState;
           let estateId = parsedState.estateId;
@@ -572,6 +552,10 @@ export const integrationsPlugin = () =>
               },
             })
             .onConflictDoNothing();
+
+          if (!callbackURL) {
+            return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
+          }
 
           return ctx.redirect(callbackURL);
         },

@@ -334,10 +334,15 @@ export function generateRuntimeToolsFromConnections(
 
 // Lazy connection dependencies interface
 export interface LazyConnectionDeps {
-  agentDurableObjectId: string;
+  agentDurableObject: {
+    durableObjectId: string;
+    durableObjectName: string;
+    className: string;
+  };
   estateId: string;
   getAgentDurableObjectName: () => string; // Made lazy to avoid early access
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
+  getAgentDurableObjectClassName: () => string;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -454,8 +459,7 @@ export function createRuntimeToolFromMCPTool(params: {
         const result = await lazyConnectMCPServer({
           connectionKey: selectedConnectionKey,
           connection,
-          agentDurableObjectId: params.lazyConnectionDeps.agentDurableObjectId,
-          agentDurableObjectName: params.lazyConnectionDeps.getAgentDurableObjectName(),
+          agentDurableObject: params.lazyConnectionDeps.agentDurableObject,
           estateId: params.lazyConnectionDeps.estateId,
           reducedState: reducedState,
           getFinalRedirectUrl: params.lazyConnectionDeps.getFinalRedirectUrl,

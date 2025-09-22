@@ -340,7 +340,7 @@ export class AgentCore<
   }
 
   // Dependencies & slices ---------------------------------------------------
-  readonly deps: MergedDepsForSlices<Slices>;
+  private readonly deps: MergedDepsForSlices<Slices>;
   private readonly slices: Readonly<Slices>;
 
   private readonly _mutex = new Mutex();
@@ -1332,6 +1332,15 @@ export class AgentCore<
     }
 
     return this.augmentState(tempState);
+  }
+
+  /**
+   * Get the final redirect URL for authorization flows.
+   */
+  async getFinalRedirectUrl(payload: {
+    durableObjectInstanceName: string;
+  }): Promise<string | undefined> {
+    return this.deps.getFinalRedirectUrl?.(payload);
   }
 }
 

@@ -1,13 +1,11 @@
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
-import { eq } from "drizzle-orm";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb } from "../../db/client.ts";
-import * as schema from "../../db/schema.ts";
-import { BetterAuthMCPOAuthProvider } from "./mcp-oauth-provider.ts";
+import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
   type MCPConnection,
@@ -35,8 +33,11 @@ export type MCPEventHookReturnEvent =
 interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> {
   event: TEvent;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
-  agentDurableObjectId: string;
-  agentDurableObjectName: string;
+  agentDurableObject: {
+    durableObjectId: string;
+    durableObjectName: string;
+    className: string;
+  };
   estateId: string;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
@@ -159,7 +160,7 @@ function getIntegrationSecretFormUIURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObjectId, agentDurableObjectName, estateId } = params;
+  const { event, reducedState, agentDurableObject, estateId } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const {
     serverUrl,
@@ -240,7 +241,7 @@ export async function handleMCPConnectRequest(
 
   const requiredDependencies = [...new Set(allMissingDependencies)];
   const finalRedirectUrl = await params.getFinalRedirectUrl?.({
-    durableObjectInstanceName: agentDurableObjectName,
+    durableObjectInstanceName: agentDurableObject.durableObjectName,
   });
 
   if (allMissingDependencies.length > 0) {
@@ -259,7 +260,7 @@ export async function handleMCPConnectRequest(
           userId: userId!,
           requiredDependencies,
           finalRedirectUrl,
-          requestedByAgentDOId: agentDurableObjectId,
+          requestedByAgentDOId: agentDurableObject.durableObjectId,
           serverUrl,
           requiresAuth,
           headers,
@@ -274,43 +275,18 @@ export async function handleMCPConnectRequest(
   const db = getDb();
   const auth = getAuth(db);
 
-  const agentClassName = agentDurableObjectName.startsWith("SlackAgent-")
-    ? "SlackAgent"
-    : "IterateAgent";
-
-  // Get the organization ID for the estate to construct proper callback URL
-  let organizationId: string | undefined;
-  if (!finalRedirectUrl) {
-    try {
-      const estateWithOrg = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
-        columns: {
-          organizationId: true,
-        },
-      });
-      organizationId = estateWithOrg?.organizationId;
-    } catch (error) {
-      console.error("Failed to get organization ID for estate:", error);
-    }
-  }
-
   const oauthProvider = requiresAuth
-    ? new BetterAuthMCPOAuthProvider({
+    ? new MCPOAuthProvider({
         auth,
         db,
         userId: userId!,
         estateId: estateId,
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: formattedServerUrl,
-        callbackURL:
-          finalRedirectUrl ||
-          (organizationId
-            ? `${import.meta.env.VITE_PUBLIC_URL}/${organizationId}/${estateId}/agents/${agentClassName}/${agentDurableObjectName}`
-            : `${import.meta.env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`),
+        callbackURL: finalRedirectUrl,
         env: { VITE_PUBLIC_URL: import.meta.env.VITE_PUBLIC_URL },
         reconnect,
-        agentDurableObjectId,
-        agentDurableObjectName,
+        agentDurableObject,
       })
     : undefined;
 
@@ -326,12 +302,9 @@ export async function handleMCPConnectRequest(
         requestInit: {
           headers: formattedHeaders,
         },
+        ...(reconnect && { reconnect }),
       },
     };
-
-    if (reconnect) {
-      connectOptions.reconnect = reconnect;
-    }
 
     result = await Promise.race([
       manager.connect(formattedServerUrl, connectOptions),
@@ -551,8 +524,11 @@ export function abortPendingConnections(connectionKey: MCPConnectionKey, reason:
 export async function getOrCreateMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
-  agentDurableObjectId: string;
-  agentDurableObjectName: string;
+  agentDurableObject: {
+    durableObjectId: string;
+    durableObjectName: string;
+    className: string;
+  };
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
@@ -605,8 +581,7 @@ export async function getOrCreateMCPConnection(params: {
             triggerLLMRequest: false,
           } as MCPConnectRequestEvent,
           reducedState: params.reducedState,
-          agentDurableObjectId: params.agentDurableObjectId,
-          agentDurableObjectName: params.agentDurableObjectName,
+          agentDurableObject: params.agentDurableObject,
           estateId: params.estateId,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
@@ -671,8 +646,11 @@ export async function getOrCreateMCPConnection(params: {
 export async function lazyConnectMCPServer(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
-  agentDurableObjectId: string;
-  agentDurableObjectName: string;
+  agentDurableObject: {
+    durableObjectId: string;
+    durableObjectName: string;
+    className: string;
+  };
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {

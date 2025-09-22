@@ -4,8 +4,13 @@ import { typeid } from "typeid-js";
 import type { Auth } from "../../auth/auth.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
+import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
 
-export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
+/**
+ * Inspired by agents SDK implementation https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
+ * Durable Object implementation https://github.com/cloudflare/agents/blob/main/packages/agents/src/mcp/do-oauth-client-provider.ts
+ */
+export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
   serverId: string | undefined;
   authUrl: string | undefined;
@@ -21,15 +26,18 @@ export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
       estateId: string;
       integrationSlug: string;
       serverUrl: string;
-      callbackURL: string;
+      callbackURL: string | undefined;
       env?: { VITE_PUBLIC_URL?: string };
       reconnect?: {
         id: string;
         oauthClientId?: string;
         oauthCode?: string;
       };
-      agentDurableObjectId?: string;
-      agentDurableObjectName?: string;
+      agentDurableObject: {
+        durableObjectId: string;
+        durableObjectName: string;
+        className: string;
+      };
     },
   ) {
     this.baseUrl = this.params.env?.VITE_PUBLIC_URL || "http://localhost:5173";
@@ -240,16 +248,23 @@ export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
       this.clientId = client_id;
     }
 
+    if (!this.clientId) {
+      throw new Error("Cannot redirect to authorization without clientId");
+    }
+
     const state = typeid("state").toString();
-    const stateData = {
+    const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
       serverUrl: this.params.serverUrl,
       estateId: this.params.estateId,
       userId: this.params.userId,
       callbackURL: this.params.callbackURL,
       clientId: this.clientId,
-      agentDurableObjectId: this.params.agentDurableObjectId,
-      agentDurableObjectName: this.params.agentDurableObjectName,
+      agentDurableObject: {
+        durableObjectId: this.params.agentDurableObject.durableObjectId,
+        durableObjectName: this.params.agentDurableObject.durableObjectName,
+        className: this.params.agentDurableObject.className,
+      },
     };
 
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
@@ -290,5 +305,3 @@ export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
     return verification.value;
   }
 }
-
-export { BetterAuthMCPOAuthProvider as MCPOAuthProvider };

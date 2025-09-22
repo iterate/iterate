@@ -531,8 +531,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
                   reducedState,
-                  agentDurableObjectId: this.ctx.id.toString(),
-                  agentDurableObjectName: this.name,
+                  agentDurableObject: {
+                    durableObjectId: this.ctx.id.toString(),
+                    durableObjectName: this.name,
+                    className: this.constructor.name,
+                  },
                   estateId: this.databaseRecord.estateId,
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
@@ -615,6 +618,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected getExtraDependencies(_deps: AgentCoreDeps): Partial<MergedDepsForSlices<Slices>> {
     return {};
+  }
+
+  get hydrationInfo() {
+    return {
+      durableObjectId: this.ctx.id.toString(),
+      durableObjectName: this.name,
+      className: this.constructor.name,
+    };
   }
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
@@ -1089,11 +1100,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eventIndex: 0,
         createdAt: new Date().toISOString(),
       },
-      agentDurableObjectId: this.ctx.id.toString(),
-      agentDurableObjectName: this.name,
+      agentDurableObject: this.hydrationInfo,
       estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
-      getFinalRedirectUrl: this.agentCore.deps.getFinalRedirectUrl,
+      getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
