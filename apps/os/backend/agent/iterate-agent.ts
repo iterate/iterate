@@ -219,7 +219,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       matchingAgents.map((record) =>
         this.getStubFromDatabaseRecord({
           ...record,
-          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
+          contextRules: record.estate.iterateConfigs[0]?.config?.contextRules ?? [],
         }),
       ),
     );
