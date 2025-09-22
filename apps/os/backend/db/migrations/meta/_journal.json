@@ -36,6 +36,20 @@
       "when": 1758288982828,
       "tag": "0004_loose_tyrannus",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1758294223540,
+      "tag": "0005_faulty_gateway",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1758299591603,
+      "tag": "0006_smooth_zarek",
+      "breakpoints": true
     }
   ]
 }

@@ -3,9 +3,7 @@
 import dedent from "dedent";
 import { z } from "zod/v4";
 import { defineRule, matchers } from "./context.ts";
-
-// not typesafe version
-// const trpcCallableBuilder = makeTrpcCallable<any>();
+import { slackAgentTools } from "./slack-agent-tools.ts";
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -142,16 +140,6 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
-    key: "reverse-tool",
-    match: matchers.always(),
-    tools: [
-      {
-        type: "agent_durable_object_tool",
-        methodName: "reverse",
-      },
-    ],
-  }),
-  defineRule({
     key: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),
@@ -187,22 +175,22 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "stopRespondingUntilMentioned",
       },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "addSlackReaction",
-      // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "removeSlackReaction",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "addSlackReaction",
+      },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "removeSlackReaction",
+      },
       // {
       //   type: "agent_durable_object_tool",
       //   methodName: "uploadAndShareFileInSlack",
       // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "updateSlackMessage",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "updateSlackMessage",
+      },
       // {
       //   type: "agent_durable_object_tool",
       //   methodName: "getUrlContent",
@@ -212,7 +200,7 @@ export const defaultContextRules = async () => [
       //   methodName: "searchWeb",
       // },
 
-      // TRPC tools
+      // TRPC tools (to be replaced with durable object versions)
       // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
       //   overrideName: "generate_image",
       // }),
@@ -223,7 +211,7 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "sendSlackMessage",
         overrideInputJSONSchema: z.toJSONSchema(
-          (await import("./slack-agent-tools.ts")).slackAgentTools.sendSlackMessage.input.pick({
+          slackAgentTools.sendSlackMessage.input.pick({
             text: true,
             ephemeral: true,
             user: true,

@@ -2,6 +2,7 @@ import { Outlet, redirect } from "react-router";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserEstateAccess } from "../../backend/trpc/trpc.ts";
+import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import type { Route } from "./+types/estate-layout";
 
 // Server-side loader that checks estate access
@@ -57,5 +58,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 
 // The component just renders the outlet since access is already checked
 export default function EstateLayout() {
-  return <Outlet />;
+  return (
+    <DashboardLayout>
+      <Outlet />
+    </DashboardLayout>
+  );
 }

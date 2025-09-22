@@ -59,7 +59,6 @@ export class PosthogCloudflare<
     this.ctx = ctx;
     this.client = client;
     this.estateMeta = estateMeta;
-    console.log("PostHog initialized with public API key", publicApiKey);
 
     this.client.groupIdentify({
       groupType: "estate",

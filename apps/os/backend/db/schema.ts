@@ -105,6 +105,9 @@ export const estate = pgTable("estate", (t) => ({
   id: iterateId("est"),
   name: t.text().notNull(),
   organizationId: t.text().notNull(),
+  connectedRepoId: t.integer(),
+  connectedRepoRef: t.text(),
+  connectedRepoPath: t.text(),
   ...withTimestamps,
 }));
 
@@ -117,6 +120,8 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   files: many(files),
   providerSpecificEstateMapping: many(providerEstateMapping),
   slackWebhookEvents: many(slackWebhookEvent),
+  iterateConfigs: many(iterateConfig),
+  agentInstances: many(agentInstance),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -287,6 +292,20 @@ export const slackWebhookEvent = pgTable(
 export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one }) => ({
   estate: one(estate, {
     fields: [slackWebhookEvent.estateId],
+    references: [estate.id],
+  }),
+}));
+
+export const iterateConfig = pgTable("iterate_config", (t) => ({
+  id: iterateId("icfg"),
+  config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+  estateId: t.text().notNull(),
+  ...withTimestamps,
+}));
+
+export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
+  estate: one(estate, {
+    fields: [iterateConfig.estateId],
     references: [estate.id],
   }),
 }));

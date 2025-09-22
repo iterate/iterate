@@ -21,12 +21,11 @@
     "rules": "vibe-rules install ${VIBE_RULES_EDITOR:-cursor}",
     "rules:cursor": "pnpm rules",
     "rules:claudecode": "VIBE_RULES_EDITOR=claude-code pnpm rules",
-    "rules:roo": "VIBE_RULES_EDITOR=roo pnpm rules",
-    "rules:cline": "VIBE_RULES_EDITOR=clinerules pnpm rules",
-    "rules:zed": "VIBE_RULES_EDITOR=zed pnpm rules"
+    "rules:codex": "VIBE_RULES_EDITOR=codex pnpm rules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@iterate-com/vibe-rules": "workspace:*",
     "@typescript-eslint/eslint-plugin": "^8.44.0",
     "@typescript-eslint/parser": "^8.44.0",
     "eslint": "^9.35.0",
@@ -37,8 +36,7 @@
     "eslint-plugin-react-refresh": "^0.4.20",
     "eslint-plugin-unicorn": "^61.0.2",
     "globals": "^16.4.0",
-    "prettier": "^3.6.2",
-    "@iterate-com/vibe-rules": "workspace:*"
+    "prettier": "^3.6.2"
   },
   "dependencies": {
     "vibe-rules": "^0.3.91"

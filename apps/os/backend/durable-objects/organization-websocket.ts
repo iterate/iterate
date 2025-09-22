@@ -39,24 +39,9 @@ export const PushControllerEvent = z.discriminatedUnion("type", [
 
 export type PushControllerEvent = z.infer<typeof PushControllerEvent>;
 
-interface WebSocketSession {
-  websocket: WebSocket;
-  userId: string;
-  estateId: string;
-  organizationId: string;
-  connectedAt: number;
-}
-
 export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
-  private sessions: Map<string, WebSocketSession> = new Map();
-
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
-
-    // Clean up any stale sessions on startup
-    ctx.blockConcurrencyWhile(async () => {
-      this.sessions = new Map();
-    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -74,10 +59,6 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
 
     if (url.pathname === "/broadcast" && request.method === "POST") {
       return this.handleBroadcast(request);
-    }
-
-    if (url.pathname === "/stats" && request.method === "GET") {
-      return this.handleStats();
     }
 
     return new Response("Not found", { status: 404 });
@@ -116,78 +97,51 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
     const [client, server] = Object.values(pair);
 
     // Accept the WebSocket connection
-    server.accept();
-
-    // Generate session ID
-    const sessionId = crypto.randomUUID();
-
-    // Store session
-    const wsSession: WebSocketSession = {
-      websocket: server,
-      userId: session.user.id,
-      estateId,
-      organizationId,
-      connectedAt: Date.now(),
-    };
-    this.sessions.set(sessionId, wsSession);
+    this.ctx.acceptWebSocket(server);
 
     // Send welcome message
     server.send(
       JSON.stringify({
         type: "CONNECTED",
-        sessionId,
         userId: session.user.id,
-        connectedAt: wsSession.connectedAt,
       }),
     );
-
-    // Handle WebSocket events
-    server.addEventListener("message", async (event) => {
-      try {
-        // Handle ping/pong for keepalive
-        if (event.data === "ping") {
-          server.send("pong");
-          return;
-        }
-
-        // Parse and validate incoming messages if needed
-        const data = JSON.parse(event.data as string);
-        console.log(`Message from ${sessionId}:`, data);
-
-        // Echo back for now (you can add more message handling here)
-        server.send(
-          JSON.stringify({
-            type: "ECHO",
-            original: data,
-            timestamp: Date.now(),
-          }),
-        );
-      } catch (error) {
-        console.error("Error handling message:", error);
-        server.send(
-          JSON.stringify({
-            type: "ERROR",
-            message: "Invalid message format",
-          }),
-        );
-      }
-    });
-
-    server.addEventListener("close", () => {
-      console.log(`WebSocket closed for session ${sessionId}`);
-      this.sessions.delete(sessionId);
-    });
-
-    server.addEventListener("error", (error) => {
-      console.error(`WebSocket error for session ${sessionId}:`, error);
-      this.sessions.delete(sessionId);
-    });
 
     // Return the client WebSocket
     return new Response(null, {
       status: 101,
       webSocket: client,
     });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string) {
+    try {
+      // Handle ping/pong for keepalive
+      if (message === "ping") {
+        ws.send("pong");
+        return;
+      }
+
+      // Parse and validate incoming messages if needed
+      const data = JSON.parse(message as string);
+
+      // Echo back for now (you can add more message handling here)
+      ws.send(
+        JSON.stringify({
+          type: "ECHO",
+          original: data,
+          timestamp: Date.now(),
+        }),
+      );
+    } catch (error) {
+      console.error("Error handling message:", error);
+      ws.send(
+        JSON.stringify({
+          type: "ERROR",
+          message: "Invalid message format",
+        }),
+      );
+    }
   }
 
   private async handleInvalidate(request: Request): Promise<Response> {
@@ -208,15 +162,14 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
       let successCount = 0;
       let errorCount = 0;
 
-      for (const [sessionId, session] of this.sessions) {
+      for (const ws of this.ctx.getWebSockets()) {
         try {
-          session.websocket.send(message);
+          ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session ${sessionId}:`, error);
+          console.error(`Failed to send to session ${ws}:`, error);
           errorCount++;
-          // Remove dead sessions
-          this.sessions.delete(sessionId);
+          ws.close();
         }
       }
 
@@ -225,7 +178,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
           success: true,
           delivered: successCount,
           failed: errorCount,
-          totalSessions: this.sessions.size,
+          totalSessions: this.ctx.getWebSockets().length,
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -248,15 +201,15 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
       let successCount = 0;
       let errorCount = 0;
 
-      for (const [sessionId, session] of this.sessions) {
+      for (const ws of this.ctx.getWebSockets()) {
         try {
-          session.websocket.send(message);
+          ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session ${sessionId}:`, error);
+          console.error(`Failed to send to session ${ws}:`, error);
           errorCount++;
           // Remove dead sessions
-          this.sessions.delete(sessionId);
+          ws.close();
         }
       }
 
@@ -265,7 +218,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
           success: true,
           delivered: successCount,
           failed: errorCount,
-          totalSessions: this.sessions.size,
+          totalSessions: this.ctx.getWebSockets().length,
         }),
         {
           headers: { "Content-Type": "application/json" },
@@ -278,22 +231,5 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
         headers: { "Content-Type": "application/json" },
       });
     }
-  }
-
-  private async handleStats(): Promise<Response> {
-    const stats = {
-      totalSessions: this.sessions.size,
-      sessions: Array.from(this.sessions.entries()).map(([id, session]) => ({
-        id,
-        userId: session.userId,
-        estateId: session.estateId,
-        connectedAt: session.connectedAt,
-        duration: Date.now() - session.connectedAt,
-      })),
-    };
-
-    return new Response(JSON.stringify(stats), {
-      headers: { "Content-Type": "application/json" },
-    });
   }
 }

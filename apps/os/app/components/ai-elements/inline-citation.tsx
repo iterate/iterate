@@ -7,15 +7,10 @@ import {
   useEffect,
   useState,
 } from "react";
-import { Badge } from "../../components/ui/badge";
-import {
-  Carousel,
-  type CarouselApi,
-  CarouselContent,
-  CarouselItem,
-} from "../../components/ui/carousel";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "../../components/ui/hover-card";
-import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge.tsx";
+import { Carousel, type CarouselApi, CarouselContent, CarouselItem } from "../ui/carousel.tsx";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../ui/hover-card.tsx";
+import { cn } from "../../lib/utils.ts";
 
 export type InlineCitationProps = ComponentProps<"span">;
 

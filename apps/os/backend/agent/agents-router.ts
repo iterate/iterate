@@ -8,7 +8,7 @@ import { agentInstance } from "../db/schema.ts";
 import {
   AgentCoreEventInput,
   FileSharedEventInput,
-  type CoreReducedState,
+  type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { IterateAgent } from "./iterate-agent.ts";
@@ -35,25 +35,30 @@ const agentStubProcedure = protectedProcedure
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
+    const getOrCreateStubParams: Parameters<typeof IterateAgent.getOrCreateStubByName>[0] = {
+      db: ctx.db,
+      estateId,
+      agentInstanceName: input.agentInstanceName,
+      reason: input.reason || "Created via agents router",
+    };
     // Always use getOrCreateStubByName - agents are created on demand
-    const agent = await (input.agentClassName === "SlackAgent"
-      ? // @ts-expect-error - TODO couldn't get types to line up
-        SlackAgent.getOrCreateStubByName({
-          db: ctx.db,
-          estateId,
-          agentInstanceName: input.agentInstanceName,
-          reason: input.reason || "Created via agents router",
-        })
-      : IterateAgent.getOrCreateStubByName({
-          db: ctx.db,
-          estateId,
-          agentInstanceName: input.agentInstanceName,
-          reason: input.reason || "Created via agents router",
-        }));
+    const agent =
+      input.agentClassName === "SlackAgent"
+        ? await SlackAgent.getOrCreateStubByName(getOrCreateStubParams)
+        : await IterateAgent.getOrCreateStubByName(getOrCreateStubParams);
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 
-    return next({ ctx: { ...ctx, agent } });
+    return next({
+      ctx: {
+        ...ctx,
+        agent: agent as {} as Omit<typeof agent, "getEvents"> & {
+          // todo: figure out why cloudflare doesn't like the return type of getEvents - it neverifies it becaue of something that can't cross the boundary?
+          // although this is still useful anyway, to help remind us to always call `await` even though if calling getEvents in-process, it's synchronous
+          getEvents: () => Promise<ReturnType<IterateAgent["getEvents"]>>;
+        },
+      },
+    });
   });
 
 // Define a schema for context rules
@@ -186,7 +191,9 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return (await ctx.agent.getReducedStateAtEventIndex(input.eventIndex)) as CoreReducedState;
+      return (await ctx.agent.getReducedStateAtEventIndex(
+        input.eventIndex,
+      )) as AugmentedCoreReducedState;
     }),
 
   // listAgentInstances: protectedProcedure

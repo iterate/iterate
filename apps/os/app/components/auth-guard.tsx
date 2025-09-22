@@ -1,12 +1,9 @@
-import { useEffect } from "react";
+import { useEffect, type PropsWithChildren } from "react";
 import { useNavigate, useLocation } from "react-router";
 import { authClient } from "../lib/auth-client.ts";
+import { GlobalLoading } from "./global-loading.tsx";
 
-interface AuthGuardProps {
-  children: React.ReactNode;
-}
-
-export function AuthGuard({ children }: AuthGuardProps) {
+export function AuthGuard({ children }: PropsWithChildren) {
   const navigate = useNavigate();
   const location = useLocation();
   const { data: session, isPending } = authClient.useSession();
@@ -31,11 +28,7 @@ export function AuthGuard({ children }: AuthGuardProps) {
 
   // Show loading spinner while checking session
   if (isPending) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-purple-600"></div>
-      </div>
-    );
+    return <GlobalLoading />;
   }
 
   // If on login page, always show children (login form)

@@ -1,5 +1,6 @@
 import { ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import {
   Card,
@@ -9,13 +10,12 @@ import {
   CardDescription,
 } from "../components/ui/card.tsx";
 import { Badge } from "../components/ui/badge.tsx";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
 } from "../components/ui/collapsible.tsx";
-import { trpc } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import type { Route } from "./+types/integrations";
 
@@ -75,83 +75,71 @@ function ScopesList({ scope }: { scope: string }) {
 
 export default function Integrations() {
   const estateId = useEstateId();
+  const trpc = useTRPC();
   const {
     data: integrations,
     isLoading,
     error,
-  } = trpc.integrations.list.useQuery({
-    estateId: estateId,
-  });
+  } = useQuery(
+    trpc.integrations.list.queryOptions({
+      estateId: estateId,
+    }),
+  );
+  const { mutateAsync: startGithubAppInstallFlow } = useMutation(
+    trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
+  );
 
-  const handleConnect = (integrationId: string) => {
+  const handleConnect = async (integrationId: string) => {
+    if (integrationId === "github-app") {
+      const { installationUrl } = await startGithubAppInstallFlow({
+        estateId: estateId,
+      });
+      window.location.href = installationUrl.toString();
+    }
     // TODO: Implement OAuth flow for connecting integrations
     // This would redirect to the auth provider's OAuth URL
     console.log(`Connect to ${integrationId}`);
   };
 
-  if (isLoading) {
-    return (
-      <DashboardLayout>
-        <div className="max-w-6xl mx-auto p-6">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-            <p className="text-muted-foreground text-lg">
-              Connect your accounts to enable integrations across the platform
-            </p>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(2)].map((_, i) => (
-              <Card key={i} className="animate-pulse">
-                <CardHeader>
-                  <div className="flex items-center gap-3">
-                    <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
-                    <div>
-                      <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
-                      <div className="h-3 bg-gray-200 rounded w-32"></div>
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <div className="h-8 bg-gray-200 rounded w-full"></div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
-  if (error) {
-    return (
-      <DashboardLayout>
-        <div className="max-w-6xl mx-auto p-6">
-          <div className="mb-8">
-            <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-            <p className="text-muted-foreground text-lg">
-              Connect your accounts to enable integrations across the platform
-            </p>
-          </div>
-          <div className="text-red-500">Error loading integrations: {error.message}</div>
-        </div>
-      </DashboardLayout>
-    );
-  }
-
   return (
-    <DashboardLayout>
-      <div className="max-w-6xl mx-auto p-6">
-        {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
+    <div className="max-w-6xl mx-auto p-6">
+      {/* Header */}
+      <div className="mb-8">
+        <h1 className="text-3xl font-bold mb-2">Integrations</h1>
+        <p className="text-muted-foreground text-lg">
+          Connect your accounts to enable integrations across the platform
+        </p>
+      </div>
 
-        {/* Integration Cards */}
+      {/* Loading State */}
+      {isLoading && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {integrations?.map((integration) => (
+          {[...Array(2)].map((_, i) => (
+            <Card key={i} className="animate-pulse">
+              <CardHeader>
+                <div className="flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
+                  <div>
+                    <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
+                    <div className="h-3 bg-gray-200 rounded w-32"></div>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <div className="h-8 bg-gray-200 rounded w-full"></div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      {/* Error State */}
+      {error && <div className="text-red-500">Error loading integrations: {error.message}</div>}
+
+      {/* Success State - Integration Cards */}
+      {!isLoading && !error && integrations && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {integrations.map((integration) => (
             <Card key={integration.id} className="relative">
               <CardHeader className="pb-4">
                 <div className="flex items-start justify-between">
@@ -250,7 +238,7 @@ export default function Integrations() {
             </Card>
           ))}
         </div>
-      </div>
-    </DashboardLayout>
+      )}
+    </div>
   );
 }

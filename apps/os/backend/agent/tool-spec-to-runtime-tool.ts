@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import type { JSONSchema } from "zod/v4/core";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { makeJSONSchemaOpenAICompatible } from "./zod-to-openai-json-schema.ts";
-import type { AgentCoreEventInput } from "./agent-core-schemas.ts";
+import { hashToolSpec, type AgentCoreEventInput } from "./agent-core-schemas.ts";
 import { doToolToRuntimeJsonSchema, type DOToolDef, type DOToolDefinitions } from "./do-tools.ts";
 import {
   type AgentDurableObjectToolSpec,
@@ -10,8 +10,8 @@ import {
   type ToolSpec,
 } from "./tool-schemas.ts";
 import { parseMagicAgentInstructions } from "./magic.ts";
-import { subtractObjectPropsFromJSONSchema } from "./subtract-object-props-from-json-schema.ts";
 import { filterOptionalFieldsFromJSONSchema } from "./json-schema.ts";
+import { subtractObjectPropsFromJSONSchema } from "./subtract-object-props-from-json-schema.ts";
 
 /**
  * Sanitizes a tool name to match OpenAI's requirements: ^[a-zA-Z0-9_-]+$
@@ -88,6 +88,10 @@ function fiddleWithJsonSchema(
   return jsonSchema;
 }
 
+export type DOWithToolDefinitions = {
+  toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
+};
+
 /**
  * Batch convert tool specifications to their runtime implementations
  *
@@ -95,11 +99,10 @@ function fiddleWithJsonSchema(
  * @returns A promise that resolves to an array of runtime tool implementations
  */
 // todo: move this to agent.ts - it's only used there
-export async function toolSpecsToImplementations<
-  T extends {
-    toolDefinitions: () => DOToolDefinitions<Record<string, unknown>>;
-  },
->(params: { toolSpecs: ToolSpec[]; theDO: T }): Promise<RuntimeTool[]> {
+export function toolSpecsToImplementations(params: {
+  toolSpecs: ToolSpec[];
+  theDO: DOWithToolDefinitions;
+}): RuntimeTool[] {
   return params.toolSpecs.reduce((acc, spec) => {
     if (spec.type === "openai_builtin") {
       return [...acc, spec.openAITool];
@@ -127,7 +130,7 @@ export async function toolSpecsToImplementations<
       const tool: RuntimeTool = {
         type: "function",
         name: spec.overrideName || sanitizeToolName(spec.methodName),
-        metadata: { source: "durable-object" },
+        metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,

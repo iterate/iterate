@@ -1,14 +1,10 @@
-import { useControllableState } from "@radix-ui/react-use-controllable-state";
+import { useControllableState } from "radix-ui/internal";
 import { BrainIcon, ChevronDownIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
-import { cn } from "../../lib/utils";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../components/ui/collapsible";
-import { Response } from "./response";
+import { cn } from "../../lib/utils.ts";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { Response } from "./response.tsx";
 
 type ReasoningContextValue = {
   isStreaming: boolean;

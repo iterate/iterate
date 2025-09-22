@@ -1,6 +1,5 @@
 import { useRef, type ComponentPropsWithRef } from "react";
 import { cn } from "../lib/utils.ts";
-import { CenterCenter } from "./center-center.tsx";
 import { AnimatedBeam } from "./ui/animated-beam.tsx";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { LoginProviders } from "./auth-components.tsx";
@@ -30,14 +29,11 @@ export function LoginPrompt() {
   const div7Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
 
   return (
-    <CenterCenter>
+    <div className="flex h-full w-full items-center justify-center">
       <div className="w-full max-w-[1000px] px-4 py-8 sm:p-8">
         <div className="flex flex-col items-center justify-center space-y-6 sm:space-y-8 text-center">
-          <h1 className="text-3xl sm:text-4xl lg:text-[48px] font-semibold tracking-tight leading-tight px-4 sm:px-0">
-            OS for Autonomous Startups
-          </h1>
           <div
-            className="relative flex h-[300px] sm:h-[400px] lg:h-[600px] w-full items-center justify-center overflow-hidden px-8 sm:px-12 lg:px-16"
+            className="relative flex h-[300px] sm:h-[400px] lg:h-[600px] w-full min-w-[320px] sm:min-w-[600px] lg:min-w-[900px] items-center justify-center overflow-hidden px-8 sm:px-12 lg:px-16"
             ref={containerRef}
           >
             {/* Render beams first so they appear behind the logos */}
@@ -89,7 +85,7 @@ export function LoginPrompt() {
               />
             </div>
 
-            <div className="relative flex size-full max-w-7xl max-h-[400px] sm:max-h-[450px] lg:max-h-[550px] items-center justify-center">
+            <div className="relative flex w-full h-full max-w-7xl max-h-[400px] sm:max-h-[450px] lg:max-h-[550px] items-center justify-center">
               {/* Center Iterate Logo */}
               <div
                 ref={div4Ref}
@@ -169,6 +165,6 @@ export function LoginPrompt() {
           </div>
         </div>
       </div>
-    </CenterCenter>
+    </div>
   );
 }

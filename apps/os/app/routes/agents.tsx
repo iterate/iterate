@@ -25,8 +25,8 @@ import {
 } from "lucide-react";
 import { useAgent } from "agents/react";
 import clsx from "clsx";
-import { trpc } from "../lib/trpc.ts";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 import { Badge } from "../components/ui/badge.tsx";
@@ -539,19 +539,20 @@ function EventDetailsContent({
 }) {
   const eventIndex = event.eventIndex;
 
+  const trpc = useTRPC();
+
   // Get reduced state at this event index
-  const { data: eventReducedState, isLoading: isLoadingReducedState } =
-    trpc.agents.getReducedStateAtEventIndex.useQuery(
+  const reducedStateQuery = useQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions(
       {
         estateId,
         agentInstanceName,
         agentClassName: agentClassName,
         eventIndex: eventIndex,
       },
-      {
-        enabled: eventIndex !== undefined,
-      },
-    );
+      { enabled: eventIndex !== undefined },
+    ),
+  );
 
   return (
     <Tabs defaultValue="event" className="flex flex-col h-full">
@@ -565,16 +566,19 @@ function EventDetailsContent({
       </TabsContent>
 
       <TabsContent value="state" className="flex-1 overflow-auto">
-        {isLoadingReducedState ? (
+        {reducedStateQuery.isLoading ? (
           <div className="flex items-center justify-center h-full bg-muted rounded-lg">
             <Clock className="h-4 w-4 animate-spin mr-2" />
             <span className="text-sm text-muted-foreground">Loading reduced state...</span>
           </div>
-        ) : eventReducedState ? (
-          <AgentReducedState reducedState={eventReducedState} className="h-full" />
+        ) : reducedStateQuery.isSuccess ? (
+          <AgentReducedState reducedState={reducedStateQuery.data as never} className="h-full" />
         ) : (
           <div className="text-xs bg-muted p-4 rounded-lg h-full flex items-center justify-center">
-            <span className="text-muted-foreground">Failed to load reduced state</span>
+            <span className="text-muted-foreground">
+              Failed to load reduced state{" "}
+              {reducedStateQuery.error?.message || `Status: ${reducedStateQuery.status}`}
+            </span>
           </div>
         )}
       </TabsContent>
@@ -720,14 +724,18 @@ function ToolCallInjector({
   const [formData, setFormData] = useState<Record<string, any>>({});
   const [triggerLLMRequest, setTriggerLLMRequest] = useState(true);
 
-  const injectToolCallMutation = trpc.agents.injectToolCall.useMutation({
-    onSuccess: () => {
-      onClose();
-    },
-    onError: (error) => {
-      console.error("Failed to inject tool call:", error);
-    },
-  });
+  const trpc = useTRPC();
+
+  const injectToolCallMutation = useMutation(
+    trpc.agents.injectToolCall.mutationOptions({
+      onSuccess: () => {
+        onClose();
+      },
+      onError: (error) => {
+        console.error("Failed to inject tool call:", error);
+      },
+    }),
+  );
 
   // Extract function tools from reduced state
   const availableTools = useMemo((): ToolDefinition[] => {
@@ -1333,7 +1341,9 @@ function FileUploadDialog({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState<Map<File, number>>(new Map());
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const addEventsMutation = trpc.agents.addEvents.useMutation();
+
+  const trpc = useTRPC();
+  const addEventsMutation = useMutation(trpc.agents.addEvents.mutationOptions({}));
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -1554,7 +1564,8 @@ export default function AgentsPage() {
   const { agentClassName, durableObjectName } = params;
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
-  const [currentUser] = trpc.user.me.useSuspenseQuery();
+  const trpc = useTRPC();
+  const { data: currentUser } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   if (
     !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
@@ -1574,11 +1585,13 @@ export default function AgentsPage() {
   const [isWebsocketConnected, setIsWebsocketConnected] = useState(false);
 
   // Get initial events
-  const [initialEvents] = trpc.agents.getEvents.useSuspenseQuery({
-    estateId,
-    agentInstanceName: durableObjectName,
-    agentClassName,
-  });
+  const { data: initialEvents } = useSuspenseQuery(
+    trpc.agents.getEvents.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+    }),
+  );
 
   const [events, setEvents] = useState<AgentCoreEvent[]>(
     initialEvents as unknown as AgentCoreEvent[],
@@ -1615,19 +1628,21 @@ export default function AgentsPage() {
   }, [agentConnection]);
 
   // Mutations
-  const addEventsMutation = trpc.agents.addEvents.useMutation();
+  const addEventsMutation = useMutation(trpc.agents.addEvents.mutationOptions({}));
 
   // Get current reduced state
-  const { data: reducedState } = trpc.agents.getReducedStateAtEventIndex.useQuery(
-    {
-      estateId,
-      agentInstanceName: durableObjectName,
-      agentClassName,
-      eventIndex: (events.length ?? 0) - 1,
-    },
-    {
-      enabled: !!agentState,
-    },
+  const { data: reducedState } = useQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions(
+      {
+        estateId,
+        agentInstanceName: durableObjectName,
+        agentClassName,
+        eventIndex: (events.length ?? 0) - 1,
+      },
+      {
+        enabled: !!agentState,
+      },
+    ),
   );
 
   // Filter events
@@ -1773,353 +1788,351 @@ export default function AgentsPage() {
     : false;
 
   return (
-    <DashboardLayout>
-      <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
-        {/* Breadcrumb navigation - Fixed height */}
-        <div className="flex-shrink-0 flex items-center gap-2 py-2 px-4 border-b">
-          <Link to={getEstateUrl("agents")}>
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back to Agents
-            </Button>
-          </Link>
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
+      {/* Breadcrumb navigation - Fixed height */}
+      <div className="flex-shrink-0 flex items-center gap-2 py-2 px-4 border-b">
+        <Link to={getEstateUrl("agents")}>
+          <Button variant="ghost" size="sm">
+            <ArrowLeft className="h-4 w-4 mr-2" />
+            Back to Agents
+          </Button>
+        </Link>
 
-          <div className="flex items-center gap-2 ml-auto">
-            {/* Pause/Resume Agent Button */}
-            {(() => {
-              const isPaused = reducedState && reducedState.paused;
-              return (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button
-                      variant={isPaused ? "destructive" : "ghost"}
-                      size="sm"
-                      onClick={handlePauseResume}
-                      className={clsx(
-                        "h-7 px-2",
-                        isPaused && "bg-red-500 hover:bg-red-600 text-white",
-                      )}
-                      disabled={addEventsMutation.isPending}
-                    >
-                      {isPaused ? (
-                        <>
-                          <Play className="h-3 w-3 mr-1" />
-                          <span className="text-xs">Resume paused agent</span>
-                        </>
-                      ) : (
-                        <>
-                          <Pause className="h-3 w-3 mr-1" />
-                          <span className="text-xs">Pause agent</span>
-                        </>
-                      )}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    <p>{isPaused ? "Resume LLM requests" : "Pause LLM requests"}</p>
-                  </TooltipContent>
-                </Tooltip>
-              );
-            })()}
+        <div className="flex items-center gap-2 ml-auto">
+          {/* Pause/Resume Agent Button */}
+          {(() => {
+            const isPaused = reducedState && reducedState.paused;
+            return (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant={isPaused ? "destructive" : "ghost"}
+                    size="sm"
+                    onClick={handlePauseResume}
+                    className={clsx(
+                      "h-7 px-2",
+                      isPaused && "bg-red-500 hover:bg-red-600 text-white",
+                    )}
+                    disabled={addEventsMutation.isPending}
+                  >
+                    {isPaused ? (
+                      <>
+                        <Play className="h-3 w-3 mr-1" />
+                        <span className="text-xs">Resume paused agent</span>
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="h-3 w-3 mr-1" />
+                        <span className="text-xs">Pause agent</span>
+                      </>
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{isPaused ? "Resume LLM requests" : "Pause LLM requests"}</p>
+                </TooltipContent>
+              </Tooltip>
+            );
+          })()}
 
-            {/* WebSocket Status */}
-            <Button variant="ghost" size="sm" className="h-7 px-2" disabled>
-              <Circle
-                className={clsx(
-                  "h-3 w-3 mr-1",
-                  isWebsocketConnected ? "text-green-500" : "text-red-500",
-                )}
-              />
-              <span className="text-xs">{isWebsocketConnected ? "Connected" : "Disconnected"}</span>
-            </Button>
-          </div>
+          {/* WebSocket Status */}
+          <Button variant="ghost" size="sm" className="h-7 px-2" disabled>
+            <Circle
+              className={clsx(
+                "h-3 w-3 mr-1",
+                isWebsocketConnected ? "text-green-500" : "text-red-500",
+              )}
+            />
+            <span className="text-xs">{isWebsocketConnected ? "Connected" : "Disconnected"}</span>
+          </Button>
         </div>
-
-        {/* Main content area - Flexible height */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Events feed - Scrollable area */}
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {/* Search bar - Fixed height */}
-            {events.length > 0 && (
-              <div className="flex-shrink-0 px-4 py-2 border-b">
-                <FilterBar
-                  value={filters.searchText}
-                  onChange={(searchText) => setFilters({ ...filters, searchText })}
-                  placeholder="Search events..."
-                  count={filteredEvents.length}
-                  onCopy={copyAllEventsAsJson}
-                />
-              </div>
-            )}
-
-            {/* Events list - Scrollable content */}
-            <Conversation className="flex-1 overflow-y-auto overflow-x-hidden relative pr-2">
-              <ConversationContent className="max-w-full px-4 py-2">
-                {filteredEvents.length === 0 ? (
-                  <ConversationEmptyState
-                    title={events.length === 0 ? "No events yet..." : "No events match the search"}
-                    description={
-                      events.length === 0
-                        ? "Agent events will appear here as they occur"
-                        : "Try adjusting your search terms"
-                    }
-                  />
-                ) : (
-                  <div className="space-y-1">
-                    {groupedEvents.map((group, groupIndex) => {
-                      if (group.type === "single") {
-                        // Render single event normally
-                        return (
-                          <div
-                            key={`${group.event?.type}-${(group.event as any)?.eventIndex || group.originalIndex}-${groupIndex}`}
-                            className="max-w-full overflow-hidden"
-                          >
-                            <MetaEventWrapper
-                              event={group.event!}
-                              index={group.originalIndex!}
-                              array={filteredEvents}
-                              renderer={CoreEventRenderer}
-                              onEventClick={handleEventClick}
-                              estateId={estateId}
-                              currentUser={currentUser}
-                            />
-                          </div>
-                        );
-                      } else {
-                        // Render parallel tool calls in a group
-                        return (
-                          <div
-                            key={`parallel-${group.llmRequestStartEventIndex}-${groupIndex}`}
-                            className="max-w-full overflow-hidden"
-                          >
-                            <ParallelToolGroup
-                              llmRequestStartEventIndex={group.llmRequestStartEventIndex!}
-                              toolCalls={group.events!}
-                            >
-                              {group.events!.map(({ event, originalIndex }) => (
-                                <div
-                                  key={`parallel-${(event as any).eventIndex || originalIndex}-${originalIndex}`}
-                                >
-                                  <MetaEventWrapper
-                                    event={event}
-                                    index={originalIndex}
-                                    array={filteredEvents}
-                                    renderer={CoreEventRenderer}
-                                    onEventClick={handleEventClick}
-                                    estateId={estateId}
-                                    currentUser={currentUser}
-                                  />
-                                </div>
-                              ))}
-                            </ParallelToolGroup>
-                          </div>
-                        );
-                      }
-                    })}
-                  </div>
-                )}
-              </ConversationContent>
-              <ConversationScrollButton />
-            </Conversation>
-          </div>
-        </div>
-
-        {/* Message input - Fixed height */}
-        <div className="flex-shrink-0 border-t bg-background">
-          <div className="px-4 py-3">
-            <PromptInput
-              onSubmit={(promptMessage) => {
-                if (!promptMessage.text?.trim()) {
-                  return;
-                }
-
-                const messageEvent = {
-                  type: "CORE:LLM_INPUT_ITEM" as const,
-                  data: {
-                    type: "message" as const,
-                    role: messageRole,
-                    content: [
-                      {
-                        type: "input_text" as const,
-                        text: promptMessage.text || "",
-                      },
-                    ],
-                  },
-                  triggerLLMRequest: true,
-                } satisfies AgentCoreEventInput;
-
-                addEventsMutation.mutate({
-                  estateId,
-                  agentInstanceName: durableObjectName,
-                  agentClassName,
-                  events: [messageEvent],
-                });
-
-                // Clear the input after successful submission
-                setMessage("");
-              }}
-            >
-              <PromptInputBody>
-                <PromptInputTextarea
-                  placeholder="Message (Enter to send, Shift+Enter for newline)"
-                  disabled={addEventsMutation.isPending}
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value)}
-                />
-
-                <PromptInputToolbar>
-                  <PromptInputTools>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <PromptInputButton onClick={() => setShowToolInjector(true)}>
-                          <Wrench className="h-4 w-4" />
-                        </PromptInputButton>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Inject tool call</p>
-                      </TooltipContent>
-                    </Tooltip>
-
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <PromptInputButton onClick={() => setShowFileUpload(true)}>
-                          <Paperclip className="h-4 w-4" />
-                        </PromptInputButton>
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Upload files</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </PromptInputTools>
-
-                  <div className="flex items-center gap-3">
-                    <PromptInputModelSelect
-                      value={messageRole}
-                      onValueChange={(value: "user" | "developer") => setMessageRole(value)}
-                    >
-                      <PromptInputModelSelectTrigger className="w-36 h-7 text-xs">
-                        <PromptInputModelSelectValue>
-                          {messageRole === "user" ? "Role: User" : "Role: Developer"}
-                        </PromptInputModelSelectValue>
-                      </PromptInputModelSelectTrigger>
-                      <PromptInputModelSelectContent>
-                        <PromptInputModelSelectItem value="user">
-                          Role: User
-                        </PromptInputModelSelectItem>
-                        <PromptInputModelSelectItem value="developer">
-                          Role: Developer
-                        </PromptInputModelSelectItem>
-                      </PromptInputModelSelectContent>
-                    </PromptInputModelSelect>
-
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        {(() => {
-                          if (isAgentThinking) {
-                            return (
-                              <PromptInputButton
-                                onClick={handleCancelLLMRequest}
-                                variant="outline"
-                                className={clsx(
-                                  "h-8 w-8 p-0 rounded-full relative overflow-hidden",
-                                  "after:absolute after:inset-0 after:rounded-full after:border-2 after:border-transparent",
-                                  "after:border-t-primary after:animate-spin",
-                                )}
-                              >
-                                <Square className="h-3 w-3" />
-                              </PromptInputButton>
-                            );
-                          } else {
-                            return (
-                              <PromptInputSubmit
-                                disabled={addEventsMutation.isPending}
-                                className="h-8 w-8 p-0 rounded-full"
-                              >
-                                <ArrowUp className="h-3 w-3" />
-                              </PromptInputSubmit>
-                            );
-                          }
-                        })()}
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>{isAgentThinking ? "Stop LLM request" : "Send message (Enter)"}</p>
-                      </TooltipContent>
-                    </Tooltip>
-                  </div>
-                </PromptInputToolbar>
-              </PromptInputBody>
-            </PromptInput>
-          </div>
-        </div>
-
-        {/* Tool Injector Drawer */}
-        <Drawer open={showToolInjector} onOpenChange={setShowToolInjector}>
-          <DrawerContent className="h-[80vh] p-0">
-            <div className="px-4 pb-4 h-full overflow-auto pr-6">
-              <ToolCallInjector
-                estateId={estateId}
-                agentInstanceName={durableObjectName}
-                agentClassName={agentClassName}
-                reducedState={reducedState}
-                onClose={() => setShowToolInjector(false)}
-              />
-            </div>
-          </DrawerContent>
-        </Drawer>
-
-        {/* File Upload Drawer */}
-        <Drawer open={showFileUpload} onOpenChange={setShowFileUpload}>
-          <DrawerContent className="h-[80vh] p-0">
-            <div className="px-4 pb-4 h-full overflow-auto pr-6">
-              <FileUploadDialog
-                estateId={estateId}
-                agentInstanceName={durableObjectName}
-                agentClassName={agentClassName}
-                onClose={() => setShowFileUpload(false)}
-              />
-            </div>
-          </DrawerContent>
-        </Drawer>
-
-        {/* Event Details Dialog */}
-        {selectedEventIndex !== null && (
-          <PagerDialog
-            open={selectedEventIndex !== null}
-            onOpenChange={(open) => !open && setSelectedEventIndex(null)}
-            items={filteredEvents}
-            selectedIndex={selectedEventIndex}
-            onSelectedIndexChange={setSelectedEventIndex}
-            title={(event, index) => (
-              <span>
-                {event.type || "Event"} – Event #{(event as any).eventIndex ?? "?"} – {index + 1} /{" "}
-                {filteredEvents.length}
-              </span>
-            )}
-            render={(event) => (
-              <EventDetailsContent
-                event={event}
-                estateId={estateId}
-                agentInstanceName={durableObjectName}
-                agentClassName={agentClassName}
-              />
-            )}
-            size="large"
-          />
-        )}
-
-        {/* Error display */}
-        {addEventsMutation.error && (
-          <Alert variant="destructive" className="mt-4">
-            <AlertDescription>
-              <div className="font-semibold">Error sending message:</div>
-              <div className="text-sm mt-1">
-                {addEventsMutation.error instanceof Error
-                  ? addEventsMutation.error.message
-                  : "An unknown error occurred"}
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
       </div>
-    </DashboardLayout>
+
+      {/* Main content area - Flexible height */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Events feed - Scrollable area */}
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {/* Search bar - Fixed height */}
+          {events.length > 0 && (
+            <div className="flex-shrink-0 px-4 py-2 border-b">
+              <FilterBar
+                value={filters.searchText}
+                onChange={(searchText) => setFilters({ ...filters, searchText })}
+                placeholder="Search events..."
+                count={filteredEvents.length}
+                onCopy={copyAllEventsAsJson}
+              />
+            </div>
+          )}
+
+          {/* Events list - Scrollable content */}
+          <Conversation className="flex-1 overflow-y-auto overflow-x-hidden relative pr-2">
+            <ConversationContent className="max-w-full px-4 py-2">
+              {filteredEvents.length === 0 ? (
+                <ConversationEmptyState
+                  title={events.length === 0 ? "No events yet..." : "No events match the search"}
+                  description={
+                    events.length === 0
+                      ? "Agent events will appear here as they occur"
+                      : "Try adjusting your search terms"
+                  }
+                />
+              ) : (
+                <div className="space-y-1">
+                  {groupedEvents.map((group, groupIndex) => {
+                    if (group.type === "single") {
+                      // Render single event normally
+                      return (
+                        <div
+                          key={`${group.event?.type}-${(group.event as any)?.eventIndex || group.originalIndex}-${groupIndex}`}
+                          className="max-w-full overflow-hidden"
+                        >
+                          <MetaEventWrapper
+                            event={group.event!}
+                            index={group.originalIndex!}
+                            array={filteredEvents}
+                            renderer={CoreEventRenderer}
+                            onEventClick={handleEventClick}
+                            estateId={estateId}
+                            currentUser={currentUser}
+                          />
+                        </div>
+                      );
+                    } else {
+                      // Render parallel tool calls in a group
+                      return (
+                        <div
+                          key={`parallel-${group.llmRequestStartEventIndex}-${groupIndex}`}
+                          className="max-w-full overflow-hidden"
+                        >
+                          <ParallelToolGroup
+                            llmRequestStartEventIndex={group.llmRequestStartEventIndex!}
+                            toolCalls={group.events!}
+                          >
+                            {group.events!.map(({ event, originalIndex }) => (
+                              <div
+                                key={`parallel-${(event as any).eventIndex || originalIndex}-${originalIndex}`}
+                              >
+                                <MetaEventWrapper
+                                  event={event}
+                                  index={originalIndex}
+                                  array={filteredEvents}
+                                  renderer={CoreEventRenderer}
+                                  onEventClick={handleEventClick}
+                                  estateId={estateId}
+                                  currentUser={currentUser}
+                                />
+                              </div>
+                            ))}
+                          </ParallelToolGroup>
+                        </div>
+                      );
+                    }
+                  })}
+                </div>
+              )}
+            </ConversationContent>
+            <ConversationScrollButton />
+          </Conversation>
+        </div>
+      </div>
+
+      {/* Message input - Fixed height */}
+      <div className="flex-shrink-0 border-t bg-background">
+        <div className="px-4 py-3">
+          <PromptInput
+            onSubmit={(promptMessage) => {
+              if (!promptMessage.text?.trim()) {
+                return;
+              }
+
+              const messageEvent = {
+                type: "CORE:LLM_INPUT_ITEM" as const,
+                data: {
+                  type: "message" as const,
+                  role: messageRole,
+                  content: [
+                    {
+                      type: "input_text" as const,
+                      text: promptMessage.text || "",
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              } satisfies AgentCoreEventInput;
+
+              addEventsMutation.mutate({
+                estateId,
+                agentInstanceName: durableObjectName,
+                agentClassName,
+                events: [messageEvent],
+              });
+
+              // Clear the input after successful submission
+              setMessage("");
+            }}
+          >
+            <PromptInputBody>
+              <PromptInputTextarea
+                placeholder="Message (Enter to send, Shift+Enter for newline)"
+                disabled={addEventsMutation.isPending}
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+              />
+
+              <PromptInputToolbar>
+                <PromptInputTools>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PromptInputButton onClick={() => setShowToolInjector(true)}>
+                        <Wrench className="h-4 w-4" />
+                      </PromptInputButton>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Inject tool call</p>
+                    </TooltipContent>
+                  </Tooltip>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <PromptInputButton onClick={() => setShowFileUpload(true)}>
+                        <Paperclip className="h-4 w-4" />
+                      </PromptInputButton>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>Upload files</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </PromptInputTools>
+
+                <div className="flex items-center gap-3">
+                  <PromptInputModelSelect
+                    value={messageRole}
+                    onValueChange={(value: "user" | "developer") => setMessageRole(value)}
+                  >
+                    <PromptInputModelSelectTrigger className="w-36 h-7 text-xs">
+                      <PromptInputModelSelectValue>
+                        {messageRole === "user" ? "Role: User" : "Role: Developer"}
+                      </PromptInputModelSelectValue>
+                    </PromptInputModelSelectTrigger>
+                    <PromptInputModelSelectContent>
+                      <PromptInputModelSelectItem value="user">
+                        Role: User
+                      </PromptInputModelSelectItem>
+                      <PromptInputModelSelectItem value="developer">
+                        Role: Developer
+                      </PromptInputModelSelectItem>
+                    </PromptInputModelSelectContent>
+                  </PromptInputModelSelect>
+
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      {(() => {
+                        if (isAgentThinking) {
+                          return (
+                            <PromptInputButton
+                              onClick={handleCancelLLMRequest}
+                              variant="outline"
+                              className={clsx(
+                                "h-8 w-8 p-0 rounded-full relative overflow-hidden",
+                                "after:absolute after:inset-0 after:rounded-full after:border-2 after:border-transparent",
+                                "after:border-t-primary after:animate-spin",
+                              )}
+                            >
+                              <Square className="h-3 w-3" />
+                            </PromptInputButton>
+                          );
+                        } else {
+                          return (
+                            <PromptInputSubmit
+                              disabled={addEventsMutation.isPending}
+                              className="h-8 w-8 p-0 rounded-full"
+                            >
+                              <ArrowUp className="h-3 w-3" />
+                            </PromptInputSubmit>
+                          );
+                        }
+                      })()}
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <p>{isAgentThinking ? "Stop LLM request" : "Send message (Enter)"}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+              </PromptInputToolbar>
+            </PromptInputBody>
+          </PromptInput>
+        </div>
+      </div>
+
+      {/* Tool Injector Drawer */}
+      <Drawer open={showToolInjector} onOpenChange={setShowToolInjector}>
+        <DrawerContent className="h-[80vh] p-0">
+          <div className="px-4 pb-4 h-full overflow-auto pr-6">
+            <ToolCallInjector
+              estateId={estateId}
+              agentInstanceName={durableObjectName}
+              agentClassName={agentClassName}
+              reducedState={reducedState}
+              onClose={() => setShowToolInjector(false)}
+            />
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* File Upload Drawer */}
+      <Drawer open={showFileUpload} onOpenChange={setShowFileUpload}>
+        <DrawerContent className="h-[80vh] p-0">
+          <div className="px-4 pb-4 h-full overflow-auto pr-6">
+            <FileUploadDialog
+              estateId={estateId}
+              agentInstanceName={durableObjectName}
+              agentClassName={agentClassName}
+              onClose={() => setShowFileUpload(false)}
+            />
+          </div>
+        </DrawerContent>
+      </Drawer>
+
+      {/* Event Details Dialog */}
+      {selectedEventIndex !== null && (
+        <PagerDialog
+          open={selectedEventIndex !== null}
+          onOpenChange={(open) => !open && setSelectedEventIndex(null)}
+          items={filteredEvents}
+          selectedIndex={selectedEventIndex}
+          onSelectedIndexChange={setSelectedEventIndex}
+          title={(event, index) => (
+            <span>
+              {event.type || "Event"} – Event #{(event as any).eventIndex ?? "?"} – {index + 1} /{" "}
+              {filteredEvents.length}
+            </span>
+          )}
+          render={(event) => (
+            <EventDetailsContent
+              event={event}
+              estateId={estateId}
+              agentInstanceName={durableObjectName}
+              agentClassName={agentClassName}
+            />
+          )}
+          size="large"
+        />
+      )}
+
+      {/* Error display */}
+      {addEventsMutation.error && (
+        <Alert variant="destructive" className="mt-4">
+          <AlertDescription>
+            <div className="font-semibold">Error sending message:</div>
+            <div className="text-sm mt-1">
+              {addEventsMutation.error instanceof Error
+                ? addEventsMutation.error.message
+                : "An unknown error occurred"}
+            </div>
+          </AlertDescription>
+        </Alert>
+      )}
+    </div>
   );
 }

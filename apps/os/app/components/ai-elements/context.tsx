@@ -1,10 +1,10 @@
 import type { LanguageModelUsage } from "ai";
 import { type ComponentProps, createContext, useContext } from "react";
 import { estimateCost, type ModelId } from "tokenlens";
-import { Button } from "../../components/ui/button";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "../../components/ui/hover-card";
-import { Progress } from "../../components/ui/progress";
-import { cn } from "../../lib/utils";
+import { Button } from "../ui/button.tsx";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "../ui/hover-card.tsx";
+import { Progress } from "../ui/progress.tsx";
+import { cn } from "../../lib/utils.ts";
 
 const PERCENT_MAX = 100;
 const ICON_RADIUS = 10;

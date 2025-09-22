@@ -9,7 +9,8 @@ import {
 } from "./openai-response-schemas.ts";
 import type { Participant } from "./participant-schemas.ts";
 import type { PromptFragment } from "./prompt-fragments.ts";
-import { type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
+import { type MCPServer, type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
+import { ContextRule } from "./context-schemas.ts";
 
 // ------------------------- Models -------------------------
 
@@ -288,6 +289,21 @@ export const AddToolSpecsEventInput = z.object({
   ...addToolSpecsEventFields,
 });
 
+const addContextRulesEventFields = {
+  type: z.literal("CORE:ADD_CONTEXT_RULES"),
+  data: z.object({ rules: z.array(ContextRule) }),
+};
+export const AddContextRulesEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...addContextRulesEventFields,
+});
+export const AddContextRulesEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...addContextRulesEventFields,
+});
+export type AddContextRulesEvent = z.infer<typeof AddContextRulesEvent>;
+export type AddContextRulesEventInput = z.input<typeof AddContextRulesEventInput>;
+
 // CORE:REMOVE_TOOL_SPECS
 const removeToolSpecsEventFields = {
   type: z.literal("CORE:REMOVE_TOOL_SPECS"),
@@ -480,8 +496,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   LlmOutputItemEvent,
   SetSystemPromptEvent,
   SetMetadataEvent,
-  AddToolSpecsEvent,
-  RemoveToolSpecsEvent,
+  AddContextRulesEvent,
   SetModelOptsEvent,
   InternalErrorEvent,
   LogEvent,
@@ -503,8 +518,7 @@ export const agentCoreEventInputSchemasUndiscriminated = [
   LlmOutputItemEventInput,
   SetSystemPromptEventInput,
   SetMetadataEventInput,
-  AddToolSpecsEventInput,
-  RemoveToolSpecsEventInput,
+  AddContextRulesEventInput,
   SetModelOptsEventInput,
   InternalErrorEventInput,
   LogEventInput,
@@ -649,14 +663,18 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
     }
   >;
   modelOpts: ModelOpts;
-  /**
-   * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made.
-   */
-  toolSpecs: ToolSpec[];
+
+  /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
+  contextRules: Record<string, ContextRule>;
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
+   * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
+   * This is *partially* derived from contextRules, but also from other sources like MCP servers. Might want rethinking some day for that reason.
    */
-  runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
+  groupedRuntimeTools: Record<
+    "context-rule" | "mcp",
+    RuntimeTool<TEventInput | AgentCoreEventInput>[]
+  >;
   llmRequestStartedAtIndex: number | null;
   paused: boolean;
   /**
@@ -664,13 +682,6 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
    * to allow slices to control whether their events can trigger LLM requests.
    */
   triggerLLMRequest: boolean;
-  /**
-   * Ephemeral context items collected from the collectContextItems hook at the end of each reducer run.
-   * These are reset to {} at the start of each reducer run.
-   * The key is the slug of the context item. This can be used by slices such as the slack and memory
-   * slices to continuously update their context item
-   */
-  ephemeralPromptFragments: Record<string, PromptFragment>;
   /**
    * Arbitrary key-value metadata associated with the agent conversation.
    * Consumers can store lightweight state here across events.
@@ -689,6 +700,30 @@ with the agent.
   mentionedParticipants: Record<string, Participant>;
 }
 
+export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
+  extends CoreReducedState<TEventInput> {
+  /**
+   * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
+   */
+  toolSpecs: ToolSpec[];
+
+  /** Flat list of runtime tools available for the agent. Derived from groupedRuntimeTools. */
+  runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
+  /**
+   * MCP servers available for this agent conversation. Derived from contextRules.
+   */
+  mcpServers: MCPServer[];
+  /**
+   * Ephemeral context items collected from the collectContextItems hook at the end of each reducer run.
+   * These are reset to {} at the start of each reducer run.
+   * The key is the slug of the context item. This can be used by slices such as the slack and memory
+   * slices to continuously update their context item. Derived from contextRules.
+   */
+  ephemeralPromptFragments: Record<string, PromptFragment>;
+  /** The keys on the original, un-augmented state. Can be used to get the original state without the derived props. */
+  rawKeys: string[];
+}
+
 // Note: We cannot use createZodSchemaThatSatisfies for CoreReducedState because:
 // 1. OpenAI.Responses.ResponseInput is not a Zod schema - it's a TypeScript type from the OpenAI SDK
 // 2. The schemas imported from openai-response-schemas.ts are custom implementations that don't
@@ -700,12 +735,11 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   systemPrompt: "You are a helpful assistant",
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
-  toolSpecs: [],
-  runtimeTools: [],
+  contextRules: {},
+  groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,
   triggerLLMRequest: false,
-  ephemeralPromptFragments: {},
   metadata: {},
   participants: {},
   mentionedParticipants: {},

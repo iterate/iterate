@@ -45,10 +45,14 @@ type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
-  static getNamespace<T extends typeof IterateAgent>(
-    this: T,
-  ): DurableObjectNamespace<InstanceType<T>> {
-    return env.SLACK_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  static getNamespace() {
+    // cast necessary to avoid typescript error:
+    // Class static side 'typeof SlackAgent' incorrectly extends base class static side 'typeof IterateAgent'.
+    // The types returned by 'getNamespace()' are incompatible between these types.
+
+    // tradeoff: types for some other static methods inherited from IterateAgent like getOrCreateStubByName
+    // are for IterateAgent, rather than SlackAgent, so a cast is necessary if you want to call slack-specific methods on a stub.
+    return env.SLACK_AGENT as unknown as typeof env.ITERATE_AGENT;
   }
 
   protected slackAPI!: WebClient;

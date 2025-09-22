@@ -103,7 +103,7 @@ export default defineConfig([
       "default-param-last": "error",
       "no-else-return": "off",
       "prefer-arrow-callback": "off",
-      curly: ["error", "all"],
+      curly: "off",
 
       // Import rules
       "import/extensions": ["error", "ignorePackages"],
@@ -123,7 +123,7 @@ export default defineConfig([
 
       // React rules
       ...reactHooks.configs.recommended.rules,
-      "react-hooks/exhaustive-deps": "off",
+      "react-hooks/exhaustive-deps": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
       // A11y rules (mapping from biome a11y rules)

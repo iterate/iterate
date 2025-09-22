@@ -1,13 +1,17 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { generateRandomString } from "better-auth/crypto";
+import { TRPCError } from "@trpc/server";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
+import * as schemas from "../../db/schema.ts";
+import { generateGithubJWT } from "../../integrations/github/github-utils.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
-  github: {
-    name: "GitHub",
-    description: "Connect to your GitHub account",
+  "github-app": {
+    name: "GitHub App",
+    description: "Install the GitHub app to your estate",
     icon: "github",
   },
   "slack-bot": {
@@ -162,6 +166,141 @@ export const integrationsRouter = router({
           accessTokenExpiresAt: acc.accessTokenExpiresAt,
         })),
         isConnected: accounts.length > 0,
+      };
+    }),
+  // Make it work
+  // TODO: Make this good later
+  startGithubAppInstallFlow: estateProtectedProcedure.mutation(async ({ ctx, input }) => {
+    const state = generateRandomString(32);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const { estateId } = input;
+
+    const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
+    const data = JSON.stringify({
+      userId: ctx.user.id,
+      estateId,
+      redirectUri,
+    });
+
+    await ctx.db.insert(schemas.verification).values({
+      identifier: state,
+      value: data,
+      expiresAt,
+    });
+
+    const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
+
+    return {
+      installationUrl,
+    };
+  }),
+  listAvailableGithubRepos: estateProtectedProcedure.query(async ({ ctx, input }) => {
+    const { estateId } = input;
+    const [githubInstallation] = await ctx.db
+      .select({
+        accountId: schemas.account.accountId,
+      })
+      .from(schemas.estateAccountsPermissions)
+      .innerJoin(
+        schemas.account,
+        eq(schemas.estateAccountsPermissions.accountId, schemas.account.id),
+      )
+      .where(
+        and(
+          eq(schemas.estateAccountsPermissions.estateId, estateId),
+          eq(schemas.account.providerId, "github-app"),
+        ),
+      )
+      .limit(1);
+
+    if (!githubInstallation) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Github installation not found",
+      });
+    }
+
+    const jwt = await generateGithubJWT();
+
+    const tokenRes = await fetch(
+      `https://api.github.com/app/installations/${githubInstallation.accountId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          "User-Agent": "Iterate OS",
+        },
+      },
+    );
+
+    if (!tokenRes.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Failed to fetch access token",
+      });
+    }
+
+    const { token } = (await tokenRes.json()) as { token: string };
+    const availableRepos = await fetch(`https://api.github.com/installation/repositories`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "User-Agent": "Iterate OS",
+      },
+    });
+
+    if (!availableRepos.ok) {
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: "Failed to fetch available repositories",
+      });
+    }
+
+    const AvailableRepos = z.object({
+      repositories: z.array(
+        z.object({
+          id: z.number(),
+          full_name: z.string(),
+          private: z.boolean(),
+        }),
+      ),
+    });
+
+    const availableReposData = AvailableRepos.parse(await availableRepos.json());
+    return availableReposData.repositories;
+  }),
+  getGithubRepoForEstate: estateProtectedProcedure.query(async ({ ctx, input }) => {
+    const { estateId } = input;
+    const [githubRepo] = await ctx.db
+      .select({
+        connectedRepoInfo: schemas.estate.connectedRepoId,
+      })
+      .from(schemas.estate)
+      .where(eq(schemas.estate.id, estateId));
+    if (!githubRepo) {
+      return null;
+    }
+    return githubRepo.connectedRepoInfo;
+  }),
+  setGithubRepoForEstate: estateProtectedProcedure
+    .input(
+      z.object({
+        repoId: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, repoId } = input;
+
+      await ctx.db
+        .update(schemas.estate)
+        .set({
+          connectedRepoId: repoId,
+          connectedRepoRef: "main",
+          connectedRepoPath: "/",
+        })
+        .where(eq(schemas.estate.id, estateId));
+
+      return {
+        success: true,
       };
     }),
 });

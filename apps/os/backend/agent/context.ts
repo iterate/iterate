@@ -1,66 +1,15 @@
 import { dirname, join, resolve } from "path";
 import { globSync, readFileSync, accessSync } from "fs";
-import jsonataLib from "jsonata";
-import type { RequireAtLeastOne } from "type-fest";
-import type { PromptFragment } from "./prompt-fragments";
-import type { ToolSpec } from "./tool-schemas";
+import jsonataLib from "jsonata/sync";
+import type {
+  ContextRule,
+  ContextRuleMatcher,
+  MonthCode,
+  TimeWindow,
+  WeekdayCode,
+} from "./context-schemas.ts";
 
-export type ContextRuleMatcher =
-  | {
-      type: "always";
-    }
-  | {
-      type: "never";
-    }
-  | {
-      type: "jsonata";
-      expression: string;
-    }
-  | {
-      type: "and";
-      matchers: ContextRuleMatcher[];
-    }
-  | {
-      type: "or";
-      matchers: ContextRuleMatcher[];
-    }
-  | {
-      type: "not";
-      matcher: ContextRuleMatcher;
-    }
-  | {
-      type: "timeWindow";
-      windows: TimeWindow[];
-      tz?: string;
-    };
-
-export type WeekdayCode = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
-export type MonthCode =
-  | "JAN"
-  | "FEB"
-  | "MAR"
-  | "APR"
-  | "MAY"
-  | "JUN"
-  | "JUL"
-  | "AUG"
-  | "SEP"
-  | "OCT"
-  | "NOV"
-  | "DEC";
-
-export type TimeWindow = {
-  /** 0=Sunday..6=Saturday or iCal-style weekday codes */
-  weekdays?: Array<0 | 1 | 2 | 3 | 4 | 5 | 6 | WeekdayCode>;
-  /** 1..12 or month codes */
-  months?: Array<1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | MonthCode>;
-  /** 1..31 */
-  daysOfMonth?: number[];
-  /** Time interval in local day. Cross-midnight allowed when end < start */
-  timeOfDay?: { start: string; end: string };
-  /** Exact month/day/hour/minute match in local time */
-  exact?: { month: number; day: number; hour: number; minute: number };
-};
+export * from "./context-schemas.ts";
 
 export function always() {
   return { type: "always" } satisfies ContextRuleMatcher;
@@ -151,28 +100,6 @@ export const matchers = {
   timeWindow,
 };
 
-/**
- * Represents context (such as prompts and tool specs) to be provided to
- * an LLM via our AgentCore class
- */
-export type ContextItem = RequireAtLeastOne<{
-  prompt: PromptFragment;
-  tools: ToolSpec[];
-}> & {
-  key: string;
-  description?: string;
-};
-
-export type ContextRule = ContextItem & {
-  /**
-   * Matcher for when this context rule should apply.
-   * Prefer providing a single matcher and compose with matchers.and/or/not.
-   *
-   * If an array is provided, it is treated as matchers.or(...array).
-   */
-  match?: ContextRuleMatcher | ContextRuleMatcher[];
-};
-
 export const defineRule = <Rule extends ContextRule>(rule: Rule) => rule;
 
 export const defineRules = <Rules extends ContextRule[]>(rules: Rules) => rules;
@@ -183,43 +110,23 @@ export const defineRules = <Rules extends ContextRule[]>(rules: Rules) => rules;
  *
  * @param params Object containing contextRule and matchAgainst data
  * @param params.contextRule The context rule containing the matchers to evaluate
- * @param params.matchAgainst Object containing agentCoreState and durableObjectClassName
+ * @param params.matchAgainst Object to evaluate the matchers against
  * @returns true if any matcher matches (or if matchers array is empty/undefined), false otherwise
  */
-export async function evaluateContextRuleMatchers({
+export function evaluateContextRuleMatchers({
   contextRule,
   matchAgainst,
 }: {
-  contextRule: {
-    match?: ContextRuleMatcher | ContextRuleMatcher[];
-  };
-  matchAgainst: {
-    agentCoreState: any;
-    durableObjectClassName: string;
-  };
-}): Promise<boolean> {
-  const providedMatchers = contextRule.match;
-  // No conditions provided -> include by default
-  if (providedMatchers === undefined) {
-    return true;
-  }
-
-  // Array -> OR wrapper
-  if (Array.isArray(providedMatchers)) {
-    return evaluateSingleMatcher(matchAgainst, { type: "or", matchers: providedMatchers });
-  }
-
-  // Single matcher
-  return evaluateSingleMatcher(matchAgainst, providedMatchers);
+  contextRule: Pick<ContextRule, "match">;
+  matchAgainst: unknown;
+}): boolean {
+  const matcher: ContextRuleMatcher = Array.isArray(contextRule.match)
+    ? { type: "or", matchers: contextRule.match }
+    : contextRule.match || { type: "always" };
+  return evaluateSingleMatcher(matchAgainst, matcher);
 }
 
-async function evaluateSingleMatcher(
-  matchAgainst: {
-    agentCoreState: any;
-    durableObjectClassName: string;
-  },
-  matcher: ContextRuleMatcher,
-): Promise<boolean> {
+function evaluateSingleMatcher(matchAgainst: unknown, matcher: ContextRuleMatcher): boolean {
   switch (matcher.type) {
     case "always":
       return true;
@@ -230,30 +137,26 @@ async function evaluateSingleMatcher(
     case "jsonata": {
       // If the jsonata expression is invalid, this will throw an error
       // We may want to log a warning and return false in the future, but for now we like the error
-      const result = await jsonataLib(matcher.expression).evaluate(matchAgainst);
+      const result = jsonataLib(matcher.expression).evaluate(matchAgainst);
       return Boolean(result);
     }
 
     case "and": {
-      const results = await Promise.all(
-        matcher.matchers.map((inner) => {
-          return evaluateSingleMatcher(matchAgainst, inner);
-        }),
-      );
+      const results = matcher.matchers.map((inner) => {
+        return evaluateSingleMatcher(matchAgainst, inner);
+      });
       return results.every(Boolean);
     }
 
     case "or": {
-      const results = await Promise.all(
-        matcher.matchers.map((inner) => {
-          return evaluateSingleMatcher(matchAgainst, inner);
-        }),
-      );
+      const results = matcher.matchers.map((inner) => {
+        return evaluateSingleMatcher(matchAgainst, inner);
+      });
       return results.some(Boolean);
     }
 
     case "not": {
-      const inner = await evaluateSingleMatcher(matchAgainst, matcher.matcher);
+      const inner = evaluateSingleMatcher(matchAgainst, matcher.matcher);
       return !inner;
     }
     case "timeWindow": {
@@ -268,19 +171,16 @@ async function evaluateSingleMatcher(
       }
       return false;
     }
+    default: {
+      matcher satisfies never;
+      throw new Error(`Unknown matcher type: ${(matcher as ContextRuleMatcher).type}`);
+    }
   }
 }
 
-function timeWindow(
-  windows: TimeWindow | TimeWindow[],
-  opts?: { tz?: string },
-): ContextRuleMatcher {
+function timeWindow(windows: TimeWindow | TimeWindow[], opts?: { tz?: string }) {
   const arr = Array.isArray(windows) ? windows : [windows];
-  return {
-    type: "timeWindow",
-    windows: arr,
-    ...(opts?.tz ? { tz: opts.tz } : {}),
-  };
+  return { type: "timeWindow", windows: arr, tz: opts?.tz } as const;
 }
 
 type LocalDateParts = {
@@ -439,7 +339,7 @@ function parseHm(hhmm: string): number {
 
 /**
  * Helper function to create context rules from files matching a glob pattern.
- * Each file becomes a context rule with id derived from filename and prompt from file content.
+ * Each file becomes a context rule with slug derived from filename and prompt from file content.
  */
 export function contextRulesFromFiles(pattern: string, overrides: Partial<ContextRule> = {}) {
   try {

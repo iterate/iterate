@@ -8,28 +8,16 @@ import {
   ScrollRestoration,
 } from "react-router";
 import { ThemeProvider } from "next-themes";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { httpBatchLink } from "@trpc/client";
-import { useState, Suspense } from "react";
-
+import { Suspense } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
 import type { Route } from "./+types/root";
-import { trpc } from "./lib/trpc.ts";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
 import { Toaster } from "./components/ui/sonner.tsx";
+import { queryClient, trpcClient, TRPCProvider } from "./lib/trpc.ts";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
-  { rel: "preconnect", href: "https://fonts.googleapis.com" },
-  {
-    rel: "preconnect",
-    href: "https://fonts.gstatic.com",
-    crossOrigin: "anonymous",
-  },
-  {
-    rel: "stylesheet",
-    href: "https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&display=swap",
-  },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {
@@ -40,26 +28,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <Meta />
         <Links />
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-              try {
-                const theme = document.cookie
-                  .split('; ')
-                  .find(row => row.startsWith('theme='))
-                  ?.split('=')[1] || 'system';
-                
-                if (theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-                  document.documentElement.classList.add('dark');
-                  document.documentElement.style.colorScheme = 'dark';
-                } else {
-                  document.documentElement.classList.remove('dark');
-                  document.documentElement.style.colorScheme = 'light';
-                }
-              } catch (e) {}
-            `,
-          }}
-        />
       </head>
       <body>
         {children}
@@ -71,33 +39,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
-  const [queryClient] = useState(() => new QueryClient());
-  const [trpcClient] = useState(() =>
-    trpc.createClient({
-      links: [
-        httpBatchLink({
-          url: "/api/trpc",
-          // Include credentials to send cookies
-          fetch(url, options) {
-            return fetch(url, {
-              ...options,
-              credentials: "include",
-            } as RequestInit);
-          },
-        }),
-      ],
-    }),
-  );
-
   return (
-    <trpc.Provider client={trpcClient} queryClient={queryClient}>
-      <QueryClientProvider client={queryClient}>
+    <QueryClientProvider client={queryClient}>
+      <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
           enableSystem
           enableColorScheme
           storageKey="theme"
+          disableTransitionOnChange
         >
           <AuthGuard>
             <Suspense fallback={<GlobalLoading />}>
@@ -106,8 +57,8 @@ export default function App() {
           </AuthGuard>
           <Toaster />
         </ThemeProvider>
-      </QueryClientProvider>
-    </trpc.Provider>
+      </TRPCProvider>
+    </QueryClientProvider>
   );
 }
 

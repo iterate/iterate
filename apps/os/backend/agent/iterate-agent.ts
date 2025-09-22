@@ -1,19 +1,21 @@
-import { createHash } from "node:crypto";
+import pTimeout from "p-suite/p-timeout";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
-import { createStaleWhileRevalidateCache } from "p-suite/stale-while-revalidate-cache";
 import { z } from "zod/v4";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
+import * as R from "remeda";
 import { env, type CloudflareEnv } from "../../env.ts";
-import { getDb, type DB } from "../db/client.ts";
+import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
 import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
+  contextRules: ContextRule[];
+};
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -23,8 +25,11 @@ import {
   type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent } from "./agent-core-schemas.ts";
-import { evaluateContextRuleMatchers, type ContextItem, type ContextRule } from "./context.ts";
+import {
+  AgentCoreEvent,
+  type AddContextRulesEvent,
+  type AugmentedCoreReducedState,
+} from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -39,6 +44,7 @@ import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
+import type { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -132,22 +138,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   override observability = undefined;
 
   // Resolve the DO namespace for the concrete subclass at runtime
-  static getNamespace<T extends typeof IterateAgent>(
-    this: T,
-  ): DurableObjectNamespace<InstanceType<T>> {
-    return env.ITERATE_AGENT as unknown as DurableObjectNamespace<InstanceType<T>>;
+  static getNamespace() {
+    return env.ITERATE_AGENT;
   }
 
   // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord<T extends typeof IterateAgent>(
-    this: T,
+  static async getStubFromDatabaseRecord(
     record: AgentInstanceDatabaseRecord,
     options?: {
       jurisdiction?: DurableObjectJurisdiction;
       locationHint?: DurableObjectLocationHint;
       props?: Record<string, unknown>;
     },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  ) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
     if (options?.jurisdiction) {
@@ -177,13 +180,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Get stub for existing agent by name (does not create)
-  static async getStubByName<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      agentInstanceName: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getStubByName(params: { db: DB; agentInstanceName: string }) {
     const { db, agentInstanceName } = params;
     const className = this.name;
 
@@ -193,29 +190,22 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eq(agentInstance.className, className),
       ),
     });
-
     if (!record) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
+    const contextRules = await this.getRulesFromDB(db, record.estateId);
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({ ...record, contextRules });
   }
 
   // Get stubs for agents by routing key (does not create)
-  static async getStubsByRoute<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      routingKey: string;
-      estateId?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>[]> {
+  static async getStubsByRoute(params: { db: DB; routingKey: string; estateId?: string }) {
     const { db, routingKey, estateId } = params;
     const className = this.name;
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
-      with: { agentInstance: true },
+      with: { agentInstance: { with: { estate: { with: { iterateConfigs: true } } } } },
     });
 
     const matchingAgents = routes
@@ -227,22 +217,24 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) => this.getStubFromDatabaseRecord(record)),
+      matchingAgents.map((record) =>
+        this.getStubFromDatabaseRecord({
+          ...record,
+          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
+        }),
+      ),
     );
 
-    return stubs;
+    return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
   }
 
   // Get or create stub by name
-  static async getOrCreateStubByName<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      estateId: string;
-      agentInstanceName: string;
-      reason?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getOrCreateStubByName(params: {
+    db: DB;
+    estateId: string;
+    agentInstanceName: string;
+    reason?: string;
+  }) {
     const { db, estateId, agentInstanceName, reason } = params;
     const className = this.name;
 
@@ -277,21 +269,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
     }
+    const contextRules = await this.getRulesFromDB(db, estateId);
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({ ...record, contextRules });
   }
 
   // Get or create stub by route
-  static async getOrCreateStubByRoute<T extends typeof IterateAgent>(
-    this: T,
-    params: {
-      db: DB;
-      estateId: string;
-      agentInstanceName: string;
-      route: string;
-      reason?: string;
-    },
-  ): Promise<DurableObjectStub<InstanceType<T>>> {
+  static async getOrCreateStubByRoute(params: {
+    db: DB;
+    estateId: string;
+    agentInstanceName: string;
+    route: string;
+    reason?: string;
+  }) {
     const { db, estateId, agentInstanceName, route, reason } = params;
 
     // First check if an agent already exists for this route
@@ -299,13 +289,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: eq(agentInstanceRoute.routingKey, route),
       with: { agentInstance: true },
     });
+    const contextRules = await this.getRulesFromDB(db, estateId);
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromDatabaseRecord(existingAgent);
+      return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
     }
 
     // No existing agent for this route, create one with route
@@ -333,7 +324,17 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .values({ agentInstanceId: record.id, routingKey: route })
       .onConflictDoNothing();
 
-    return this.getStubFromDatabaseRecord(record);
+    return this.getStubFromDatabaseRecord({
+      ...record,
+      contextRules,
+    });
+  }
+
+  static async getRulesFromDB(db: DB, estateId: string): Promise<ContextRule[]> {
+    const config = await db.query.iterateConfig.findFirst({
+      where: eq(schema.iterateConfig.estateId, estateId),
+    });
+    return config?.config?.contextRules ?? [];
   }
 
   protected db: DB;
@@ -350,42 +351,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   initialState = {
     reminders: {},
   };
-
-  #swrCacheMinTimeToStale = 1000 * 60;
-  /** don't use directly, use #swrGet instead, which makes sure background work prevents the process from dying until it's done */
-  #rawSwrCache = createStaleWhileRevalidateCache({
-    minTimeToStale: this.#swrCacheMinTimeToStale,
-    storage: {
-      // todo: use this.sql`insert into swr_cache ...` instead. remove from state
-      getItem: (key) => {
-        const [result] = this.sql<string>`select json from swr_cache where key = ${key}`;
-        try {
-          return typeof result === "string" ? JSON.parse(result) : undefined;
-        } catch (e) {
-          console.warn(`Failed to parse JSON for key ${key}: ${result}: ${String(e)}`);
-          return undefined;
-        }
-      },
-      setItem: (key, value) => {
-        this.sql`
-          insert into swr_cache (key, json)
-          values (${key}, ${JSON.stringify(value)})
-          on conflict (key)
-          do update set json = excluded.json
-        `;
-      },
-      removeItem: (key) => {
-        this.sql`delete from swr_cache where key = ${key}`;
-      },
-    },
-  });
-  async #swrGet<T>(key: string, fn: () => Promise<T>): Promise<T> {
-    const retrieved = await this.#rawSwrCache.retrieve(key);
-    if (retrieved.cachedAge > this.#swrCacheMinTimeToStale) {
-      this.ctx.waitUntil(this.#rawSwrCache(key, fn)); // make sure process doesn't die until this is retrieved
-    }
-    return this.#rawSwrCache(key, fn).then((r) => r.value);
-  }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -444,6 +409,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const _posthogClient = this.getPosthogClient();
 
     const baseDeps: AgentCoreDeps = {
+      getRuleMatchData: (state) => ({
+        agentCoreState: state,
+        durableObjectClassName: this.constructor.name,
+      }),
       storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
@@ -502,34 +471,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         });
       },
 
-      toolSpecsToImplementations: async (specs: ToolSpec[]) => {
-        const cacheKey = `toolSpecsToImplementations-${createHash("md5").update(JSON.stringify(specs)).digest("hex")}`;
-        return this.#swrGet(
-          cacheKey,
-          async () =>
-            await toolSpecsToImplementations({
-              toolSpecs: specs,
-              // todo: move toolSpecsToImplementations to just be an instance method on this class
-              // cast is silly - env is protected on this class.
-              theDO: this as typeof this & { env: CloudflareEnv },
-            }),
-        );
-      },
-
-      onLLMStreamResponseStreamingChunk: (chunk: any) => {
-        // Broadcast OpenAI streaming chunk to all connected clients using SDK's broadcast
-        try {
-          this.broadcast(
-            JSON.stringify({
-              type: "openai_response_chunk",
-              content: chunk,
-              timestamp: Date.now(),
-            }),
-          );
-        } catch (error) {
-          // During HMR, broadcast might fail - log but don't crash
-          console.warn("Failed to broadcast OpenAI chunk during HMR:", error);
-        }
+      toolSpecsToImplementations: (specs: ToolSpec[]) => {
+        return toolSpecsToImplementations({ toolSpecs: specs, theDO: this });
       },
       // TODO: somebody who understands this more than me needs to fix this type
       // @ts-expect-error
@@ -602,6 +545,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           );
         }
 
+        if (event.type === "CORE:LLM_REQUEST_END") {
+          // fairly arbitrarily, refresh context rules after each LLM request so the agent will have updated instructions by next time
+          // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
+          // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
+          this.ctx.waitUntil(this.refreshContextRules());
+        }
+
         //   // this.ctx.waitUntil(
         //     /**
         //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
@@ -636,27 +586,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         //     // }),
         //   // );
       },
-
-      collectContextItems: async (): Promise<ContextItem[]> => {
-        // Collect context rules - this may include durable object class specific rules (e.g. from SlackAgent)
-        // as well as what's coming from platform.agents.listContextRules
-        const contextRules = await this.#swrGet("contextRules", () => this.getContextRules());
-        return Promise.all(
-          contextRules.map(async (rule) => ({
-            rule,
-            shouldInclude: await evaluateContextRuleMatchers({
-              contextRule: rule,
-              matchAgainst: {
-                agentCoreState: this.agentCore.state,
-                durableObjectClassName: this.constructor.name,
-              },
-            }),
-          })),
-        ).then((results) =>
-          results.filter(({ shouldInclude }) => shouldInclude).map(({ rule }) => rule),
-        );
-      },
-
       lazyConnectionDeps: {
         agentDurableObjectId: this.ctx.id.toString(),
         estateId: this.databaseRecord.estateId,
@@ -688,6 +617,27 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
 
+  async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
+    const rules = await this.getContextRules();
+    return {
+      type: "CORE:ADD_CONTEXT_RULES",
+      data: { rules },
+      metadata: {},
+      triggerLLMRequest: false,
+      createdAt: new Date().toISOString(),
+      eventIndex: this.getEvents().length,
+    } satisfies AgentCoreEvent;
+  }
+
+  async refreshContextRules() {
+    const event = await this.getAddContextRulesEvent();
+    const existingRules = this.agentCore.state.contextRules;
+    const upToDate = event.data.rules.every((r) => R.isDeepEqual(r, existingRules[r.key]));
+    if (!upToDate) {
+      this.addEvent(event); // only worth adding if it's going to have an effect
+    }
+  }
+
   /**
    * Called after an agent object in constructed and the state has been loaded from the DO store.
    */
@@ -695,6 +645,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Call parent onStart to ensure persistence completes
     await super.onStart();
     const event = this.getEvents();
+    if (event.length === 0) {
+      // new agent, fetch initial context rules, along with tool schemas etc.
+      event.push(await this.getAddContextRulesEvent());
+    }
     await this.agentCore.initializeWithEvents(event);
 
     this.setState({
@@ -756,20 +710,23 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    return await defaultContextRules();
-    // Fetch context rules from the platform
-    // const rulesFromSkinnyRepo = await this.env.PLATFORM.runCallable(
-    //   trpcCallableBuilder.platform.agents.listContextRules.build(),
-    //   {},
-    // );
-
-    // // Type guard to ensure platformRules is an array
-    // if (!Array.isArray(rulesFromSkinnyRepo)) {
-    //   console.warn("Expected platform context rules to be an array, got:", rulesFromSkinnyRepo);
-    //   return [];
-    // }
-
-    // return rulesFromSkinnyRepo;
+    const defaultRules = await defaultContextRules();
+    const { db, databaseRecord } = this;
+    // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
+    const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+      milliseconds: 250,
+      fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    });
+    const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
+    const seenIds = new Set<string>();
+    const dedupedRules = rules.filter((rule: ContextRule) => {
+      if (seenIds.has(rule.key)) {
+        return false;
+      }
+      seenIds.add(rule.key);
+      return true;
+    });
+    return dedupedRules;
   }
 
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
@@ -789,9 +746,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   /*
    * Get the reduced state at a specific event index
    */
-  async getReducedStateAtEventIndex(
-    eventIndex: number,
-  ): Promise<Readonly<MergedStateForSlices<Slices>>> {
+  async getReducedStateAtEventIndex(eventIndex: number): Promise<AugmentedCoreReducedState> {
     return this.agentCore.getReducedStateAtEventIndex(eventIndex);
   }
 
@@ -932,8 +887,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   doNothing() {
     return {};
   }
-  getAgentDebugURL() {
-    return { debugURL: `${this.env.VITE_PUBLIC_URL}/agents/${this.constructor.name}/${this.name}` };
+  async getAgentDebugURL() {
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+      columns: {
+        organizationId: true,
+        id: true,
+      },
+    });
+    if (!estate) {
+      throw new Error("Estate not found");
+    }
+    return {
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+    };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
     const { message, type, when } = input;

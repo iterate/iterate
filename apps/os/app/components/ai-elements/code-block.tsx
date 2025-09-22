@@ -3,8 +3,8 @@ import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
 import { createContext, useContext, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { cn } from "../../lib/utils";
-import { Button } from "../../components/ui/button";
+import { cn } from "../../lib/utils.ts";
+import { Button } from "../ui/button.tsx";
 
 type CodeBlockContextType = {
   code: string;

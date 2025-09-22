@@ -1,14 +1,10 @@
-import { useControllableState } from "@radix-ui/react-use-controllable-state";
+import { useControllableState } from "radix-ui/internal";
 import { BrainIcon, ChevronDownIcon, DotIcon, type LucideIcon } from "lucide-react";
 import type { ComponentProps } from "react";
 import { createContext, memo, useContext } from "react";
-import { Badge } from "../../components/ui/badge";
-import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../components/ui/collapsible";
-import { cn } from "../../lib/utils";
+import { Badge } from "../ui/badge.tsx";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
+import { cn } from "../../lib/utils.ts";
 
 type ChainOfThoughtContextValue = {
   isOpen: boolean;

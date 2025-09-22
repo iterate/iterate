@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
+import { WebClient } from "@slack/web-api";
 import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
@@ -13,6 +14,7 @@ import {
   isBotMentionedInMessage,
 } from "../../agent/slack-agent-utils.ts";
 import { slackWebhookEvent } from "../../db/schema.ts";
+import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
@@ -38,9 +40,9 @@ slackApp.post("/webhook", async (c) => {
   // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
   const body = (await c.req.json()) as SlackWebhookPayload;
   // Slack types say this doesn't exist but it was here in v1...
-  // if (body.type === "url_verification") {
-  //   return c.text(body.challenge);
-  // }
+  if ("type" in body && body.type === "url_verification" && "challenge" in body) {
+    return c.text(body.challenge as string);
+  }
 
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
@@ -48,7 +50,11 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  const estateId = await slackTeamIdToEstateId({ db, teamId: body.team_id });
+  const [estateId, messageMetadata] = await Promise.all([
+    slackTeamIdToEstateId({ db, teamId: body.team_id }),
+    getMessageMetadata(body.event, db),
+  ]);
+
   if (!estateId) {
     console.warn(
       `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
@@ -57,7 +63,14 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  const messageMetadata = await getMessageMetadata(body.event, db);
+  c.executionCtx.waitUntil(
+    // deterministically react to the webhook as early as possible (eyes emoji)
+    getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
+      if (slackToken) {
+        await reactToSlackWebhook(body, new WebClient(slackToken), messageMetadata);
+      }
+    }),
+  );
 
   c.executionCtx.waitUntil(
     db
@@ -113,7 +126,6 @@ slackApp.post("/webhook", async (c) => {
     }
   }
 
-  // @ts-expect-error - TODO couldn't get types to line up
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
@@ -340,4 +352,206 @@ async function getRoutingKey({
   }
   const suffix = `slack-${estateId}-team-${payload.team_id}`;
   return `ts-${threadTs}-${suffix}`;
+}
+
+export async function reactToSlackWebhook(
+  slackWebhookPayload: SlackWebhookPayload,
+  slackAPI: WebClient,
+  messageMetadata: { channel?: string; ts?: string },
+) {
+  const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
+
+  if (!botUserId || !slackWebhookPayload.event) {
+    return;
+  }
+
+  const shouldInclude = shouldIncludeEventInConversation(slackWebhookPayload.event, botUserId);
+
+  if (shouldInclude && slackWebhookPayload.event.type === "message") {
+    if (messageMetadata.channel && messageMetadata.ts) {
+      const isMentioned = isBotMentionedInMessage(slackWebhookPayload.event, botUserId);
+
+      if (isMentioned) {
+        await slackAPI.reactions
+          .add({
+            channel: messageMetadata.channel,
+            timestamp: messageMetadata.ts,
+            name: "eyes",
+          })
+          .then(
+            () => console.log("[SlackAgent] Added eyes reaction"),
+            (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
+          );
+      }
+    }
+  }
+}
+
+export function shouldIncludeEventInConversation(
+  slackEvent: SlackWebhookPayload["event"] | undefined,
+  botUserId: string | undefined,
+): boolean {
+  if (!slackEvent) {
+    return false;
+  }
+
+  // Filter out events from the bot itself
+  if (botUserId && "user" in slackEvent && slackEvent.user === botUserId) {
+    return false;
+  }
+
+  // Exhaustive switch on event types
+  switch (slackEvent.type) {
+    // ===== Currently included event types =====
+    case "message": {
+      const messageEvent = slackEvent as any;
+      // Skip certain message subtypes (except file_share)
+      if (messageEvent.subtype && messageEvent.subtype !== "file_share") {
+        return false;
+      }
+      return true;
+    }
+
+    case "reaction_added":
+    case "reaction_removed":
+      // Reactions are included in context but don't trigger LLM computation
+      return true;
+
+    // ===== Event types we explicitly choose to ignore =====
+    // User/member events - too noisy, not conversational
+    case "user_change":
+    case "member_joined_channel":
+    case "member_left_channel":
+      return false;
+
+    // Channel management events - administrative, not conversational
+    case "channel_created":
+    case "channel_deleted":
+    case "channel_rename":
+    case "channel_archive":
+    case "channel_unarchive":
+    case "channel_history_changed":
+    case "channel_shared":
+    case "channel_unshared":
+      return false;
+
+    // File events (except file_share within messages)
+    case "file_created":
+    case "file_change":
+    case "file_deleted":
+    case "file_public":
+    case "file_shared":
+    case "file_unshared":
+      return false;
+
+    // App/bot lifecycle events
+    case "app_mention":
+      // TODO: Consider including app_mention in the future for direct bot mentions
+      return false;
+    case "app_home_opened":
+    case "app_installed":
+    case "app_uninstalled":
+    case "app_requested":
+    case "app_deleted":
+      return false;
+
+    // Team/workspace events
+    case "team_join":
+    case "team_rename":
+    case "team_domain_change":
+      return false;
+
+    // DM/Group events
+    case "im_created":
+    case "im_open":
+    case "im_close":
+    case "im_history_changed":
+    case "group_left":
+    case "group_open":
+    case "group_close":
+    case "group_archive":
+    case "group_unarchive":
+    case "group_rename":
+    case "group_history_changed":
+      return false;
+
+    // Message metadata events
+    case "message_metadata_posted":
+    case "message_metadata_updated":
+    case "message_metadata_deleted":
+      return false;
+
+    // Pin events
+    case "pin_added":
+    case "pin_removed":
+      return false;
+
+    // Star events
+    case "star_added":
+    case "star_removed":
+      return false;
+
+    // Presence/DND events
+    case "dnd_updated":
+    case "dnd_updated_user":
+      return false;
+
+    // Emoji events
+    case "emoji_changed":
+      return false;
+
+    // Subteam (user group) events
+    case "subteam_created":
+    case "subteam_updated":
+    case "subteam_members_changed":
+    case "subteam_self_added":
+    case "subteam_self_removed":
+      return false;
+
+    // Workflow events
+    case "workflow_published":
+    case "workflow_unpublished":
+    case "workflow_deleted":
+    case "workflow_step_deleted":
+    case "workflow_step_execute":
+      return false;
+
+    // OAuth/permission events
+    case "tokens_revoked":
+      return false;
+
+    // Link sharing events
+    case "link_shared":
+      // TODO: Consider including link_shared for URL unfurling in the future
+      return false;
+
+    // Call events
+    case "call_rejected":
+      return false;
+
+    // Shared channel events
+    case "shared_channel_invite_accepted":
+    case "shared_channel_invite_approved":
+    case "shared_channel_invite_declined":
+    case "shared_channel_invite_received":
+      return false;
+
+    // Grid migration events
+    case "grid_migration_started":
+    case "grid_migration_finished":
+      return false;
+
+    // Default case for exhaustive checking
+    default: {
+      // TypeScript's exhaustive check - if this line has an error, it means
+      // there are unhandled event types that should be explicitly handled above
+      const unhandledEvent: SlackWebhookPayload["event"] = slackEvent;
+      console.warn(`Unhandled Slack event type: ${unhandledEvent.type}`);
+
+      // For now, ignore any unhandled event types
+      // When new event types are added to @slack/types, they'll appear here
+      // and we can decide whether to include them in conversations
+      return false;
+    }
+  }
 }
