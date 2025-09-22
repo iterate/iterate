@@ -143,12 +143,18 @@ export function SerializedObjectCodeBlock({
     search({ top: true }),
     keymap.of(searchKeymap),
     EditorView.editable.of(false), // This is enough for readonly
-    EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcuts
+    EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcutss
   ];
 
   return (
     <div className="relative">
-      <div className={clsx("rounded overflow-hidden overflow-y-auto", className)}>
+      <div
+        className={clsx(
+          "cm-SerializedObjectCodeBlock",
+          "rounded overflow-hidden overflow-y-auto",
+          className,
+        )}
+      >
         <CodeMirror value={code} extensions={extensions} />
       </div>
 
