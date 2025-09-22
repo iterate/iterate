@@ -49,6 +49,7 @@
     "expect-type": "^1.2.2",
     "hono": "^4.9.7",
     "isbot": "^5.1.30",
+    "glob": "^11.0.0",
     "jose": "^6.1.0",
     "jsonata": "github:mmkal/jsonata#e892b028ccb52d795cf29468e6a12c81db029c90",
     "lucide-react": "^0.544.0",
