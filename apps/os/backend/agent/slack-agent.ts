@@ -128,6 +128,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
       },
+      lazyConnectionDeps: {
+        agentDurableObjectId: this.ctx.id.toString(),
+        estateId: this.databaseRecord?.estateId || "",
+        getAgentDurableObjectName: () => this.name,
+        getReducedState: () => this.agentCore.state,
+        getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
+          return await this.getSlackPermalink();
+        },
+      },
     };
   }
 
@@ -431,6 +440,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     let lastUserMessage: any = null;
 
     const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
 

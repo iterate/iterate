@@ -340,7 +340,7 @@ export class AgentCore<
   }
 
   // Dependencies & slices ---------------------------------------------------
-  private readonly deps: MergedDepsForSlices<Slices>;
+  readonly deps: MergedDepsForSlices<Slices>;
   private readonly slices: Readonly<Slices>;
 
   private readonly _mutex = new Mutex();

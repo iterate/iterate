@@ -65,8 +65,6 @@ export class BetterAuthMCPOAuthProvider implements AgentsOAuthProvider {
       ),
     });
 
-    console.log("account", account);
-
     if (account?.accessToken) {
       this.accountId = account.id;
       return {

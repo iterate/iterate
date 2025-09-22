@@ -538,7 +538,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                 });
 
                 for (const eventToAdd of eventsToAdd) {
-                  await this.agentCore.addEvent(eventToAdd);
+                  this.agentCore.addEvent(eventToAdd);
                 }
               }
             })(),
@@ -1093,6 +1093,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       agentDurableObjectName: this.name,
       estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
+      getFinalRedirectUrl: this.agentCore.deps.getFinalRedirectUrl,
     });
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {

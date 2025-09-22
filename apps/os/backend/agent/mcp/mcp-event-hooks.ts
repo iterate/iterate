@@ -275,17 +275,13 @@ export async function handleMCPConnectRequest(
   const db = getDb();
   const auth = getAuth(db);
 
-  const oauthCallbackUrl = await params.getFinalRedirectUrl?.({
-    durableObjectInstanceName: agentDurableObjectName,
-  });
-
   const agentClassName = agentDurableObjectName.startsWith("SlackAgent-")
     ? "SlackAgent"
     : "IterateAgent";
 
   // Get the organization ID for the estate to construct proper callback URL
   let organizationId: string | undefined;
-  if (!oauthCallbackUrl) {
+  if (!finalRedirectUrl) {
     try {
       const estateWithOrg = await db.query.estate.findFirst({
         where: eq(schema.estate.id, estateId),
@@ -308,7 +304,7 @@ export async function handleMCPConnectRequest(
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: formattedServerUrl,
         callbackURL:
-          oauthCallbackUrl ||
+          finalRedirectUrl ||
           (organizationId
             ? `${env.VITE_PUBLIC_URL}/${organizationId}/${estateId}/agents/${agentClassName}/${agentDurableObjectName}`
             : `${env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`),

@@ -1637,6 +1637,25 @@ export default function AgentsPage() {
     }
   }, [searchParams, setSearchParams]);
 
+  // Handle MCP OAuth initiation - redirect to OAuth URL when OAUTH_REQUIRED event is received
+  useEffect(() => {
+    if (!events || events.length === 0) return;
+
+    // Check the most recent events for OAUTH_REQUIRED
+    const recentEvents = events.slice(-10); // Check last 10 events
+    const oauthRequiredEvent = recentEvents
+      .reverse()
+      .find((event) => event.type === "MCP:OAUTH_REQUIRED");
+
+    if (oauthRequiredEvent && oauthRequiredEvent.data?.oauthUrl) {
+      const oauthUrl = oauthRequiredEvent.data.oauthUrl;
+      console.log("MCP OAuth required, redirecting to:", oauthUrl);
+
+      // Redirect to the OAuth URL
+      window.location.href = oauthUrl;
+    }
+  }, [events]);
+
   // Check WebSocket connection status
   useEffect(() => {
     const checkConnectionStatus = () => {
