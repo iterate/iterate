@@ -34,7 +34,7 @@ export const parseSpecifier = (specifier: string): EstateSpecifier => {
   let url;
   try {
     url = new URL(specifier);
-  } catch (e) {
+  } catch {
     throw new Error(
       `Can't parse specifier: ${specifier}. Examples of valid specifiers:\n${examples.join("\n")}`,
     );
