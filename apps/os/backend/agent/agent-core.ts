@@ -309,11 +309,9 @@ export class AgentCore<
     });
     // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
     // into the LLM instructions for this request. These are ephemeral and recomputed per request.
-    for (const rule of enabledContextRules) {
-      if (rule.prompt) {
-        next.ephemeralPromptFragments[rule.key] = rule.prompt;
-      }
-    }
+    next.ephemeralPromptFragments = Object.fromEntries(
+      enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
+    );
     const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
     next.groupedRuntimeTools = {
       ...next.groupedRuntimeTools,
