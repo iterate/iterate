@@ -219,7 +219,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       matchingAgents.map((record) =>
         this.getStubFromDatabaseRecord({
           ...record,
-          contextRules: record.estate.iterateConfigs[0]?.config?.contextRules ?? [],
+          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
         }),
       ),
     );
@@ -702,14 +702,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    // const db = this.db;
     const defaultRules = await defaultContextRules();
-    // todo: uncomment this - with a timeout + warning when it's too slow, it suggests we have some kind of deadlock
-    // when querying the db during do initialisation
-    // const dbConfig = await this.db.query.iterateConfig.findFirst({
-    //   where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
-    // });
-    const rules = [...defaultRules, ...this.databaseRecord.contextRules];
+    // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
+    const maybeRules = await Promise.race([
+      IterateAgent.getRulesFromDB(this.db, this.databaseRecord.estateId),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250)),
+    ]);
+    if (!maybeRules) {
+      console.warn(
+        "Timeout querying context rules from db - this might be a deadlock. Using rules loaded from database record at DO initialisation.",
+      );
+    }
+    const rules = [...defaultRules, ...(maybeRules || this.databaseRecord.contextRules)];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
       if (seenIds.has(rule.key)) {
