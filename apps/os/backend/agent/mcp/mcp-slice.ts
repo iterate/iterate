@@ -95,6 +95,13 @@ const mcpConnectRequestFields = {
     requiresAuth: z.boolean().default(true),
     triggerLLMRequestOnEstablishedConnection: z.boolean().default(false),
     headers: z.record(z.string(), z.string()).optional(),
+    reconnect: z
+      .object({
+        id: z.string(),
+        oauthClientId: z.string().optional(),
+        oauthCode: z.string().optional(),
+      })
+      .optional(),
   }),
 };
 

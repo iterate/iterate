@@ -3,7 +3,10 @@ import PQueue from "p-queue";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
-import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
+import { getAuth } from "../../auth/auth.ts";
+import { getDb } from "../../db/client.ts";
+import { env } from "../../../env.ts";
+import { BetterAuthMCPOAuthProvider } from "./better-auth-mcp-oauth-provider.ts";
 import {
   getConnectionKey,
   type MCPConnection,
@@ -33,6 +36,7 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   agentDurableObjectId: string;
   agentDurableObjectName: string;
+  estateId: string;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
     reducedState: MergedStateForSlices<CoreAgentSlices>;
@@ -89,10 +93,20 @@ async function formatStringWithDependencyFromIntegrationSystem(params: {
 function getIntegrationSlugFromServerUrl(serverUrl: string) {
   try {
     const url = new URL(serverUrl);
+    // Create a cleaner slug by removing protocol and replacing special chars
     const hostnameAndPath = url.hostname + url.pathname;
-    return encodeURIComponent(hostnameAndPath);
+    // Replace common special characters with hyphens for a cleaner slug
+    return hostnameAndPath
+      .replace(/[/.:]/g, "-") // Replace /, ., : with -
+      .replace(/[^a-zA-Z0-9-]/g, "") // Remove any other special chars
+      .replace(/-+/g, "-") // Replace multiple hyphens with single hyphen
+      .replace(/^-|-$/g, ""); // Remove leading/trailing hyphens
   } catch {
-    return encodeURIComponent(serverUrl);
+    // Fallback for invalid URLs
+    return serverUrl
+      .replace(/[^a-zA-Z0-9]/g, "-")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
   }
 }
 
@@ -148,7 +162,7 @@ function getIntegrationSecretFormUIURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObjectId, agentDurableObjectName } = params;
+  const { event, reducedState, agentDurableObjectId, agentDurableObjectName, estateId } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const {
     serverUrl,
@@ -161,6 +175,7 @@ export async function handleMCPConnectRequest(
     requiresAuth,
     triggerLLMRequestOnEstablishedConnection,
     headers,
+    reconnect,
   } = event.data;
 
   if (mode === "personal" && !userId) {
@@ -260,10 +275,21 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
+  const db = getDb();
+  const auth = getAuth(db);
+
   const oauthProvider = requiresAuth
-    ? new MCPOAuthProvider({
-        clientId: "iterate-mcp-client",
-        serverId: formattedServerUrl,
+    ? new BetterAuthMCPOAuthProvider({
+        auth,
+        db,
+        userId: userId!,
+        estateId: estateId,
+        integrationSlug: guaranteedIntegrationSlug,
+        serverUrl: formattedServerUrl,
+        env: { VITE_PUBLIC_URL: env.VITE_PUBLIC_URL },
+        reconnect,
+        agentDurableObjectId,
+        agentDurableObjectName,
       })
     : undefined;
 
@@ -272,16 +298,23 @@ export async function handleMCPConnectRequest(
   let result: Awaited<ReturnType<typeof manager.connect>>;
 
   try {
-    result = await Promise.race([
-      manager.connect(formattedServerUrl, {
-        transport: {
-          authProvider: oauthProvider,
-          type: "auto",
-          requestInit: {
-            headers: formattedHeaders,
-          },
+    const connectOptions: Parameters<typeof manager.connect>[1] = {
+      transport: {
+        authProvider: oauthProvider,
+        type: "auto",
+        requestInit: {
+          headers: formattedHeaders,
         },
-      }),
+      },
+    };
+
+    // Add reconnect parameters if available
+    if (reconnect) {
+      connectOptions.reconnect = reconnect;
+    }
+
+    result = await Promise.race([
+      manager.connect(formattedServerUrl, connectOptions),
       // wait 20 seconds - if fail, add an error event
       new Promise<typeof result>((_, reject) => {
         setTimeout(
@@ -502,6 +535,7 @@ export async function getOrCreateMCPConnection(params: {
   connection: MCPConnection;
   agentDurableObjectId: string;
   agentDurableObjectName: string;
+  estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
@@ -556,6 +590,7 @@ export async function getOrCreateMCPConnection(params: {
           reducedState: params.reducedState,
           agentDurableObjectId: params.agentDurableObjectId,
           agentDurableObjectName: params.agentDurableObjectName,
+          estateId: params.estateId,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
@@ -621,6 +656,7 @@ export async function lazyConnectMCPServer(params: {
   connection: MCPConnection;
   agentDurableObjectId: string;
   agentDurableObjectName: string;
+  estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;

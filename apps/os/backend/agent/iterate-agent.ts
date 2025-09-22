@@ -594,6 +594,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                   reducedState,
                   agentDurableObjectId: this.ctx.id.toString(),
                   agentDurableObjectName: this.name,
+                  estateId: this.databaseRecord.estateId,
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
 
@@ -678,7 +679,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * and add additional functionality but maintain the old logic.
    */
   protected getExtraDependencies(_deps: AgentCoreDeps): Partial<MergedDepsForSlices<Slices>> {
-    return {};
+    // Provide MCPSliceDeps
+    const mcpDeps = {
+      env: this.env,
+      uploadFile: _deps.uploadFile,
+      lazyConnectionDeps: {
+        agentDurableObjectId: this.ctx.id.toString(),
+        estateId: this.databaseRecord.estateId,
+        getAgentDurableObjectName: () => this.name,
+        getReducedState: () => this.agentCore.state,
+        getFinalRedirectUrl: _deps.getFinalRedirectUrl,
+      },
+    };
+
+    return mcpDeps as unknown as Partial<MergedDepsForSlices<Slices>>;
   }
 
   /**
@@ -1117,14 +1131,28 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
       agentDurableObjectId: this.ctx.id.toString(),
       agentDurableObjectName: this.name,
+      estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
     });
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+      // Extract error details from events
+      const errorDetails = events
+        .map((e) => {
+          if (e.type === "MCP:CONNECTION_ERROR") {
+            return `${e.type}: ${e.data.error}`;
+          } else if (e.type === "MCP:OAUTH_REQUIRED") {
+            return `${e.type}: OAuth required - ${e.data.oauthUrl}`;
+          } else {
+            return e.type;
+          }
+        })
+        .join("; ");
+
       return {
         __addAgentCoreEvents: events,
         success: false,
-        message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
+        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
         addedMcpServer: mcpServer,
       };
     }
