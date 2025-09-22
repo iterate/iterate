@@ -11,7 +11,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute, iterateConfig } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   contextRules: ContextRule[];
 };
