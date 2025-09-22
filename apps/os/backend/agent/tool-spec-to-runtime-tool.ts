@@ -65,7 +65,7 @@ function fiddleWithJsonSchema(
   let jsonSchema = structuredClone(originalJsonSchema); // deep since we're going to modify deeply-nested properties
   jsonSchema = subtractObjectPropsFromJSONSchema(jsonSchema, options?.passThroughArgs || {});
 
-  // Save the original schema with correct required arrays before makeJSONSchemaOpenAICompatible modifies them
+  // Save the original schema with correct required arrays before makeJSONSchemaOpenAICompatible modifies them.
   const schemaBeforeOpenAIModification = options?.hideOptionalInputs
     ? structuredClone(jsonSchema)
     : null;
