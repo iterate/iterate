@@ -2647,7 +2647,21 @@ describe("AgentCore ephemeralPromptFragments", () => {
       expect(callArgs).toBeDefined();
 
       // Check that ephemeral context items are rendered into the system prompt
-      expect(callArgs.instructions).toMatchInlineSnapshot(`"You are a helpful assistant."`);
+      expect(callArgs.instructions).toMatchInlineSnapshot(`
+        "You are a helpful assistant.
+
+        <test-context>
+          <context>
+            This is important ephemeral context data
+          </context>
+        </test-context>
+
+        <another-context>
+          <rule>
+            Another piece of context information
+          </rule>
+        </another-context>"
+      `);
 
       // Verify that input messages no longer contain the ephemeral context items
       const inputMessages = callArgs.input;
