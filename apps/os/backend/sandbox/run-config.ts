@@ -51,43 +51,17 @@ export async function runConfigInSandbox(
     };
   }
 
-  // Checkout specific branch or commit
-  if (branch) {
-    // Checkout the branch
-    const checkoutCommand = `cd /tmp/repo && git checkout ${branch}`;
+  // Checkout specific commit or branch (prioritize commit hash since they're unique)
+  const checkoutTarget = commitHash || branch;
+  if (checkoutTarget) {
+    const checkoutCommand = `cd /tmp/repo && git checkout ${checkoutTarget}`;
     const checkoutResult = await sandbox.exec(checkoutCommand);
 
     if (checkoutResult.exitCode !== 0) {
       return {
-        error: "Failed to checkout branch",
+        error: `Failed to checkout ${commitHash ? "commit" : "branch"}`,
         details: checkoutResult.stderr,
-        commitHash: branch,
-      };
-    }
-
-    // If a specific commit hash is also provided, checkout that commit on the branch
-    if (commitHash) {
-      const checkoutCommitCommand = `cd /tmp/repo && git checkout ${commitHash}`;
-      const checkoutCommitResult = await sandbox.exec(checkoutCommitCommand);
-
-      if (checkoutCommitResult.exitCode !== 0) {
-        return {
-          error: "Failed to checkout commit",
-          details: checkoutCommitResult.stderr,
-          commitHash,
-        };
-      }
-    }
-  } else if (commitHash) {
-    // Only checkout commit if no branch specified
-    const checkoutCommand = `cd /tmp/repo && git checkout ${commitHash}`;
-    const checkoutResult = await sandbox.exec(checkoutCommand);
-
-    if (checkoutResult.exitCode !== 0) {
-      return {
-        error: "Failed to checkout commit",
-        details: checkoutResult.stderr,
-        commitHash,
+        commitHash: checkoutTarget,
       };
     }
   }

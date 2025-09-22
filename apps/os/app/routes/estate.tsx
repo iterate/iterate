@@ -130,8 +130,8 @@ function EstateContent() {
   const [isEditing, setIsEditing] = useState(false);
   const [isEditingRepo, setIsEditingRepo] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
-  const [repoPath, setRepoPath] = useState<string>("/");
-  const [repoBranch, setRepoBranch] = useState<string>("main");
+  const [repoPath, setRepoPath] = useState<string>("");
+  const [repoBranch, setRepoBranch] = useState<string>("");
   const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
 
   // Get estate ID from URL
@@ -164,14 +164,10 @@ function EstateContent() {
     }),
   );
 
-  // Initialize form values when connected repo data loads
-  React.useEffect(() => {
-    if (connectedRepo && !isEditingRepo) {
-      setSelectedRepo(connectedRepo.repoId?.toString() || "");
-      setRepoPath(connectedRepo.path || "/");
-      setRepoBranch(connectedRepo.branch || "main");
-    }
-  }, [connectedRepo, isEditingRepo]);
+  // Compute display values for repo fields
+  const displaySelectedRepo = selectedRepo || connectedRepo?.repoId?.toString() || "";
+  const displayRepoPath = repoPath || connectedRepo?.path || "/";
+  const displayRepoBranch = repoBranch || connectedRepo?.branch || "main";
 
   // Update estate name mutation with optimistic updates
   const updateEstateMutation = useMutation(
@@ -236,7 +232,7 @@ function EstateContent() {
     trpc.integrations.disconnectGithubRepo.mutationOptions({}),
   );
   const handleConnectRepo = () => {
-    if (!selectedRepo) {
+    if (!displaySelectedRepo) {
       toast.error("Please select a repository");
       return;
     }
@@ -244,9 +240,9 @@ function EstateContent() {
     setGithubRepoForEstateMutation.mutate(
       {
         estateId: estateId!,
-        repoId: parseInt(selectedRepo),
-        path: repoPath || "/",
-        branch: repoBranch || "main",
+        repoId: parseInt(displaySelectedRepo),
+        path: displayRepoPath,
+        branch: displayRepoBranch,
       },
       {
         onSuccess: () => {
@@ -334,8 +330,8 @@ function EstateContent() {
           onSuccess: () => {
             toast.success("Repository disconnected successfully");
             setSelectedRepo("");
-            setRepoPath("/");
-            setRepoBranch("main");
+            setRepoPath("");
+            setRepoBranch("");
             queryClient.invalidateQueries({
               queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ estateId }),
             });
@@ -435,7 +431,7 @@ function EstateContent() {
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                 Repository
               </label>
-              <Select onValueChange={setSelectedRepo}>
+              <Select value={displaySelectedRepo} onValueChange={setSelectedRepo}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a repository" />
                 </SelectTrigger>
@@ -455,7 +451,7 @@ function EstateContent() {
                   Branch (default: main)
                 </label>
                 <Input
-                  value={repoBranch}
+                  value={displayRepoBranch}
                   onChange={(e) => setRepoBranch(e.target.value)}
                   placeholder="main"
                   className="w-full"
@@ -467,7 +463,7 @@ function EstateContent() {
                   Path (default: /)
                 </label>
                 <Input
-                  value={repoPath}
+                  value={displayRepoPath}
                   onChange={(e) => setRepoPath(e.target.value)}
                   placeholder="/"
                   className="w-full"
@@ -481,12 +477,10 @@ function EstateContent() {
                   variant="outline"
                   onClick={() => {
                     setIsEditingRepo(false);
-                    // Reset to original values
-                    if (connectedRepo) {
-                      setSelectedRepo(connectedRepo.repoId?.toString() || "");
-                      setRepoPath(connectedRepo.path || "/");
-                      setRepoBranch(connectedRepo.branch || "main");
-                    }
+                    // Clear the form state to reset to computed values
+                    setSelectedRepo("");
+                    setRepoPath("");
+                    setRepoBranch("");
                   }}
                   className="flex-1"
                 >
@@ -495,7 +489,7 @@ function EstateContent() {
               )}
               <Button
                 onClick={handleConnectRepo}
-                disabled={!selectedRepo || setGithubRepoForEstateMutation.isPending}
+                disabled={!displaySelectedRepo || setGithubRepoForEstateMutation.isPending}
                 className={`${isEditingRepo ? "flex-1" : "w-full"} bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold`}
               >
                 {setGithubRepoForEstateMutation.isPending ? (
