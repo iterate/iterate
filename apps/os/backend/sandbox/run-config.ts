@@ -6,6 +6,7 @@ export interface RunConfigOptions {
   githubRepoUrl: string;
   githubToken: string;
   commitHash?: string;
+  branch?: string;
   workingDirectory?: string;
 }
 
@@ -32,14 +33,15 @@ export async function runConfigInSandbox(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const { githubRepoUrl, githubToken, commitHash, workingDirectory } = options;
+  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory } = options;
 
   // Get sandbox instance
   const sandboxId = typeid("build").toString();
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
   // Clone the repository using the provided token
-  const cloneCommand = `git clone https://${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo`;
+  // For GitHub App installation tokens, use x-access-token as the username
+  const cloneCommand = `git clone https://x-access-token:${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo`;
   const cloneResult = await sandbox.exec(cloneCommand);
 
   if (cloneResult.exitCode !== 0) {
@@ -49,16 +51,17 @@ export async function runConfigInSandbox(
     };
   }
 
-  // Checkout specific commit if provided
-  if (commitHash) {
-    const checkoutCommand = `cd /tmp/repo && git checkout ${commitHash}`;
+  // Checkout specific commit or branch (prioritize commit hash since they're unique)
+  const checkoutTarget = commitHash || branch;
+  if (checkoutTarget) {
+    const checkoutCommand = `cd /tmp/repo && git checkout ${checkoutTarget}`;
     const checkoutResult = await sandbox.exec(checkoutCommand);
 
     if (checkoutResult.exitCode !== 0) {
       return {
-        error: "Failed to checkout commit",
+        error: `Failed to checkout ${commitHash ? "commit" : "branch"}`,
         details: checkoutResult.stderr,
-        commitHash,
+        commitHash: checkoutTarget,
       };
     }
   }

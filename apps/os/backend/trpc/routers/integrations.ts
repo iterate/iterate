@@ -1,11 +1,16 @@
 import { z } from "zod";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
-import { generateGithubJWT } from "../../integrations/github/github-utils.ts";
+import {
+  generateGithubJWT,
+  getGithubInstallationForEstate,
+  getGithubRepoForEstate,
+  getGithubInstallationToken,
+} from "../../integrations/github/github-utils.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -196,22 +201,7 @@ export const integrationsRouter = router({
   }),
   listAvailableGithubRepos: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
-    const [githubInstallation] = await ctx.db
-      .select({
-        accountId: schemas.account.accountId,
-      })
-      .from(schemas.estateAccountsPermissions)
-      .innerJoin(
-        schemas.account,
-        eq(schemas.estateAccountsPermissions.accountId, schemas.account.id),
-      )
-      .where(
-        and(
-          eq(schemas.estateAccountsPermissions.estateId, estateId),
-          eq(schemas.account.providerId, "github-app"),
-        ),
-      )
-      .limit(1);
+    const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
 
     if (!githubInstallation) {
       throw new TRPCError({
@@ -220,27 +210,7 @@ export const integrationsRouter = router({
       });
     }
 
-    const jwt = await generateGithubJWT();
-
-    const tokenRes = await fetch(
-      `https://api.github.com/app/installations/${githubInstallation.accountId}/access_tokens`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${jwt}`,
-          "User-Agent": "Iterate OS",
-        },
-      },
-    );
-
-    if (!tokenRes.ok) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "Failed to fetch access token",
-      });
-    }
-
-    const { token } = (await tokenRes.json()) as { token: string };
+    const token = await getGithubInstallationToken(githubInstallation.accountId);
     const availableRepos = await fetch(`https://api.github.com/installation/repositories`, {
       headers: {
         Authorization: `Bearer ${token}`,
@@ -270,37 +240,210 @@ export const integrationsRouter = router({
   }),
   getGithubRepoForEstate: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
-    const [githubRepo] = await ctx.db
-      .select({
-        connectedRepoInfo: schemas.estate.connectedRepoId,
-      })
-      .from(schemas.estate)
-      .where(eq(schemas.estate.id, estateId));
-    if (!githubRepo) {
-      return null;
-    }
-    return githubRepo.connectedRepoInfo;
+    const githubRepo = await getGithubRepoForEstate(ctx.db, estateId);
+    if (!githubRepo) return null;
+
+    return {
+      repoId: githubRepo.connectedRepoId,
+      branch: githubRepo.connectedRepoRef || "main",
+      path: githubRepo.connectedRepoPath || "/",
+    };
   }),
   setGithubRepoForEstate: estateProtectedProcedure
     .input(
       z.object({
         repoId: z.number(),
+        branch: z.string().optional().default("main"),
+        path: z.string().optional().default("/"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { estateId, repoId } = input;
+      const { estateId, repoId, branch, path } = input;
 
       await ctx.db
         .update(schemas.estate)
         .set({
           connectedRepoId: repoId,
-          connectedRepoRef: "main",
-          connectedRepoPath: "/",
+          connectedRepoRef: branch,
+          connectedRepoPath: path,
         })
         .where(eq(schemas.estate.id, estateId));
 
       return {
         success: true,
+      };
+    }),
+  disconnectGithubRepo: estateProtectedProcedure.mutation(async ({ ctx, input }) => {
+    const { estateId } = input;
+
+    await ctx.db
+      .update(schemas.estate)
+      .set({
+        connectedRepoId: null,
+        connectedRepoRef: null,
+        connectedRepoPath: null,
+      })
+      .where(eq(schemas.estate.id, estateId));
+
+    return {
+      success: true,
+    };
+  }),
+
+  // Disconnect an integration from the estate or personal account
+  disconnect: estateProtectedProcedure
+    .input(
+      z.object({
+        providerId: z.string(),
+        disconnectType: z.enum(["estate", "personal", "both"]).default("both"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, providerId, disconnectType } = input;
+      let estateDisconnected = 0;
+      let personalDisconnected = 0;
+
+      // Handle estate-wide disconnection
+      if (disconnectType === "estate" || disconnectType === "both") {
+        // Find all accounts for this provider connected to this estate
+        const estateAccounts = await ctx.db.query.estateAccountsPermissions.findMany({
+          where: eq(estateAccountsPermissions.estateId, estateId),
+          with: {
+            account: true,
+          },
+        });
+
+        const estateAccountsToDisconnect = estateAccounts.filter(
+          ({ account: acc }) => acc.providerId === providerId,
+        );
+
+        if (estateAccountsToDisconnect.length > 0) {
+          // Delete estate permissions for these accounts
+          const accountIds = estateAccountsToDisconnect.map(({ account: acc }) => acc.id);
+          await ctx.db
+            .delete(estateAccountsPermissions)
+            .where(
+              and(
+                eq(estateAccountsPermissions.estateId, estateId),
+                inArray(estateAccountsPermissions.accountId, accountIds),
+              ),
+            );
+          estateDisconnected = accountIds.length;
+
+          // For GitHub integrations, also clear the connected repo information and revoke the installation
+          if (providerId === "github-app") {
+            // Clear the connected repo information
+            await ctx.db
+              .update(schemas.estate)
+              .set({
+                connectedRepoId: null,
+                connectedRepoRef: null,
+                connectedRepoPath: null,
+              })
+              .where(eq(schemas.estate.id, estateId));
+
+            // Always revoke the GitHub app installation
+            for (const { account: acc } of estateAccountsToDisconnect) {
+              if (acc.providerId === "github-app" && acc.accountId) {
+                try {
+                  // Generate JWT for authentication
+                  const jwt = await generateGithubJWT();
+
+                  // Call GitHub API to delete the installation
+                  const deleteResponse = await fetch(
+                    `https://api.github.com/app/installations/${acc.accountId}`,
+                    {
+                      method: "DELETE",
+                      headers: {
+                        Accept: "application/vnd.github+json",
+                        Authorization: `Bearer ${jwt}`,
+                        "X-GitHub-Api-Version": "2022-11-28",
+                        "User-Agent": "Iterate OS",
+                      },
+                    },
+                  );
+
+                  if (!deleteResponse.ok && deleteResponse.status !== 404) {
+                    // Log error but don't fail the disconnection
+                    console.error(
+                      `Failed to revoke GitHub installation ${acc.accountId}: ${deleteResponse.status} ${deleteResponse.statusText}`,
+                    );
+                  } else if (deleteResponse.ok) {
+                    console.log(`Successfully revoked GitHub installation ${acc.accountId}`);
+                  }
+                } catch (error) {
+                  // Log error but don't fail the disconnection
+                  console.error(`Error revoking GitHub installation ${acc.accountId}:`, error);
+                }
+              }
+            }
+          }
+
+          // Clean up orphaned accounts
+          for (const accountId of accountIds) {
+            const otherEstatePermissions = await ctx.db.query.estateAccountsPermissions.findFirst({
+              where: eq(estateAccountsPermissions.accountId, accountId),
+            });
+
+            // If this account is not used by any other estate and belongs to the current user, delete it
+            const acc = estateAccountsToDisconnect.find(
+              (ea) => ea.account.id === accountId,
+            )?.account;
+            if (!otherEstatePermissions && acc?.userId === ctx.user.id) {
+              await ctx.db.delete(account).where(eq(account.id, accountId));
+            }
+          }
+        }
+      }
+
+      // Handle personal disconnection
+      if (disconnectType === "personal" || disconnectType === "both") {
+        // Find personal accounts for this provider (directly linked to user, not necessarily to estate)
+        const personalAccounts = await ctx.db
+          .select()
+          .from(account)
+          .where(and(eq(account.userId, ctx.user.id), eq(account.providerId, providerId)));
+
+        if (personalAccounts.length > 0) {
+          // For personal accounts, we need to check if they're used by any estate
+          for (const personalAccount of personalAccounts) {
+            // Check if this account is used by any estate
+            const estatePermissions = await ctx.db.query.estateAccountsPermissions.findFirst({
+              where: eq(estateAccountsPermissions.accountId, personalAccount.id),
+            });
+
+            // Only delete if not used by any estate (or if we're also disconnecting from estate)
+            if (!estatePermissions || disconnectType === "both") {
+              // First remove any estate permissions if they exist
+              if (estatePermissions) {
+                await ctx.db
+                  .delete(estateAccountsPermissions)
+                  .where(eq(estateAccountsPermissions.accountId, personalAccount.id));
+              }
+
+              // Note: We don't revoke GitHub installations for personal disconnections
+              // GitHub installations belong to GitHub accounts/orgs, not to individual users in our system
+
+              // Delete the account record from our database
+              await ctx.db.delete(account).where(eq(account.id, personalAccount.id));
+              personalDisconnected++;
+            }
+          }
+        }
+      }
+
+      if (estateDisconnected === 0 && personalDisconnected === 0) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `No ${providerId} integration found to disconnect`,
+        });
+      }
+
+      return {
+        success: true,
+        estateDisconnected,
+        personalDisconnected,
+        totalDisconnected: estateDisconnected + personalDisconnected,
       };
     }),
 });

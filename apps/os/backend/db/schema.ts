@@ -296,16 +296,40 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
   }),
 }));
 
-export const iterateConfig = pgTable("iterate_config", (t) => ({
-  id: iterateId("icfg"),
-  config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
-  estateId: t.text().notNull(),
-  ...withTimestamps,
-}));
+export const iterateConfig = pgTable(
+  "iterate_config",
+  (t) => ({
+    id: iterateId("icfg"),
+    config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+    estateId: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId)],
+);
 
 export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
   estate: one(estate, {
     fields: [iterateConfig.estateId],
+    references: [estate.id],
+  }),
+}));
+
+export const builds = pgTable("builds", (t) => ({
+  id: iterateId("build"),
+  status: t.text({ enum: ["complete", "failed", "in_progress"] }).notNull(),
+  commitHash: t.text().notNull(),
+  commitMessage: t.text().notNull(),
+  iterateWorkflowRunId: t.text(),
+  webhookIterateId: t.text().notNull(),
+  estateId: t.text().notNull(),
+  completedAt: t.timestamp(),
+  output: t.jsonb().$type<{ stdout?: string; stderr?: string; exitCode?: number }>(),
+  ...withTimestamps,
+}));
+
+export const buildsRelations = relations(builds, ({ one }) => ({
+  estate: one(estate, {
+    fields: [builds.estateId],
     references: [estate.id],
   }),
 }));
