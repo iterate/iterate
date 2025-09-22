@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import {
   protectedProcedure,
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
 } from "../trpc.ts";
-import { estate } from "../../db/schema.ts";
+import { estate, builds } from "../../db/schema.ts";
 
 export const estateRouter = router({
   // Check if user has access to a specific estate (non-throwing version)
@@ -91,5 +91,26 @@ export const estateRouter = router({
         createdAt: updatedEstate[0].createdAt,
         updatedAt: updatedEstate[0].updatedAt,
       };
+    }),
+
+  // Get builds for an estate
+  getBuilds: estateProtectedProcedure
+    .input(
+      z.object({
+        limit: z.number().min(1).max(100).default(20).optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId } = input;
+      const limit = input.limit || 20;
+
+      const estateBuilds = await ctx.db
+        .select()
+        .from(builds)
+        .where(eq(builds.estateId, estateId))
+        .orderBy(desc(builds.createdAt))
+        .limit(limit);
+
+      return estateBuilds;
     }),
 });

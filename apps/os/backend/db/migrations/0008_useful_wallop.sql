@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "iterate_config_estate_id_index" ON "iterate_config" USING btree ("estate_id");

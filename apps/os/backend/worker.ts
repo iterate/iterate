@@ -4,6 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
@@ -16,6 +17,8 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
+import * as schemas from "./db/schema.ts";
+import { invalidateOrganizationQueries } from "./utils/websocket-utils.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -136,6 +139,7 @@ app.post(
           message: "Invalid GitHub repository URL format",
         }),
       githubToken: z.string().min(1, "GitHub token is required"),
+      branch: z.string().optional(),
       commitHash: z
         .string()
         .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
