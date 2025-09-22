@@ -1,3 +1,4 @@
+import pTimeout from "p-suite/p-timeout";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -219,7 +220,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       matchingAgents.map((record) =>
         this.getStubFromDatabaseRecord({
           ...record,
-          contextRules: record.estate.iterateConfigs[0]?.config?.contextRules ?? [],
+          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
         }),
       ),
     );
@@ -702,14 +703,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    // const db = this.db;
     const defaultRules = await defaultContextRules();
-    // todo: uncomment this - with a timeout + warning when it's too slow, it suggests we have some kind of deadlock
-    // when querying the db during do initialisation
-    // const dbConfig = await this.db.query.iterateConfig.findFirst({
-    //   where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
-    // });
-    const rules = [...defaultRules, ...this.databaseRecord.contextRules];
+    const { db, databaseRecord } = this;
+    // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
+    const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+      milliseconds: 250,
+      fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    });
+    const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
       if (seenIds.has(rule.key)) {
