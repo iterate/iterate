@@ -198,7 +198,7 @@ export const integrationsPlugin = () =>
                     integrationSlug: stateData.integrationSlug,
                     requiresAuth: true,
                     reconnect: {
-                      id: "cloudflare-requires-some-id",
+                      id: "cloudflare-requires-id",
                       oauthClientId: stateData.clientId,
                       oauthCode: code,
                     },

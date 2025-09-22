@@ -1,7 +1,15 @@
 import { z } from "zod";
 
+export const AgentDurableObjectInfo = z.object({
+  durableObjectId: z.string(),
+  durableObjectName: z.string(),
+  className: z.string(),
+});
+
+export type AgentDurableObjectInfo = z.infer<typeof AgentDurableObjectInfo>;
+
 export const BaseOAuthState = z.object({
-  callbackURL: z.url().optional(),
+  callbackURL: z.string().optional(),
 });
 
 export const MCPOAuthState = BaseOAuthState.extend({
@@ -10,11 +18,7 @@ export const MCPOAuthState = BaseOAuthState.extend({
   estateId: z.string(),
   userId: z.string(),
   clientId: z.string(),
-  agentDurableObject: z.object({
-    durableObjectId: z.string(),
-    durableObjectName: z.string(),
-    className: z.string(),
-  }),
+  agentDurableObject: AgentDurableObjectInfo,
 });
 
 export const SlackDirectLoginState = BaseOAuthState.extend({});

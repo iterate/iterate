@@ -142,6 +142,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT;
   }
 
+  static getClassName(): string {
+    return "IterateAgent";
+  }
+
   // Internal helper to get stub from existing database record
   static async getStubFromDatabaseRecord(
     record: AgentInstanceDatabaseRecord,
@@ -182,7 +186,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Get stub for existing agent by name (does not create)
   static async getStubByName(params: { db: DB; agentInstanceName: string }) {
     const { db, agentInstanceName } = params;
-    const className = this.name;
+    const className = this.getClassName();
 
     const record = await db.query.agentInstance.findFirst({
       where: and(
@@ -201,7 +205,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Get stubs for agents by routing key (does not create)
   static async getStubsByRoute(params: { db: DB; routingKey: string; estateId?: string }) {
     const { db, routingKey, estateId } = params;
-    const className = this.name;
+    const className = this.getClassName();
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
@@ -236,7 +240,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     reason?: string;
   }) {
     const { db, estateId, agentInstanceName, reason } = params;
-    const className = this.name;
+    const className = this.getClassName();
 
     let record = await db.query.agentInstance.findFirst({
       where: and(
@@ -293,7 +297,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
-      .find((r) => r.className === this.name && r.estateId === estateId);
+      .find((r) => r.className === this.getClassName() && r.estateId === estateId);
 
     if (existingAgent) {
       return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
@@ -305,7 +309,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .insert(agentInstance)
       .values({
         estateId,
-        className: this.name,
+        className: this.getClassName(),
         durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
@@ -531,12 +535,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
                   reducedState,
-                  agentDurableObject: {
-                    durableObjectId: this.ctx.id.toString(),
-                    durableObjectName: this.name,
-                    className: this.constructor.name,
-                  },
-                  estateId: this.databaseRecord.estateId,
+                  agentDurableObject: this.getHydrationInfo(),
+                  estateId: this.databaseRecord?.estateId || "",
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
 
@@ -590,9 +590,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         //   // );
       },
       lazyConnectionDeps: {
-        agentDurableObjectId: this.ctx.id.toString(),
-        getEstateId: () => this.databaseRecord?.estateId,
-        getAgentDurableObjectName: () => this.name,
+        getDurableObjectInfo: () =>
+          this.getHydrationInfo(this.databaseRecord?.durableObjectName || this.name),
+        getEstateId: () => this.databaseRecord?.estateId || "",
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
@@ -620,10 +620,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
 
-  get hydrationInfo() {
+  getHydrationInfo(durableObjectName?: string) {
     return {
       durableObjectId: this.ctx.id.toString(),
-      durableObjectName: this.name,
+      durableObjectName: durableObjectName || this.name,
       className: this.constructor.name,
     };
   }
@@ -1100,8 +1100,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eventIndex: 0,
         createdAt: new Date().toISOString(),
       },
-      agentDurableObject: this.hydrationInfo,
-      estateId: this.databaseRecord.estateId,
+      agentDurableObject: this.getHydrationInfo(
+        this.databaseRecord?.durableObjectName || this.name,
+      ),
+      estateId: this.databaseRecord?.estateId || "",
       reducedState: this.getReducedState(),
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });

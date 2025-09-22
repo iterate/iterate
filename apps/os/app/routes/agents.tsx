@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useParams, Link, useSearchParams } from "react-router";
+import { useParams, Link } from "react-router";
 import {
   ArrowLeft,
   ArrowUp,
@@ -104,13 +104,7 @@ interface FilterState {
   searchText: string;
 }
 
-type AgentEvent =
-  | AgentCoreEvent
-  | {
-      type: "MCP:OAUTH_REQUIRED";
-      data: { oauthUrl: string; [key: string]: any };
-      [key: string]: any;
-    };
+type AgentEvent = AgentCoreEvent;
 
 // Helper function to get color for time delta based on milliseconds
 const getTimeDeltaColor = (ms: number): string => {
@@ -1567,7 +1561,6 @@ function FileUploadDialog({
 
 export default function AgentsPage() {
   const params = useParams();
-  const [searchParams, setSearchParams] = useSearchParams();
   const { agentClassName, durableObjectName } = params;
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
@@ -1616,49 +1609,6 @@ export default function AgentsPage() {
       }
     },
   });
-
-  // Handle MCP OAuth callback
-  useEffect(() => {
-    const mcpOAuthComplete = searchParams.get("mcp_oauth_complete");
-    const serverUrl = searchParams.get("server_url");
-    const integrationSlug = searchParams.get("integration_slug");
-
-    if (mcpOAuthComplete === "true" && serverUrl && integrationSlug) {
-      // Clear the query parameters from the URL
-      const newSearchParams = new URLSearchParams(searchParams);
-      newSearchParams.delete("mcp_oauth_complete");
-      newSearchParams.delete("server_url");
-      newSearchParams.delete("integration_slug");
-
-      // Update the URL without the OAuth callback parameters
-      setSearchParams(newSearchParams, { replace: true });
-
-      // Show a success message or notification
-      console.log("MCP OAuth completed successfully:", { serverUrl, integrationSlug });
-
-      // Optionally, you could show a toast notification here
-      // toast.success(`Successfully connected to ${integrationSlug}`);
-    }
-  }, [searchParams, setSearchParams]);
-
-  // Handle MCP OAuth initiation - redirect to OAuth URL when OAUTH_REQUIRED event is received
-  useEffect(() => {
-    if (!events || events.length === 0) return;
-
-    // Check the most recent events for OAUTH_REQUIRED
-    const recentEvents = events.slice(-10); // Check last 10 events
-    const oauthRequiredEvent = recentEvents
-      .reverse()
-      .find((event) => event.type === "MCP:OAUTH_REQUIRED");
-
-    if (oauthRequiredEvent && oauthRequiredEvent.data?.oauthUrl) {
-      const oauthUrl = oauthRequiredEvent.data.oauthUrl;
-      console.log("MCP OAuth required, redirecting to:", oauthUrl);
-
-      // Redirect to the OAuth URL
-      window.location.href = oauthUrl;
-    }
-  }, [events]);
 
   // Check WebSocket connection status
   useEffect(() => {

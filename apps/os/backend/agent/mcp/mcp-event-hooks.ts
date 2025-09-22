@@ -3,6 +3,7 @@ import PQueue from "p-queue";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
+import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb } from "../../db/client.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
@@ -33,11 +34,7 @@ export type MCPEventHookReturnEvent =
 interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> {
   event: TEvent;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
-  agentDurableObject: {
-    durableObjectId: string;
-    durableObjectName: string;
-    className: string;
-  };
+  agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
@@ -302,8 +299,8 @@ export async function handleMCPConnectRequest(
         requestInit: {
           headers: formattedHeaders,
         },
-        ...(reconnect && { reconnect }),
       },
+      ...(reconnect && { reconnect }),
     };
 
     result = await Promise.race([
@@ -524,11 +521,7 @@ export function abortPendingConnections(connectionKey: MCPConnectionKey, reason:
 export async function getOrCreateMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
-  agentDurableObject: {
-    durableObjectId: string;
-    durableObjectName: string;
-    className: string;
-  };
+  agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
@@ -646,11 +639,7 @@ export async function getOrCreateMCPConnection(params: {
 export async function lazyConnectMCPServer(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
-  agentDurableObject: {
-    durableObjectId: string;
-    durableObjectName: string;
-    className: string;
-  };
+  agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {

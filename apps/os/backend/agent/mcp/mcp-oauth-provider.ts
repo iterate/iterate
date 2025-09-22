@@ -1,10 +1,16 @@
 import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
 import { eq, and } from "drizzle-orm";
 import { typeid } from "typeid-js";
+import { z } from "zod";
 import type { Auth } from "../../auth/auth.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
+import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
+
+const DynamicClientInfo = z.looseObject({
+  client_id: z.string(),
+});
 
 /**
  * Inspired by agents SDK implementation https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
@@ -15,7 +21,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   serverId: string | undefined;
   authUrl: string | undefined;
 
-  private accountId: string | undefined;
+  private dbAccountId: string | undefined;
   private baseUrl: string;
 
   constructor(
@@ -33,11 +39,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         oauthClientId?: string;
         oauthCode?: string;
       };
-      agentDurableObject: {
-        durableObjectId: string;
-        durableObjectName: string;
-        className: string;
-      };
+      agentDurableObject: AgentDurableObjectInfo;
     },
   ) {
     this.baseUrl = this.params.env?.VITE_PUBLIC_URL || "http://localhost:5173";
@@ -48,16 +50,19 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async clearTokens() {
-    if (!this.accountId) {
+    if (!this.dbAccountId) {
       return;
     }
     await this.params.db
       .delete(schema.account)
       .where(
-        and(eq(schema.account.id, this.accountId), eq(schema.account.providerId, this.providerId)),
+        and(
+          eq(schema.account.id, this.dbAccountId),
+          eq(schema.account.providerId, this.providerId),
+        ),
       );
 
-    this.accountId = undefined;
+    this.dbAccountId = undefined;
   }
 
   async tokens() {
@@ -74,7 +79,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     });
 
     if (account?.accessToken) {
-      this.accountId = account.id;
+      this.dbAccountId = account.id;
       return {
         access_token: account.accessToken,
         token_type: "Bearer",
@@ -112,7 +117,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     }
 
     try {
-      const clientInfo = JSON.parse(verification.value);
+      const clientInfo = DynamicClientInfo.parse(JSON.parse(verification.value));
       return clientInfo;
     } catch (error) {
       console.error("Failed to parse client information:", error);
@@ -125,8 +130,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     refresh_token?: string;
     expires_in?: number;
   }): Promise<void> {
-    if (!this.clientId || !this.serverId) {
-      throw new Error("Cannot save tokens without clientId and serverId");
+    if (!this.clientId) {
+      throw new Error("Cannot save tokens without clientId");
     }
 
     const expiresAt = tokens.expires_in
@@ -151,67 +156,60 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         })
         .where(eq(schema.account.id, existingAccount.id));
 
-      this.accountId = existingAccount.id;
+      this.dbAccountId = existingAccount.id;
     } else {
-      const newAccountId = typeid("acc").toString();
+      // for rahul: how would we insert this in one big query? in sql
+      const [newAccount] = await this.params.db
+        .insert(schema.account)
+        .values({
+          accountId: this.clientId, // Dynamic client id is the closest thing to an *external* account id
+          providerId: this.providerId,
+          userId: this.params.userId,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          accessTokenExpiresAt: expiresAt,
+          scope: "",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning();
 
-      await this.params.db.insert(schema.account).values({
-        id: newAccountId,
-        accountId: this.clientId,
-        providerId: this.providerId,
-        userId: this.params.userId,
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        accessTokenExpiresAt: expiresAt,
-        scope: "",
+      this.dbAccountId = newAccount.id;
+
+      await this.params.db.insert(schema.estateAccountsPermissions).values({
+        accountId: this.dbAccountId,
+        estateId: this.params.estateId,
         createdAt: new Date(),
         updatedAt: new Date(),
       });
 
-      this.accountId = newAccountId;
-
-      await this.params.db
-        .insert(schema.estateAccountsPermissions)
-        .values({
-          id: typeid("eap").toString(),
-          accountId: newAccountId,
-          estateId: this.params.estateId,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .onConflictDoNothing();
-
-      await this.params.db
-        .insert(schema.providerEstateMapping)
-        .values({
-          id: typeid("pem").toString(),
-          internalEstateId: this.params.estateId,
-          externalId: this.serverId,
-          providerId: this.providerId,
-          providerMetadata: {
-            serverUrl: this.params.serverUrl,
-            integrationSlug: this.params.integrationSlug,
-            clientId: this.clientId,
-          },
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .onConflictDoNothing();
+      await this.params.db.insert(schema.providerEstateMapping).values({
+        internalEstateId: this.params.estateId,
+        externalId: this.dbAccountId,
+        providerId: this.providerId,
+        providerMetadata: {
+          serverUrl: this.params.serverUrl,
+          integrationSlug: this.params.integrationSlug,
+          clientId: this.clientId,
+        },
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
     }
   }
 
-  async saveClientInformation(info: any): Promise<void> {
+  async saveClientInformation(_info: unknown): Promise<void> {
+    const info = DynamicClientInfo.parse(_info);
     this.clientId = info.client_id;
 
     const verificationKey = `mcp-client-${this.providerId}-${info.client_id}`;
-    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year to store client information?
 
     await this.params.db
       .delete(schema.verification)
       .where(eq(schema.verification.identifier, verificationKey));
 
     await this.params.db.insert(schema.verification).values({
-      id: typeid("ver").toString(),
       identifier: verificationKey,
       value: JSON.stringify(info),
       expiresAt,
@@ -226,14 +224,13 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     }
 
     const verificationKey = `mcp-verifier-${this.providerId}-${this.clientId}`;
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow
 
     await this.params.db
       .delete(schema.verification)
       .where(eq(schema.verification.identifier, verificationKey));
 
     await this.params.db.insert(schema.verification).values({
-      id: typeid("ver").toString(),
       identifier: verificationKey,
       value: verifier,
       expiresAt,
@@ -267,13 +264,12 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       },
     };
 
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+    const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow
     await this.params.db
       .delete(schema.verification)
       .where(eq(schema.verification.identifier, state));
 
     await this.params.db.insert(schema.verification).values({
-      id: typeid("ver").toString(),
       identifier: state,
       value: JSON.stringify(stateData),
       expiresAt,
@@ -281,10 +277,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       updatedAt: new Date(),
     });
 
-    // Add state to the auth URL
     authUrl.searchParams.set("state", state);
 
-    // Store the modified auth URL for the frontend to use
     this.authUrl = authUrl.toString();
   }
 
