@@ -21,9 +21,7 @@
     "rules": "vibe-rules install ${VIBE_RULES_EDITOR:-cursor}",
     "rules:cursor": "pnpm rules",
     "rules:claudecode": "VIBE_RULES_EDITOR=claude-code pnpm rules",
-    "rules:roo": "VIBE_RULES_EDITOR=roo pnpm rules",
-    "rules:cline": "VIBE_RULES_EDITOR=clinerules pnpm rules",
-    "rules:zed": "VIBE_RULES_EDITOR=zed pnpm rules"
+    "rules:codex": "VIBE_RULES_EDITOR=codex pnpm rules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
