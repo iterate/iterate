@@ -61,12 +61,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     await super.initAfterConstructorBeforeOnStart(params);
 
-    const slackAccessToken = await getSlackAccessTokenForEstate(
-      this.db,
-      this.databaseRecord.estateId,
-    );
+    const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
     if (!slackAccessToken) {
-      throw new Error(`Slack access token not set for estate ${this.databaseRecord.estateId}.`);
+      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
     }
     this.slackAPI = new WebClient(slackAccessToken);
   }

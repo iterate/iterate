@@ -588,7 +588,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
       lazyConnectionDeps: {
         agentDurableObjectId: this.ctx.id.toString(),
-        estateId: this.databaseRecord.estateId,
+        getEstateId: () => this.databaseRecord?.estateId,
         getAgentDurableObjectName: () => this.name,
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {

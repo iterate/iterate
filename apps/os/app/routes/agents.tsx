@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import { useParams, Link } from "react-router";
+import { useParams, Link, useSearchParams } from "react-router";
 import {
   ArrowLeft,
   ArrowUp,
@@ -1561,6 +1561,7 @@ function FileUploadDialog({
 
 export default function AgentsPage() {
   const params = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { agentClassName, durableObjectName } = params;
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
@@ -1611,6 +1612,30 @@ export default function AgentsPage() {
       }
     },
   });
+
+  // Handle MCP OAuth callback
+  useEffect(() => {
+    const mcpOAuthComplete = searchParams.get("mcp_oauth_complete");
+    const serverUrl = searchParams.get("server_url");
+    const integrationSlug = searchParams.get("integration_slug");
+
+    if (mcpOAuthComplete === "true" && serverUrl && integrationSlug) {
+      // Clear the query parameters from the URL
+      const newSearchParams = new URLSearchParams(searchParams);
+      newSearchParams.delete("mcp_oauth_complete");
+      newSearchParams.delete("server_url");
+      newSearchParams.delete("integration_slug");
+
+      // Update the URL without the OAuth callback parameters
+      setSearchParams(newSearchParams, { replace: true });
+
+      // Show a success message or notification
+      console.log("MCP OAuth completed successfully:", { serverUrl, integrationSlug });
+
+      // Optionally, you could show a toast notification here
+      // toast.success(`Successfully connected to ${integrationSlug}`);
+    }
+  }, [searchParams, setSearchParams]);
 
   // Check WebSocket connection status
   useEffect(() => {

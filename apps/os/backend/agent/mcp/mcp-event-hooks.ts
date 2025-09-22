@@ -1,10 +1,12 @@
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
+import { eq } from "drizzle-orm";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb } from "../../db/client.ts";
+import * as schema from "../../db/schema.ts";
 import { env } from "../../../env.ts";
 import { BetterAuthMCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
@@ -281,6 +283,22 @@ export async function handleMCPConnectRequest(
     ? "SlackAgent"
     : "IterateAgent";
 
+  // Get the organization ID for the estate to construct proper callback URL
+  let organizationId: string | undefined;
+  if (!oauthCallbackUrl) {
+    try {
+      const estateWithOrg = await db.query.estate.findFirst({
+        where: eq(schema.estate.id, estateId),
+        columns: {
+          organizationId: true,
+        },
+      });
+      organizationId = estateWithOrg?.organizationId;
+    } catch (error) {
+      console.error("Failed to get organization ID for estate:", error);
+    }
+  }
+
   const oauthProvider = requiresAuth
     ? new BetterAuthMCPOAuthProvider({
         auth,
@@ -291,7 +309,9 @@ export async function handleMCPConnectRequest(
         serverUrl: formattedServerUrl,
         callbackURL:
           oauthCallbackUrl ||
-          `${env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`,
+          (organizationId
+            ? `${env.VITE_PUBLIC_URL}/${organizationId}/${estateId}/agents/${agentClassName}/${agentDurableObjectName}`
+            : `${env.VITE_PUBLIC_URL}/agents/${agentClassName}/${agentDurableObjectName}`),
         env: { VITE_PUBLIC_URL: env.VITE_PUBLIC_URL },
         reconnect,
         agentDurableObjectId,

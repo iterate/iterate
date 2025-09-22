@@ -186,8 +186,6 @@ export const integrationsPlugin = () =>
 
               let agentStub: any;
               if (isSlackAgent) {
-                // Use SlackAgent's inherited method
-                // @ts-expect-error - Type mismatch between SlackAgent and IterateAgent
                 agentStub = await SlackAgent.getStubByName({
                   db,
                   agentInstanceName: stateData.agentDurableObjectName,
@@ -209,7 +207,7 @@ export const integrationsPlugin = () =>
                     integrationSlug: stateData.integrationSlug,
                     requiresAuth: true,
                     reconnect: {
-                      id: stateData.serverId,
+                      id: stateData.serverId || stateData.serverUrl,
                       oauthClientId: stateData.clientId,
                       oauthCode: code,
                     },
