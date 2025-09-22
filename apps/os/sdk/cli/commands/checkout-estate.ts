@@ -9,7 +9,7 @@ import { t } from "../config.ts";
 export const checkoutEstateCommand = t.procedure
   .input(
     z.object({
-      estate: EstateSpecifierFromString.meta({ alias: "e" }),
+      estate: EstateSpecifierFromString.meta({ positional: true, alias: "e" }),
       path: z.string().optional(),
       rmrf: z.boolean().optional(),
     }),
@@ -29,5 +29,5 @@ export const checkoutEstateCommand = t.procedure
     if (cloneResult.exitCode !== 0) {
       throw new Error(`Failed to clone repository: ${cloneResult.stderr}`);
     }
-    return repoPath;
+    return path.join(repoPath, input.estate.directory || ".");
   });

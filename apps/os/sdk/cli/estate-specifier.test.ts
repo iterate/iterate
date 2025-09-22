@@ -66,6 +66,18 @@ test("checkoutEstateCommand", async () => {
       "repo": "lerna-learning",
     }
   `);
+
+  expect(parseSpecifier("git:mmkal/lerna-learning#&path:packages/greeting-util"))
+    .toMatchInlineSnapshot(`
+      {
+        "raw": "git:mmkal/lerna-learning#path:packages/greeting-util",
+        "protocol": "git:",
+        "cloneUrl": "https://github.com/mmkal/lerna-learning",
+        "owner": "mmkal",
+        "repo": "lerna-learning",
+        "ref": "path:packages/greeting-util",
+      }
+    `);
 });
 
 test("bad", async () => {
