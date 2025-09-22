@@ -120,6 +120,8 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   files: many(files),
   providerSpecificEstateMapping: many(providerEstateMapping),
   slackWebhookEvents: many(slackWebhookEvent),
+  iterateConfigs: many(iterateConfig),
+  agentInstances: many(agentInstance),
 }));
 
 export const organization = pgTable("organization", (t) => ({
