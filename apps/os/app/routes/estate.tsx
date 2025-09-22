@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import type { inferRouterOutputs } from "@trpc/server";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { useTRPC } from "../lib/trpc.ts";
@@ -28,6 +29,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select.tsx";
+import type { AppRouter } from "../../backend/trpc/root.ts";
+
+// Use tRPC's built-in type inference for the build type
+type RouterOutputs = inferRouterOutputs<AppRouter>;
+type Build = RouterOutputs["estate"]["getBuilds"][0];
 
 interface EditableTitleProps {
   value: string;
@@ -151,10 +157,12 @@ function EstateContent() {
     }),
   );
 
-  const { data: builds, isLoading: buildsLoading } = trpc.estate.getBuilds.useQuery({
-    estateId: estateId,
-    limit: 10,
-  });
+  const { data: builds, isLoading: buildsLoading } = useSuspenseQuery(
+    trpc.estate.getBuilds.queryOptions({
+      estateId: estateId,
+      limit: 10,
+    }),
+  );
 
   // Initialize form values when connected repo data loads
   React.useEffect(() => {
@@ -232,6 +240,7 @@ function EstateContent() {
       toast.error("Please select a repository");
       return;
     }
+
     setGithubRepoForEstateMutation.mutate(
       {
         estateId: estateId!,
@@ -518,7 +527,7 @@ function EstateContent() {
               </div>
             ) : builds && builds.length > 0 ? (
               <div className="space-y-3">
-                {builds.map((build) => {
+                {builds.map((build: Build) => {
                   const isExpanded = expandedBuilds.has(build.id);
                   return (
                     <div
