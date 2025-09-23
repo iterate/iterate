@@ -461,6 +461,7 @@ function MetaEventWrapper({
   estateId,
   currentUser,
   botUserId,
+  hideAgentWebhooks,
 }: {
   event: AgentEvent;
   index: number;
@@ -470,11 +471,13 @@ function MetaEventWrapper({
     estateId: string;
     currentUser: { name: string; email: string; image?: string | null };
     botUserId?: string;
+    hideAgentWebhooks?: boolean;
   }>;
   onEventClick?: (eventIndex: number) => void;
   estateId: string;
   currentUser: { name: string; email: string; image?: string | null };
   botUserId?: string;
+  hideAgentWebhooks?: boolean;
 }): React.ReactElement {
   const label = event.type || "Core Event";
   const getDate = (ev: AgentEvent) => new Date(ev.createdAt);
@@ -528,6 +531,7 @@ function MetaEventWrapper({
             estateId={estateId}
             currentUser={currentUser}
             botUserId={botUserId}
+            hideAgentWebhooks={hideAgentWebhooks}
           />
         </div>
       )}
@@ -1039,11 +1043,13 @@ function CoreEventRenderer({
   estateId,
   currentUser,
   botUserId,
+  hideAgentWebhooks,
 }: {
   event: AgentEvent;
   estateId: string;
   currentUser: { name: string; email: string; image?: string | null };
   botUserId?: string;
+  hideAgentWebhooks?: boolean;
 }): React.ReactElement | null {
   if (!event) {
     return null;
@@ -1393,74 +1399,48 @@ function CoreEventRenderer({
         }
       };
 
-      // For bot events, use a collapsible format that's collapsed by default
-      if (isFromBot) {
+      // For bot events, show a minimal display if hideAgentWebhooks is true
+      if (isFromBot && hideAgentWebhooks) {
         return (
-          <Card className="mb-3 border-purple-200 dark:border-purple-800 bg-purple-50/30 dark:bg-purple-950/30 p-0">
-            <Collapsible defaultOpen={false}>
-              <CollapsibleTrigger className="w-full">
-                <div className="p-3 cursor-pointer hover:bg-purple-100/50 dark:hover:bg-purple-900/50 transition-colors">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      <Bot className="h-4 w-4 text-purple-600 dark:text-purple-400" />
-                      <div className="text-left">
-                        <div className="font-medium text-sm">Agent Slack Activity</div>
-                        <div className="text-xs text-muted-foreground">
-                          {slackEvent.type}
-                          {"subtype" in slackEvent &&
-                            slackEvent.subtype &&
-                            `: ${slackEvent.subtype}`}
-                        </div>
-                      </div>
-                    </div>
-                    <ChevronDown className="h-4 w-4 transition-transform data-[state=open]:rotate-180" />
-                  </div>
-                </div>
-              </CollapsibleTrigger>
-              <CollapsibleContent>
-                <div className="px-3 pb-3 pt-0">
-                  <div className="space-y-4 border-t pt-3">
-                    {renderSlackEventContent()}
-                    <div className="pt-3 border-t border-muted">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary" className="text-xs">
-                          {slackEvent.type}
-                          {"subtype" in slackEvent &&
-                            slackEvent.subtype &&
-                            `: ${slackEvent.subtype}`}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          Channel:{" "}
-                          {payload.event && "channel" in payload.event
-                            ? typeof payload.event.channel === "string"
-                              ? payload.event.channel.slice(-8) // Show last 8 chars for readability
-                              : payload.event.channel.id?.slice(-8)
-                            : "Unknown"}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          Team: {payload.team_id?.slice(-8) || "Unknown"}
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </CollapsibleContent>
-            </Collapsible>
-          </Card>
+          <div className="flex items-center gap-2 my-2 text-purple-600 dark:text-purple-400 opacity-75">
+            <div className="flex-1 h-px bg-purple-200 dark:bg-purple-800/50" />
+            <div className="flex items-center gap-2 text-xs">
+              <Bot className="h-3 w-3" />
+              <span>Agent {slackEvent.type}</span>
+              {"subtype" in slackEvent && slackEvent.subtype && <span>({slackEvent.subtype})</span>}
+            </div>
+            <div className="flex-1 h-px bg-purple-200 dark:bg-purple-800/50" />
+          </div>
         );
       }
 
-      // For non-bot events, use a similar collapsible format with blue styling
+      // Use collapsible format for all events (both bot and user events when not minimized)
+      const isBot = isFromBot;
+      const borderColor = isBot
+        ? "border-purple-200 dark:border-purple-800"
+        : "border-blue-200 dark:border-blue-800";
+      const bgColor = isBot
+        ? "bg-purple-50/30 dark:bg-purple-950/30"
+        : "bg-blue-50/30 dark:bg-blue-950/30";
+      const hoverColor = isBot
+        ? "hover:bg-purple-100/50 dark:hover:bg-purple-900/50"
+        : "hover:bg-blue-100/50 dark:hover:bg-blue-900/50";
+      const iconColor = isBot
+        ? "text-purple-600 dark:text-purple-400"
+        : "text-blue-600 dark:text-blue-400";
+      const Icon = isBot ? Bot : Users;
+      const title = isBot ? "Agent Slack Activity" : "User Slack Activity";
+
       return (
-        <Card className="mb-3 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/30 p-0">
+        <Card className={`mb-3 ${borderColor} ${bgColor} p-0`}>
           <Collapsible defaultOpen={false}>
             <CollapsibleTrigger className="w-full">
-              <div className="p-3 cursor-pointer hover:bg-blue-100/50 dark:hover:bg-blue-900/50 transition-colors">
+              <div className={`p-3 cursor-pointer ${hoverColor} transition-colors`}>
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    <Icon className={`h-4 w-4 ${iconColor}`} />
                     <div className="text-left">
-                      <div className="font-medium text-sm">User Slack Activity</div>
+                      <div className="font-medium text-sm">{title}</div>
                       <div className="text-xs text-muted-foreground">
                         {slackEvent.type}
                         {"subtype" in slackEvent && slackEvent.subtype && `: ${slackEvent.subtype}`}
@@ -1878,28 +1858,11 @@ export default function AgentsPage() {
 
   // Filter events
   const filteredEvents = useMemo(() => {
-    let filtered = events;
-
-    // Filter out agent webhooks if the toggle is enabled
-    if (hideAgentWebhooks) {
-      filtered = filtered.filter((event) => {
-        if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
-          const payload = event.data.payload as SlackWebhookPayload;
-          const slackEvent = payload?.event;
-          const isFromBot =
-            botUserId && slackEvent && "user" in slackEvent && slackEvent.user === botUserId;
-          return !isFromBot; // Hide if it's from the bot
-        }
-        return true; // Keep all other events
-      });
-    }
-
-    // Apply search filter
     if (!filters.searchText.trim()) {
-      return filtered;
+      return events;
     }
-    return filtered.filter((event) => fulltextSearchInObject(event, filters.searchText.trim()));
-  }, [events, filters.searchText, hideAgentWebhooks, botUserId]);
+    return events.filter((event) => fulltextSearchInObject(event, filters.searchText.trim()));
+  }, [events, filters.searchText]);
 
   // Group parallel tool calls together
   const groupedEvents = useMemo(() => {
@@ -2170,6 +2133,7 @@ export default function AgentsPage() {
                             estateId={estateId}
                             currentUser={currentUser}
                             botUserId={botUserId}
+                            hideAgentWebhooks={hideAgentWebhooks}
                           />
                         </div>
                       );
@@ -2197,6 +2161,7 @@ export default function AgentsPage() {
                                   estateId={estateId}
                                   currentUser={currentUser}
                                   botUserId={botUserId}
+                                  hideAgentWebhooks={hideAgentWebhooks}
                                 />
                               </div>
                             ))}
