@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { WebClient, type UsersListResponse } from "@slack/web-api";
+import { waitUntil } from "cloudflare:workers";
 import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
@@ -63,7 +64,7 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  c.executionCtx.waitUntil(
+  waitUntil(
     // deterministically react to the webhook as early as possible (eyes emoji)
     getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
       if (slackToken) {
@@ -72,7 +73,7 @@ slackApp.post("/webhook", async (c) => {
     }),
   );
 
-  c.executionCtx.waitUntil(
+  waitUntil(
     db
       .insert(slackWebhookEvent)
       .values({
@@ -113,6 +114,8 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
+  // If the bot isn't mentioned or it's not a DM to the bot, we bail early
+
   if (!agentRoute) {
     const botUserId = extractBotUserIdFromAuthorizations(body);
     const isBotMentioned =
@@ -120,12 +123,11 @@ slackApp.post("/webhook", async (c) => {
         ? isBotMentionedInMessage(body.event, botUserId)
         : false;
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-
     if (!isBotMentioned && !isDM) {
+      console.log("IGNORING WEBHOOK EVENT BECAUSE BOT IS NOT MENTIONED OR IT'S NOT A DM");
       return c.text("ok");
     }
   }
-
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
@@ -134,7 +136,7 @@ slackApp.post("/webhook", async (c) => {
     reason: "Slack webhook received",
   });
 
-  c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
+  waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
   return c.text("ok");
 });

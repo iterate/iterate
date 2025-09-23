@@ -2000,7 +2000,7 @@ describe("CORE:FILE_SHARED event handling", () => {
       content: [
         {
           type: "input_text",
-          text: "The iterateFileId for the above file is file_123. You may need this when using the file in other tool calls. Download: https://you-must-inject-this-into-agent-core.com/file_123",
+          text: "Use either of the following identifiers to use this file in other tools:\n\niterateFileId: file_123.\n\nPublic URL: https://you-must-inject-this-into-agent-core.com/file_123.",
         },
       ],
     });
@@ -2283,7 +2283,7 @@ describe("CORE:FILE_SHARED event handling", () => {
       content: [
         {
           type: "input_text",
-          text: "Note: The previous file was something you created as the result of a tool call. Use the download URL below to share this file.\n\nThe iterateFileId for the above file is file_agent_123. You may need this when using the file in other tool calls. Download: https://you-must-inject-this-into-agent-core.com/file_agent_123",
+          text: "Note: The previous file was something you created as the result of a tool call.\n\nUse either of the following identifiers to use this file in other tools:\n\niterateFileId: file_agent_123.\n\nPublic URL: https://you-must-inject-this-into-agent-core.com/file_agent_123.",
         },
       ],
     });

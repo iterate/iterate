@@ -2,17 +2,6 @@ import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 
 export const slackAgentTools = defineDOTools({
-  // Not sure we still need this
-  // getSetupIntegrationInAgentURL: {
-  //   description:
-  //     "Setup an integration in the agent. Call with internal id for the user requesting the integration.",
-  //   input: z.object({
-  //     impersonateUserEmail: z.string(),
-  //     mode: IntegrationMode,
-  //     integrationSlug: z.string() as z.ZodType<StaticIntegrationSlug>,
-  //     appSlug: z.string(),
-  //   }),
-  // },
   sendSlackMessage: {
     description: `Send a slack message to the thread you are currently active in.`,
     input: z.object({
@@ -75,18 +64,14 @@ export const slackAgentTools = defineDOTools({
       name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
     }),
   },
-  // uploadAndShareFileInSlack: {
-  //   description:
-  //     "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
-  //   input: z.object({
-  //     iterateFileId: z.string().describe("The Iterate file ID to upload"),
-  //     initial_comment: z.string().optional().describe("Optional comment to include with the file"),
-  //   }).extend({
-  //     // make these both optional, because we can infer them from context (but still want to allow agents to upload files to other threads)
-  //     channel: z.string().optional(),
-  //     threadTs: z.string().optional(),
-  //   }),
-  // },
+  uploadAndShareFileInSlack: {
+    description:
+      "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
+    input: z.object({
+      iterateFileId: z.string().describe("The Iterate file ID to upload"),
+      initialComment: z.string().optional().describe("Optional comment to include with the file"),
+    }),
+  },
   updateSlackMessage: {
     description:
       "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
@@ -109,26 +94,6 @@ export const slackAgentTools = defineDOTools({
         .describe(
           "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
         ),
-    }),
-  },
-  getUrlContent: {
-    description: "Get the content of a URL, including Slack message threads",
-    input: z.object({
-      url: z.string(),
-      shouldMakeScreenshot: z
-        .boolean()
-        .describe(
-          "Set to true to make a screenshot of the URL and make it visible to you. Set to false for file/image urls.",
-        )
-        .optional(),
-    }),
-  },
-  searchWeb: {
-    description: "Search the web using exa (think of it like a better google)",
-    input: z.object({
-      query: z.string(),
-      numResults: z.number().optional().default(10),
-      safeSearch: z.boolean().optional().default(true),
     }),
   },
 });
