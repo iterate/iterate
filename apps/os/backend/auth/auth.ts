@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
@@ -20,7 +21,8 @@ export const getAuth = (db: DB) =>
         allowDifferentEmails: true,
       },
     },
-    plugins: [integrationsPlugin()],
+    emailAndPassword: { enabled: true },
+    plugins: [admin(), integrationsPlugin()],
     socialProviders: {
       google: {
         scope: [

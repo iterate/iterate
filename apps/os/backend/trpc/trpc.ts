@@ -6,7 +6,15 @@ import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import type { Context } from "./context.ts";
 
-const t = initTRPC.context<Context>().create();
+const t = initTRPC.context<Context>().create({
+  // errorFormatter: (opts) => ({
+  //   ...opts,
+  //   shape: {
+  //     ...opts.shape,
+  //     // message: "bad",
+  //   },
+  // }),
+});
 
 // Base router and procedure helpers
 export const router = t.router;
@@ -50,6 +58,18 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
 
 // Protected procedure that requires authentication
 export const protectedProcedure = t.procedure
+  .use(({ ctx, next }) => {
+    if (ctx.req.headers.get("x-iterate-service-auth-token") === process.env.SERVICE_AUTH_TOKEN) {
+      return next({
+        ctx: {
+          ...ctx,
+          session: {},
+          user: {},
+        },
+      });
+    }
+    return next();
+  })
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
