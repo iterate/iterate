@@ -17,7 +17,7 @@ export default function SiteFooter() {
             <div className="flex items-center gap-2">
               <SymbolIcon />
               <span className="text-sm text-gray-600">
-                iterate is a registered trademark of Nustom (UK) Limited.{' '}
+                iterate is a registered trademark of Nustom (UK) Limited.{" "}
                 <Link
                   to="https://trademarks.ipo.gov.uk/ipo-tmcase/page/Results/1/UK00004143107"
                   external

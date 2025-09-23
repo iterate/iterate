@@ -8,5 +8,5 @@ export default [
   route("privacy", "./routes/privacy.tsx"),
   route("terms", "./routes/terms.tsx"),
   route("verify", "./routes/verify.tsx"),
-  route("*", "./routes/404.tsx")
+  route("*", "./routes/404.tsx"),
 ] satisfies RouteConfig;

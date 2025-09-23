@@ -9,16 +9,16 @@ interface CardInfo {
 const CARDS: CardInfo[] = [
   {
     title: "GitHub ↔ Linear",
-    body: "When code lands, tickets move. Keep labels and status in sync without thinking about it."
+    body: "When code lands, tickets move. Keep labels and status in sync without thinking about it.",
   },
   {
     title: "Notion",
-    body: "Drop notes and tasks into your databases. Get a short summary back in the channel."
+    body: "Drop notes and tasks into your databases. Get a short summary back in the channel.",
   },
   {
     title: "Add tools fast",
-    body: "Paste an MCP server URL to try a new tool. No waiting for a product update."
-  }
+    body: "Paste an MCP server URL to try a new tool. No waiting for a product update.",
+  },
 ];
 
 export default function HeroShuffle() {
@@ -37,14 +37,11 @@ export default function HeroShuffle() {
   const layers = [
     { z: 30, tx: 0, ty: 0, r: 0, s: 1 },
     { z: 20, tx: 16, ty: 16, r: -4, s: 0.985 },
-    { z: 10, tx: 32, ty: 32, r: 5, s: 0.97 }
+    { z: 10, tx: 32, ty: 32, r: 5, s: 0.97 },
   ];
 
   return (
-    <div
-      aria-hidden
-      className="relative w-full h-72 md:h-80 lg:h-96 select-none"
-    >
+    <div aria-hidden className="relative w-full h-72 md:h-80 lg:h-96 select-none">
       {order.map((card, i) => (
         <motion.div
           key={card.title}
@@ -54,7 +51,7 @@ export default function HeroShuffle() {
             x: layers[i].tx,
             y: layers[i].ty,
             rotate: layers[i].r,
-            scale: layers[i].s
+            scale: layers[i].s,
           }}
           transition={{ type: "spring", stiffness: 120, damping: 18 }}
         >

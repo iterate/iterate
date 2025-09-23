@@ -5,6 +5,6 @@ export default {
   buildDirectory: "dist",
   appDirectory: "backend",
   future: {
-    unstable_viteEnvironmentApi: true
-  }
+    unstable_viteEnvironmentApi: true,
+  },
 } satisfies Config;
