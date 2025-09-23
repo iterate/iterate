@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+export const DynamicClientInfo = z.looseObject({
+  client_id: z.string(),
+});
+
+export type DynamicClientInfo = z.infer<typeof DynamicClientInfo>;
+
 export const AgentDurableObjectInfo = z.object({
   durableObjectId: z.string(),
   durableObjectName: z.string(),
@@ -9,7 +15,7 @@ export const AgentDurableObjectInfo = z.object({
 export type AgentDurableObjectInfo = z.infer<typeof AgentDurableObjectInfo>;
 
 export const BaseOAuthState = z.object({
-  callbackURL: z.string().optional(),
+  callbackUrl: z.string().optional(),
 });
 
 export const MCPOAuthState = BaseOAuthState.extend({

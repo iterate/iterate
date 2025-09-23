@@ -344,17 +344,24 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   protected db: DB;
   // Runtime slice list – inferred from the generic parameter.
   agentCore!: AgentCore<Slices, CoreAgentSlices>;
-  databaseRecord!: AgentInstanceDatabaseRecord;
+  _databaseRecord?: AgentInstanceDatabaseRecord;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     const { record } = params;
-    this.databaseRecord = record;
+    this._databaseRecord = record;
   }
 
   initialState = {
     reminders: {},
   };
+
+  get databaseRecord() {
+    if (!this._databaseRecord) {
+      throw new Error("Database record not found");
+    }
+    return this._databaseRecord;
+  }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -531,12 +538,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
           this.ctx.waitUntil(
             (async () => {
+              if (!this.databaseRecord) {
+                throw new Error("Database record not found");
+              }
               if (reducedState.mcpConnections) {
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
                   reducedState,
-                  agentDurableObject: this.getHydrationInfo(),
-                  estateId: this.databaseRecord?.estateId || "",
+                  agentDurableObject: this.hydrationInfo,
+                  estateId: this.databaseRecord.estateId,
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
 
@@ -590,8 +600,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         //   // );
       },
       lazyConnectionDeps: {
-        getDurableObjectInfo: () =>
-          this.getHydrationInfo(this.databaseRecord?.durableObjectName || this.name),
+        getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord?.estateId || "",
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
@@ -620,10 +629,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
 
-  getHydrationInfo(durableObjectName?: string) {
+  get hydrationInfo() {
     return {
       durableObjectId: this.ctx.id.toString(),
-      durableObjectName: durableObjectName || this.name,
+      durableObjectName: this.databaseRecord.durableObjectName,
       className: this.constructor.name,
     };
   }
@@ -1100,10 +1109,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eventIndex: 0,
         createdAt: new Date().toISOString(),
       },
-      agentDurableObject: this.getHydrationInfo(
-        this.databaseRecord?.durableObjectName || this.name,
-      ),
-      estateId: this.databaseRecord?.estateId || "",
+      agentDurableObject: this.hydrationInfo,
+      estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });

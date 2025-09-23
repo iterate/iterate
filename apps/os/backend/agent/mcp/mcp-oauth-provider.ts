@@ -1,16 +1,13 @@
 import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
 import { eq, and } from "drizzle-orm";
-import { typeid } from "typeid-js";
 import { z } from "zod";
+import { generateRandomString } from "better-auth/crypto";
 import type { Auth } from "../../auth/auth.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
-
-const DynamicClientInfo = z.looseObject({
-  client_id: z.string(),
-});
+import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
 
 /**
  * Inspired by agents SDK implementation https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
@@ -32,13 +29,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       estateId: string;
       integrationSlug: string;
       serverUrl: string;
-      callbackURL: string | undefined;
+      callbackUrl: string | undefined;
       env?: { VITE_PUBLIC_URL?: string };
-      reconnect?: {
-        id: string;
-        oauthClientId?: string;
-        oauthCode?: string;
-      };
       agentDurableObject: AgentDurableObjectInfo;
     },
   ) {
@@ -66,11 +58,6 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async tokens() {
-    if (this.params.reconnect) {
-      this.clientId = this.params.reconnect.oauthClientId;
-      this.serverId = this.params.reconnect.id;
-    }
-
     const account = await this.params.db.query.account.findFirst({
       where: and(
         eq(schema.account.userId, this.params.userId),
@@ -78,6 +65,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       ),
     });
 
+    // Refresh logic comes from mcp typescript sdk (we assume)
+    // https://github.com/modelcontextprotocol/typescript-sdk/blob/1d475bb3f75674a46d81dba881ea743a763cbc12/src/client/auth.ts#L980
     if (account?.accessToken) {
       this.dbAccountId = account.id;
       return {
@@ -98,7 +87,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     return {
       client_name: `Iterate MCP Client - ${this.params.integrationSlug}`,
       client_uri: this.baseUrl,
-      redirect_uris: [this.redirectUrl] as string[],
+      redirect_uris: [this.redirectUrl],
     };
   }
 
@@ -107,22 +96,23 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       return undefined;
     }
 
-    const verificationKey = `mcp-client-${this.providerId}-${this.clientId}`;
-    const verification = await this.params.db.query.verification.findFirst({
-      where: eq(schema.verification.identifier, verificationKey),
+    const dynamicClientInfo = await this.params.db.query.dynamicClientInfo.findFirst({
+      where: and(
+        eq(schema.dynamicClientInfo.providerId, this.providerId),
+        eq(schema.dynamicClientInfo.clientId, this.clientId),
+      ),
     });
 
-    if (!verification) {
+    if (!dynamicClientInfo) {
       return undefined;
     }
 
-    try {
-      const clientInfo = DynamicClientInfo.parse(JSON.parse(verification.value));
-      return clientInfo;
-    } catch (error) {
-      console.error("Failed to parse client information:", error);
+    const clientInfo = DynamicClientInfo.safeParse(dynamicClientInfo.clientInfo);
+    if (!clientInfo.success) {
+      console.error(`Failed to parse client information: ${z.prettifyError(clientInfo.error)}`);
       return undefined;
     }
+    return clientInfo.data;
   }
 
   async saveTokens(tokens: {
@@ -152,48 +142,31 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           accessToken: tokens.access_token,
           refreshToken: tokens.refresh_token || existingAccount.refreshToken,
           accessTokenExpiresAt: expiresAt,
-          updatedAt: new Date(),
         })
         .where(eq(schema.account.id, existingAccount.id));
 
       this.dbAccountId = existingAccount.id;
     } else {
-      // for rahul: how would we insert this in one big query? in sql
-      const [newAccount] = await this.params.db
-        .insert(schema.account)
-        .values({
-          accountId: this.clientId, // Dynamic client id is the closest thing to an *external* account id
-          providerId: this.providerId,
-          userId: this.params.userId,
-          accessToken: tokens.access_token,
-          refreshToken: tokens.refresh_token,
-          accessTokenExpiresAt: expiresAt,
-          scope: "",
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .returning();
+      await this.params.db.transaction(async (tx) => {
+        const [newAccount] = await tx
+          .insert(schema.account)
+          .values({
+            accountId: this.clientId!, // Dynamic client id is the closest thing to an *external* account id
+            providerId: this.providerId,
+            userId: this.params.userId,
+            accessToken: tokens.access_token,
+            refreshToken: tokens.refresh_token,
+            accessTokenExpiresAt: expiresAt,
+            scope: "",
+          })
+          .returning();
 
-      this.dbAccountId = newAccount.id;
+        this.dbAccountId = newAccount.id;
 
-      await this.params.db.insert(schema.estateAccountsPermissions).values({
-        accountId: this.dbAccountId,
-        estateId: this.params.estateId,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-
-      await this.params.db.insert(schema.providerEstateMapping).values({
-        internalEstateId: this.params.estateId,
-        externalId: this.dbAccountId,
-        providerId: this.providerId,
-        providerMetadata: {
-          serverUrl: this.params.serverUrl,
-          integrationSlug: this.params.integrationSlug,
-          clientId: this.clientId,
-        },
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        await tx.insert(schema.estateAccountsPermissions).values({
+          accountId: this.dbAccountId,
+          estateId: this.params.estateId,
+        });
       });
     }
   }
@@ -201,21 +174,19 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   async saveClientInformation(_info: unknown): Promise<void> {
     const info = DynamicClientInfo.parse(_info);
     this.clientId = info.client_id;
-
-    const verificationKey = `mcp-client-${this.providerId}-${info.client_id}`;
-    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000); // 1 year to store client information?
-
     await this.params.db
-      .delete(schema.verification)
-      .where(eq(schema.verification.identifier, verificationKey));
-
-    await this.params.db.insert(schema.verification).values({
-      identifier: verificationKey,
-      value: JSON.stringify(info),
-      expiresAt,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    });
+      .insert(schema.dynamicClientInfo)
+      .values({
+        clientId: info.client_id,
+        providerId: this.providerId,
+        clientInfo: info,
+      })
+      .onConflictDoUpdate({
+        target: [schema.dynamicClientInfo.providerId, schema.dynamicClientInfo.clientId],
+        set: {
+          clientInfo: info,
+        },
+      });
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {
@@ -234,28 +205,21 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       identifier: verificationKey,
       value: verifier,
       expiresAt,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
   }
 
   async redirectToAuthorization(authUrl: URL): Promise<void> {
-    const client_id = authUrl.searchParams.get("client_id");
-    if (client_id) {
-      this.clientId = client_id;
-    }
-
     if (!this.clientId) {
       throw new Error("Cannot redirect to authorization without clientId");
     }
 
-    const state = typeid("state").toString();
+    const state = generateRandomString(32);
     const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
       serverUrl: this.params.serverUrl,
       estateId: this.params.estateId,
       userId: this.params.userId,
-      callbackURL: this.params.callbackURL,
+      callbackUrl: this.params.callbackUrl,
       clientId: this.clientId,
       agentDurableObject: {
         durableObjectId: this.params.agentDurableObject.durableObjectId,
@@ -273,8 +237,6 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       identifier: state,
       value: JSON.stringify(stateData),
       expiresAt,
-      createdAt: new Date(),
-      updatedAt: new Date(),
     });
 
     authUrl.searchParams.set("state", state);

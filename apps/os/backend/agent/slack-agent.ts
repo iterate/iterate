@@ -133,9 +133,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         return await this.getSlackPermalink();
       },
       lazyConnectionDeps: {
-        getDurableObjectInfo: () =>
-          this.getHydrationInfo(this.databaseRecord?.durableObjectName || this.name),
-        getEstateId: () => this.databaseRecord?.estateId || "",
+        getDurableObjectInfo: () => this.hydrationInfo,
+        getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();

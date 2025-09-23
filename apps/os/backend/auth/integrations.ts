@@ -89,7 +89,7 @@ export const integrationsPlugin = () =>
           }),
         },
         async (ctx) => {
-          const { code, state, error, error_description } = ctx.query;
+          const { code, state: stateId, error, error_description } = ctx.query;
 
           if (error) {
             return ctx.json(
@@ -101,16 +101,16 @@ export const integrationsPlugin = () =>
             );
           }
 
-          let stateData: z.infer<typeof MCPOAuthState>;
+          let state: z.infer<typeof MCPOAuthState>;
 
-          if (state) {
-            const stateValue = await ctx.context.internalAdapter.findVerificationValue(state);
-            if (!stateValue) {
+          if (stateId) {
+            const rawState = await ctx.context.internalAdapter.findVerificationValue(stateId);
+            if (!rawState) {
               return ctx.json({ error: "Invalid or expired state" }, { status: 400 });
             }
 
             try {
-              stateData = MCPOAuthState.parse(JSON.parse(stateValue.value));
+              state = MCPOAuthState.parse(JSON.parse(rawState.value));
             } catch (parseError) {
               console.error("Invalid MCP OAuth state data:", parseError);
               return ctx.json({ error: "Invalid state data format" }, { status: 400 });
@@ -137,7 +137,7 @@ export const integrationsPlugin = () =>
           } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
 
           const estate = await db.query.estate.findFirst({
-            where: eq(schema.estate.id, stateData.estateId),
+            where: eq(schema.estate.id, state.estateId),
             with: {
               organization: {
                 with: {
@@ -152,22 +152,16 @@ export const integrationsPlugin = () =>
           }
 
           const isMember = estate.organization.members.some(
-            (member) => member.userId === stateData.userId,
+            (member) => member.userId === state.userId,
           );
 
           if (!isMember) {
-            console.error("Membership check failed:", {
-              estateId: stateData.estateId,
-              userId: stateData.userId,
-              organizationId: estate.organization.id,
-              members: estate.organization.members.map((m) => ({ userId: m.userId, role: m.role })),
-            });
             return ctx.json(
               {
-                error: "You are not a member of this estate",
+                error: "Something went wrong",
                 debug: {
-                  estateId: stateData.estateId,
-                  userId: stateData.userId,
+                  estateId: state.estateId,
+                  userId: state.userId,
                   organizationMembers: estate.organization.members.length,
                 },
               },
@@ -175,16 +169,16 @@ export const integrationsPlugin = () =>
             );
           }
 
-          await ctx.context.internalAdapter.deleteVerificationValue(state);
+          await ctx.context.internalAdapter.deleteVerificationValue(stateId);
 
-          if (stateData.agentDurableObject) {
+          if (state.agentDurableObject) {
             try {
               const params = {
                 db,
-                agentInstanceName: stateData.agentDurableObject.durableObjectName,
+                agentInstanceName: state.agentDurableObject.durableObjectName,
               };
               const agentStub =
-                stateData.agentDurableObject.className === "SlackAgent"
+                state.agentDurableObject.className === "SlackAgent"
                   ? await SlackAgent.getStubByName(params)
                   : await IterateAgent.getStubByName(params);
 
@@ -192,14 +186,14 @@ export const integrationsPlugin = () =>
                 {
                   type: "MCP:CONNECT_REQUEST",
                   data: {
-                    serverUrl: stateData.serverUrl,
-                    mode: stateData.userId ? "personal" : "company",
-                    userId: stateData.userId,
-                    integrationSlug: stateData.integrationSlug,
+                    serverUrl: state.serverUrl,
+                    mode: state.userId ? "personal" : "company",
+                    userId: state.userId,
+                    integrationSlug: state.integrationSlug,
                     requiresAuth: true,
                     reconnect: {
                       id: "cloudflare-requires-id",
-                      oauthClientId: stateData.clientId,
+                      oauthClientId: state.clientId,
                       oauthCode: code,
                     },
                   },
@@ -210,11 +204,11 @@ export const integrationsPlugin = () =>
             }
           }
 
-          if (!stateData.callbackURL) {
+          if (!state.callbackUrl) {
             return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
           }
 
-          return ctx.redirect(stateData.callbackURL.toString());
+          return ctx.redirect(state.callbackUrl.toString());
         },
       ),
 
@@ -372,7 +366,7 @@ export const integrationsPlugin = () =>
 
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
 
-          const { link, callbackURL } = parsedState;
+          const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
 
           const code = ctx.query.code;

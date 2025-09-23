@@ -2,6 +2,7 @@ import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm
 import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
+import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
@@ -80,6 +81,18 @@ export const verification = pgTable("verification", (t) => ({
 }));
 
 // #endregion ========== Better Auth Schema ==========
+
+export const dynamicClientInfo = pgTable(
+  "dynamic_client_info",
+  (t) => ({
+    id: iterateId("dci"),
+    providerId: t.text().notNull(),
+    clientId: t.text().notNull(),
+    clientInfo: t.jsonb().$type<DynamicClientInfo>().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.providerId, t.clientId)],
+);
 
 export const files = pgTable("files", (t) => ({
   id: iterateId("file"),

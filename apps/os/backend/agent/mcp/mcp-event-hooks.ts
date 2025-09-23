@@ -280,9 +280,8 @@ export async function handleMCPConnectRequest(
         estateId: estateId,
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: formattedServerUrl,
-        callbackURL: finalRedirectUrl,
+        callbackUrl: finalRedirectUrl,
         env: { VITE_PUBLIC_URL: import.meta.env.VITE_PUBLIC_URL },
-        reconnect,
         agentDurableObject,
       })
     : undefined;
