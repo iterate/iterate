@@ -62,12 +62,12 @@ function fiddleWithJsonSchema(
   /** Options for the hacks - these match the form of an AgentDurableObjectToolSpec `passThroughArgs` and `hideOptionalInputs` props */
   options: Pick<AgentDurableObjectToolSpec, "passThroughArgs" | "hideOptionalInputs">,
 ) {
-  let jsonSchema = originalJsonSchema;
+  let jsonSchema = structuredClone(originalJsonSchema); // deep since we're going to modify deeply-nested properties
   jsonSchema = subtractObjectPropsFromJSONSchema(jsonSchema, options?.passThroughArgs || {});
 
-  // Save the original schema with correct required arrays before makeJSONSchemaOpenAICompatible modifies them
+  // Save the original schema with correct required arrays before makeJSONSchemaOpenAICompatible modifies them.
   const schemaBeforeOpenAIModification = options?.hideOptionalInputs
-    ? JSON.parse(JSON.stringify(jsonSchema))
+    ? structuredClone(jsonSchema)
     : null;
 
   // This is a function Andy has written a while back

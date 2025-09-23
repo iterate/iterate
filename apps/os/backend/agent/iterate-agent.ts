@@ -44,7 +44,7 @@ import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { ContextRule } from "./context-schemas.ts";
+import { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -635,7 +635,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
-    const rules = await this.getContextRules();
+    const rules = ContextRule.array().parse(await this.getContextRules());
     return {
       type: "CORE:ADD_CONTEXT_RULES",
       data: { rules },

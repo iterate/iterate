@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - estates/*
+  - estates/*/apps/*
   - vibe-rules
 
 minimumReleaseAge: 1440
