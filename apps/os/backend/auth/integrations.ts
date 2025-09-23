@@ -338,7 +338,7 @@ export const integrationsPlugin = () =>
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
 
-          const webClient = new WebClient();
+          const slackAPI = new WebClient();
 
           const tokens = await webClient.oauth.v2.access({
             client_id: env.SLACK_CLIENT_ID,
