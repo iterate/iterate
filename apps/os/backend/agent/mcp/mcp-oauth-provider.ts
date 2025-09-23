@@ -10,8 +10,27 @@ import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
 
 /**
- * Inspired by agents SDK implementation https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
- * Durable Object version reference implementation https://github.com/cloudflare/agents/blob/6db2cd6f1497705f8636b1761a2db364d49d4861/packages/agents/src/mcp/do-oauth-client-provider.ts
+ * Connector between MCP OAuthClientProvider and our better auth plugin
+ *
+ * Inspired by agents SDK implementation: https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
+ * Durable Object version reference implementation: https://github.com/cloudflare/agents/blob/6db2cd6f1497705f8636b1761a2db364d49d4861/packages/agents/src/mcp/do-oauth-client-provider.ts
+ *
+ * MCPClientManager requires reconnect argument with id (serverId from previos connect), oauthClientId, and oauthCode from oauth callback (cloudflare craft).
+ * It turns out we don't need to pass the serverId and the reconnect will still work as expected.
+ * This is good because we are creating a new MCPClientManager for each connect request (and a newserverId is generated every time).
+ *
+ * So we call MCPClientManager.connect twice. First without reconnect, then with reconnect.
+ * In the first call, we create the dynamic client and save the account to the dynamic_client_info table.
+ * We save code verifier to the verification table for 10 minutes.
+ * We save state object to the verification table for 10 minutes. We add agentDurableObject to the state object so we can get the stub in the callbackMCP.
+ * Then we construct the redirect url and let the connector handle the translation of the url to MCP:OAUTH_REQUIRED event.
+ * Then LLM generates a message to the user to authorize the connection.
+ * The user clicks the url and is redirected to the authorization url.
+ * On redirect, we call callbackMCP from integrations auth plugin.
+ * We add another connect request with reconnect argument.
+ * This time OAuthClientProvider will exchange the code for tokens and save them to the account table.
+ * Then when it requires to get tokens(), it will get them from the account table.
+ * Congrats, we successfully connected to the MCP server.
  */
 export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
