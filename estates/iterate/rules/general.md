@@ -5,23 +5,23 @@ match: always()
 
 You're a bot for iterate.com
 
-Our goal is to help founders automate their startups by building the most hackable agent. 
+Our goal is to help founders automate their startups by building the most hackable agent.
 
 Link to our companies house registration: https://find-and-update.company-information.service.gov.uk/company/15475675
 
 # Our Stack
 
 ## Github
-We use github for version control, whenever you're asked to do something with Github, connect to to the github MCP with the following parameters 
 
+We use github for version control, whenever you're asked to do something with Github, connect to to the github MCP with the following parameters
 
-   serverUrl: "https://api.githubcopilot.com/mcp/",
-      mode: "company",
-      integrationSlug: "github",
-      allowedTools: [
-        // Core user and authentication
-        "get_me",
-        "search_users",
+serverUrl: "https://api.githubcopilot.com/mcp/",
+mode: "company",
+integrationSlug: "github",
+allowedTools: [
+// Core user and authentication
+"get_me",
+"search_users",
 
         // Repository operations
         "search_repositories",
@@ -55,6 +55,3 @@ We use github for version control, whenever you're asked to do something with Gi
         "list_releases",
         "get_latest_release",
         "list_notifications",]
-
-
-

@@ -14,76 +14,78 @@ expect.addSnapshotSerializer({
 });
 
 test("checkoutEstateCommand", async () => {
-  expect(parseSpecifier("github:mmkal/lerna-learning#ci/test&path:packages/greeting-util"))
+  expect(parseSpecifier("github:example-org/example-repo#ci/test&path:packages/example-package"))
     .toMatchInlineSnapshot(`
       {
-        "raw": "github:mmkal/lerna-learning#ci/test&path:packages/greeting-util",
+        "raw": "github:example-org/example-repo#ci/test&path:packages/example-package",
         "protocol": "github:",
-        "cloneUrl": "https://github.com/mmkal/lerna-learning",
-        "owner": "mmkal",
-        "repo": "lerna-learning",
+        "cloneUrl": "https://github.com/example-org/example-repo",
+        "owner": "example-org",
+        "repo": "example-repo",
         "ref": "ci/test",
-        "directory": "packages/greeting-util",
+        "directory": "packages/example-package",
       }
     `);
 
   expect(
     parseSpecifier(
-      "git:https://github.com/mmkal/lerna-learning.git#ci/test&path:packages/greeting-util",
+      "git:https://github.com/example-org/example-repo.git#ci/test&path:packages/example-package",
     ),
   ).toMatchInlineSnapshot(`
     {
-      "raw": "git:https://github.com/mmkal/lerna-learning.git#ci/test&path:packages/greeting-util",
+      "raw": "git:https://github.com/example-org/example-repo.git#ci/test&path:packages/example-package",
       "protocol": "git:",
-      "cloneUrl": "https://github.com/mmkal/lerna-learning",
-      "owner": "mmkal",
-      "repo": "lerna-learning",
+      "cloneUrl": "https://github.com/example-org/example-repo",
+      "owner": "example-org",
+      "repo": "example-repo",
       "ref": "ci/test",
-      "directory": "packages/greeting-util",
+      "directory": "packages/example-package",
     }
   `);
 
   expect(
-    parseSpecifier("https://github.com/mmkal/lerna-learning#ci/test&path:packages/greeting-util"),
+    parseSpecifier(
+      "https://github.com/example-org/example-repo#ci/test&path:packages/example-package",
+    ),
   ).toMatchInlineSnapshot(`
     {
-      "raw": "https://github.com/mmkal/lerna-learning#ci/test&path:packages/greeting-util",
+      "raw": "https://github.com/example-org/example-repo#ci/test&path:packages/example-package",
       "protocol": "https:",
-      "cloneUrl": "https://github.com/mmkal/lerna-learning",
-      "owner": "mmkal",
-      "repo": "lerna-learning",
+      "cloneUrl": "https://github.com/example-org/example-repo",
+      "owner": "example-org",
+      "repo": "example-repo",
       "ref": "ci/test",
-      "directory": "packages/greeting-util",
+      "directory": "packages/example-package",
     }
   `);
 
-  expect(parseSpecifier("git:mmkal/lerna-learning")).toMatchInlineSnapshot(`
+  expect(parseSpecifier("git:example-org/example-repo")).toMatchInlineSnapshot(`
     {
-      "raw": "git:mmkal/lerna-learning",
+      "raw": "git:example-org/example-repo",
       "protocol": "git:",
-      "cloneUrl": "https://github.com/mmkal/lerna-learning",
-      "owner": "mmkal",
-      "repo": "lerna-learning",
+      "cloneUrl": "https://github.com/example-org/example-repo",
+      "owner": "example-org",
+      "repo": "example-repo",
     }
   `);
 
-  expect(parseSpecifier("git:mmkal/lerna-learning#&path:packages/greeting-util"))
+  expect(parseSpecifier("git:example-org/example-repo#&path:packages/example-package"))
     .toMatchInlineSnapshot(`
       {
-        "raw": "git:mmkal/lerna-learning#path:packages/greeting-util",
+        "raw": "git:example-org/example-repo#&path:packages/example-package",
         "protocol": "git:",
-        "cloneUrl": "https://github.com/mmkal/lerna-learning",
-        "owner": "mmkal",
-        "repo": "lerna-learning",
-        "ref": "path:packages/greeting-util",
+        "cloneUrl": "https://github.com/example-org/example-repo",
+        "owner": "example-org",
+        "repo": "example-repo",
+        "directory": "packages/example-package",
       }
     `);
 });
 
 test("bad", async () => {
-  expect(() => parseSpecifier("mmkal/lerna-learning.git")).toThrowErrorMatchingInlineSnapshot(
+  expect(() => parseSpecifier("example-org/example-repo.git")).toThrowErrorMatchingInlineSnapshot(
     `
-    Error: Can't parse specifier: mmkal/lerna-learning.git. Examples of valid specifiers:
+    Error: Can't parse specifier: example-org/example-repo.git. Examples of valid specifiers:
     A github repo: git:some-org/some-repo
     A github repo with a https url: https://github.com/some-org/some-repo
     A github repo with a ref: git:some-org/some-repo#some-ref
@@ -92,7 +94,7 @@ test("bad", async () => {
   `,
   );
 
-  expect(() => parseSpecifier("bitbucket:mmkal/lerna-learning.git"))
+  expect(() => parseSpecifier("bitbucket:example-org/example-repo.git"))
     .toThrowErrorMatchingInlineSnapshot(`
     Error: Invalid protocol: bitbucket:. Only git: and github: and https://github.com are supported. Examples of valid specifiers:
     A github repo: git:some-org/some-repo
