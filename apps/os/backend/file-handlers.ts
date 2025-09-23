@@ -7,6 +7,7 @@ import type { Variables } from "./worker.ts";
 import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
+import { getStage } from "./utils/staging.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
@@ -268,7 +269,15 @@ export const uploadFile = async ({
             POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY,
           }),
         },
-        posthog: { traceId: `file-upload-${fileId}` },
+        posthog: {
+          estateName: estateId,
+          environmentName: getStage({
+            ITERATE_USER: env.ITERATE_USER,
+            STAGE__PR_ID: env.STAGE__PR_ID,
+            ESTATE_NAME: estateId,
+          }),
+          traceId: `file-upload-${fileId}`,
+        },
       }),
     });
 

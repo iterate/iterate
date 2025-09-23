@@ -86,11 +86,15 @@ export class PosthogCloudflare<
     );
   }
 
-  track<TEvent extends keyof TEvents>(
-    event: TEvent,
-    distinctId: string,
-    properties: TEvents[TEvent],
-  ) {
+  track<TEvent extends keyof TEvents>({
+    event,
+    distinctId,
+    properties,
+  }: {
+    event: TEvent;
+    distinctId: string;
+    properties: TEvents[TEvent];
+  }) {
     this.ctx.waitUntil(
       this.client.captureImmediate({
         event: String(event),
@@ -114,5 +118,4 @@ export class PosthogCloudflare<
   }
 }
 
-// TODO(@jonas): What is this?
-export const SELF_AGENT_DISTINCT_ID = `AGENT[TODO: Add estate]`;
+export const SELF_AGENT_DISTINCT_ID = (estateName: string) => `AGENT[${estateName}]`;

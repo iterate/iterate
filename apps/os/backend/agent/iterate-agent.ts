@@ -1,4 +1,5 @@
 import pTimeout from "p-suite/p-timeout";
+import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -46,13 +47,9 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
-
-// Commented imports (preserved for reference)
-// import { getAgentDebugUri } from "./posthog-utils.ts";
-// import { uploadFile } from "./files/hono-handlers.ts";
-// import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
-// import { PlatformPosthog } from "./posthog.ts";
-// import { trpcCallableBuilder } from "../legacy-agent/trpc/callable-builders.ts";
+import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
+import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
+import { getStage } from "../utils/staging.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -378,14 +375,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
   }
 
-  private posthog: PosthogCloudflare | undefined = undefined;
-  private getPosthogClient() {
-    if (!this.posthog) {
-      this.posthog = new PosthogCloudflare(this.ctx, { estate: "some estate", environment: "dev" });
-    }
-    return this.posthog;
-  }
-
   /**
    * Get all slices for this agent. This method must be overridden by subclasses
    * to return the correct statically-typed slice array.
@@ -406,7 +395,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const _posthogClient = this.getPosthogClient();
+    const getEstate = pMemoize(() => this.getEstate());
+    const getBraintrustParentSpanExportedId = pMemoize(async () => {
+      const estate = await getEstate();
+      return await this.getOrCreateBraintrustParentSpanExportedId(estate.name);
+    });
+    const posthogClient = pMemoize(async () => {
+      const estate = await getEstate();
+      const stage = getStage({
+        ITERATE_USER: this.env.ITERATE_USER,
+        STAGE__PR_ID: this.env.STAGE__PR_ID,
+        ESTATE_NAME: estate.name,
+      });
+      return new PosthogCloudflare(this.ctx, { estate: estate.name, environment: stage });
+    });
 
     const baseDeps: AgentCoreDeps = {
       getRuleMatchData: (state) => ({
@@ -457,17 +459,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       getOpenAIClient: async () => {
+        const estate = await getEstate();
         return await openAIProvider({
           posthog: {
-            traceId: this.name,
+            estateName: estate.name,
+            environmentName: getStage({
+              STAGE__PR_ID: this.env.STAGE__PR_ID,
+              ITERATE_USER: this.env.ITERATE_USER,
+              ESTATE_NAME: estate.name,
+            }),
+            traceId: `${this.constructor.name}-${this.name}`,
           },
           env: {
             BRAINTRUST_API_KEY: this.env.BRAINTRUST_API_KEY,
             OPENAI_API_KEY: this.env.OPENAI_API_KEY,
             POSTHOG_PUBLIC_KEY: this.env.POSTHOG_PUBLIC_KEY,
           },
-          projectName: `iterate-platform`,
-          braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
+          braintrust: {
+            getBraintrustParentSpanExportedId,
+          },
         });
       },
 
@@ -554,39 +564,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           this.ctx.waitUntil(this.refreshContextRules());
         }
 
-        //   // this.ctx.waitUntil(
-        //     /**
-        //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
-        //      *
-        //      * Unfortunately we hit an issue with the CloudFlare workerd process behaving in an unexpected manner, where fetch() calls would never resolve
-        //      * and so both posthog and braintrust calls would break.
-        //      *
-        //      * We suspect this is related to the way that durable objects handle their own liveliness when handing off to a worker via RPC or Event Queues,
-        //      * causing async work like promises and timers to never process.
-        //      *
-        //      * For more details read this thread:
-        //      * https://iterate-com.slack.com/archives/C06LU7PGK0S/p1754985703369859
-        //      */
-        //     // processPosthogAgentCoreEvent(posthogClient, {
-        //     //   event: `AGENT_CORE_EVENT_ADDED`,
-        //     //   data: {
-        //     //     event,
-        //     //     reducedState,
-        //     //     className: this.constructor.name,
-        //     //     // TODO we don't have the agent instance name here - in the future we will.
-        //     //     // But for now I'm just using the ID to identify the agent instance.
-        //     //     // I think Rahul has some witchcraft in the works to get us the name
-        //     //     agentInstanceName: this.name,
-        //     //     agentDebugURL: getAgentDebugUri({
-        //     //       durableObjectName: this.name,
-        //     //       agentClassName: this.constructor.name,
-        //     //     }),
-        //     //   },
-        //     //   source: {
-        //     //     service: "platform",
-        //     //   },
-        //     // }),
-        //   // );
+        this.ctx.waitUntil(
+          (async () => {
+            const posthog = await posthogClient();
+            return await processPosthogAgentCoreEvent({
+              posthog,
+              data: {
+                event,
+                reducedState,
+              },
+            });
+          })(),
+        );
       },
     };
 
@@ -855,6 +844,30 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return this.state.braintrustParentSpanExportedId;
   }
 
+  // get the braintrust parent span exported id from the state
+  // if it's not set, create it and set it in the state
+  async getOrCreateBraintrustParentSpanExportedId(estateName?: string) {
+    if (this.state.braintrustParentSpanExportedId) {
+      return this.state.braintrustParentSpanExportedId;
+    } else {
+      const projectName = `${getStage({
+        ITERATE_USER: this.env.ITERATE_USER,
+        STAGE__PR_ID: this.env.STAGE__PR_ID,
+        ESTATE_NAME: estateName,
+      })}-platform`;
+      const spanExportedId = await makeBraintrustSpan({
+        braintrustKey: this.env.BRAINTRUST_API_KEY,
+        projectName,
+        spanName: `${this.constructor.name}-${this.name}`,
+      });
+      this.setState({
+        ...this.state,
+        braintrustParentSpanExportedId: spanExportedId,
+      });
+      return spanExportedId;
+    }
+  }
+
   ping() {
     return { message: "pong back at you!" };
   }
@@ -880,17 +893,22 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   doNothing() {
     return {};
   }
-  async getAgentDebugURL() {
+  async getEstate() {
     const estate = await this.db.query.estate.findFirst({
       where: eq(schema.estate.id, this.databaseRecord.estateId),
       columns: {
         organizationId: true,
         id: true,
+        name: true,
       },
     });
     if (!estate) {
       throw new Error("Estate not found");
     }
+    return estate;
+  }
+  async getAgentDebugURL() {
+    const estate = await this.getEstate();
     return {
       debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
     };

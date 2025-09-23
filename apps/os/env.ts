@@ -15,6 +15,8 @@ export type CloudflareEnv = Env & {
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_APP_SLUG: string;
   GITHUB_WEBHOOK_SECRET: string;
+  ITERATE_USER?: string;
+  STAGE__PR_ID?: string;
 };
 
 export const env = _env as CloudflareEnv;

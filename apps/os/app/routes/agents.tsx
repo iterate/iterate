@@ -1645,6 +1645,15 @@ export default function AgentsPage() {
     ),
   );
 
+  // Get Braintrust permalink
+  const { data: braintrustPermalinkResult } = useQuery(
+    trpc.agents.getBraintrustPermalink.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+    }),
+  );
+
   // Filter events
   const filteredEvents = useMemo(() => {
     if (!filters.searchText.trim()) {
@@ -1861,6 +1870,13 @@ export default function AgentsPage() {
                 placeholder="Search events..."
                 count={filteredEvents.length}
                 onCopy={copyAllEventsAsJson}
+                onBrainClick={
+                  braintrustPermalinkResult?.permalink
+                    ? () => {
+                        window.open(braintrustPermalinkResult.permalink, "_blank");
+                      }
+                    : undefined
+                }
               />
             </div>
           )}
