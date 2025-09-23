@@ -19,7 +19,7 @@ export default function SiteFooter() {
             <div className="flex items-center gap-2">
               <SymbolIcon />
               <span className="text-sm text-gray-600">
-                iterate is a registered trademark of Nustom (UK) Limited.{' '}
+                iterate is a registered trademark of Nustom (UK) Limited.{" "}
                 <Link
                   to="https://trademarks.ipo.gov.uk/ipo-tmcase/page/Results/1/UK00004143107"
                   external
@@ -31,12 +31,12 @@ export default function SiteFooter() {
               </span>
             </div>
             <p className="text-xs text-gray-500 leading-relaxed">
-              Disclaimer: This app uses generative AI to assist with operational tasks.
-              AI-generated responses may contain inaccuracies or outdated information.
-              All critical decisions should be validated by a human expert. Note: Your
-              workspace needs to be on a paid slack plan in order to interact with
-              @iterate via Slack's Agent and Assistant view, however users on a free plan
-              can still interact with the bot as they would with any other user.
+              Disclaimer: This app uses generative AI to assist with operational tasks. AI-generated
+              responses may contain inaccuracies or outdated information. All critical decisions
+              should be validated by a human expert. Note: Your workspace needs to be on a paid
+              slack plan in order to interact with @iterate via Slack's Agent and Assistant view,
+              however users on a free plan can still interact with the bot as they would with any
+              other user.
             </p>
           </div>
         </div>

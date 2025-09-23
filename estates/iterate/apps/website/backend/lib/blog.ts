@@ -9,8 +9,8 @@ export interface BlogPost {
 }
 
 function getSlugFromPath(filePath: string): string {
-  const fileName = filePath.split('/').pop() || '';
-  return fileName.replace('.md', '');
+  const fileName = filePath.split("/").pop() || "";
+  return fileName.replace(".md", "");
 }
 
 export async function getSortedPostsData(): Promise<BlogPost[]> {
@@ -26,9 +26,9 @@ export async function getSortedPostsData(): Promise<BlogPost[]> {
         title: matterResult.data.title || slug,
         date: matterResult.data.date || new Date().toISOString(),
         excerpt: matterResult.data.excerpt || "",
-        content: matterResult.content
+        content: matterResult.content,
       };
-    })
+    }),
   );
   return allPostsData.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -47,6 +47,6 @@ export async function getPostData(slug: string): Promise<BlogPost | null> {
     title: matterResult.data.title || slug,
     date: matterResult.data.date || new Date().toISOString(),
     excerpt: matterResult.data.excerpt || "",
-    content: matterResult.content
+    content: matterResult.content,
   };
 }

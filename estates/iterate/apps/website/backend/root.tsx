@@ -13,15 +13,24 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>Iterate</title>
         <link rel="shortcut icon" href={favicon} />
-        <meta name="description" content="Automate operational tasks for your business with Iterate's AI-powered platform" />
+        <meta
+          name="description"
+          content="Automate operational tasks for your business with Iterate's AI-powered platform"
+        />
         <meta property="og:url" content="https://iterate.com/" />
         <meta property="og:type" content="website" />
         <meta property="og:title" content="Iterate" />
-        <meta property="og:description" content="Automate operational tasks for your business with Iterate's AI-powered platform" />
+        <meta
+          property="og:description"
+          content="Automate operational tasks for your business with Iterate's AI-powered platform"
+        />
         <meta property="og:image" content={ogImage} />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="Iterate" />
-        <meta name="twitter:description" content="Automate operational tasks for your business with Iterate's AI-powered platform" />
+        <meta
+          name="twitter:description"
+          content="Automate operational tasks for your business with Iterate's AI-powered platform"
+        />
         <meta name="twitter:image" content={ogImage} />
         <script async src="https://www.googletagmanager.com/gtag/js?id=G-T9SJZX3ECG" />
         <script
@@ -32,16 +41,17 @@ export function Layout({ children }: { children: React.ReactNode }) {
           function gtag(){dataLayer.push(arguments);}
           gtag('js', new Date());
           gtag('config', 'G-T9SJZX3ECG');
-        `
+        `,
           }}
         />
         <Meta />
         <Links />
       </head>
-      <body suppressHydrationWarning className="min-h-screen font-mono text-slate-900 bg-white overflow-x-hidden">
-        <div className="min-h-screen bg-white">
-          {children}
-        </div>
+      <body
+        suppressHydrationWarning
+        className="min-h-screen font-mono text-slate-900 bg-white overflow-x-hidden"
+      >
+        <div className="min-h-screen bg-white">{children}</div>
         <Toaster />
         <script
           defer
