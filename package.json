@@ -7,6 +7,8 @@
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "iterate": "pnpm run --silent os iterate",
+    "os": "pnpm run --filter ./apps/os",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
     "test": "pnpm -r --parallel test",
