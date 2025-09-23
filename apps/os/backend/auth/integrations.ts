@@ -6,7 +6,7 @@ import { setSessionCookie } from "better-auth/cookies";
 import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
@@ -101,25 +101,7 @@ export const integrationsPlugin = () =>
             );
           }
 
-          let state: z.infer<typeof MCPOAuthState>;
-
-          if (stateId) {
-            const rawState = await ctx.context.internalAdapter.findVerificationValue(stateId);
-            if (!rawState) {
-              return ctx.json({ error: "Invalid or expired state" }, { status: 400 });
-            }
-
-            try {
-              state = MCPOAuthState.parse(JSON.parse(rawState.value));
-            } catch (parseError) {
-              console.error("Invalid MCP OAuth state data:", parseError);
-              return ctx.json({ error: "Invalid state data format" }, { status: 400 });
-            }
-          } else {
-            console.warn(
-              "MCP OAuth callback received without state parameter - this is a security risk",
-            );
-
+          if (!stateId) {
             return ctx.json(
               {
                 error: "Missing state parameter",
@@ -132,76 +114,75 @@ export const integrationsPlugin = () =>
             );
           }
 
+          const rawState = await ctx.context.internalAdapter.findVerificationValue(stateId);
+          if (!rawState) {
+            return ctx.json({ error: "Invalid or expired state" }, { status: 400 });
+          }
+
+          const parsedStateResult = MCPOAuthState.safeParse(JSON.parse(rawState.value));
+          if (!parsedStateResult.success) {
+            return ctx.json({ error: "Invalid state data format" }, { status: 400 });
+          }
+
+          const state = parsedStateResult.data;
+
           const {
             var: { db },
           } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
 
-          const estate = await db.query.estate.findFirst({
-            where: eq(schema.estate.id, state.estateId),
-            with: {
-              organization: {
-                with: {
-                  members: true,
-                },
-              },
-            },
-          });
+          const result = await db
+            .select({
+              estate: schema.estate,
+            })
+            .from(schema.estate)
+            .innerJoin(
+              schema.organizationUserMembership,
+              and(
+                eq(schema.organizationUserMembership.organizationId, schema.estate.organizationId),
+                eq(schema.organizationUserMembership.userId, state.userId),
+              ),
+            )
+            .where(eq(schema.estate.id, state.estateId))
+            .limit(1);
 
-          if (!estate) {
+          const estateWithMembership = result[0]?.estate;
+
+          if (!estateWithMembership) {
+            console.error("Estate not found or user not authorized", {
+              estateId: state.estateId,
+              userId: state.userId,
+            });
             return ctx.json({ error: "Estate not found" }, { status: 404 });
-          }
-
-          const isMember = estate.organization.members.some(
-            (member) => member.userId === state.userId,
-          );
-
-          if (!isMember) {
-            return ctx.json(
-              {
-                error: "Something went wrong",
-                debug: {
-                  estateId: state.estateId,
-                  userId: state.userId,
-                  organizationMembers: estate.organization.members.length,
-                },
-              },
-              { status: 403 },
-            );
           }
 
           await ctx.context.internalAdapter.deleteVerificationValue(stateId);
 
           if (state.agentDurableObject) {
-            try {
-              const params = {
-                db,
-                agentInstanceName: state.agentDurableObject.durableObjectName,
-              };
-              const agentStub =
-                state.agentDurableObject.className === "SlackAgent"
-                  ? await SlackAgent.getStubByName(params)
-                  : await IterateAgent.getStubByName(params);
+            const params = {
+              db,
+              agentInstanceName: state.agentDurableObject.durableObjectName,
+            };
+            const agentStub =
+              state.agentDurableObject.className === "SlackAgent"
+                ? await SlackAgent.getStubByName(params)
+                : await IterateAgent.getStubByName(params);
 
-              await agentStub.addEvents([
-                {
-                  type: "MCP:CONNECT_REQUEST",
-                  data: {
-                    serverUrl: state.serverUrl,
-                    mode: state.userId ? "personal" : "company",
-                    userId: state.userId,
-                    integrationSlug: state.integrationSlug,
-                    requiresAuth: true,
-                    reconnect: {
-                      id: "cloudflare-requires-id",
-                      oauthClientId: state.clientId,
-                      oauthCode: code,
-                    },
+            await agentStub.addEvents([
+              {
+                type: "MCP:CONNECT_REQUEST",
+                data: {
+                  serverUrl: state.serverUrl,
+                  mode: state.userId ? "personal" : "company",
+                  userId: state.userId,
+                  integrationSlug: state.integrationSlug,
+                  requiresAuth: true,
+                  reconnect: {
+                    oauthClientId: state.clientId,
+                    oauthCode: code,
                   },
                 },
-              ]);
-            } catch (error) {
-              console.error("Failed to trigger agent reconnect:", error);
-            }
+              },
+            ]);
           }
 
           if (!state.callbackUrl) {

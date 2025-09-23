@@ -281,7 +281,6 @@ export async function handleMCPConnectRequest(
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: formattedServerUrl,
         callbackUrl: finalRedirectUrl,
-        env: { VITE_PUBLIC_URL: import.meta.env.VITE_PUBLIC_URL },
         agentDurableObject,
       })
     : undefined;
@@ -299,7 +298,13 @@ export async function handleMCPConnectRequest(
           headers: formattedHeaders,
         },
       },
-      ...(reconnect && { reconnect }),
+      ...(reconnect && {
+        reconnect: {
+          id: "cloudflare-requires-id",
+          oauthClientId: reconnect.oauthClientId,
+          oauthCode: reconnect.oauthCode,
+        },
+      }),
     };
 
     result = await Promise.race([

@@ -97,9 +97,8 @@ const mcpConnectRequestFields = {
     headers: z.record(z.string(), z.string()).optional(),
     reconnect: z
       .object({
-        id: z.string(),
-        oauthClientId: z.string().optional(),
-        oauthCode: z.string().optional(),
+        oauthClientId: z.string(),
+        oauthCode: z.string(),
       })
       .optional(),
   }),

@@ -55,10 +55,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return env.SLACK_AGENT as unknown as typeof env.ITERATE_AGENT;
   }
 
-  static getClassName(): string {
-    return "SlackAgent";
-  }
-
   protected slackAPI!: WebClient;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK

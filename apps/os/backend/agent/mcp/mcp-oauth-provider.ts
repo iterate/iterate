@@ -11,7 +11,7 @@ import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
 
 /**
  * Inspired by agents SDK implementation https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
- * Durable Object implementation https://github.com/cloudflare/agents/blob/main/packages/agents/src/mcp/do-oauth-client-provider.ts
+ * Durable Object version reference implementation https://github.com/cloudflare/agents/blob/6db2cd6f1497705f8636b1761a2db364d49d4861/packages/agents/src/mcp/do-oauth-client-provider.ts
  */
 export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
@@ -30,11 +30,10 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       integrationSlug: string;
       serverUrl: string;
       callbackUrl: string | undefined;
-      env?: { VITE_PUBLIC_URL?: string };
       agentDurableObject: AgentDurableObjectInfo;
     },
   ) {
-    this.baseUrl = this.params.env?.VITE_PUBLIC_URL || "http://localhost:5173";
+    this.baseUrl = import.meta.env.VITE_PUBLIC_URL;
   }
 
   private get providerId() {
@@ -147,7 +146,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
 
       this.dbAccountId = existingAccount.id;
     } else {
-      await this.params.db.transaction(async (tx) => {
+      const newAccount = await this.params.db.transaction(async (tx) => {
         const [newAccount] = await tx
           .insert(schema.account)
           .values({
@@ -161,13 +160,14 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           })
           .returning();
 
-        this.dbAccountId = newAccount.id;
-
         await tx.insert(schema.estateAccountsPermissions).values({
-          accountId: this.dbAccountId,
+          accountId: newAccount.id,
           estateId: this.params.estateId,
         });
+        return newAccount;
       });
+
+      this.dbAccountId = newAccount.id;
     }
   }
 

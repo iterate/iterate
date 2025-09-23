@@ -142,10 +142,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT;
   }
 
-  static getClassName(): string {
-    return "IterateAgent";
-  }
-
   // Internal helper to get stub from existing database record
   static async getStubFromDatabaseRecord(
     record: AgentInstanceDatabaseRecord,
@@ -186,7 +182,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Get stub for existing agent by name (does not create)
   static async getStubByName(params: { db: DB; agentInstanceName: string }) {
     const { db, agentInstanceName } = params;
-    const className = this.getClassName();
+    const className = this.name;
 
     const record = await db.query.agentInstance.findFirst({
       where: and(
@@ -205,7 +201,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Get stubs for agents by routing key (does not create)
   static async getStubsByRoute(params: { db: DB; routingKey: string; estateId?: string }) {
     const { db, routingKey, estateId } = params;
-    const className = this.getClassName();
+    const className = this.name;
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
@@ -240,7 +236,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     reason?: string;
   }) {
     const { db, estateId, agentInstanceName, reason } = params;
-    const className = this.getClassName();
+    const className = this.name;
 
     let record = await db.query.agentInstance.findFirst({
       where: and(
@@ -297,7 +293,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
-      .find((r) => r.className === this.getClassName() && r.estateId === estateId);
+      .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
       return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
@@ -309,7 +305,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .insert(agentInstance)
       .values({
         estateId,
-        className: this.getClassName(),
+        className: this.name,
         durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
