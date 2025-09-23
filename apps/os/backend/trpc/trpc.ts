@@ -59,18 +59,6 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
 // Protected procedure that requires authentication
 export const protectedProcedure = t.procedure
   .use(({ ctx, next }) => {
-    if (ctx.req.headers.get("x-iterate-service-auth-token") === process.env.SERVICE_AUTH_TOKEN) {
-      return next({
-        ctx: {
-          ...ctx,
-          session: {},
-          user: {},
-        },
-      });
-    }
-    return next();
-  })
-  .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
     }

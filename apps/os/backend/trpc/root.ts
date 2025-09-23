@@ -12,27 +12,30 @@ export const appRouter = router({
   estate: estateRouter,
   estates: estatesRouter,
   user: userRouter,
-  test: publicProcedure.mutation(async ({ ctx }) => {
-    const auth = getAuth(ctx.db);
-    const admin = await auth.api
-      .createUser({
-        body: {
-          email: "admin@example.com",
-          name: "Admin",
-          password: "password",
-          role: "admin",
-        },
+  test: import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
+    ? publicProcedure.mutation(async ({ ctx }) => {
+        const auth = getAuth(ctx.db);
+        const admin = await auth.api
+          .createUser({
+            body: {
+              name: "Admin",
+              email: "admin@example.com",
+              password: "password",
+              role: "admin",
+            },
+            returnHeaders,
+          })
+          .catch(async (e) => {
+            if (e.message.includes("already exists")) {
+              // const users = await auth.api.lis;
+              // return users.users[0];
+              return {};
+            }
+            throw e;
+          });
+        return admin;
       })
-      .catch(async (e) => {
-        if (e.message.includes("already exists")) {
-          // const users = await auth.api.lis;
-          // return users.users[0];
-          return {};
-        }
-        throw e;
-      });
-    return admin;
-  }),
+    : ({} as never),
 });
 
 export type AppRouter = typeof appRouter;

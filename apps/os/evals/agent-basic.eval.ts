@@ -24,24 +24,18 @@ evalite("My Eval", {
   // The task to perform
   // - TODO: Replace with your LLM call
   task: async (input) => {
-    const adminTrpcClient = createTRPCClient<AppRouter>({
-      links: [
-        httpLink({
-          url: "http://localhost:5173/api/trpc",
-          headers: {
-            "x-iterate-service-auth-token": serviceAuthToken,
-          },
-        }),
-      ],
+    const unauthedClient = createTRPCClient<AppRouter>({
+      links: [httpLink({ url: "http://localhost:5173/api/trpc" })],
     });
-    const foo = await adminTrpcClient.test.mutate();
+    const foo = await unauthedClient.test.mutate();
     console.log(foo);
-
-    const lo = await authClient.signIn.email({
-      email: "admin@example.com",
-      password: "password",
+    const lo = await fetch("http://localhost:5173/api/auth/sign-in/email", {
+      method: "POST",
+      body: JSON.stringify({ email: "admin@example.com", password: "password" }),
+      headers: { "Content-Type": "application/json" },
     });
-    console.log(lo);
+    const loData = await lo.text();
+    console.log({ loData });
     // return JSON.stringify(foo);
     // const admin = await authClient.admin.createUser({
     //   email: "test@test.com",
@@ -55,12 +49,13 @@ evalite("My Eval", {
         httpLink({
           url: "http://localhost:5173/api/trpc",
           headers: {
-            Authorization: `Bearer ${lo.data?.token}`,
+            cookie: lo.headers.getSetCookie().join("; "),
           },
         }),
       ],
     });
     const estates = await trpcClient.estates.list.query();
+    console.log({ estates });
     const estateId = estates[0].id;
     return JSON.stringify(estates);
     const result = await trpcClient.agents.list.query({ estateId });
