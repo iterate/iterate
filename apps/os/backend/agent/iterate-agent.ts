@@ -598,7 +598,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
-        getEstateId: () => this.databaseRecord?.estateId || "",
+        getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
