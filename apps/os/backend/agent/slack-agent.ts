@@ -61,12 +61,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     await super.initAfterConstructorBeforeOnStart(params);
 
-    const slackAccessToken = await getSlackAccessTokenForEstate(
-      this.db,
-      this.databaseRecord.estateId,
-    );
+    const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
     if (!slackAccessToken) {
-      throw new Error(`Slack access token not set for estate ${this.databaseRecord.estateId}.`);
+      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
     }
     this.slackAPI = new WebClient(slackAccessToken);
   }
@@ -87,13 +84,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       onEventAdded: <E, S>(payload: {
         event: E;
         reducedState: S;
-        getFinalRedirectUrl?: <S>(payload: {
+        getFinalRedirectUrl?: (payload: {
           durableObjectInstanceName: string;
-          reducedState: S;
         }) => Promise<string | undefined>;
       }) => {
         deps?.onEventAdded?.(payload);
-        const { slackChannelId, slackThreadId } = payload.reducedState as SlackSliceState;
+        const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
         if (!slackChannelId || !slackThreadId) {
           return;
         }
@@ -129,11 +125,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
         }
       },
-      getFinalRedirectUrl: async <S>(_payload: {
-        durableObjectInstanceName: string;
-        reducedState: S;
-      }) => {
+      getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
+      },
+      lazyConnectionDeps: {
+        getDurableObjectInfo: () => this.hydrationInfo,
+        getEstateId: () => this.databaseRecord.estateId,
+        getReducedState: () => this.agentCore.state,
+        getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
+          return await this.getSlackPermalink();
+        },
       },
     };
   }
@@ -438,6 +439,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     let lastUserMessage: any = null;
 
     const events = this.getEventsByType("SLACK:WEBHOOK_EVENT_RECEIVED");
+
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
 

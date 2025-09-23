@@ -532,7 +532,7 @@ function EventDetailsContent({
   agentInstanceName,
   agentClassName,
 }: {
-  event: AgentCoreEvent;
+  event: AgentEvent;
   estateId: string;
   agentInstanceName: string;
   agentClassName: "IterateAgent" | "SlackAgent";
@@ -940,7 +940,7 @@ function ParallelToolGroup({
 }: {
   llmRequestStartEventIndex: number;
   toolCalls: Array<{
-    event: AgentCoreEvent;
+    event: AgentEvent;
     originalIndex: number;
   }>;
   children: React.ReactNode;
@@ -1593,9 +1593,7 @@ export default function AgentsPage() {
     }),
   );
 
-  const [events, setEvents] = useState<AgentCoreEvent[]>(
-    initialEvents as unknown as AgentCoreEvent[],
-  );
+  const [events, setEvents] = useState<AgentEvent[]>(initialEvents as unknown as AgentEvent[]);
 
   // Connect to agent via WebSocket
   const agentConnection = useAgent({
@@ -1657,8 +1655,8 @@ export default function AgentsPage() {
   const groupedEvents = useMemo(() => {
     const groups: Array<{
       type: "single" | "parallel";
-      event?: AgentCoreEvent;
-      events?: Array<{ event: AgentCoreEvent; originalIndex: number }>;
+      event?: AgentEvent;
+      events?: Array<{ event: AgentEvent; originalIndex: number }>;
       originalIndex?: number;
       llmRequestStartEventIndex?: number;
     }> = [];
@@ -1674,7 +1672,7 @@ export default function AgentsPage() {
         const llmRequestStartEventIndex = event.data.llmRequestStartEventIndex;
 
         // Find all events with the same LLM request start event index
-        const parallelEvents: Array<{ event: AgentCoreEvent; originalIndex: number }> = [];
+        const parallelEvents: Array<{ event: AgentEvent; originalIndex: number }> = [];
 
         filteredEvents.forEach((otherEvent, otherIndex) => {
           if (
