@@ -17,6 +17,8 @@ import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   contextRules: ContextRule[];
 };
+import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
+import { getStage } from "../utils/staging.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -47,9 +49,7 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
-import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
-import { getStage } from "../utils/staging.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.

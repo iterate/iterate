@@ -1,7 +1,7 @@
-import type { MergedEventForSlices } from "../agent/agent-core.ts";
-import { PosthogCloudflare } from "./posthog-cloudflare.ts";
 import type { ReactionAddedEvent, ReactionRemovedEvent } from "@slack/types";
+import type { MergedEventForSlices } from "../agent/agent-core.ts";
 import type { SlackAgentSlices } from "../agent/slack-agent.ts";
+import { PosthogCloudflare } from "./posthog-cloudflare.ts";
 
 type AgentEventType = MergedEventForSlices<SlackAgentSlices>["type"];
 type Events = Record<

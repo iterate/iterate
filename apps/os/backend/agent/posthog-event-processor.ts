@@ -1,9 +1,9 @@
+import type { GenericMessageEvent } from "@slack/types";
+import type { OSPosthog } from "../utils/posthog.ts";
+import { SELF_AGENT_DISTINCT_ID } from "../utils/posthog-cloudflare.ts";
 import type { AgentCoreSlice, MergedEventForSlices, MergedStateForSlices } from "./agent-core.ts";
 import type { SlackAgentSlices } from "./slack-agent.ts";
-import type { OSPosthog } from "../utils/posthog.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
-import type { GenericMessageEvent } from "@slack/types";
-import { SELF_AGENT_DISTINCT_ID } from "../utils/posthog-cloudflare.ts";
 
 interface SliceEventData {
   event: MergedEventForSlices<SlackAgentSlices>;
