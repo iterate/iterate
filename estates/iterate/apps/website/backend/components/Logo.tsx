@@ -1,5 +1,5 @@
-import { Link } from "./Link";
 import logoAsset from "../assets/logo.svg?url";
+import { Link } from "./Link";
 
 interface LogoProps {
   width?: number;

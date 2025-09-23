@@ -1,5 +1,5 @@
-import matter from "gray-matter";
 import path from "node:path";
+import matter from "gray-matter";
 
 export interface BlogPost {
   slug: string;

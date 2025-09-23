@@ -6,7 +6,7 @@ interface AnimationPosition {
   opacity: number;
 }
 
-export const getStackedCardPositions = (count: number = 3): AnimationPosition[] => {
+export const getStackedCardPositions = (count = 3): AnimationPosition[] => {
   return Array.from({ length: count }, (_, i) => ({
     z: 30 - (i * 10),
     x: i * 15,
