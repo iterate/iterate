@@ -13,11 +13,11 @@ test("paginates investors", async ({ page }) => {
     return page.locator("#investors > :not(.hidden)").count();
   };
 
-  let _n = await countInvestors(0);
+  let n = await countInvestors(0);
   await page.getByTestId("more-investors").click();
-  _n = await countInvestors(_n);
+  n = await countInvestors(n);
   await page.getByTestId("more-investors").click();
-  _n = await countInvestors(_n);
+  await countInvestors(n);
 });
 
 test("submits email", async ({ page }) => {
@@ -30,7 +30,7 @@ test("submits email", async ({ page }) => {
   await page.locator("input[name=email]").fill("test@example.com");
   await page.locator("input[type=email]").press("Enter");
   await expect(
-    page.getByText("We'll keep you up to date as things progress.", { exact: true }),
+    page.getByText("We'll keep you up to date as things progress.", { exact: true })
   ).toBeInViewport();
   await expect(page.locator("input[name=email]")).toHaveValue("");
 });
@@ -46,8 +46,8 @@ test("shows email error message", async ({ page }) => {
   await page.locator("input[type=email]").press("Enter");
   await expect(
     page.getByText("We hit an error adding you to the waiting list. Please try again.", {
-      exact: true,
-    }),
+      exact: true
+    })
   ).toBeInViewport();
   await expect(page.locator("input[name=email]")).toHaveValue("test@example.com"); // shouldn't clear
 });

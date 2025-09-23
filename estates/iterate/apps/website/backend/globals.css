@@ -7,214 +7,74 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme {
-  --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
-  --font-mono:
-    ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
+    --font-sans: -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
-
-:root {
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
-  --accent-foreground: oklch(0.205 0 0);
-  --destructive: oklch(0.577 0.245 27.325);
-  --destructive-foreground: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
-}
-
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
-}
-
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-card: var(--card);
-  --color-card-foreground: var(--card-foreground);
-  --color-popover: var(--popover);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-primary: var(--primary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-secondary: var(--secondary);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-muted: var(--muted);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-accent: var(--accent);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-destructive: var(--destructive);
-  --color-destructive-foreground: var(--destructive-foreground);
-  --color-border: var(--border);
-  --color-input: var(--input);
-  --color-ring: var(--ring);
-  --color-chart-1: var(--chart-1);
-  --color-chart-2: var(--chart-2);
-  --color-chart-3: var(--chart-3);
-  --color-chart-4: var(--chart-4);
-  --color-chart-5: var(--chart-5);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
-  --color-sidebar: var(--sidebar);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-ring: var(--sidebar-ring);
-}
-
-@layer base {
-  * {
-    @apply border-border outline-ring/50;
-  }
-  body {
-    @apply bg-background text-foreground;
-  }
-}
-
 /* Base styles - minimal overrides only */
 body {
-  font-feature-settings:
-    "kern" 1,
-    "liga" 1,
-    "calt" 1;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  overflow-x: hidden; /* prevent layout from horizontal scroll (dotted shadows) */
+    font-feature-settings: "kern" 1, "liga" 1, "calt" 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow-x: hidden; /* prevent layout from horizontal scroll (dotted shadows) */
 }
-
 /* Prose/Markdown content - ensure consistent styling */
-.prose a {
-  @apply text-blue-600 no-underline border-b border-transparent hover:text-blue-700 hover:border-blue-700;
+.prose a { 
+    @apply text-blue-600 no-underline border-b border-transparent hover:text-blue-700 hover:border-blue-700;
 }
-.prose h1 {
-  @apply -ml-4 pl-4 border-l-2 border-orange-500 font-bold;
+.prose h1 { 
+    @apply -ml-4 pl-4 border-l-2 border-orange-500 font-bold;
 }
-.prose h2 {
-  @apply underline decoration-1 underline-offset-4 decoration-gray-400 font-bold;
+.prose h2 { 
+    @apply underline decoration-1 underline-offset-4 decoration-gray-400 font-bold;
 }
-.prose h3 {
-  @apply font-bold;
+.prose h3 { 
+    @apply font-bold;
 }
-.prose ul {
-  @apply pl-4;
-  list-style-type: "*\2002";
+.prose ul { 
+    @apply pl-4;
+    list-style-type: "*\2002";
 }
-.prose ul ul {
-  list-style-type: "-\2002";
-  @apply mt-4;
+.prose ul ul { 
+    list-style-type: "-\2002";
+    @apply mt-4;
 }
-.prose li::marker {
-  @apply text-slate-900;
+.prose li::marker { 
+    @apply text-slate-900;
 }
-.prose pre {
-  @apply bg-gray-50 border border-gray-200 p-4 rounded-none;
+.prose pre { 
+    @apply bg-gray-50 border border-gray-200 p-4 rounded-none;
 }
-.prose table {
-  @apply text-base text-slate-900 border-collapse w-full;
+.prose table { 
+    @apply text-base text-slate-900 border-collapse w-full;
 }
-.prose thead,
-.prose tr {
-  @apply border-b border-gray-300;
+.prose thead, .prose tr { 
+    @apply border-b border-gray-300;
 }
-.prose th,
-.prose td {
-  @apply px-6 py-4 text-left align-bottom;
+.prose th, .prose td { 
+    @apply px-6 py-4 text-left align-bottom;
 }
-
 /* Terminal cursor animation */
 @keyframes blink {
-  0%,
-  49% {
-    opacity: 1;
-  }
-  50%,
-  100% {
-    opacity: 0;
-  }
+    0%, 49% { opacity: 1; }
+    50%, 100% { opacity: 0; }
 }
-
 .terminal-cursor::after {
-  content: "_";
-  @apply inline-block font-bold;
-  animation: blink 1s infinite;
+    content: '_';
+    @apply inline-block font-bold;
+    animation: blink 1s infinite;
 }
-
 /* ------------------------------------------------------------------
    Iterate site visual system utilities (PlanetScale/Turbopuffer vibe)
    These were lost during refactors; re-introduced to restore visuals.
 ------------------------------------------------------------------- */
-
 :root {
   /* Accent/link + heading mark */
-  --color-accent: #1e9de7; /* PlanetScale-like link blue */
+  --color-accent: #1e9de7;           /* PlanetScale-like link blue */
   --color-accent-hover: #0b6ec5;
-  --color-heading-mark: #f35815; /* Orange left rule */
-  --color-border: #d8dee7; /* Crisp light gray for 1px/2px rules */
+  --color-heading-mark: #f35815;     /* Orange left rule */
+  --color-border: #d8dee7;           /* Crisp light gray for 1px/2px rules */
 }
-
 /* Avoid global anchor coloring to not affect icon buttons etc. */
-
 /* Headline left mark */
 .headline-mark {
   @apply font-bold text-slate-900;
@@ -222,14 +82,12 @@ body {
   padding-left: 1rem;
   margin-left: -1rem;
 }
-
 /* Brutalist card with crisp 2px border */
 .brutal-card {
   @apply bg-white;
   border: 2px solid var(--color-border);
   position: relative;
 }
-
 /* Dotted halftone shadow outside card (bottom + right strips) */
 .brutal-dots {
   position: relative;
@@ -247,18 +105,17 @@ body {
 /* Right strip */
 .brutal-dots::before {
   left: calc(100% + 2px); /* start just outside the 2px border */
-  top: 9px; /* align to 3px grid */
-  bottom: -3px; /* extend 3px beyond to ensure no gap */
-  width: 12px; /* shadow thickness */
+  top: 9px;               /* align to 3px grid */
+  bottom: -3px;           /* extend 3px beyond to ensure no gap */
+  width: 12px;            /* shadow thickness */
 }
 /* Bottom strip */
 .brutal-dots::after {
-  top: calc(100% + 2px); /* start just outside the 2px border */
-  left: 9px; /* align to 3px grid */
-  right: -14px; /* extend fully beneath the 12px right strip (+2px border) */
-  height: 12px; /* shadow thickness */
+  top: calc(100% + 2px);  /* start just outside the 2px border */
+  left: 9px;              /* align to 3px grid */
+  right: -14px;           /* extend fully beneath the 12px right strip (+2px border) */
+  height: 12px;           /* shadow thickness */
 }
-
 /* ASCII-style dashed grid used for tables/teams */
 .dashed-grid {
   display: grid;
@@ -270,186 +127,63 @@ body {
   border-right: 1px dashed var(--color-border);
   border-bottom: 1px dashed var(--color-border);
 }
-
 /* Column helpers */
 /* Responsive column helpers */
 /* 2 cols: 1 col on mobile, 2 on sm+ */
-.dashed-cols-2 {
-  grid-template-columns: 1fr;
+.dashed-cols-2 { grid-template-columns: 1fr; }
+@media (min-width: 640px) { /* sm */
+  .dashed-cols-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
-@media (min-width: 640px) {
-  /* sm */
-  .dashed-cols-2 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 /* 3 cols: 1 col mobile, 2 on sm, 3 on md+ */
-.dashed-cols-3 {
-  grid-template-columns: 1fr;
+.dashed-cols-3 { grid-template-columns: 1fr; }
+@media (min-width: 640px) { /* sm */
+  .dashed-cols-3 { grid-template-columns: repeat(2, minmax(0,1fr)); }
 }
-@media (min-width: 640px) {
-  /* sm */
-  .dashed-cols-3 {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+@media (min-width: 768px) { /* md */
+  .dashed-cols-3 { grid-template-columns: repeat(3, minmax(0,1fr)); }
 }
-@media (min-width: 768px) {
-  /* md */
-  .dashed-cols-3 {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
 /* 4 cols: 2 cols on mobile, 4 on md+ */
-.dashed-cols-4 {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.dashed-cols-4 { grid-template-columns: repeat(2, minmax(0,1fr)); }
+@media (min-width: 768px) { /* md */
+  .dashed-cols-4 { grid-template-columns: repeat(4, minmax(0,1fr)); }
 }
-@media (min-width: 768px) {
-  /* md */
-  .dashed-cols-4 {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
 /* Remove right border on last column cells, responsive */
 /* cols-2: mobile 1 col -> no vertical split; sm 2 cols */
-.dashed-cols-2 .cell:last-child {
-  border-bottom: 0;
-}
+.dashed-cols-2 .cell:last-child { border-bottom: 0; }
 @media (min-width: 640px) {
-  .dashed-cols-2 .cell:nth-child(2n) {
-    border-right: 0;
-  }
+  .dashed-cols-2 .cell:nth-child(2n) { border-right: 0; }
 }
 /* cols-3: mobile 1 col; sm 2 cols; md 3 cols */
 @media (min-width: 640px) {
-  .dashed-cols-3 .cell:nth-child(2n) {
-    border-right: 0;
-  }
+  .dashed-cols-3 .cell:nth-child(2n) { border-right: 0; }
 }
 @media (min-width: 768px) {
-  .dashed-cols-3 .cell:nth-child(3n) {
-    border-right: 0;
-  }
+  .dashed-cols-3 .cell:nth-child(3n) { border-right: 0; }
 }
 /* cols-4: mobile 2 cols; md 4 cols */
-.dashed-cols-4 .cell:nth-child(2n) {
-  border-right: 0;
-}
+.dashed-cols-4 .cell:nth-child(2n) { border-right: 0; }
 @media (min-width: 768px) {
-  .dashed-cols-4 .cell {
-    border-right: 1px dashed var(--color-border);
-  }
-  .dashed-cols-4 .cell:nth-child(4n) {
-    border-right: 0;
-  }
+  .dashed-cols-4 .cell { border-right: 1px dashed var(--color-border); }
+  .dashed-cols-4 .cell:nth-child(4n) { border-right: 0; }
 }
-
 /* Remove bottom border for the last row (responsive) */
 /* cols-2: mobile 1 col -> last-child; sm -> last 2 */
 @media (min-width: 640px) {
-  .dashed-cols-2 .cell:nth-last-child(-n + 2) {
-    border-bottom: 0;
-  }
+  .dashed-cols-2 .cell:nth-last-child(-n+2) { border-bottom: 0; }
 }
 /* cols-3: mobile 1 col -> last-child; sm -> last 2; md -> last 3 */
 @media (min-width: 640px) {
-  .dashed-cols-3 .cell:nth-last-child(-n + 2) {
-    border-bottom: 0;
-  }
+  .dashed-cols-3 .cell:nth-last-child(-n+2) { border-bottom: 0; }
 }
 @media (min-width: 768px) {
-  .dashed-cols-3 .cell:nth-last-child(-n + 3) {
-    border-bottom: 0;
-  }
+  .dashed-cols-3 .cell:nth-last-child(-n+3) { border-bottom: 0; }
 }
 /* cols-4: mobile 2 cols -> last 2; md -> last 4 */
-.dashed-cols-4 .cell:nth-last-child(-n + 2) {
-  border-bottom: 0;
-}
+.dashed-cols-4 .cell:nth-last-child(-n+2) { border-bottom: 0; }
 @media (min-width: 768px) {
-  .dashed-cols-4 .cell:nth-last-child(-n + 4) {
-    border-bottom: 0;
-  }
+  .dashed-cols-4 .cell:nth-last-child(-n+4) { border-bottom: 0; }
 }
-
 /* Blog/legal prose overrides: mono-only and PlanetScale-ish accents */
 .prose {
   font-family: var(--font-mono);
-}
-.prose a {
-  color: var(--color-accent);
-  text-decoration: none;
-  border-bottom: 1px solid transparent;
-}
-.prose a:hover {
-  color: var(--color-accent-hover);
-  border-bottom-color: var(--color-accent-hover);
-}
-.prose h1 {
-  @apply font-bold;
-  border-left: 2px solid var(--color-border);
-  padding-left: 1rem;
-  margin-left: -1rem;
-}
-.prose h2 {
-  @apply font-bold underline decoration-1 underline-offset-4;
-}
-.prose h3 {
-  @apply font-bold;
-}
-.prose pre {
-  @apply bg-gray-50 border border-gray-200 p-4 rounded-none;
-}
-.prose table {
-  @apply text-base text-slate-900 border-collapse w-full;
-}
-.prose thead,
-.prose tr {
-  @apply border-b border-gray-300;
-}
-.prose th,
-.prose td {
-  @apply px-6 py-4 text-left align-bottom;
-}
-
-/* Dotted divider helper */
-.hr-dot-fill hr {
-  border: 0;
-  height: 1px;
-  background-image: repeating-linear-gradient(
-    90deg,
-    rgba(15, 23, 42, 0.25) 0 2px,
-    transparent 2px 8px
-  );
-}
-
-/* Keycap UI for keyboard shortcuts */
-.keycap {
-  display: inline-grid;
-  place-items: center; /* perfectly center text */
-  height: 1.6rem; /* square */
-  width: 1.6rem;
-  padding: 0; /* avoid rectangles */
-  font-size: 0.9rem; /* readable, balanced */
-  line-height: 1;
-  border-radius: 0.5rem; /* soft corners */
-  border: 1px solid rgba(15, 23, 42, 0.2);
-  background: rgba(255, 255, 255, 0.5);
-  color: #0f172a;
-  font-weight: 600;
-  font-family: var(--font-sans);
-  backdrop-filter: saturate(180%) blur(8px);
-  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.12); /* removed top highlight */
-}
-.keycap-invert {
-  border-color: rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.14);
-  color: #fff;
-}
-
-/* Nudge the command symbol to visually match Latin glyphs */
-.keycap[data-key="cmd"] {
-  font-size: 0.9rem;
 }

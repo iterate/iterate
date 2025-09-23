@@ -35,7 +35,7 @@ export default function TasksList() {
     { name: "Set up investor CRM and remember to send investor emails" },
     { name: "Configure a meeting recording bot and connect to knowledge base" },
     {
-      name: "Onboard new employees (options board consent, add to cap table software, sign contract, add to HRIS, provision accounts)",
+      name: "Onboard new employees (options board consent, add to cap table software, sign contract, add to HRIS, provision accounts)"
     },
     { name: "Set up shared mailboxes via Front or Google groups for the public to reach you" },
     { name: "Organize events and get-togethers at your office" },
@@ -90,7 +90,7 @@ export default function TasksList() {
     { name: "Monitor cloud cost spend and alerts" },
     { name: "Manage feature flag rollouts" },
     { name: "Track engineering on-call rotations" },
-    { name: "Coordinate design assets and brand guidelines" },
+    { name: "Coordinate design assets and brand guidelines" }
   ];
   const [visibleCount, setVisibleCount] = useState(initialVisibleCount);
   const [loadMore, setLoadMore] = useState(allTasks.length > initialVisibleCount);

@@ -1,0 +1,19 @@
+import BlogLayout from "../components/BlogLayout.tsx";
+import { Link } from "../components/Link.tsx";
+
+export default function ContactUs() {
+  return (
+    <BlogLayout>
+      <div className="max-w-2xl space-y-6">
+        <h1 className="text-3xl font-bold text-gray-900 headline-mark">Contact Us</h1>
+        <p className="text-gray-700">
+          For any issues or support, email{" "}
+          <Link to="mailto:support@nustom.com" variant="underline" external>
+            support@nustom.com
+          </Link>
+          .
+        </p>
+      </div>
+    </BlogLayout>
+  );
+}

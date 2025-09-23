@@ -10,21 +10,21 @@ const Avatar = forwardRef<HTMLDivElement, AvatarProps>(
     const sizeStyles = {
       sm: "h-10 w-10",
       md: "h-20 w-20",
-      lg: "h-32 w-32",
+      lg: "h-32 w-32"
     };
-
+    
     return (
       <div
         ref={ref}
         className={cn(
           "relative flex shrink-0 overflow-hidden rounded-full bg-white border border-gray-200 aspect-square",
           sizeStyles[size],
-          className,
+          className
         )}
         {...props}
       />
     );
-  },
+  }
 );
 
 Avatar.displayName = "Avatar";
@@ -39,7 +39,7 @@ const AvatarImage = forwardRef<HTMLImageElement, AvatarImageProps>(
       className={cn("aspect-square h-full w-full object-cover", className)}
       {...props}
     />
-  ),
+  )
 );
 
 AvatarImage.displayName = "AvatarImage";
@@ -52,11 +52,11 @@ const AvatarFallback = forwardRef<HTMLDivElement, AvatarFallbackProps>(
       ref={ref}
       className={cn(
         "flex h-full w-full items-center justify-center rounded-full bg-gray-100 text-xl font-semibold text-gray-600",
-        className,
+        className
       )}
       {...props}
     />
-  ),
+  )
 );
 
 AvatarFallback.displayName = "AvatarFallback";

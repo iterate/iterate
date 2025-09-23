@@ -6,19 +6,19 @@ interface LinkProps extends RouterLinkProps {
   variant?: "default" | "underline" | "subtle";
 }
 
-export function Link({
-  children,
-  className,
+export function Link({ 
+  children, 
+  className, 
   external = false,
   variant = "default",
-  ...props
+  ...props 
 }: LinkProps) {
   const baseStyles = "transition-colors";
-
+  
   const variantStyles = {
     default: "text-blue-600 hover:text-blue-700 hover:underline underline-offset-4",
     underline: "text-blue-600 hover:text-blue-700 underline underline-offset-4",
-    subtle: "text-slate-600 hover:text-slate-900 hover:underline underline-offset-4",
+    subtle: "text-slate-600 hover:text-slate-900 hover:underline underline-offset-4"
   };
 
   const linkClassName = cn(baseStyles, variantStyles[variant], className);
