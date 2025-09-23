@@ -38,6 +38,15 @@ export function LoginProviders() {
     }
   };
 
+  const handleTestAdminUserSignIn = async () => {
+    console.log("🚀 Attempting email sign-in...");
+    const result = await authClient.signIn.email({
+      email: "admin@example.com",
+      password: "password",
+    });
+    window.location.href = result.data?.url ?? "/";
+  };
+
   return (
     <div className="w-full space-y-3">
       <Button
@@ -74,6 +83,16 @@ export function LoginProviders() {
       >
         Continue with Slack
       </Button>
+      {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (
+        <Button
+          onClick={handleTestAdminUserSignIn}
+          variant="outline"
+          size="lg"
+          className="w-full h-12 text-base font-medium"
+        >
+          Continue as test admin user
+        </Button>
+      )}
     </div>
   );
 }

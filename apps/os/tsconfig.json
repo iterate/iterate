@@ -13,7 +13,7 @@
     "noImplicitAny": true,
     "noUncheckedIndexedAccess": false,
     "noUnusedLocals": false, // ESLint handles this
-    "noUnusedParameters": true,
+    "noUnusedParameters": false,
     "useUnknownInCatchVariables": true,
     "strict": true,
     "jsx": "react-jsx",

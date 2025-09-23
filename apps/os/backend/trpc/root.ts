@@ -13,28 +13,29 @@ export const appRouter = router({
   estates: estatesRouter,
   user: userRouter,
   test: import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
-    ? publicProcedure.mutation(async ({ ctx }) => {
-        const auth = getAuth(ctx.db);
-        const admin = await auth.api
-          .createUser({
-            body: {
-              name: "Admin",
-              email: "admin@example.com",
-              password: "password",
-              role: "admin",
-            },
-            returnHeaders,
-          })
-          .catch(async (e) => {
-            if (e.message.includes("already exists")) {
-              // const users = await auth.api.lis;
-              // return users.users[0];
-              return {};
-            }
-            throw e;
-          });
-        return admin;
-      })
+    ? {
+        createAdminUser: publicProcedure.mutation(async ({ ctx }) => {
+          const auth = getAuth(ctx.db);
+          const admin = await auth.api
+            .createUser({
+              body: {
+                name: "Admin",
+                email: "admin@example.com",
+                password: "password",
+                role: "admin",
+              },
+            })
+            .catch(async (e) => {
+              if (e.message.includes("already exists")) {
+                // const users = await auth.api.lis;
+                // return users.users[0];
+                return {};
+              }
+              throw e;
+            });
+          return admin;
+        }),
+      }
     : ({} as never),
 });
 
