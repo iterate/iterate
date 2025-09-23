@@ -44,6 +44,8 @@ type IdentityBot = {
   slackBotProfile: BotProfile;
 };
 
+export type Identity = IdentityUser | IdentityAgent | IdentityBot;
+
 export class PosthogCloudflare<
   TEvents extends Record<string, Record<string, unknown>> = Record<string, Record<string, unknown>>,
 > {

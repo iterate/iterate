@@ -100,15 +100,13 @@ export function posthogOpenAIWrapper(
   return new Proxy(openai, {
     get(target, prop) {
       if (prop !== "responses") {
-        // @ts-ignore - string / symbol index signature
-        return target[prop];
+        return target[prop as keyof typeof target];
       }
 
       return new Proxy(target.responses, {
         get(target, prop) {
           if (prop !== "stream") {
-            // @ts-ignore - string / symbol index signature
-            return target[prop];
+            return target[prop as keyof typeof target];
           }
 
           // Intercept the stream method call (same pattern as Braintrust)
@@ -162,8 +160,7 @@ export function posthogOpenAIWrapper(
                       return { done, value };
                     };
                   }
-                  // @ts-ignore - string / symbol index signature
-                  return target[prop];
+                  return target[prop as keyof typeof target];
                 },
               });
             };
@@ -176,8 +173,7 @@ export function posthogOpenAIWrapper(
                   return wrappedGen;
                 }
                 // For method calls, ensure proper 'this' binding to avoid proxy interference
-                // @ts-ignore - string / symbol index signature
-                const value = target[prop];
+                const value = target[prop as keyof typeof target];
                 if (typeof value === "function") {
                   // Bind the method to the original target to preserve private member access
                   return value.bind(target);

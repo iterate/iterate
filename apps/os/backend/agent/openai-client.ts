@@ -4,17 +4,18 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { getBraintrustLogger } from "../utils/braintrust-client.ts";
 import { posthogOpenAIWrapper } from "./posthog-openai-wrapper.ts";
 import { braintrustOpenAIWrapper } from "./braintrust-wrapper.ts";
+import { waitUntil } from "cloudflare:workers";
 
 /**
- * Return a singleton OpenAI client wrapped in Braintrust and PostHog.
+ * Return an OpenAI client wrapped in Braintrust and PostHog.
  */
 export async function openAIProvider(opts: {
   env: {
-    BRAINTRUST_API_KEY: string | null;
     OPENAI_API_KEY: string;
+    BRAINTRUST_API_KEY?: string;
     POSTHOG_PUBLIC_KEY?: string;
   };
-  posthog: {
+  posthog?: {
     estateName: string;
     environmentName: string;
     traceId: string;
@@ -25,25 +26,16 @@ export async function openAIProvider(opts: {
   };
 }): Promise<OpenAI> {
   const { env } = opts;
-  const braintrustKey = env.BRAINTRUST_API_KEY;
-  invariant(
-    braintrustKey ?? braintrustKey === null,
-    "BRAINTRUST_API_KEY is missing from environment",
-  );
 
-  // Optional upstream OpenAI key: allow Braintrust proxy without it for now
   const openAIKey = env.OPENAI_API_KEY;
   invariant(openAIKey, "OPENAI_API_KEY is missing from environment");
 
-  // Create standard OpenAI client
   let openai = new OpenAI({
     apiKey: openAIKey,
   });
 
-  if (env.POSTHOG_PUBLIC_KEY) {
-    const waitUntil = await import("cloudflare:workers")
-      .then((m) => m.waitUntil)
-      .catch(() => (_promise: Promise<void>) => {});
+  if (opts.posthog) {
+    invariant(env.POSTHOG_PUBLIC_KEY, "POSTHOG_PUBLIC_KEY is missing from environment");
     const posthogClient = new PosthogCloudflare(
       { waitUntil },
       { estate: opts.posthog.estateName, environment: opts.posthog.environmentName },
@@ -51,14 +43,10 @@ export async function openAIProvider(opts: {
     openai = posthogOpenAIWrapper(openai, posthogClient, opts.posthog);
   }
 
-  // Apply Braintrust wrapper on top
-  if (braintrustKey && opts.braintrust) {
-    // note: this second import is cached if the first one happened already
-    const waitUntil = await import("cloudflare:workers")
-      .then((m) => m.waitUntil)
-      .catch(() => (_promise: Promise<void>) => {});
+  if (opts.braintrust) {
+    invariant(env.BRAINTRUST_API_KEY, "BRAINTRUST_API_KEY is missing from environment");
     getBraintrustLogger({
-      braintrustKey,
+      braintrustKey: env.BRAINTRUST_API_KEY,
       projectName: opts.braintrust.projectName,
     });
     openai = braintrustOpenAIWrapper({

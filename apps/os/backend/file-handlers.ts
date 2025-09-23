@@ -263,20 +263,11 @@ export const uploadFile = async ({
       db,
       openai: await openAIProvider({
         env: {
-          BRAINTRUST_API_KEY: env.BRAINTRUST_API_KEY || null,
+          BRAINTRUST_API_KEY: env.BRAINTRUST_API_KEY,
           OPENAI_API_KEY: env.OPENAI_API_KEY,
           ...(env.POSTHOG_PUBLIC_KEY && {
             POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY,
           }),
-        },
-        posthog: {
-          estateName: estateId,
-          environmentName: getStage({
-            ITERATE_USER: env.ITERATE_USER,
-            STAGE__PR_ID: env.STAGE__PR_ID,
-            ESTATE_NAME: estateId,
-          }),
-          traceId: `file-upload-${fileId}`,
         },
       }),
     });

@@ -1,6 +1,6 @@
 import type { GenericMessageEvent } from "@slack/types";
 import type { OSPosthog } from "../utils/posthog.ts";
-import { SELF_AGENT_DISTINCT_ID } from "../utils/posthog-cloudflare.ts";
+import { SELF_AGENT_DISTINCT_ID, type Identity } from "../utils/posthog-cloudflare.ts";
 import type { AgentCoreSlice, MergedEventForSlices, MergedStateForSlices } from "./agent-core.ts";
 import type { SlackAgentSlices } from "./slack-agent.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
@@ -30,12 +30,16 @@ export async function processPosthogAgentCoreEvent({
     },
   };
 
+  const { internalUserId, identity } = await getDistinctIdForSliceEventData({
+    data,
+    posthog,
+  });
+
+  posthog.identify(internalUserId, identity);
+
   posthog.track({
     event: `agent:${coreEventTypeLower}`,
-    distinctId: await getDistinctIdForSliceEventData({
-      posthog,
-      data,
-    }),
+    distinctId: internalUserId,
     properties: {
       type: event.type,
       rawEvent,
@@ -53,7 +57,7 @@ async function getDistinctIdForSliceEventData({
 }: {
   data: SliceEventData;
   posthog: OSPosthog;
-}) {
+}): Promise<{ internalUserId: string; identity: Identity }> {
   if (data.event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
     const payload = data.event.data.payload as SlackWebhookPayload;
     const state = data.reducedState;
@@ -68,13 +72,14 @@ async function getDistinctIdForSliceEventData({
       if (event.bot_profile) {
         const id = `BOT[${event.bot_profile.id}]`;
 
-        posthog.identify(id, {
-          type: "bot",
-          name: `Bot: ${event.bot_profile.name}`,
-          slackBotProfile: event.bot_profile,
-        });
-
-        return id;
+        return {
+          internalUserId: id,
+          identity: {
+            type: "bot",
+            name: `Bot: ${event.bot_profile.name}`,
+            slackBotProfile: event.bot_profile,
+          },
+        };
       }
 
       // many times it's a user participant - find participant by Slack user ID
@@ -90,20 +95,16 @@ async function getDistinctIdForSliceEventData({
         }
 
         const [internalUserId, participantData] = participant;
-        posthog.identify(internalUserId, {
-          type: "user",
-          email: participantData.email ?? null,
-        });
-        return internalUserId;
+        return { internalUserId, identity: { type: "user", email: participantData.email ?? null } };
       }
 
-      return "SLACK[UNKNOWN]";
+      return { internalUserId: "SLACK[UNKNOWN]", identity: { type: "user", email: null } };
     }
   }
 
   // for all other events, we mark as Agent
-  posthog.identify(SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estate), {
-    type: "agent",
-  });
-  return SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estate);
+  return {
+    internalUserId: SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estate),
+    identity: { type: "agent" },
+  };
 }

@@ -78,14 +78,12 @@ export function braintrustOpenAIWrapper({
   return new Proxy(openai, {
     get(target, prop) {
       if (prop !== "responses") {
-        // @ts-expect-error
-        return target[prop];
+        return target[prop as keyof typeof target];
       }
       return new Proxy(target.responses, {
         get(target, prop) {
           if (prop !== "stream") {
-            // @ts-expect-error
-            return target[prop];
+            return target[prop as keyof typeof target];
           }
           const _stream = target[prop];
           return <T extends OpenAI.Responses.ResponseCreateParamsStreaming>(
@@ -137,8 +135,7 @@ export function braintrustOpenAIWrapper({
                       return { done, value };
                     };
                   }
-                  // @ts-expect-error
-                  return target[prop];
+                  return target[prop as keyof typeof target];
                 },
               });
             };
@@ -149,8 +146,7 @@ export function braintrustOpenAIWrapper({
                 if (prop === Symbol.asyncIterator) {
                   return wrappedGen;
                 }
-                // @ts-expect-error
-                return target[prop];
+                return target[prop as keyof typeof target];
               },
             });
           };
