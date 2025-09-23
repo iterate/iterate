@@ -211,21 +211,10 @@ export const integrationsRouter = router({
     }
 
     const token = await getGithubInstallationToken(githubInstallation.accountId);
-    const availableRepos = await fetch(`https://api.github.com/installation/repositories`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "User-Agent": "Iterate OS",
-      },
-    });
 
-    if (!availableRepos.ok) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "Failed to fetch available repositories",
-      });
-    }
-
-    const AvailableRepos = z.object({
+    // GitHub API schema for paginated repository response
+    const GitHubReposResponse = z.object({
+      total_count: z.number(),
       repositories: z.array(
         z.object({
           id: z.number(),
@@ -235,8 +224,49 @@ export const integrationsRouter = router({
       ),
     });
 
-    const availableReposData = AvailableRepos.parse(await availableRepos.json());
-    return availableReposData.repositories;
+    const allRepos: z.infer<typeof GitHubReposResponse>["repositories"] = [];
+    let page = 1;
+    const perPage = 100; // Maximum allowed by GitHub
+    let hasMore = true;
+
+    // Fetch all pages of repositories
+    while (hasMore) {
+      const availableRepos = await fetch(
+        `https://api.github.com/installation/repositories?per_page=${perPage}&page=${page}`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "User-Agent": "Iterate OS",
+            Accept: "application/vnd.github+json",
+          },
+        },
+      );
+
+      if (!availableRepos.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to fetch available repositories",
+        });
+      }
+
+      const reposData = GitHubReposResponse.parse(await availableRepos.json());
+      allRepos.push(...reposData.repositories);
+
+      // Check if there are more pages
+      // GitHub returns total_count, so we can check if we've fetched all
+      hasMore = allRepos.length < reposData.total_count;
+      page++;
+
+      // Safety check to prevent infinite loops (max 10 pages = 1000 repos)
+      if (page > 10) {
+        console.warn(
+          `Stopping repository fetch at page ${page - 1} to prevent excessive API calls`,
+        );
+        break;
+      }
+    }
+
+    return allRepos;
   }),
   getGithubRepoForEstate: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
