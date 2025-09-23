@@ -4,7 +4,7 @@
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "os-v2",
+  "name": "os",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./backend/worker.ts",
@@ -71,6 +71,8 @@
       "new_sqlite_classes": ["Sandbox"],
     },
   ],
+  "services": [{ "binding": "SELF", "service": "os" }],
+
   /**
    * Smart Placement
    * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

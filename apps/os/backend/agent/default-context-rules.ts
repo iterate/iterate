@@ -2,6 +2,7 @@
 
 import dedent from "dedent";
 import { z } from "zod/v4";
+import { SearchRequest } from "../default-tools.ts";
 import { defineRule, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 
@@ -183,22 +184,27 @@ export const defaultContextRules = async () => [
         type: "agent_durable_object_tool",
         methodName: "removeSlackReaction",
       },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "uploadAndShareFileInSlack",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "uploadAndShareFileInSlack",
+      },
       {
         type: "agent_durable_object_tool",
         methodName: "updateSlackMessage",
       },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "getUrlContent",
-      // },
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "searchWeb",
-      // },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "getURLContent",
+      },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "searchWeb",
+        overrideInputJSONSchema: z.toJSONSchema(
+          SearchRequest.pick({
+            query: true,
+          }),
+        ),
+      },
 
       // TRPC tools (to be replaced with durable object versions)
       // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
