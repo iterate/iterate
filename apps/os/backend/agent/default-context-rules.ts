@@ -140,6 +140,17 @@ const defaultSlackAgentPrompt = dedent`
 `;
 export const defaultContextRules = async () => [
   defineRule({
+    key: "DO_NOT_MERGE_THIS",
+    prompt: "",
+    match: matchers.always(),
+    tools: [
+      {
+        type: "agent_durable_object_tool",
+        methodName: "reverse",
+      },
+    ],
+  }),
+  defineRule({
     key: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),

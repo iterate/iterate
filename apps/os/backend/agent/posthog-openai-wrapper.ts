@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import { SELF_AGENT_DISTINCT_ID, type PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
+import { formatItemsForObservability } from "../utils/observability-formatter.ts";
 
 // Global trace storage for conversation continuity
 const _traceStorage = new Map<
@@ -48,9 +49,15 @@ export function posthogOpenAIWrapper(
         $ai_trace_id: traceId,
 
         // input/output data
-        $ai_input: input.input,
-        $ai_output_choices: output.filter((o) => o.type === "message"),
+        $ai_input:
+          typeof input.input === "string"
+            ? input.input
+            : input.input
+              ? formatItemsForObservability(input.input)
+              : [],
+        $ai_output_choices: [output],
         $ai_function_calls: output.filter((o) => o.type === "function_call"),
+        $ai_tools: input.tools,
 
         // usage metrics
         $ai_input_tokens: usage?.input_tokens,

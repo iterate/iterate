@@ -1,5 +1,6 @@
 import { startSpan } from "braintrust/browser";
 import type OpenAI from "openai";
+import { formatItemsForObservability } from "../utils/observability-formatter.ts";
 
 export interface OpenAIResponse {
   messages: OpenAI.Responses.ResponseInputItem[];
@@ -30,8 +31,13 @@ export async function logLLMRequestToBraintrust(params: {
   const { input: inputMessages, instructions: _includedAsInputMessage, ...inputMetadata } = input;
 
   span.log({
-    input: inputMessages,
-    output: response.messages,
+    input:
+      typeof inputMessages === "string"
+        ? inputMessages
+        : inputMessages
+          ? formatItemsForObservability(inputMessages)
+          : [],
+    output: formatItemsForObservability(response.messages),
     metadata: {
       ...inputMetadata,
       ...response.metadata,

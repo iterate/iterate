@@ -22,7 +22,6 @@ export async function processPosthogAgentCoreEvent({
     MergedEventForSlices<SlackAgentSlices>["type"]
   >;
 
-  // TODO: decide what we need to actually track
   const { inputItems, ...rest } = data.reducedState;
   const rawEvent = {
     ...data,

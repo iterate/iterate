@@ -61,7 +61,7 @@
     "p-suite": "^0.3.0",
     "partysocket": "^1.1.5",
     "postgres": "^3.4.7",
-    "posthog-node": "^5.8.4",
+    "posthog-node": "^5.8.6",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-day-picker": "^9.10.0",
