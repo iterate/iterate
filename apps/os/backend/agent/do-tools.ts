@@ -1,5 +1,8 @@
 import { z } from "zod";
 import type { JSONSchema } from "zod/v4/core";
+import type { AgentDurableObjectToolSpec, ToolSpec } from "./tool-schemas.ts";
+import type { iterateAgentTools } from "./iterate-agent-tools.ts";
+import type { slackAgentTools } from "./slack-agent-tools.ts";
 
 export type RuntimeJsonSchema = {
   type: "query" | "mutation" | "subscription";
@@ -87,4 +90,19 @@ export function doToolToRuntimeJsonSchema(_value: unknown) {
     }),
   };
   return runtimeJsonSchema;
+}
+
+export type AgentDOToolMethodName<TClassName extends "SlackAgent" | "IterateAgent"> =
+  TClassName extends "SlackAgent" ? keyof typeof slackAgentTools : keyof typeof iterateAgentTools;
+
+export function agentDOTool<TClassName extends "SlackAgent" | "IterateAgent">(
+  tool: Omit<AgentDurableObjectToolSpec, "type"> & {
+    className: TClassName;
+    methodName: AgentDOToolMethodName<TClassName>;
+  },
+): ToolSpec {
+  return {
+    type: "agent_durable_object_tool",
+    ...tool,
+  };
 }
