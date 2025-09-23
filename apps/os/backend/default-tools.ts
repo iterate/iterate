@@ -196,9 +196,7 @@ const ContentsRequestInput = z
     urls: z.array(z.string().url()).describe("Array of URLs to extract content from"),
     ids: z
       .array(z.string())
-      .describe(
-        "Deprecated - use 'urls' instead. Array of document IDs from previous searches",
-      )
+      .describe("Deprecated - use 'urls' instead. Array of document IDs from previous searches")
       .optional(),
   })
   .merge(ContentsOptions);
@@ -296,9 +294,7 @@ async function callExaEndpoint<Schema extends z.ZodTypeAny>(
   return schema.parse(data);
 }
 
-function isFulfilled<T>(
-  result: PromiseSettledResult<T>,
-): result is PromiseFulfilledResult<T> {
+function isFulfilled<T>(result: PromiseSettledResult<T>): result is PromiseFulfilledResult<T> {
   return result.status === "fulfilled";
 }
 
@@ -555,7 +551,11 @@ async function getURLContentFromWebpage(params: {
     if (isFulfilled(screenshotResult)) {
       const screenshotPayload = screenshotResult.value?.content?.[0];
 
-      if (screenshotPayload?.type === "image" && "data" in screenshotPayload && screenshotPayload.data) {
+      if (
+        screenshotPayload?.type === "image" &&
+        "data" in screenshotPayload &&
+        screenshotPayload.data
+      ) {
         const screenshotBytes = Buffer.from(screenshotPayload.data, "base64");
         const screenshotFilename = `screenshot-${randomUUID()}.png`;
 
