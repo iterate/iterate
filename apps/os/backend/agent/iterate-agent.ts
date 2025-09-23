@@ -538,9 +538,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
           this.ctx.waitUntil(
             (async () => {
-              if (!this.databaseRecord) {
-                throw new Error("Database record not found");
-              }
               if (reducedState.mcpConnections) {
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
