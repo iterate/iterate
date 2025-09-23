@@ -118,3 +118,20 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* CodeMirror search panel sticky positioning */
+.cm-SerializedObjectCodeBlock .cm-search.cm-panel {
+  position: fixed;
+  top: 0;
+  z-index: 10;
+  background: grey;
+}
+
+/* Ensure the CodeMirror editor container allows for sticky positioning */
+.cm-editor {
+  position: relative !important;
+}
+
+.cm-scroller {
+  overflow: auto !important;
+}

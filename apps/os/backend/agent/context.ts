@@ -1,5 +1,7 @@
 import { dirname, join, resolve } from "path";
-import { globSync, readFileSync, accessSync } from "fs";
+import { readFileSync, accessSync } from "fs";
+import { fileURLToPath } from "url";
+import { globSync } from "glob";
 import jsonataLib from "jsonata/sync";
 import type {
   ContextRule,
@@ -348,9 +350,10 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     if (!configDir) {
       throw new Error("iterate.config.ts not found");
     }
-    const files = globSync(pattern, { cwd: configDir });
-    return files.map((filePath) => {
+    const files = globSync(pattern, { cwd: configDir }) as string[];
+    return files.map((filePath: string) => {
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
+      console.log("fileContent", fileContent);
       // Get relative path from config directory and remove .md extension
       return defineRule({
         key: filePath.replace(/\.md$/, ""),
@@ -365,37 +368,69 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
 }
 
 const findIterateConfig = (root: string = process.cwd()): string | null => {
-  let currentDir = resolve(root);
-  const rootDir = resolve("/");
+  // 1) If provided, honor explicit env var path
+  const envPath = process.env.ITERATE_CONFIG_PATH;
+  if (envPath) {
+    const candidates = [
+      resolve(root, envPath),
+      // common when running from apps/os and providing repo-root-relative path
+      resolve(root, "..", "..", envPath),
+    ];
+    for (const candidate of candidates) {
+      try {
+        accessSync(candidate);
+        return dirname(candidate);
+      } catch {
+        // try next candidate
+      }
+    }
+  }
 
-  while (currentDir !== rootDir) {
-    const configPath = join(currentDir, "iterate.config.ts");
+  // 2) Try to infer from the call stack (works when called from iterate.config.ts)
+  try {
+    const stack = new Error().stack ?? "";
+    const lines = stack.split("\n");
+    for (const line of lines) {
+      if (!line.includes("iterate.config.ts")) continue;
 
-    try {
-      // Check if the file exists
-      accessSync(configPath);
-      // If we get here, the file exists
-      return currentDir;
-    } catch {
-      // File doesn't exist in this directory, move up
-      const parentDir = dirname(currentDir);
-
-      // Prevent infinite loop by checking if we've reached the same directory
-      if (parentDir === currentDir) {
-        break;
+      // file URL form
+      const fileUrlMatch = line.match(/(file:\/\/[^^\s)]+?\/iterate\.config\.ts)/);
+      if (fileUrlMatch) {
+        const abs = fileURLToPath(fileUrlMatch[1]);
+        return dirname(resolve(abs));
       }
 
+      // POSIX absolute path
+      const posixMatch = line.match(/(\/[^^\s)]+?\/iterate\.config\.ts)/);
+      if (posixMatch) {
+        return dirname(resolve(posixMatch[1]));
+      }
+
+      // Windows absolute path
+      const winMatch = line.match(/([A-Za-z]:\\[^\s)]+?\\iterate\.config\.ts)/);
+      if (winMatch) {
+        return dirname(resolve(winMatch[1]));
+      }
+    }
+  } catch {
+    // ignore call stack parsing errors
+  }
+
+  // 3) Fallback: walk upwards from cwd (works if cwd is the estate dir)
+  let currentDir = resolve(root);
+  const rootDir = resolve("/");
+  while (currentDir !== rootDir) {
+    const configPath = join(currentDir, "iterate.config.ts");
+    try {
+      accessSync(configPath);
+      return currentDir;
+    } catch {
+      const parentDir = dirname(currentDir);
+      if (parentDir === currentDir) break;
       currentDir = parentDir;
     }
   }
 
-  // Check root directory as final attempt
-  try {
-    const rootConfigPath = join(rootDir, "iterate.config.ts");
-    accessSync(rootConfigPath);
-    return rootDir;
-  } catch {
-    // Config file not found anywhere
-    return null;
-  }
+  // 4) Not found
+  return null;
 };

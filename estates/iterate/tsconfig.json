@@ -1,0 +1,4 @@
+{
+  "extends": "@iterate-com/sdk/tsconfig.json",
+  "exclude": ["apps/website"]
+}

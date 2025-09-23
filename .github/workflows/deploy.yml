@@ -56,3 +56,9 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run deploy
         working-directory: apps/os
+
+      - name: Deploy Website
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm run deploy
+        working-directory: estates/iterate/apps/website

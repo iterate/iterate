@@ -44,7 +44,7 @@ import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { ContextRule } from "./context-schemas.ts";
+import { ContextRule } from "./context-schemas.ts";
 import type { MCPServer } from "./tool-schemas.ts";
 
 // Commented imports (preserved for reference)
@@ -534,9 +534,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
           this.ctx.waitUntil(
             (async () => {
-              if (!this.databaseRecord) {
-                throw new Error("Database record not found");
-              }
               if (reducedState.mcpConnections) {
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
@@ -597,7 +594,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
-        getEstateId: () => this.databaseRecord?.estateId || "",
+        getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
@@ -634,7 +631,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
-    const rules = await this.getContextRules();
+    const rules = ContextRule.array().parse(await this.getContextRules());
     return {
       type: "CORE:ADD_CONTEXT_RULES",
       data: { rules },
