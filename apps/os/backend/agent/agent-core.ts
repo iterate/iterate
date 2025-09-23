@@ -194,7 +194,7 @@ export interface AgentCoreSlice<Spec extends AgentCoreSliceSpec = AgentCoreSlice
   eventSchema: SliceEventSchemaOf<Spec>;
   /** Zod schema for input events (defaults to `eventSchema`) */
   eventInputSchema: SliceEventInputSchemaOf<Spec>;
-  /** Async reducer returning partial state updates */
+  /** Reducer returning partial state updates */
   reduce(
     state: Readonly<
       CoreReducedState<z.input<SliceEventInputSchemaOf<Spec>>> &
@@ -322,7 +322,7 @@ export class AgentCore<
     // todo: figure out how to deduplicate these in case of name collisions?
     next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
 
-    return next as unknown as MergedStateForSlices<Slices> &
+    return next as MergedStateForSlices<Slices> &
       MergedStateForSlices<CoreSlices> &
       AugmentedCoreReducedState;
   }
