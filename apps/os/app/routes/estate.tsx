@@ -231,6 +231,9 @@ function EstateContent() {
   const disconnectGithubRepoMutation = useMutation(
     trpc.integrations.disconnectGithubRepo.mutationOptions({}),
   );
+  const startGithubAppInstallFlowMutation = useMutation(
+    trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
+  );
   const handleConnectRepo = () => {
     if (!displaySelectedRepo) {
       toast.error("Please select a repository");
@@ -270,6 +273,17 @@ function EstateContent() {
   const handleGoToGitHub = () => {
     // Open GitHub
     window.open("https://github.com", "_blank");
+  };
+
+  const handleConnectGitHub = async () => {
+    try {
+      const { installationUrl } = await startGithubAppInstallFlowMutation.mutateAsync({
+        estateId: estateId!,
+      });
+      window.location.href = installationUrl;
+    } catch (error) {
+      toast.error("Failed to start GitHub connection flow");
+    }
   };
 
   const toggleBuildExpanded = (buildId: string) => {
@@ -425,7 +439,7 @@ function EstateContent() {
               <ArrowRight className="h-4 w-4 ml-3" />
             </Button>
           </div>
-        ) : (
+        ) : repos && repos.length > 0 ? (
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -505,6 +519,32 @@ function EstateContent() {
                 )}
               </Button>
             </div>
+          </div>
+        ) : (
+          // GitHub not connected - show connect button
+          <div className="space-y-4">
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+              <p className="text-sm text-amber-800 dark:text-amber-200">
+                GitHub is not connected. Connect your GitHub account to select a repository.
+              </p>
+            </div>
+            <Button
+              onClick={handleConnectGitHub}
+              disabled={startGithubAppInstallFlowMutation.isPending}
+              className="w-full bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold"
+            >
+              {startGithubAppInstallFlowMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  Connect GitHub
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </>
+              )}
+            </Button>
           </div>
         )}
 
