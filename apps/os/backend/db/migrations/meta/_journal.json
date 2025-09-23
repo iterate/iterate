@@ -64,6 +64,13 @@
       "when": 1758317063885,
       "tag": "0008_useful_wallop",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1758621519299,
+      "tag": "0009_omniscient_blindfold",
+      "breakpoints": true
     }
   ]
 }

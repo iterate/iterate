@@ -1,7 +1,5 @@
-// @ts-nocheck
-
 import { describe, expect, it } from "vitest";
-// import { getMentionedExternalUserIds, isBotMentionedInMessage } from "./slack-agent-utils.ts";
+import { getMentionedExternalUserIds, isBotMentionedInMessage } from "./slack-agent-utils.ts";
 
 describe.skip("slack-helpers mentions", () => {
   it("extracts user IDs from <@ID>", () => {

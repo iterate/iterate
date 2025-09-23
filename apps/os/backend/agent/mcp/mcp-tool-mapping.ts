@@ -5,6 +5,7 @@ import type { LocalFunctionRuntimeTool } from "../tool-schemas.ts";
 import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
+import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { lazyConnectMCPServer, mcpManagerCache } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import type { MCPEventHookReturnEvent } from "./mcp-event-hooks.ts";
@@ -334,12 +335,11 @@ export function generateRuntimeToolsFromConnections(
 
 // Lazy connection dependencies interface
 export interface LazyConnectionDeps {
-  agentDurableObjectId: string;
-  getAgentDurableObjectName: () => string; // Made lazy to avoid early access
+  getDurableObjectInfo: () => AgentDurableObjectInfo;
+  getEstateId: () => string;
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: MergedStateForSlices<CoreAgentSlices>;
   }) => Promise<string | undefined>;
 }
 
@@ -454,8 +454,8 @@ export function createRuntimeToolFromMCPTool(params: {
         const result = await lazyConnectMCPServer({
           connectionKey: selectedConnectionKey,
           connection,
-          agentDurableObjectId: params.lazyConnectionDeps.agentDurableObjectId,
-          agentDurableObjectName: params.lazyConnectionDeps.getAgentDurableObjectName(),
+          agentDurableObject: params.lazyConnectionDeps.getDurableObjectInfo(),
+          estateId: params.lazyConnectionDeps.getEstateId(),
           reducedState: reducedState,
           getFinalRedirectUrl: params.lazyConnectionDeps.getFinalRedirectUrl,
         });

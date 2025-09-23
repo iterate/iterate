@@ -171,9 +171,8 @@ export interface AgentCoreDeps {
   /**
    * Optional hook to get the final redirect URL for any authorization flows.
    */
-  getFinalRedirectUrl?: <S>(payload: {
+  getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
-    reducedState: S;
   }) => Promise<string | undefined>;
   /** Provided console instance */
   console: Console;
@@ -1331,6 +1330,15 @@ export class AgentCore<
     }
 
     return this.augmentState(tempState);
+  }
+
+  /**
+   * Get the final redirect URL for authorization flows.
+   */
+  async getFinalRedirectUrl(payload: {
+    durableObjectInstanceName: string;
+  }): Promise<string | undefined> {
+    return this.deps.getFinalRedirectUrl?.(payload);
   }
 }
 

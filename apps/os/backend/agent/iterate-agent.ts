@@ -337,17 +337,24 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   protected db: DB;
   // Runtime slice list – inferred from the generic parameter.
   agentCore!: AgentCore<Slices, CoreAgentSlices>;
-  databaseRecord!: AgentInstanceDatabaseRecord;
+  _databaseRecord?: AgentInstanceDatabaseRecord;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     const { record } = params;
-    this.databaseRecord = record;
+    this._databaseRecord = record;
   }
 
   initialState = {
     reminders: {},
   };
+
+  get databaseRecord() {
+    if (!this._databaseRecord) {
+      throw new Error("Database record not found");
+    }
+    return this._databaseRecord;
+  }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
@@ -516,10 +523,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         return `${this.env.VITE_PUBLIC_URL}/api/uploads/${fileId}`;
       },
 
-      getFinalRedirectUrl: async <S>(payload: {
-        durableObjectInstanceName: string;
-        reducedState: S;
-      }) => {
+      getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
         return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
       },
 
@@ -544,13 +548,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                 const eventsToAdd = await runMCPEventHooks({
                   event: mcpEvent,
                   reducedState,
-                  agentDurableObjectId: this.ctx.id.toString(),
-                  agentDurableObjectName: this.name,
+                  agentDurableObject: this.hydrationInfo,
+                  estateId: this.databaseRecord.estateId,
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
 
                 for (const eventToAdd of eventsToAdd) {
-                  await this.agentCore.addEvent(eventToAdd);
+                  this.agentCore.addEvent(eventToAdd);
                 }
               }
             })(),
@@ -577,6 +581,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           })(),
         );
       },
+      lazyConnectionDeps: {
+        getDurableObjectInfo: () => this.hydrationInfo,
+        getEstateId: () => this.databaseRecord.estateId,
+        getReducedState: () => this.agentCore.state,
+        getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
+          return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
+        },
+      },
     };
 
     const extraDeps = this.getExtraDependencies(baseDeps);
@@ -597,6 +609,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected getExtraDependencies(_deps: AgentCoreDeps): Partial<MergedDepsForSlices<Slices>> {
     return {};
+  }
+
+  get hydrationInfo() {
+    return {
+      durableObjectId: this.ctx.id.toString(),
+      durableObjectName: this.databaseRecord.durableObjectName,
+      className: this.constructor.name,
+    };
   }
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
@@ -1100,16 +1120,30 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eventIndex: 0,
         createdAt: new Date().toISOString(),
       },
-      agentDurableObjectId: this.ctx.id.toString(),
-      agentDurableObjectName: this.name,
+      agentDurableObject: this.hydrationInfo,
+      estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
+      getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+      // Extract error details from events
+      const errorDetails = events
+        .map((e) => {
+          if (e.type === "MCP:CONNECTION_ERROR") {
+            return `${e.type}: ${e.data.error}`;
+          } else if (e.type === "MCP:OAUTH_REQUIRED") {
+            return `${e.type}: OAuth required - ${e.data.oauthUrl}`;
+          } else {
+            return e.type;
+          }
+        })
+        .join("; ");
+
       return {
         __addAgentCoreEvents: events,
         success: false,
-        message: `Failed to add MCP server: ${input.serverUrl} (Got ${events.length} events: ${events.map((e) => e.type).join(", ")})`,
+        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
         addedMcpServer: mcpServer,
       };
     }
