@@ -1,4 +1,4 @@
-import path from "node:path";
+// Using URL API instead of node:path for browser compatibility
 import matter from "gray-matter";
 
 export interface BlogPost {
@@ -15,16 +15,16 @@ export async function getSortedPostsData(): Promise<BlogPost[]> {
   const allPostsData = await Promise.all(
     entries.map(async ([filePath, getContent]) => {
       const content = await getContent();
-      const slug = path.basename(filePath, ".md");
+      const slug = filePath.split("/").pop()?.replace(".md", "") || "";
       const matterResult = matter(content);
       return {
         slug,
         title: matterResult.data.title || slug,
         date: matterResult.data.date || new Date().toISOString(),
         excerpt: matterResult.data.excerpt || "",
-        content: matterResult.content
+        content: matterResult.content,
       };
-    })
+    }),
   );
   return allPostsData.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -43,6 +43,6 @@ export async function getPostData(slug: string): Promise<BlogPost | null> {
     title: matterResult.data.title || slug,
     date: matterResult.data.date || new Date().toISOString(),
     excerpt: matterResult.data.excerpt || "",
-    content: matterResult.content
+    content: matterResult.content,
   };
 }

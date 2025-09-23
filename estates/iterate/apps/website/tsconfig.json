@@ -21,5 +21,5 @@
     "types": ["@cloudflare/workers-types", "vite/client"]
   },
   "include": ["backend/**/*", "backend/**/*.tsx", "backend/**/*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "dist"]
 }

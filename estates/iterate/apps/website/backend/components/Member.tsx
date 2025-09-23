@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { cn } from "../utils/cn.ts";
-import { TwitterIcon, LinkedInIcon } from "./Icons";
+import { TwitterIcon, LinkedInIcon } from "./Icons.tsx";
 
 interface Social {
   x?: string;
@@ -21,7 +21,11 @@ export default function Member({ image, name, companyRole, social, className }: 
       <div className="flex items-start gap-3">
         <div className="relative flex h-12 w-12 shrink-0 overflow-hidden rounded-full bg-gray-100 aspect-square select-none pointer-events-none">
           {image ? (
-            <img src={image} alt={name} className="aspect-square h-full w-full object-cover bg-center" />
+            <img
+              src={image}
+              alt={name}
+              className="aspect-square h-full w-full object-cover bg-center"
+            />
           ) : (
             <div className="flex h-full w-full items-center justify-center text-sm font-semibold text-gray-600">
               {name.split(" ").map((n) => n[0])}

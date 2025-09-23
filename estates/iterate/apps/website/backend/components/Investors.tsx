@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../utils/cn.ts";
-import { Button } from "./Button";
-import { Grid, GridItem } from "./Grid";
+import { Button } from "./Button.tsx";
+// Removed unused Grid imports
 
 interface Investor {
   name: string;
@@ -18,7 +18,7 @@ export default function Investors() {
     {
       name: "Index Ventures",
       role: "Carlos Gonzales-Cadenaz",
-      url: "https://www.indexventures.com"
+      url: "https://www.indexventures.com",
     },
     { name: "Lachy Groom", role: "LFG Fund", url: "https://twitter.com/lachygroom" },
     { name: "Max Mullen", role: "Co-founder of Instacart", url: "https://www.instacart.com" },
@@ -39,14 +39,14 @@ export default function Investors() {
     {
       name: "Anu Hariharan",
       role: "Founder of Avracap",
-      url: "https://www.ycombinator.com/continuity"
+      url: "https://www.ycombinator.com/continuity",
     },
     { name: "Ben Firshman", role: "CEO of Replicate", url: "https://replicate.com" },
     { name: "Box Group", role: "David Tisch", url: "https://www.boxgroup.com" },
     {
       name: "Chi-Hua Chien",
       role: "Partner at Goodwater Capital",
-      url: "https://www.goodwatercap.com"
+      url: "https://www.goodwatercap.com",
     },
     { name: "Colin Sidoti", role: "CEO of Clerk", url: "https://www.clerk.com" },
     { name: "Darby Wong", role: "CEO of Clerky", url: "https://www.clerky.com" },
@@ -54,7 +54,7 @@ export default function Investors() {
     {
       name: "Eileen Burbidge",
       role: "Partner at Passion Capital",
-      url: "https://www.passioncapital.com"
+      url: "https://www.passioncapital.com",
     },
     { name: "General Catalyst", role: "Adam Valkin", url: "https://www.generalcatalyst.com" },
     { name: "James Tamplin", role: "Co-founder of Firebase", url: "https://firebase.google.com" },
@@ -65,7 +65,7 @@ export default function Investors() {
     {
       name: "Matt Clifford",
       role: "Co-founder of Entrepreneur First",
-      url: "https://www.joinef.com"
+      url: "https://www.joinef.com",
     },
     { name: "Mehdi Ghissassi", role: "Product Lead at DeepMind", url: "https://deepmind.com" },
     { name: "Mike Hudack", role: "CEO of Sling", url: "https://sling.com" },
@@ -73,7 +73,7 @@ export default function Investors() {
     {
       name: "Nathalie McGrath",
       role: "Co-founder of The People Design House",
-      url: "https://coinbase.com"
+      url: "https://coinbase.com",
     },
     { name: "Olivier Pomel", role: "CEO of Datadog", url: "https://www.datadoghq.com" },
     { name: "Paul Coppelstone", role: "CEO of Supabase", url: "https://supabase.com" },
@@ -83,7 +83,7 @@ export default function Investors() {
     { name: "Shruti Challa", role: "CRO at Sonder", url: "https://www.sonder.com" },
     { name: "Soleio.vc", role: "Design Angel", url: "https://soleio.com" },
     { name: "Stephen Whitworth", role: "CEO of Incident.io", url: "https://incident.io" },
-    { name: "Tom Blomfield", role: "Partner at Y Combinator", url: "https://monzo.com" }
+    { name: "Tom Blomfield", role: "Partner at Y Combinator", url: "https://monzo.com" },
   ];
   const [visibleCount, setVisibleCount] = useState(pageSize - 1);
   const [loadMore, setLoadMore] = useState(allInvestors.length > pageSize);
@@ -98,7 +98,7 @@ export default function Investors() {
   return (
     <section id="investors">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 border border-dashed border-gray-300 overflow-hidden">
-        {allInvestors.slice(0, visibleCount).map(({ name, role }, index) => {
+        {allInvestors.slice(0, visibleCount).map(({ name, role }) => {
           return (
             <motion.div
               key={name}
@@ -106,7 +106,7 @@ export default function Investors() {
                 "p-4 border-r border-b border-dashed border-gray-300 -mb-[1px]",
                 "[&:nth-child(2n)]:border-r-0",
                 "sm:[&:nth-child(2n)]:border-r sm:[&:nth-child(3n)]:border-r-0",
-                "lg:[&:nth-child(3n)]:border-r lg:[&:nth-child(4n)]:border-r-0"
+                "lg:[&:nth-child(3n)]:border-r lg:[&:nth-child(4n)]:border-r-0",
               )}
               initial={{ opacity: 0, translateY: -20 }}
               animate={{ opacity: 1, translateY: 0 }}
@@ -118,12 +118,14 @@ export default function Investors() {
           );
         })}
         {loadMore && (
-          <div className={cn(
-            "p-4 border-r border-b border-dashed border-gray-300 -mb-[1px]",
-            "[&:nth-child(2n)]:border-r-0",
-            "sm:[&:nth-child(2n)]:border-r sm:[&:nth-child(3n)]:border-r-0",
-            "lg:[&:nth-child(3n)]:border-r lg:[&:nth-child(4n)]:border-r-0"
-          )}>
+          <div
+            className={cn(
+              "p-4 border-r border-b border-dashed border-gray-300 -mb-[1px]",
+              "[&:nth-child(2n)]:border-r-0",
+              "sm:[&:nth-child(2n)]:border-r sm:[&:nth-child(3n)]:border-r-0",
+              "lg:[&:nth-child(3n)]:border-r lg:[&:nth-child(4n)]:border-r-0",
+            )}
+          >
             <Button
               variant="ghost"
               size="sm"

@@ -10,7 +10,7 @@ export async function loader() {
 }
 
 export default function BlogPage() {
-  const { posts } = useLoaderData();
+  const { posts } = useLoaderData<typeof loader>();
 
   return (
     <BlogLayout>
@@ -18,7 +18,7 @@ export default function BlogPage() {
         <h1 className="text-3xl font-bold mb-8 text-gray-900 headline-mark">Blog</h1>
 
         <div className="grid gap-4">
-          {posts.map((post) => (
+          {posts.map((post: any) => (
             <article
               key={post.slug}
               className="bg-white p-5 border-2 border-gray-300 hover:shadow-sm transition-all"
@@ -27,20 +27,14 @@ export default function BlogPage() {
                 <h2 className="text-xl font-semibold mb-2 text-gray-900 group-hover:text-blue-600 transition-colors">
                   {post.title}
                 </h2>
-                {post.excerpt && (
-                  <p className="text-gray-600 mb-2">{post.excerpt}</p>
-                )}
-                <time className="text-sm text-gray-500">
-                  {formatDate(post.date)}
-                </time>
+                {post.excerpt && <p className="text-gray-600 mb-2">{post.excerpt}</p>}
+                <time className="text-sm text-gray-500">{formatDate(post.date)}</time>
               </Link>
             </article>
           ))}
 
           {posts.length === 0 && (
-            <p className="text-gray-600">
-              No blog posts yet. Check back soon!
-            </p>
+            <p className="text-gray-600">No blog posts yet. Check back soon!</p>
           )}
         </div>
       </div>

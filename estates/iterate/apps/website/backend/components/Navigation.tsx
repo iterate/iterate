@@ -1,5 +1,5 @@
 import { useLocation } from "react-router";
-import { Link } from "./Link";
+import { Link } from "./Link.tsx";
 
 export default function Navigation() {
   const { pathname } = useLocation();
@@ -11,14 +11,14 @@ export default function Navigation() {
   return (
     <nav className="flex items-center gap-4 sm:gap-6 text-sm flex-wrap">
       {navItems.map((item) => {
-        const isActive = pathname.startsWith(item.href.replace('/#','/'));
+        const isActive = pathname.startsWith(item.href.replace("/#", "/"));
         return (
           <Link
             key={item.href}
             to={item.href}
-            variant={isActive ? 'underline' : 'default'}
+            variant={isActive ? "underline" : "default"}
             className="font-medium"
-            aria-current={isActive ? 'page' : undefined}
+            aria-current={isActive ? "page" : undefined}
           >
             {item.label}
           </Link>
