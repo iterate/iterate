@@ -294,15 +294,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     }
     const currentState = this.agentCore.state;
 
-    if (!currentState.participants) {
-      return [];
-    }
-
-    const existingParticipant = Object.values(currentState.participants).find(
+    const existingParticipant = Object.values(currentState.participants || {}).find(
       (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
     );
     if (existingParticipant) {
-      return []; // Already a participant, skip DB queries
+      return [];
     }
 
     const userMapping = await this.db.query.providerUserMapping.findFirst({
