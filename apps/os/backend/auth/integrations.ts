@@ -14,8 +14,8 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
+import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
-import { syncSlackUsersInBackground } from "./slack-utils.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -338,9 +338,9 @@ export const integrationsPlugin = () =>
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
 
-          const slackAPI = new WebClient();
+          const unauthedSlackClient = new WebClient();
 
-          const tokens = await webClient.oauth.v2.access({
+          const tokens = await unauthedSlackClient.oauth.v2.access({
             client_id: env.SLACK_CLIENT_ID,
             client_secret: env.SLACK_CLIENT_SECRET,
             code: code,
@@ -361,9 +361,9 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get tokens" });
           }
 
-          const userWebClient = new WebClient(tokens.authed_user.access_token);
+          const userSlackClient = new WebClient(tokens.authed_user.access_token);
 
-          const userInfo = await userWebClient.users.identity({});
+          const userInfo = await userSlackClient.users.identity({});
 
           if (
             !userInfo ||
@@ -417,7 +417,7 @@ export const integrationsPlugin = () =>
               });
             }
 
-            waitUntil(syncSlackUsersInBackground(tokens.access_token));
+            waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
 
             // When a user is created, an estate and organization is created automatically via hooks
             // SO we can be sure that the user has only that estate

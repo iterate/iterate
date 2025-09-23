@@ -281,7 +281,7 @@ function EstateContent() {
         estateId: estateId!,
       });
       window.location.href = installationUrl;
-    } catch (error) {
+    } catch (_error) {
       toast.error("Failed to start GitHub connection flow");
     }
   };
