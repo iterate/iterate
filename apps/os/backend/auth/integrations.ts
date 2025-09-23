@@ -7,12 +7,15 @@ import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
+import { WebClient } from "@slack/web-api";
+import { waitUntil } from "cloudflare:workers";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
+import { syncSlackUsersInBackground } from "./slack-utils.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -47,30 +50,6 @@ export const SLACK_USER_AUTH_SCOPES = [
   "identity.team",
   "identity.avatar",
 ];
-
-export const SlackBotOauthTokenResponse = z.object({
-  access_token: z.string(),
-  bot_user_id: z.string(),
-  team: z.looseObject({
-    id: z.string(),
-    name: z.string(),
-  }),
-  authed_user: z.object({
-    id: z.string(),
-    access_token: z.string(),
-  }),
-});
-export type SlackBotOauthTokenResponse = z.infer<typeof SlackBotOauthTokenResponse>;
-
-export const UserInfoResponse = z.object({
-  user: z.object({
-    id: z.string(),
-    name: z.string(),
-    email: z.string(),
-    image_192: z.string().optional(),
-  }),
-});
-export type UserInfoResponse = z.infer<typeof UserInfoResponse>;
 
 export const integrationsPlugin = () =>
   ({
@@ -359,41 +338,42 @@ export const integrationsPlugin = () =>
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
 
-          const httpBasicAuth = btoa(`${env.SLACK_CLIENT_ID}:${env.SLACK_CLIENT_SECRET}`);
-          const params = new URLSearchParams();
-          params.set("code", code);
-          params.set("redirect_uri", redirectURI);
+          const webClient = new WebClient();
 
-          const tokenRes = await fetch(`https://slack.com/api/oauth.v2.access`, {
-            method: "POST",
-            body: params.toString(),
-            headers: {
-              Authorization: `Basic ${httpBasicAuth}`,
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
+          const tokens = await webClient.oauth.v2.access({
+            client_id: env.SLACK_CLIENT_ID,
+            client_secret: env.SLACK_CLIENT_SECRET,
+            code: code,
+            redirect_uri: redirectURI,
           });
 
-          if (!tokenRes.ok) {
-            return ctx.json({ error: "Failed to get tokens" });
+          if (
+            !tokens.ok ||
+            !tokens.authed_user ||
+            !tokens.authed_user.access_token ||
+            !tokens.bot_user_id ||
+            !tokens.team?.id
+          ) {
+            return ctx.json({ error: "Failed to get tokens", details: tokens.error });
           }
-
-          const tokens = SlackBotOauthTokenResponse.parse(await tokenRes.json());
 
           if (!tokens || !tokens.access_token || !tokens.authed_user.access_token) {
             return ctx.json({ error: "Failed to get tokens" });
           }
 
-          const userInfo = await fetch(`https://slack.com/api/users.identity`, {
-            headers: {
-              Authorization: `Bearer ${tokens.authed_user.access_token}`,
-            },
-          });
+          const userWebClient = new WebClient(tokens.authed_user.access_token);
 
-          if (!userInfo.ok) {
-            return ctx.json({ error: "Failed to get user info" });
+          const userInfo = await userWebClient.users.identity({});
+
+          if (
+            !userInfo ||
+            !userInfo.ok ||
+            !userInfo.user ||
+            !userInfo.user.email ||
+            !userInfo.user.id
+          ) {
+            return ctx.json({ error: "Failed to get user info", details: userInfo.error });
           }
-
-          const userInfoData = UserInfoResponse.parse(await userInfo.json());
 
           const botUserId = tokens.bot_user_id;
 
@@ -401,19 +381,19 @@ export const integrationsPlugin = () =>
 
           if (!link) {
             const existingUser = await ctx.context.internalAdapter.findUserByEmail(
-              userInfoData.user.email,
+              userInfo.user.email,
             );
             if (existingUser) {
               await ctx.context.internalAdapter.updateUser(existingUser.user.id, {
-                name: userInfoData.user.name,
-                image: userInfoData.user.image_192,
+                name: userInfo.user.name,
+                image: userInfo.user.image_192,
               });
               user = existingUser.user;
             } else {
               user = await ctx.context.internalAdapter.createUser({
-                email: userInfoData.user.email,
-                name: userInfoData.user.name,
-                image: userInfoData.user.image_192,
+                email: userInfo.user.email,
+                name: userInfo.user.name || "",
+                image: userInfo.user.image_192,
                 emailVerified: true,
               });
             }
@@ -430,12 +410,14 @@ export const integrationsPlugin = () =>
             } else {
               await ctx.context.internalAdapter.createAccount({
                 providerId: "slack",
-                accountId: userInfoData.user.id,
+                accountId: userInfo.user.id,
                 userId: user.id,
                 accessToken: tokens.authed_user.access_token,
                 scope: SLACK_USER_AUTH_SCOPES.join(","),
               });
             }
+
+            waitUntil(syncSlackUsersInBackground(tokens.access_token));
 
             // When a user is created, an estate and organization is created automatically via hooks
             // SO we can be sure that the user has only that estate
@@ -519,7 +501,7 @@ export const integrationsPlugin = () =>
             .insert(schema.providerEstateMapping)
             .values({
               internalEstateId: estateId,
-              externalId: tokens.team.id,
+              externalId: tokens.team?.id,
               providerId: "slack-bot",
               providerMetadata: {
                 botUserId,

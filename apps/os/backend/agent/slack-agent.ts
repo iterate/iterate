@@ -1,9 +1,9 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
-import { and, asc, eq, or } from "drizzle-orm";
+import { and, asc, eq, or, inArray } from "drizzle-orm";
 import { env as _env, env } from "../../env.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
-import { slackWebhookEvent } from "../db/schema.ts";
+import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
 import type {
   AgentCoreDeps,
   AgentCoreEventInput,
@@ -278,57 +278,66 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * This is crucial for MCP personal connections to work properly.
    */
   protected async getParticipantJoinedEvents(
-    _slackUserId: string,
-    _botUserId?: string,
+    slackUserId: string,
+    botUserId?: string,
   ): Promise<ParticipantJoinedEventInput[]> {
-    return [];
-    // if (slackUserId === botUserId) {
-    //   return [];
-    // }
-    // const currentState = this.agentCore.state;
-    // for (const participant of Object.values(currentState.participants || {})) {
-    //   if (participant.externalUserMapping?.slack?.externalUserId === slackUserId) {
-    //     return []; // Already a participant, skip DB queries
-    //   }
-    // }
+    if (slackUserId === botUserId) {
+      return [];
+    }
+    const currentState = this.agentCore.state;
 
-    // const userMapping = await serverTrpc.platform.integrations.getIntegrationUserMapping.query({
-    //   integrationSlug: "slack",
-    //   externalUserId: slackUserId,
-    // });
-    // if (!userMapping?.internalUserId) {
-    //   return [];
-    // }
+    if (!currentState.participants) {
+      return [];
+    }
 
-    // if (currentState.participants && userMapping.internalUserId in currentState.participants) {
-    //   return [];
-    // }
+    const existingParticipant = Object.values(currentState.participants).find(
+      (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+    );
+    if (existingParticipant) {
+      return []; // Already a participant, skip DB queries
+    }
 
-    // const { user } = await serverTrpc.platform.auth.getUserById.query({
-    //   id: userMapping.internalUserId,
-    // });
+    const userMapping = await this.db.query.providerUserMapping.findFirst({
+      where: and(
+        eq(providerUserMapping.providerId, "slack-bot"),
+        eq(providerUserMapping.externalId, slackUserId),
+      ),
+      with: {
+        internalUser: true,
+      },
+    });
 
-    // return [
-    //   {
-    //     type: "CORE:PARTICIPANT_JOINED",
-    //     data: {
-    //       internalUserId: userMapping.internalUserId,
-    //       email: user.email,
-    //       displayName: user.name,
-    //       externalUserMapping: {
-    //         slack: {
-    //           integrationSlug: userMapping.integrationSlug,
-    //           externalUserId: userMapping.externalUserId,
-    //           internalUserId: userMapping.internalUserId,
-    //           email: user.email,
-    //           rawUserInfo: userMapping.rawUserInfo || undefined,
-    //         },
-    //       },
-    //     },
-    //     triggerLLMRequest: false,
-    //     metadata: {},
-    //   },
-    // ];
+    if (!userMapping?.internalUser) {
+      return [];
+    }
+
+    if (currentState.participants[userMapping.internalUser.id]) {
+      return [];
+    }
+
+    const { internalUser, externalId, providerMetadata } = userMapping;
+
+    return [
+      {
+        type: "CORE:PARTICIPANT_JOINED" as const,
+        data: {
+          internalUserId: internalUser.id,
+          email: internalUser.email,
+          displayName: internalUser.name,
+          externalUserMapping: {
+            slack: {
+              integrationSlug: "slack" as const,
+              externalUserId: externalId,
+              internalUserId: internalUser.id,
+              email: internalUser.email,
+              rawUserInfo: providerMetadata as Record<string, unknown>,
+            },
+          },
+        },
+        triggerLLMRequest: false,
+        metadata: {},
+      },
+    ] as const;
   }
 
   /**
@@ -336,86 +345,69 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * These are lightweight participants who haven't actively participated yet.
    */
   protected async getParticipantMentionedEvents(
-    _messageText: string,
-    _currentSlackUserId?: string,
-    _botUserId?: string,
+    messageText: string,
+    currentSlackUserId?: string,
+    botUserId?: string,
   ): Promise<ParticipantMentionedEventInput[]> {
-    return [];
-    // const mentionedUserIds = getMentionedExternalUserIds(messageText);
-    // const currentState = this.agentCore.state;
+    const mentionedUserIds = getMentionedExternalUserIds(messageText);
+    const currentState = this.agentCore.state;
 
-    // const existingSlackUserIds = new Set([
-    //   ...Object.values(currentState.participants || {})
-    //     .map((p) => p.externalUserMapping?.slack?.externalUserId)
-    //     .filter(Boolean),
-    //   ...Object.values(currentState.mentionedParticipants || {})
-    //     .map((p) => p.externalUserMapping?.slack?.externalUserId)
-    //     .filter(Boolean),
-    // ]);
+    if (mentionedUserIds.length === 0) {
+      return [];
+    }
 
-    // const newMentionedUserIds = R.pipe(
-    //   mentionedUserIds,
-    //   R.filter((id) => id !== botUserId && id !== currentSlackUserId),
-    //   R.filter((id) => !existingSlackUserIds.has(id)),
-    //   R.unique(),
-    // );
+    const existingSlackUserIds = new Set([
+      ...Object.values(currentState.participants || {})
+        .map((p) => p.externalUserMapping?.slack?.externalUserId)
+        .filter(Boolean),
+      ...Object.values(currentState.mentionedParticipants || {})
+        .map((p) => p.externalUserMapping?.slack?.externalUserId)
+        .filter(Boolean),
+    ]);
 
-    // if (newMentionedUserIds.length === 0) {
-    //   return [];
-    // }
+    const newMentionedUserIds = mentionedUserIds
+      .filter((id) => id !== botUserId && id !== currentSlackUserId)
+      .filter((id) => !existingSlackUserIds.has(id))
+      .filter((id, index, arr) => arr.indexOf(id) === index);
 
-    // const userMappingResults = await Promise.all(
-    //   newMentionedUserIds.map(async (slackUserId) => {
-    //     const mapping = await serverTrpc.platform.integrations.getIntegrationUserMapping.query({
-    //       integrationSlug: "slack",
-    //       externalUserId: slackUserId,
-    //     });
-    //     return { slackUserId, mapping };
-    //   }),
-    // );
+    if (newMentionedUserIds.length === 0) {
+      return [];
+    }
 
-    // const validMappings = userMappingResults.filter(
-    //   (
-    //     result,
-    //   ): result is {
-    //     slackUserId: string;
-    //     mapping: NonNullable<typeof result.mapping> & { internalUserId: string };
-    //   } =>
-    //     result.mapping?.internalUserId != null && typeof result.mapping.internalUserId === "string",
-    // );
+    const userMappings = await this.db.query.providerUserMapping.findMany({
+      where: and(
+        eq(providerUserMapping.providerId, "slack-bot"),
+        inArray(providerUserMapping.externalId, newMentionedUserIds),
+      ),
+      with: {
+        internalUser: true,
+      },
+    });
 
-    // const userDetails = await Promise.all(
-    //   validMappings.map(async ({ slackUserId, mapping }) => {
-    //     const { user } = await serverTrpc.platform.auth.getUserById.query({
-    //       id: mapping.internalUserId,
-    //     });
-    //     return { slackUserId, mapping, user };
-    //   }),
-    // );
-
-    // const validUserDetails = R.filter(userDetails, R.isTruthy);
-
-    // return validUserDetails.map(
-    //   ({ mapping, user }): ParticipantMentionedEventInput => ({
-    //     type: "CORE:PARTICIPANT_MENTIONED",
-    //     data: {
-    //       internalUserId: mapping.internalUserId,
-    //       email: user.email,
-    //       displayName: user.name,
-    //       externalUserMapping: {
-    //         slack: {
-    //           integrationSlug: mapping.integrationSlug,
-    //           externalUserId: mapping.externalUserId,
-    //           internalUserId: mapping.internalUserId,
-    //           email: user.email,
-    //           rawUserInfo: mapping.rawUserInfo ?? undefined,
-    //         },
-    //       },
-    //     },
-    //     triggerLLMRequest: false,
-    //     metadata: {},
-    //   }),
-    // );
+    return userMappings
+      .filter((userMapping) => userMapping.internalUser != null)
+      .map((userMapping): ParticipantMentionedEventInput => {
+        const { internalUser, externalId, providerMetadata } = userMapping;
+        return {
+          type: "CORE:PARTICIPANT_MENTIONED" as const,
+          data: {
+            internalUserId: internalUser!.id,
+            email: internalUser!.email,
+            displayName: internalUser!.name,
+            externalUserMapping: {
+              slack: {
+                integrationSlug: "slack" as const,
+                externalUserId: externalId,
+                internalUserId: internalUser.id,
+                email: internalUser.email,
+                rawUserInfo: providerMetadata as Record<string, unknown>,
+              },
+            },
+          },
+          triggerLLMRequest: false,
+          metadata: {},
+        };
+      });
   }
 
   public async initSlack(channelId: string, threadTs: string) {

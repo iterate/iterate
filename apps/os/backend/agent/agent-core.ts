@@ -194,7 +194,7 @@ export interface AgentCoreSlice<Spec extends AgentCoreSliceSpec = AgentCoreSlice
   eventSchema: SliceEventSchemaOf<Spec>;
   /** Zod schema for input events (defaults to `eventSchema`) */
   eventInputSchema: SliceEventInputSchemaOf<Spec>;
-  /** Async reducer returning partial state updates */
+  /** Reducer returning partial state updates */
   reduce(
     state: Readonly<
       CoreReducedState<z.input<SliceEventInputSchemaOf<Spec>>> &
