@@ -204,10 +204,8 @@ export const integrationsRouter = router({
     const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
 
     if (!githubInstallation) {
-      throw new TRPCError({
-        code: "NOT_FOUND",
-        message: "Github installation not found",
-      });
+      // Return empty array instead of throwing - this is a normal state when GitHub isn't connected
+      return [];
     }
 
     const token = await getGithubInstallationToken(githubInstallation.accountId);
