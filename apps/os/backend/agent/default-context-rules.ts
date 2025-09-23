@@ -236,14 +236,14 @@ export const defaultContextRules = async () => [
           }),
         ),
       },
-
-      // TRPC tools (to be replaced with durable object versions)
-      // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
-      //   overrideName: "generate_image",
-      // }),
-      // trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
-      //   overrideName: "edit_image",
-      // }),
+      {
+        type: "agent_durable_object_tool",
+        methodName: "generateImage",
+      },
+      {
+        type: "agent_durable_object_tool",
+        methodName: "editImage",
+      },
       {
         type: "agent_durable_object_tool",
         methodName: "sendSlackMessage",

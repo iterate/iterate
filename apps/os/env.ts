@@ -21,6 +21,8 @@ export type CloudflareEnv = Env & {
   EXA_API_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  REPLICATE_API_TOKEN: string;
+  ITERATE_USER: string;
 };
 
 export const env = _env as CloudflareEnv;
