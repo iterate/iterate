@@ -1,10 +1,10 @@
 import { OpenAI } from "openai";
 import invariant from "tiny-invariant";
+import { waitUntil } from "cloudflare:workers";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { getBraintrustLogger } from "../utils/braintrust-client.ts";
 import { posthogOpenAIWrapper } from "./posthog-openai-wrapper.ts";
 import { braintrustOpenAIWrapper } from "./braintrust-wrapper.ts";
-import { waitUntil } from "cloudflare:workers";
 
 /**
  * Return an OpenAI client wrapped in Braintrust and PostHog.
