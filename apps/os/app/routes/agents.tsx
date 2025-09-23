@@ -96,15 +96,17 @@ import type {
   AgentCoreEventInput,
   CoreReducedState,
 } from "../../backend/agent/agent-core-schemas.ts";
+import type { SlackSliceEvent, SlackSliceState } from "../../backend/agent/slack-slice.ts";
 import { isThinking } from "../../backend/agent/agent-core-schemas.ts";
 import { fulltextSearchInObject } from "../../backend/utils/type-helpers.ts";
+import type { SlackWebhookPayload } from "../../backend/agent/slack.types.ts";
 
 // Types and interfaces
 interface FilterState {
   searchText: string;
 }
 
-type AgentEvent = AgentCoreEvent;
+type AgentEvent = AgentCoreEvent | SlackSliceEvent;
 
 // Helper function to get color for time delta based on milliseconds
 const getTimeDeltaColor = (ms: number): string => {
@@ -458,6 +460,7 @@ function MetaEventWrapper({
   onEventClick,
   estateId,
   currentUser,
+  botUserId,
 }: {
   event: AgentEvent;
   index: number;
@@ -466,10 +469,12 @@ function MetaEventWrapper({
     event: AgentEvent;
     estateId: string;
     currentUser: { name: string; email: string; image?: string | null };
+    botUserId?: string;
   }>;
   onEventClick?: (eventIndex: number) => void;
   estateId: string;
   currentUser: { name: string; email: string; image?: string | null };
+  botUserId?: string;
 }): React.ReactElement {
   const label = event.type || "Core Event";
   const getDate = (ev: AgentEvent) => new Date(ev.createdAt);
@@ -518,7 +523,12 @@ function MetaEventWrapper({
 
       {Renderer && (
         <div>
-          <Renderer event={event} estateId={estateId} currentUser={currentUser} />
+          <Renderer
+            event={event}
+            estateId={estateId}
+            currentUser={currentUser}
+            botUserId={botUserId}
+          />
         </div>
       )}
     </div>
@@ -1028,10 +1038,12 @@ function CoreEventRenderer({
   event,
   estateId,
   currentUser,
+  botUserId,
 }: {
   event: AgentEvent;
   estateId: string;
   currentUser: { name: string; email: string; image?: string | null };
+  botUserId?: string;
 }): React.ReactElement | null {
   if (!event) {
     return null;
@@ -1272,6 +1284,221 @@ function CoreEventRenderer({
             )}
           </ToolContent>
         </Tool>
+      );
+    }
+
+    case "SLACK:WEBHOOK_EVENT_RECEIVED": {
+      const payload = event.data.payload as SlackWebhookPayload;
+      const slackEvent = payload?.event;
+
+      if (!slackEvent) {
+        return null;
+      }
+
+      // Check if this event is from the bot (agent) itself
+      const isFromBot = botUserId && "user" in slackEvent && slackEvent.user === botUserId;
+
+      const formatSlackUser = (userId: string) => {
+        return userId ? userId : "Unknown user";
+      };
+
+      const renderSlackEventContent = () => {
+        switch (slackEvent.type) {
+          case "message":
+            if (slackEvent.subtype) {
+              return (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="text-xs">
+                      {slackEvent.subtype}
+                    </Badge>
+                  </div>
+                  {"text" in slackEvent && slackEvent.text && (
+                    <div className="bg-muted/50 p-3 rounded-md border">
+                      <div className="text-sm whitespace-pre-wrap break-words">
+                        {slackEvent.text}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs">
+                    {isFromBot ? "Agent (Bot)" : formatSlackUser(slackEvent.user || "bot")}
+                  </Badge>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(parseFloat(slackEvent.ts) * 1000).toLocaleTimeString()}
+                  </span>
+                </div>
+                {slackEvent.text && (
+                  <div className="bg-muted/50 p-3 rounded-md border">
+                    <div className="text-sm whitespace-pre-wrap break-words">{slackEvent.text}</div>
+                  </div>
+                )}
+              </div>
+            );
+
+          case "reaction_added":
+          case "reaction_removed":
+            return (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="text-xs">
+                    {isFromBot ? "Agent (Bot)" : formatSlackUser(slackEvent.user)}
+                  </Badge>
+                  <span className="text-sm">
+                    {slackEvent.type === "reaction_added" ? "added" : "removed"} reaction{" "}
+                    {slackEvent.reaction}
+                  </span>
+                </div>
+              </div>
+            );
+
+          case "app_mention":
+            return (
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">App mentioned by</span>
+                  <Badge variant="outline" className="text-xs">
+                    {isFromBot
+                      ? "Agent (Bot)"
+                      : formatSlackUser(
+                          slackEvent.user || slackEvent.bot_profile?.name || "unknown",
+                        )}
+                  </Badge>
+                </div>
+                {slackEvent.text && (
+                  <div className="bg-muted/50 p-3 rounded-md border">
+                    <div className="text-sm whitespace-pre-wrap break-words">{slackEvent.text}</div>
+                  </div>
+                )}
+              </div>
+            );
+
+          default:
+            return (
+              <div className="text-sm">
+                <strong>Slack event: {slackEvent.type}</strong>
+                <details className="mt-2">
+                  <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                    View raw event data
+                  </summary>
+                  <SerializedObjectCodeBlock data={slackEvent} className="mt-2" />
+                </details>
+              </div>
+            );
+        }
+      };
+
+      // For bot events, use a collapsible format that's collapsed by default
+      if (isFromBot) {
+        return (
+          <Card className="mb-3 border-purple-200 dark:border-purple-800 bg-purple-50/30 dark:bg-purple-950/30 p-0">
+            <Collapsible defaultOpen={false}>
+              <CollapsibleTrigger className="w-full">
+                <div className="p-3 cursor-pointer hover:bg-purple-100/50 dark:hover:bg-purple-900/50 transition-colors">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Bot className="h-4 w-4 text-purple-600 dark:text-purple-400" />
+                      <div className="text-left">
+                        <div className="font-medium text-sm">Agent Slack Activity</div>
+                        <div className="text-xs text-muted-foreground">
+                          {slackEvent.type}
+                          {"subtype" in slackEvent &&
+                            slackEvent.subtype &&
+                            `: ${slackEvent.subtype}`}
+                        </div>
+                      </div>
+                    </div>
+                    <ChevronDown className="h-4 w-4 transition-transform data-[state=open]:rotate-180" />
+                  </div>
+                </div>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="px-3 pb-3 pt-0">
+                  <div className="space-y-4 border-t pt-3">
+                    {renderSlackEventContent()}
+                    <div className="pt-3 border-t border-muted">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="text-xs">
+                          {slackEvent.type}
+                          {"subtype" in slackEvent &&
+                            slackEvent.subtype &&
+                            `: ${slackEvent.subtype}`}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          Channel:{" "}
+                          {payload.event && "channel" in payload.event
+                            ? typeof payload.event.channel === "string"
+                              ? payload.event.channel.slice(-8) // Show last 8 chars for readability
+                              : payload.event.channel.id?.slice(-8)
+                            : "Unknown"}
+                        </Badge>
+                        <Badge variant="outline" className="text-xs">
+                          Team: {payload.team_id?.slice(-8) || "Unknown"}
+                        </Badge>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
+        );
+      }
+
+      // For non-bot events, use a similar collapsible format with blue styling
+      return (
+        <Card className="mb-3 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/30 p-0">
+          <Collapsible defaultOpen={false}>
+            <CollapsibleTrigger className="w-full">
+              <div className="p-3 cursor-pointer hover:bg-blue-100/50 dark:hover:bg-blue-900/50 transition-colors">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <Users className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+                    <div className="text-left">
+                      <div className="font-medium text-sm">User Slack Activity</div>
+                      <div className="text-xs text-muted-foreground">
+                        {slackEvent.type}
+                        {"subtype" in slackEvent && slackEvent.subtype && `: ${slackEvent.subtype}`}
+                      </div>
+                    </div>
+                  </div>
+                  <ChevronDown className="h-4 w-4 transition-transform data-[state=open]:rotate-180" />
+                </div>
+              </div>
+            </CollapsibleTrigger>
+            <CollapsibleContent>
+              <div className="px-3 pb-3 pt-0">
+                <div className="space-y-4 border-t pt-3">
+                  {renderSlackEventContent()}
+                  <div className="pt-3 border-t border-muted">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary" className="text-xs">
+                        {slackEvent.type}
+                        {"subtype" in slackEvent && slackEvent.subtype && `: ${slackEvent.subtype}`}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        Channel:{" "}
+                        {payload.event && "channel" in payload.event
+                          ? typeof payload.event.channel === "string"
+                            ? payload.event.channel.slice(-8) // Show last 8 chars for readability
+                            : payload.event.channel.id?.slice(-8)
+                          : "Unknown"}
+                      </Badge>
+                      <Badge variant="outline" className="text-xs">
+                        Team: {payload.team_id?.slice(-8) || "Unknown"}
+                      </Badge>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </CollapsibleContent>
+          </Collapsible>
+        </Card>
       );
     }
 
@@ -1583,6 +1810,7 @@ export default function AgentsPage() {
   const [showToolInjector, setShowToolInjector] = useState(false);
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [isWebsocketConnected, setIsWebsocketConnected] = useState(false);
+  const [hideAgentWebhooks, setHideAgentWebhooks] = useState(true);
 
   // Get initial events
   const { data: initialEvents } = useSuspenseQuery(
@@ -1643,13 +1871,35 @@ export default function AgentsPage() {
     ),
   );
 
+  const botUserId =
+    agentClassName === "SlackAgent" && reducedState
+      ? (reducedState as SlackSliceState).botUserId
+      : undefined;
+
   // Filter events
   const filteredEvents = useMemo(() => {
-    if (!filters.searchText.trim()) {
-      return events;
+    let filtered = events;
+
+    // Filter out agent webhooks if the toggle is enabled
+    if (hideAgentWebhooks) {
+      filtered = filtered.filter((event) => {
+        if (event.type === "SLACK:WEBHOOK_EVENT_RECEIVED") {
+          const payload = event.data.payload as SlackWebhookPayload;
+          const slackEvent = payload?.event;
+          const isFromBot =
+            botUserId && slackEvent && "user" in slackEvent && slackEvent.user === botUserId;
+          return !isFromBot; // Hide if it's from the bot
+        }
+        return true; // Keep all other events
+      });
     }
-    return events.filter((event) => fulltextSearchInObject(event, filters.searchText.trim()));
-  }, [events, filters.searchText]);
+
+    // Apply search filter
+    if (!filters.searchText.trim()) {
+      return filtered;
+    }
+    return filtered.filter((event) => fulltextSearchInObject(event, filters.searchText.trim()));
+  }, [events, filters.searchText, hideAgentWebhooks, botUserId]);
 
   // Group parallel tool calls together
   const groupedEvents = useMemo(() => {
@@ -1797,6 +2047,32 @@ export default function AgentsPage() {
         </Link>
 
         <div className="flex items-center gap-2 ml-auto">
+          {/* Hide Agent Webhooks Toggle - only show for SlackAgent */}
+          {agentClassName === "SlackAgent" && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant={hideAgentWebhooks ? "default" : "ghost"}
+                  size="sm"
+                  onClick={() => setHideAgentWebhooks(!hideAgentWebhooks)}
+                  className="h-7 px-2"
+                >
+                  <Bot className="h-3 w-3 mr-1" />
+                  <span className="text-xs">
+                    {hideAgentWebhooks ? "Show" : "Hide"} agent webhooks
+                  </span>
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>
+                  {hideAgentWebhooks
+                    ? "Show agent's Slack webhook events"
+                    : "Hide agent's Slack webhook events"}
+                </p>
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           {/* Pause/Resume Agent Button */}
           {(() => {
             const isPaused = reducedState && reducedState.paused;
@@ -1893,6 +2169,7 @@ export default function AgentsPage() {
                             onEventClick={handleEventClick}
                             estateId={estateId}
                             currentUser={currentUser}
+                            botUserId={botUserId}
                           />
                         </div>
                       );
@@ -1919,6 +2196,7 @@ export default function AgentsPage() {
                                   onEventClick={handleEventClick}
                                   estateId={estateId}
                                   currentUser={currentUser}
+                                  botUserId={botUserId}
                                 />
                               </div>
                             ))}
