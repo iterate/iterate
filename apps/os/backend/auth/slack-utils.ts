@@ -23,9 +23,7 @@ export async function saveSlackUserMapping(
         .update(schema.user)
         .set({
           name: member.real_name || member.name || undefined,
-          email: member.profile.email,
           image: member.profile?.image_192,
-          emailVerified: false,
         })
         .where(eq(schema.user.id, existingMapping.internalUserId));
       await tx
