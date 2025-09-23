@@ -4,9 +4,10 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
-import { uploadFileHandler, uploadFileFromUrlHandler, getFileHandler } from "./file-handlers.ts";
+import { uploadFileHandler, uploadFileFromURLHandler, getFileHandler } from "./file-handlers.ts";
 import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
@@ -30,6 +31,7 @@ export type Variables = {
   auth: Auth;
   session: AuthSession;
   db: DB;
+  workerEntrypoint?: WorkerEntrypoint;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -95,7 +97,7 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
 });
 
 app.post("/api/estate/:estateId/files", uploadFileHandler);
-app.post("/api/estate/:estateId/files/from-url", uploadFileFromUrlHandler);
+app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
 app.get("/api/estate/:estateId/files/:id", getFileHandler);
 
 // Mount the Slack integration app
@@ -188,7 +190,16 @@ app.all("*", (c) => {
   });
 });
 
-export default app;
+// In order to use cloudflare's fancy RPC system, we need to export a WorkerEntrypoint subclass.
+// Any methods on this class can be called via worker binding
+// The special `fetch` method is used to handle HTTP requests
+// This is only really needed when we have multiple workers, though. I just ported it over because I mistakenly
+// thought we need it sooner
+export default class extends WorkerEntrypoint {
+  fetch(request: Request) {
+    return app.fetch(request, this.env, this.ctx);
+  }
+}
 
 export { IterateAgent, SlackAgent, OrganizationWebSocket };
 export { Sandbox } from "@cloudflare/sandbox";

@@ -111,4 +111,31 @@ export const iterateAgentTools = defineDOTools({
       onBehalfOfIterateUserId: z.string().describe("The iterate user ID to connect on behalf of."),
     }),
   },
+  getURLContent: {
+    description: "Get the content of a URL, including Slack message threads",
+    input: z.object({
+      url: z.string(),
+      includeScreenshotOfPage: z
+        .boolean()
+        .default(false)
+        .describe(
+          "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, or when you need to see what the page looks like. Defaults to false.",
+        )
+        .optional(),
+      includeTextContent: z
+        .boolean()
+        .default(true)
+        .describe(
+          "Set to true to extract text content from the webpage. This includes the full text, title, and other metadata. Defaults to true.",
+        )
+        .optional(),
+    }),
+  },
+  searchWeb: {
+    description: "Search the web using exa (think of it like a better google)",
+    input: z.object({
+      query: z.string(),
+      numResults: z.number().optional().default(10),
+    }),
+  },
 });

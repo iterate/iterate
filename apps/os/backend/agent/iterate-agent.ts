@@ -7,6 +7,7 @@ import { z } from "zod/v4";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
+import { waitUntil } from "cloudflare:workers";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -19,6 +20,8 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getStage } from "../utils/staging.ts";
+import { searchWeb, getURLContent } from "../default-tools.ts";
+import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -462,7 +465,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       background: (fn: () => Promise<void>) => {
-        this.ctx.waitUntil(fn());
+        waitUntil(fn());
       },
 
       getOpenAIClient: async () => {
@@ -491,36 +494,35 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       toolSpecsToImplementations: (specs: ToolSpec[]) => {
         return toolSpecsToImplementations({ toolSpecs: specs, theDO: this });
       },
-      // TODO: somebody who understands this more than me needs to fix this type
+
       // @ts-expect-error
-      uploadFile: async (_data: {
+      uploadFile: async (data: {
         ctx: ExecutionContext;
         content: ReadableStream;
         filename: string;
         mimeType?: string;
         contentLength: number;
       }) => {
-        throw new Error(
-          "uploadFile is not implemented yet - it's only relevant for openai native image generation anyway",
-        );
-        // // Cloudflare needs to know the content length in advance, so we need to create a fixed-length stream
-        // const fileRecord = await uploadFile({
-        //   stream: data.content,
-        //   contentLength: data.contentLength,
-        //   filename: data.filename,
-        //   contentType: data.mimeType || "application/octet-stream",
-        // });
-        // return {
-        //   fileId: fileRecord.iterateId,
-        //   openAIFileId: fileRecord.openAIFileId,
-        //   originalFilename: fileRecord.filename,
-        //   size: fileRecord.fileSize,
-        //   mimeType: fileRecord.mimeType,
-        // };
+        // Cloudflare needs to know the content length in advance, so we need to create a fixed-length stream
+        const fileRecord = await uploadFile({
+          estateId: this.databaseRecord.estateId,
+          db: this.db,
+          stream: data.content,
+          contentLength: data.contentLength,
+          filename: data.filename,
+          contentType: data.mimeType || "application/octet-stream",
+        });
+        return {
+          fileId: fileRecord.id,
+          openAIFileId: fileRecord.openAIFileId,
+          originalFilename: fileRecord.filename,
+          size: fileRecord.fileSize,
+          mimeType: fileRecord.mimeType,
+        };
       },
 
       turnFileIdIntoPublicURL: (fileId: string) => {
-        return `${this.env.VITE_PUBLIC_URL}/api/uploads/${fileId}`;
+        return getFilePublicURL(fileId, this.databaseRecord.estateId);
       },
 
       getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
@@ -542,7 +544,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
         if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
-          this.ctx.waitUntil(
+          waitUntil(
             (async () => {
               if (reducedState.mcpConnections) {
                 const eventsToAdd = await runMCPEventHooks({
@@ -565,7 +567,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           // fairly arbitrarily, refresh context rules after each LLM request so the agent will have updated instructions by next time
           // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
           // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
-          this.ctx.waitUntil(this.refreshContextRules());
+          waitUntil(this.refreshContextRules());
         }
 
         this.ctx.waitUntil(
@@ -1153,6 +1155,34 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       success: true,
       message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
       addedMcpServer: mcpServer,
+    };
+  }
+
+  async getURLContent(input: Inputs["getURLContent"]) {
+    return await getURLContent({
+      ...input,
+      db: this.db,
+      estateId: this.databaseRecord.estateId,
+    });
+  }
+
+  async searchWeb(input: Inputs["searchWeb"]) {
+    const { query, numResults = 10 } = input;
+    const result = await searchWeb({
+      query,
+      numResults,
+      type: "auto" as const,
+    });
+    return {
+      query,
+      results: result.results.map((r) => ({
+        title: r.title,
+        url: r.url,
+        snippet: r.text || "",
+        publishedDate: r.publishedDate,
+        author: r.author,
+      })),
+      totalResults: result.results.length,
     };
   }
 }

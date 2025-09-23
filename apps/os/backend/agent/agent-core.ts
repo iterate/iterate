@@ -821,7 +821,6 @@ export class AgentCore<
 
       case "CORE:FILE_SHARED": {
         const { direction, iterateFileId, originalFilename, mimeType, openAIFileId } = event.data;
-        this.deps.console.log("FILE_SHARED", event);
 
         // Require OpenAI file ID for sharing files with the agent
         if (!openAIFileId) {
@@ -864,9 +863,11 @@ export class AgentCore<
         // build developer messages for both directions so that the agent can reference iterateFileId in subsequent tool calls
         const developerText = renderPromptFragment([
           direction === "from-agent-to-user"
-            ? "Note: The previous file was something you created as the result of a tool call. Use the download URL below to share this file."
+            ? "Note: The previous file was something you created as the result of a tool call."
             : null,
-          `The iterateFileId for the above file is ${iterateFileId}. You may need this when using the file in other tool calls. Download: ${downloadUrl}`,
+          `Use either of the following identifiers to use this file in other tools:`,
+          `iterateFileId: ${iterateFileId}.`,
+          `Public URL: ${downloadUrl}.`,
         ]);
 
         const developerMessage = {
