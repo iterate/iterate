@@ -118,11 +118,11 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
 
     const clientInfo = DynamicClientInfo.safeParse(JSON.parse(verification.value));
     if (!clientInfo.success) {
-      console.error(`Failed to parse client information: ${z.prettifyError(clientInfo.error)}`)
+      console.error(`Failed to parse client information: ${z.prettifyError(clientInfo.error)}`);
       return undefined;
     }
 
-    return clientInfo.data
+    return clientInfo.data;
   }
 
   async saveTokens(tokens: {
