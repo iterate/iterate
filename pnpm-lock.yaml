@@ -67,8 +67,8 @@ importers:
         specifier: ^0.11.0
         version: 0.11.0
       '@cloudflare/sandbox':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.3.2
+        version: 0.3.2
       '@codemirror/lang-json':
         specifier: ^6.0.2
         version: 6.0.2
@@ -687,8 +687,8 @@ packages:
     resolution: {integrity: sha512-+tv3z+SPp+gqTIcImN9o0hqE9xyfQjI1XD9pL6NuKjua9B1y7mNYv0S9cP+QEbA4ppVgGZEmKOvHX5G5Ei1CVA==}
     engines: {node: '>=18.0.0'}
 
-  '@cloudflare/sandbox@0.3.1':
-    resolution: {integrity: sha512-EqUYQkbR3RQ/UXxfzAKWOpxDTRK4gQdeNgwfnRjmB29gx3n6EmRj+f7f1I87qLBfN0s9JuckGOs5yHUpSIrpqQ==}
+  '@cloudflare/sandbox@0.3.2':
+    resolution: {integrity: sha512-PfyM2C+kIkTAKvoL59J/lRMopJ6BdkVY/aD5vOsO7yc8z8+LO+yG0hs8Upp0RvxdZo2G7LlrIMKA6TYw8JeU3A==}
 
   '@cloudflare/unenv-preset@2.7.3':
     resolution: {integrity: sha512-tsQQagBKjvpd9baa6nWVIv399ejiqcrUBBW6SZx6Z22+ymm+Odv5+cFimyuCsD/fC1fQTwfRmwXBNpzvHSeGCw==}
@@ -7751,7 +7751,7 @@ snapshots:
     dependencies:
       mime: 3.0.0
 
-  '@cloudflare/sandbox@0.3.1':
+  '@cloudflare/sandbox@0.3.2':
     dependencies:
       '@cloudflare/containers': 0.0.27
 

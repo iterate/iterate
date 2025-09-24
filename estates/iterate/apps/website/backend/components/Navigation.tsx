@@ -4,7 +4,7 @@ import { Link } from "./Link.tsx";
 export default function Navigation() {
   const { pathname } = useLocation();
   const navItems = [
-    { href: "/#pricing", label: "Pricing" },
+    // { href: "/#pricing", label: "Pricing" }, // hidden for now
     { href: "/blog", label: "Blog" },
   ];
 

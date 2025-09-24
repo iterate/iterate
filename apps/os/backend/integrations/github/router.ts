@@ -160,8 +160,8 @@ githubApp.post("/webhook", async (c) => {
     const event = JSON.parse(payload);
     const eventType = c.req.header("X-GitHub-Event");
 
-    // We only handle check_suite events from GitHub Apps
-    if (eventType !== "check_suite") {
+    // We only handle push events
+    if (eventType !== "push") {
       // Silently ignore other event types
       return c.json({ message: "Event type not relevant" }, 200);
     }
@@ -173,23 +173,17 @@ githubApp.post("/webhook", async (c) => {
       return c.json({ error: "Invalid webhook payload - no repository" }, 400);
     }
 
-    // Only process relevant check_suite actions
-    if (event.action !== "requested" && event.action !== "rerequested") {
-      // Silently ignore completed, in_progress, etc.
-      return c.json({ message: "Check suite action not relevant" }, 200);
-    }
-
-    // Extract commit information from check_suite
-    const commitHash = event.check_suite?.head_sha;
-    const commitMessage = event.check_suite?.head_commit?.message || "Check suite run";
-    const branch = event.check_suite?.head_branch;
+    // Extract commit information from push event
+    const commitHash = event.after || event.head_commit?.id;
+    const commitMessage = event.head_commit?.message || "Push event";
+    const branch = event.ref?.replace("refs/heads/", "");
 
     if (!commitHash) {
-      console.error("Missing commit information in check_suite");
+      console.error("Missing commit information in push event");
       return c.json({ error: "Invalid webhook payload - no commit hash" }, 400);
     }
 
-    console.log(`Processing check_suite: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
+    console.log(`Processing push: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
 
     // Find the estate connected to this repository
     const estate = await getEstateByRepoId(c.var.db, repoId);

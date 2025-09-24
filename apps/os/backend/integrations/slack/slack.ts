@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { WebClient } from "@slack/web-api";
+import { WebClient, type UsersListResponse } from "@slack/web-api";
+import { waitUntil } from "cloudflare:workers";
 import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
-
 import { SlackAgent } from "../../agent/slack-agent.ts";
 import {
   extractBotUserIdFromAuthorizations,
@@ -15,6 +15,7 @@ import {
 } from "../../agent/slack-agent-utils.ts";
 import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
@@ -63,7 +64,7 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  c.executionCtx.waitUntil(
+  waitUntil(
     // deterministically react to the webhook as early as possible (eyes emoji)
     getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
       if (slackToken) {
@@ -72,7 +73,7 @@ slackApp.post("/webhook", async (c) => {
     }),
   );
 
-  c.executionCtx.waitUntil(
+  waitUntil(
     db
       .insert(slackWebhookEvent)
       .values({
@@ -113,6 +114,8 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
+  // If the bot isn't mentioned or it's not a DM to the bot, we bail early
+
   if (!agentRoute) {
     const botUserId = extractBotUserIdFromAuthorizations(body);
     const isBotMentioned =
@@ -120,12 +123,11 @@ slackApp.post("/webhook", async (c) => {
         ? isBotMentionedInMessage(body.event, botUserId)
         : false;
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-
     if (!isBotMentioned && !isDM) {
+      console.log("IGNORING WEBHOOK EVENT BECAUSE BOT IS NOT MENTIONED OR IT'S NOT A DM");
       return c.text("ok");
     }
   }
-
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
@@ -134,7 +136,7 @@ slackApp.post("/webhook", async (c) => {
     reason: "Slack webhook received",
   });
 
-  c.executionCtx.waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
+  waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
   return c.text("ok");
 });
@@ -387,171 +389,87 @@ export async function reactToSlackWebhook(
   }
 }
 
-export function shouldIncludeEventInConversation(
-  slackEvent: SlackWebhookPayload["event"] | undefined,
-  botUserId: string | undefined,
-): boolean {
-  if (!slackEvent) {
-    return false;
-  }
+export async function saveSlackUserMapping(
+  db: ReturnType<typeof getDb>,
+  member: NonNullable<UsersListResponse["members"]>[number],
+) {
+  await db.transaction(async (tx) => {
+    if (!member.id || !member.profile?.email || member.deleted) {
+      return;
+    }
+    const existingMapping = await tx.query.providerUserMapping.findFirst({
+      where: and(
+        eq(schema.providerUserMapping.providerId, "slack-bot"),
+        eq(schema.providerUserMapping.externalId, member.id),
+      ),
+    });
 
-  // Filter out events from the bot itself
-  if (botUserId && "user" in slackEvent && slackEvent.user === botUserId) {
-    return false;
-  }
-
-  // Exhaustive switch on event types
-  switch (slackEvent.type) {
-    // ===== Currently included event types =====
-    case "message": {
-      const messageEvent = slackEvent as any;
-      // Skip certain message subtypes (except file_share)
-      if (messageEvent.subtype && messageEvent.subtype !== "file_share") {
-        return false;
-      }
-      return true;
+    if (existingMapping) {
+      await tx
+        .update(schema.user)
+        .set({
+          name: member.real_name || member.name || undefined,
+          image: member.profile?.image_192,
+        })
+        .where(eq(schema.user.id, existingMapping.internalUserId));
+      await tx
+        .update(schema.providerUserMapping)
+        .set({
+          providerMetadata: member,
+        })
+        .where(eq(schema.providerUserMapping.id, existingMapping.id));
+      return;
     }
 
-    case "reaction_added":
-    case "reaction_removed":
-      // Reactions are included in context but don't trigger LLM computation
-      return true;
+    const existingUser = await tx.query.user.findFirst({
+      where: eq(schema.user.email, member.profile.email),
+    });
 
-    // ===== Event types we explicitly choose to ignore =====
-    // User/member events - too noisy, not conversational
-    case "user_change":
-    case "member_joined_channel":
-    case "member_left_channel":
-      return false;
+    if (existingUser) {
+      await tx
+        .update(schema.user)
+        .set({
+          name: member.real_name || member.name || "",
+          image: member.profile?.image_192,
+        })
+        .where(eq(schema.user.id, existingUser.id));
 
-    // Channel management events - administrative, not conversational
-    case "channel_created":
-    case "channel_deleted":
-    case "channel_rename":
-    case "channel_archive":
-    case "channel_unarchive":
-    case "channel_history_changed":
-    case "channel_shared":
-    case "channel_unshared":
-      return false;
+      await tx.insert(schema.providerUserMapping).values({
+        providerId: "slack-bot",
+        internalUserId: existingUser.id,
+        externalId: member.id,
+        providerMetadata: member,
+      });
 
-    // File events (except file_share within messages)
-    case "file_created":
-    case "file_change":
-    case "file_deleted":
-    case "file_public":
-    case "file_shared":
-    case "file_unshared":
-      return false;
-
-    // App/bot lifecycle events
-    case "app_mention":
-      // TODO: Consider including app_mention in the future for direct bot mentions
-      return false;
-    case "app_home_opened":
-    case "app_installed":
-    case "app_uninstalled":
-    case "app_requested":
-    case "app_deleted":
-      return false;
-
-    // Team/workspace events
-    case "team_join":
-    case "team_rename":
-    case "team_domain_change":
-      return false;
-
-    // DM/Group events
-    case "im_created":
-    case "im_open":
-    case "im_close":
-    case "im_history_changed":
-    case "group_left":
-    case "group_open":
-    case "group_close":
-    case "group_archive":
-    case "group_unarchive":
-    case "group_rename":
-    case "group_history_changed":
-      return false;
-
-    // Message metadata events
-    case "message_metadata_posted":
-    case "message_metadata_updated":
-    case "message_metadata_deleted":
-      return false;
-
-    // Pin events
-    case "pin_added":
-    case "pin_removed":
-      return false;
-
-    // Star events
-    case "star_added":
-    case "star_removed":
-      return false;
-
-    // Presence/DND events
-    case "dnd_updated":
-    case "dnd_updated_user":
-      return false;
-
-    // Emoji events
-    case "emoji_changed":
-      return false;
-
-    // Subteam (user group) events
-    case "subteam_created":
-    case "subteam_updated":
-    case "subteam_members_changed":
-    case "subteam_self_added":
-    case "subteam_self_removed":
-      return false;
-
-    // Workflow events
-    case "workflow_published":
-    case "workflow_unpublished":
-    case "workflow_deleted":
-    case "workflow_step_deleted":
-    case "workflow_step_execute":
-      return false;
-
-    // OAuth/permission events
-    case "tokens_revoked":
-      return false;
-
-    // Link sharing events
-    case "link_shared":
-      // TODO: Consider including link_shared for URL unfurling in the future
-      return false;
-
-    // Call events
-    case "call_rejected":
-      return false;
-
-    // Shared channel events
-    case "shared_channel_invite_accepted":
-    case "shared_channel_invite_approved":
-    case "shared_channel_invite_declined":
-    case "shared_channel_invite_received":
-      return false;
-
-    // Grid migration events
-    case "grid_migration_started":
-    case "grid_migration_finished":
-      return false;
-
-    // Default case for exhaustive checking
-    default: {
-      // TypeScript's exhaustive check - if this line has an error, it means
-      // there are unhandled event types that should be explicitly handled above
-      const unhandledEvent: SlackWebhookPayload["event"] = slackEvent;
-      console.warn(`Unhandled Slack event type: ${unhandledEvent.type}`);
-
-      // For now, ignore any unhandled event types
-      // When new event types are added to @slack/types, they'll appear here
-      // and we can decide whether to include them in conversations
-      return false;
+      return;
     }
+    const newUser = await tx
+      .insert(schema.user)
+      .values({
+        name: member.real_name || member.name || "",
+        email: member.profile.email,
+        image: member.profile?.image_192,
+        emailVerified: false,
+      })
+      .returning();
+
+    await tx.insert(schema.providerUserMapping).values({
+      providerId: "slack-bot",
+      internalUserId: newUser[0].id,
+      externalId: member.id,
+      providerMetadata: member,
+    });
+  });
+}
+
+export async function syncSlackUsersInBackground(db: DB, botToken: string) {
+  const authedWebClient = new WebClient(botToken);
+  const userListResponse = await authedWebClient.users.list({});
+  if (userListResponse.ok && userListResponse.members) {
+    await Promise.allSettled(
+      userListResponse.members.map(async (member) => {
+        await saveSlackUserMapping(db, member);
+      }),
+    );
   }
 }

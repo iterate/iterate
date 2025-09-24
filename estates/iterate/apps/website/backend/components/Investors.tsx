@@ -2,7 +2,6 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../utils/cn.ts";
 import { Button } from "./Button.tsx";
-// Removed unused Grid imports
 
 interface Investor {
   name: string;
@@ -98,7 +97,7 @@ export default function Investors() {
   return (
     <section id="investors">
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 border border-dashed border-gray-300 overflow-hidden">
-        {allInvestors.slice(0, visibleCount).map(({ name, role }) => {
+        {allInvestors.slice(0, visibleCount).map(({ name, role }, _index) => {
           return (
             <motion.div
               key={name}
