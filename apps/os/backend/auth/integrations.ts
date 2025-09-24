@@ -424,16 +424,31 @@ export const integrationsPlugin = () =>
                 eq(schema.providerEstateMapping.providerId, "slack-bot"),
                 eq(schema.providerEstateMapping.externalId, tokens.team?.id),
               ),
+              columns: {},
+              with: {
+                internalEstate: {
+                  columns: {
+                    id: true,
+                  },
+                  with: {
+                    organization: {
+                      columns: {
+                        id: true,
+                      },
+                    },
+                  },
+                },
+              },
             });
 
             // If the slack team is already linked to an estate, add the user to that estate too
             if (existingSlackTeam) {
               await db.insert(schema.organizationUserMembership).values({
-                organizationId: existingSlackTeam?.internalEstateId,
+                organizationId: existingSlackTeam?.internalEstate.organization.id,
                 userId: user.id,
                 role: "member",
               });
-              estateId = existingSlackTeam?.internalEstateId;
+              estateId = existingSlackTeam?.internalEstate.id;
             }
 
             // When a user is created, an estate and organization is created automatically via hooks
