@@ -18,12 +18,12 @@ import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
+  "app_mentions:read",
   "channels:history",
   "channels:join",
   "channels:read",
   "chat:write",
   "chat:write.public",
-  "commands",
   "files:read",
   "files:write",
   "groups:history",
@@ -31,11 +31,8 @@ export const SLACK_BOT_SCOPES = [
   "im:history",
   "im:read",
   "im:write",
-  "im:write.topic",
   "mpim:history",
   "mpim:read",
-  "mpim:write",
-  "mpim:write.topic",
   "reactions:read",
   "reactions:write",
   "users.profile:read",
