@@ -57,10 +57,10 @@ slackApp.post("/webhook", async (c) => {
   ]);
 
   if (!estateId) {
-    console.warn(
-      `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
-      body,
-    );
+    // console.warn(
+    //   `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
+    //   body,
+    // );
     return c.text("ok");
   }
 
