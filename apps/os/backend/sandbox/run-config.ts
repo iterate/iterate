@@ -64,9 +64,18 @@ async function runConfigInSandboxInternal(
   const repoPath = workingDirectory ? `/tmp/repo/${workingDirectory}` : "/tmp/repo";
 
   // Create a single bash script that handles the entire build process
-  const buildScript = dedent`
+  const buildScript = dedent(`
     #!/bin/bash
     set -e  # Exit on any error
+
+    # Read arguments passed to the script
+    GITHUB_REPO_URL="$1"
+    GITHUB_TOKEN="$2"
+    CHECKOUT_TARGET="$3"
+    WORKING_DIR="$4"
+    CALLBACK_URL="$5"
+    BUILD_ID="$6"
+    ESTATE_ID="$7"
 
     # Function to send callback if URL is provided
     send_callback() {
@@ -75,113 +84,132 @@ async function runConfigInSandboxInternal(
       local stderr="$3"
       local exit_code="$4"
   
-      if [ -n "${callbackUrl || ""}" ]; then
-        # Prepare JSON payload
-        local payload=$(cat <<EOF
-    {
-      "buildId": "${options.buildId || ""}",
-      "estateId": "${options.estateId || ""}",
-      "success": \${success},
-      "stdout": $(echo "$stdout" | jq -Rs .),
-      "stderr": $(echo "$stderr" | jq -Rs .),
-      "exitCode": $exit_code
-    }
-    EOF
-        )
+      if [ -n "$CALLBACK_URL" ]; then
+        echo "=== Sending callback to: $CALLBACK_URL ===" >&2
+
+        # Prepare JSON payload safely using jq
+        local payload=$(jq -n \\
+          --arg buildId "$BUILD_ID" \\
+          --arg estateId "$ESTATE_ID" \\
+          --argjson success "$success" \\
+          --arg stdout "$stdout" \\
+          --arg stderr "$stderr" \\
+          --argjson exitCode "$exit_code" \\
+          '{buildId: $buildId, estateId: $estateId, success: $success, stdout: $stdout, stderr: $stderr, exitCode: $exitCode}')
 
         # Send callback (fire and forget, don't wait for response)
-        curl -X POST "${callbackUrl}" \
-          -H "Content-Type: application/json" \
-          -d "$payload" \
-          --max-time 10 \
-          2>/dev/null || true
+        curl -X POST "$CALLBACK_URL" \\
+          -H "Content-Type: application/json" \\
+          -d "$payload" \\
+          --max-time 10 \\
+          2>&1 | sed 's/^/[CALLBACK] /' >&2 || true
+
+        echo "=== Callback sent ===" >&2
       fi
     }
 
-    # Capture all output
-    exec 2>&1
-    STDOUT=""
-    STDERR=""
+    # Determine the actual working directory
+    if [ -n "$WORKING_DIR" ]; then
+      REPO_PATH="/tmp/repo/$WORKING_DIR"
+    else
+      REPO_PATH="/tmp/repo"
+    fi
 
-    echo "=== Starting build process ==="
-    echo "Repository: ${githubRepoUrl}"
-    echo "Checkout target: ${checkoutTarget}"
-    echo "Working directory: ${workingDirectory || "root"}"
-    echo ""
+    echo "=== Starting build process ===" >&2
+    echo "Repository: $GITHUB_REPO_URL" >&2
+    echo "Checkout target: $CHECKOUT_TARGET" >&2
+    echo "Working directory: \${WORKING_DIR:-root}" >&2
+    if [ -n "$CALLBACK_URL" ]; then
+      echo "Callback URL: $CALLBACK_URL" >&2
+    fi
+    echo "" >&2
 
     # Clone the repository
-    echo "=== Cloning repository ==="
-    if ! git clone https://x-access-token:${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo 2>&1; then
+    echo "=== Cloning repository ===" >&2
+    # Extract the repo path from the URL safely
+    REPO_PATH_FROM_URL=$(echo "$GITHUB_REPO_URL" | sed 's|https://||')
+    if ! git clone "https://x-access-token:$GITHUB_TOKEN@$REPO_PATH_FROM_URL" /tmp/repo 2>&1 >&2; then
       STDERR="Failed to clone repository"
       send_callback "false" "" "$STDERR" 1
-      echo "$STDERR"
+      echo "ERROR: $STDERR" >&2
       exit 1
     fi
 
     # Checkout specific commit or branch
-    if [ "${checkoutTarget}" != "main" ]; then
-      echo "=== Checking out ${checkoutTarget} ==="
+    if [ "$CHECKOUT_TARGET" != "main" ] && [ -n "$CHECKOUT_TARGET" ]; then
+      echo "=== Checking out $CHECKOUT_TARGET ===" >&2
       cd /tmp/repo
-      if ! git checkout ${checkoutTarget} 2>&1; then
-        STDERR="Failed to checkout ${checkoutTarget}"
+      if ! git checkout "$CHECKOUT_TARGET" 2>&1 >&2; then
+        STDERR="Failed to checkout $CHECKOUT_TARGET"
         send_callback "false" "" "$STDERR" 1
-        echo "$STDERR"
+        echo "ERROR: $STDERR" >&2
         exit 1
       fi
     fi
 
     # Verify working directory exists
-    echo "=== Verifying working directory ==="
-    if [ ! -d "${repoPath}" ]; then
-      STDERR="Working directory ${workingDirectory} does not exist in the repository"
+    echo "=== Verifying working directory ===" >&2
+    if [ ! -d "$REPO_PATH" ]; then
+      STDERR="Working directory $WORKING_DIR does not exist in the repository"
       send_callback "false" "" "$STDERR" 1
-      echo "$STDERR"
+      echo "ERROR: $STDERR" >&2
       exit 1
     fi
 
-    # Install dependencies
-    echo "=== Installing dependencies ==="
-    cd ${repoPath}
-    if ! pnpm i --silent 2>&1; then
+    # Install dependencies (suppress output)
+    echo "=== Installing dependencies ===" >&2
+    cd "$REPO_PATH"
+    if ! pnpm i --silent 2>&1 >&2; then
       STDERR="Failed to install dependencies"
       send_callback "false" "" "$STDERR" 1
-      echo "$STDERR"
+      echo "ERROR: $STDERR" >&2
       exit 1
     fi
 
-    # Run pnpm iterate and capture output
-    echo "=== Running pnpm iterate ==="
-    if OUTPUT=$(pnpm iterate 2>&1); then
-      STDOUT="$OUTPUT"
+    # Run pnpm iterate and capture ONLY its stdout
+    echo "=== Running pnpm iterate ===" >&2
+    if OUTPUT=$(pnpm iterate 2>/dev/null); then
+      # Success - output to stdout and send callback
       echo "$OUTPUT"
-      send_callback "true" "$STDOUT" "" 0
+      send_callback "true" "$OUTPUT" "" 0
       exit 0
     else
       EXIT_CODE=$?
-      STDERR="$OUTPUT"
-      echo "$OUTPUT"
+      # Failure - capture stderr this time
+      STDERR=$(pnpm iterate 2>&1 >/dev/null || true)
       send_callback "false" "" "$STDERR" $EXIT_CODE
+      echo "ERROR: pnpm iterate failed with exit code $EXIT_CODE" >&2
+      echo "$STDERR" >&2
       exit $EXIT_CODE
     fi
-  `;
+  `);
 
   // Write the script to a file in the sandbox
   await sandbox.writeFile("/tmp/build.sh", buildScript);
 
-  // Make the script executable and run it
-  const result = await sandbox.exec("chmod +x /tmp/build.sh && /tmp/build.sh", {
+  // Prepare arguments for the script (properly escaped)
+  const scriptArgs = [
+    githubRepoUrl,
+    githubToken,
+    checkoutTarget,
+    workingDirectory || "",
+    callbackUrl || "",
+    options.buildId || "",
+    options.estateId || "",
+  ];
+
+  // Create the command with properly escaped arguments
+  const command = [
+    "chmod +x /tmp/build.sh &&",
+    "/tmp/build.sh",
+    ...scriptArgs.map((arg) => `'${arg.replace(/'/g, "'\\''")}'`),
+  ].join(" ");
+
+  // Make the script executable and run it with arguments
+  const result = await sandbox.exec(command, {
     timeout: 90000, // 90 seconds total timeout
   });
 
-  console.log("Result:", {
-    success: result.exitCode === 0,
-    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
-    output: {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    },
-  });
   // If callback URL is provided, the script will handle the callback
   // Otherwise, return the result directly
   if (callbackUrl) {
