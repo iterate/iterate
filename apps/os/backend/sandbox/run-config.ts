@@ -61,7 +61,6 @@ async function runConfigInSandboxInternal(
 
   // Determine the checkout target and working directory
   const checkoutTarget = commitHash || branch || "main";
-  const repoPath = workingDirectory ? `/tmp/repo/${workingDirectory}` : "/tmp/repo";
 
   // Create a single bash script that handles the entire build process
   const buildScript = dedent(`
@@ -208,6 +207,16 @@ async function runConfigInSandboxInternal(
   // Make the script executable and run it with arguments
   const result = await sandbox.exec(command, {
     timeout: 90000, // 90 seconds total timeout
+  });
+
+  console.log("Build result", {
+    success: result.exitCode === 0,
+    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
+    output: {
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+    },
   });
 
   // If callback URL is provided, the script will handle the callback
