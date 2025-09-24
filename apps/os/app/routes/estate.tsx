@@ -397,7 +397,10 @@ function EstateContent() {
               <div className="flex items-center gap-2">
                 <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
                 <span className="text-green-700 dark:text-green-300 font-medium">
-                  Connected to Repository #{connectedRepo.repoId}
+                  Connected to{" "}
+                  {connectedRepo.repoFullName ||
+                    connectedRepo.repoName ||
+                    `Repository #${connectedRepo.repoId}`}
                 </span>
               </div>
               <div className="flex gap-2">
