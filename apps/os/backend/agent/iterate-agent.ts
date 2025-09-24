@@ -37,8 +37,8 @@ import {
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
-  handleMCPConnectRequest,
   mcpManagerCache,
+  getOrCreateMCPConnection,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
@@ -1057,24 +1057,28 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       ...R.pipe(
         input.requiresHeadersAuth ?? {},
         R.entries(),
-        R.map(([key, config]) => ({
-          key,
-          type: "header" as const,
-          placeholder: config.placeholder,
-          description: config.description,
-          sensitive: config.sensitive,
-        })),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "header",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
       ),
       ...R.pipe(
         input.requiresQueryParamsAuth ?? {},
         R.entries(),
-        R.map(([key, config]) => ({
-          key,
-          type: "query_param" as const,
-          placeholder: config.placeholder,
-          description: config.description,
-          sensitive: config.sensitive,
-        })),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "query_param",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
       ),
     ];
 
@@ -1110,9 +1114,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       metadata: {},
       triggerLLMRequest: false,
     };
-
-    const events = await handleMCPConnectRequest({
-      event: {
+    const result = await getOrCreateMCPConnection({
+      connectionKey,
+      connectionRequestEvent: {
         ...connectRequestEvent,
         eventIndex: 0,
         createdAt: new Date().toISOString(),
@@ -1122,9 +1126,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       reducedState: this.getReducedState(),
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
+    if (!result.success) {
+      return {
+        success: false,
+        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${result.error}`,
+      };
+    }
 
-    if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-      const errorDetails = events
+    if (result.data.events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+      const errorDetails = result.data.events
         .map((e) => {
           if (e.type === "MCP:CONNECTION_ERROR") {
             return `${e.type}: ${e.data.error}`;
@@ -1137,7 +1147,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         .join("; ");
 
       return {
-        __addAgentCoreEvents: events,
+        __addAgentCoreEvents: result.data.events,
         success: false,
         message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
         addedMcpServer: mcpServer,
@@ -1145,7 +1155,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     return {
-      __addAgentCoreEvents: events,
+      __addAgentCoreEvents: result.data.events,
       success: true,
       message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
       addedMcpServer: mcpServer,

@@ -58,7 +58,7 @@ export const MCPConnection = z.object({
   serverUrl: z.string(),
   serverName: z.string(),
   mode: IntegrationMode,
-  userId: z.string().optional(),
+  userId: z.string(),
   integrationSlug: z.string().optional(),
   tools: z.array(MCPTool),
   prompts: z.array(MCPPrompt),
@@ -78,7 +78,6 @@ export type MCPConnection = z.infer<typeof MCPConnection>;
 
 export interface MCPSliceState {
   mcpConnections: Record<MCPConnectionKey, MCPConnection>;
-  pendingConnections: string[]; // Track pending connection keys
 }
 
 // ------------------------- Event Schemas -------------------------
@@ -232,6 +231,7 @@ const mcpParamsRequiredFields = {
     requiredParams: z.array(MCPParam),
     userId: z.string(),
     agentDurableObject: AgentDurableObjectInfo,
+    integrationSlug: z.string(),
     paramsCollectionUrl: z.string(),
   }),
 };
@@ -366,7 +366,6 @@ export const mcpSlice = defineAgentCoreSlice<{
   eventInputSchema: MCPEventInput,
   initialState: {
     mcpConnections: {},
-    pendingConnections: [],
   },
   reduce(state, deps, event) {
     switch (event.type) {
@@ -374,17 +373,10 @@ export const mcpSlice = defineAgentCoreSlice<{
         const { serverUrl, mode, userId } = event.data;
         const connectionKey = getConnectionKey({ serverUrl, mode, userId });
         const { [connectionKey]: _conn, ...rest } = state.mcpConnections;
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.includes(connectionKey)
-          ? pendingConnections
-          : [...pendingConnections, connectionKey];
-
-        // Update runtime tools to remove tools from the disconnected connection
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections: rest, deps });
 
         return {
           mcpConnections: { ...rest },
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems],
         };
@@ -414,15 +406,11 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
-
         return {
           mcpConnections: newConnections,
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, connectionMessage],
-          triggerLLMRequest: newPendingConnections.length === 0,
+          triggerLLMRequest: true,
         };
       }
 
@@ -482,17 +470,11 @@ export const mcpSlice = defineAgentCoreSlice<{
         }
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
 
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = connectionKey
-          ? pendingConnections.filter((key) => key !== connectionKey)
-          : pendingConnections;
-
         return {
           mcpConnections: newConnections,
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, errorMessage],
-          triggerLLMRequest: newPendingConnections.length === 0,
+          triggerLLMRequest: true,
         };
       }
 
@@ -514,8 +496,44 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
+        const newState = {
+          mcpConnections: {
+            ...state.mcpConnections,
+            [connectionKey]: {
+              serverId: "",
+              serverUrl,
+              mode,
+              userId,
+              integrationSlug,
+              tools: [],
+              prompts: [],
+              resources: [],
+            },
+          },
+          inputItems: [...state.inputItems, oauthMessage],
+          triggerLLMRequest: true,
+        };
+        return newState;
+      }
+
+      case "MCP:PARAMS_REQUIRED": {
+        const { connectionKey, serverUrl, mode, userId, integrationSlug, paramsCollectionUrl } =
+          event.data;
+
+        if (!paramsCollectionUrl) {
+          return {};
+        }
+
+        const paramsRequiredMessage = {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Additional inputs are required to connect to ${integrationSlug}. Send the user this URL to add inputs: ${paramsCollectionUrl}. Connection will proceed automatically once inputs are added.`,
+            },
+          ],
+        } satisfies ResponseInputItem;
 
         const newState = {
           mcpConnections: {
@@ -531,9 +549,8 @@ export const mcpSlice = defineAgentCoreSlice<{
               resources: [],
             },
           },
-          pendingConnections: newPendingConnections,
-          inputItems: [...state.inputItems, oauthMessage],
-          triggerLLMRequest: newPendingConnections.length === 0,
+          inputItems: [...state.inputItems, paramsRequiredMessage],
+          triggerLLMRequest: true,
         };
         return newState;
       }

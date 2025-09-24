@@ -1,7 +1,7 @@
 import dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
-import { IntegrationMode } from "./tool-schemas.ts";
+import { IntegrationMode, MCPParam } from "./tool-schemas.ts";
 
 export type IterateAgentToolInterface = typeof iterateAgentTools.$infer.interface;
 export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;
@@ -99,11 +99,7 @@ export const iterateAgentTools = defineDOTools({
       requiresHeadersAuth: z
         .record(
           z.string(),
-          z.object({
-            placeholder: z.string(),
-            description: z.string(),
-            sensitive: z.boolean().default(true),
-          }),
+          MCPParam.pick({ placeholder: true, description: true, sensitive: true }),
         )
         .nullable()
         .describe(
@@ -112,11 +108,7 @@ export const iterateAgentTools = defineDOTools({
       requiresQueryParamsAuth: z
         .record(
           z.string(),
-          z.object({
-            placeholder: z.string(),
-            description: z.string(),
-            sensitive: z.boolean().default(false),
-          }),
+          MCPParam.pick({ placeholder: true, description: true, sensitive: true }),
         )
         .nullable()
         .describe(

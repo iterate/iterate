@@ -203,6 +203,7 @@ export async function handleMCPConnectRequest(
           mode,
           connectionKey,
           requiredParams: missingParams,
+          integrationSlug: guaranteedIntegrationSlug,
           userId,
           agentDurableObject,
           paramsCollectionUrl,
@@ -474,19 +475,13 @@ export function getConnectionQueue(connectionKey: MCPConnectionKey): ConnectionQ
 export function abortPendingConnections(connectionKey: MCPConnectionKey, reason: string) {
   const entry = connectionQueues.get(connectionKey);
   if (entry) {
-    // Abort all pending tasks - this will cause p-queue to reject promises
-    // for both executing and pending tasks when they check the signal
     entry.controller.abort(reason);
-
-    // Important: We don't delete the queue entry immediately to avoid race conditions.
-    // The queue will be cleaned up by the timeout in the finally block of getOrCreateMCPConnection
-    // after all tasks have been processed (either completed or aborted).
   }
 }
 
 export async function getOrCreateMCPConnection(params: {
   connectionKey: MCPConnectionKey;
-  connection: MCPConnection;
+  connectionRequestEvent: MCPConnectRequestEvent;
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
@@ -494,7 +489,7 @@ export async function getOrCreateMCPConnection(params: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
-  const { connectionKey, connection } = params;
+  const { connectionKey } = params;
 
   // Check cache first before even creating/using a queue
   const existingManager = mcpManagerCache.managers.get(connectionKey);
@@ -507,49 +502,26 @@ export async function getOrCreateMCPConnection(params: {
 
   const result = await queue.add(
     async ({ signal }): Promise<Result<MCPConnectionResult>> => {
-      // Actually create the connection (only one execution at a time per key)
       try {
-        // Double-check inside queue in case another concurrent request completed
         const existingManager = mcpManagerCache.managers.get(connectionKey);
         if (existingManager) {
           return { success: true, data: { manager: existingManager, events: [] } };
         }
-
-        // Check if we've been aborted before starting
         if (signal?.aborted) {
           return { success: false, error: signal.reason || "Connection aborted" };
         }
         const events = await handleMCPConnectRequest({
-          event: {
-            type: "MCP:CONNECT_REQUEST",
-            data: {
-              serverUrl: connection.serverUrl,
-              mode: connection.mode,
-              userId: connection.userId,
-              integrationSlug: connection.integrationSlug,
-              requiresOAuth: connection.requiresOAuth ?? true,
-              allowedTools: connection.tools.map((t) => t.name),
-              allowedPrompts: connection.prompts.map((p) => p.name),
-              allowedResources: connection.resources.map((r) => r.uri),
-              triggerLLMRequestOnEstablishedConnection: false,
-            },
-            eventIndex: 0,
-            createdAt: new Date().toISOString(),
-            metadata: {},
-            triggerLLMRequest: false,
-          } as MCPConnectRequestEvent,
+          event: params.connectionRequestEvent,
           reducedState: params.reducedState,
           agentDurableObject: params.agentDurableObject,
           estateId: params.estateId,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
-        // Check if events contain oauth_required or connection_error
         const hasOAuthRequired = events.some((e) => e.type === "MCP:OAUTH_REQUIRED");
         const hasConnectionError = events.some((e) => e.type === "MCP:CONNECTION_ERROR");
 
         if (hasOAuthRequired || hasConnectionError) {
-          // Abort all pending connections for this key
           const abortReason = hasOAuthRequired
             ? "OAuth authorization required - aborting pending connection attempts"
             : "Connection failed - aborting pending connection attempts";
@@ -559,7 +531,6 @@ export async function getOrCreateMCPConnection(params: {
           console.log("aborted pending connections", abortReason);
         }
 
-        // The manager should be available after successful connection
         const manager = mcpManagerCache.managers.get(params.connectionKey);
         if (!manager) {
           return { success: true, data: { manager: undefined, events } };
@@ -592,13 +563,13 @@ export async function getOrCreateMCPConnection(params: {
 // ------------------------- Lazy Connection -------------------------
 
 /**
- * Lazily connect to an MCP server when a tool is first used.
+ * Rehydrate an existing MCP connection.
  *
  * 1. Returns immediately if connection exists in cache (no queue overhead)
  * 2. Uses queue only for actual connection attempts to prevent duplicates
  * 3. Cleans up idle queues automatically after connection attempts
  */
-export async function lazyConnectMCPServer(params: {
+export async function rehydrateExistingMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
   agentDurableObject: AgentDurableObjectInfo;
@@ -608,14 +579,27 @@ export async function lazyConnectMCPServer(params: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPClientManager | undefined> & { events?: MCPEventHookReturnEvent[] }> {
-  const { connectionKey } = params;
-
-  const existingManager = mcpManagerCache.managers.get(connectionKey);
-  if (existingManager) {
-    return { success: true, data: existingManager };
-  }
-
-  const result = await getOrCreateMCPConnection(params);
+  const result = await getOrCreateMCPConnection({
+    ...params,
+    connectionRequestEvent: {
+      type: "MCP:CONNECT_REQUEST",
+      data: {
+        serverUrl: params.connection.serverUrl,
+        mode: params.connection.mode,
+        userId: params.connection.userId,
+        integrationSlug: params.connection.integrationSlug,
+        requiresOAuth: params.connection.requiresOAuth ?? true,
+        allowedTools: params.connection.tools.map((t) => t.name),
+        allowedPrompts: params.connection.prompts.map((p) => p.name),
+        allowedResources: params.connection.resources.map((r) => r.uri),
+        triggerLLMRequestOnEstablishedConnection: false,
+      },
+      eventIndex: 0,
+      createdAt: new Date().toISOString(),
+      metadata: {},
+      triggerLLMRequest: false,
+    },
+  });
 
   if (result.success) {
     return {

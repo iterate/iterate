@@ -1,10 +1,19 @@
-import { useState, useEffect, useMemo } from "react";
-import { Form, useNavigate, useSearchParams } from "react-router";
+import { useState, useMemo } from "react";
+import { useNavigate, useSearchParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
 import { Shield, Eye, EyeOff } from "lucide-react";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
+import {
+  Form,
+  FormControl,
+  FormDescription,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "../components/ui/form.tsx";
 import {
   Card,
   CardContent,
@@ -15,6 +24,8 @@ import {
 import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
+import { AgentDurableObjectInfo } from "../../backend/auth/oauth-state-schemas.ts";
+
 interface RequiredParam {
   key: string;
   type: "header" | "query_param";
@@ -52,21 +63,28 @@ export default function MCPParams() {
     () => JSON.parse(requiredParamsStr),
     [requiredParamsStr],
   );
-  const durableObject = useMemo(() => JSON.parse(agentDurableObject), [agentDurableObject]);
+  const durableObject = useMemo(
+    () => AgentDurableObjectInfo.parse(agentDurableObject),
+    [agentDurableObject],
+  );
 
-  // State for form values
-  const [values, setValues] = useState<Record<string, string>>({});
+  // Memoized initial values
+  const initialValues = useMemo(() => {
+    const values: Record<string, string> = {};
+    requiredParams.forEach((param) => {
+      values[param.key] = "";
+    });
+    return values;
+  }, [requiredParams]);
+
+  // State for UI
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
-  // Initialize form values
-  useEffect(() => {
-    const initialValues: Record<string, string> = {};
-    requiredParams.forEach((param) => {
-      initialValues[param.key] = "";
-    });
-    setValues(initialValues);
-  }, [requiredParams]);
+  // Set up React Hook Form
+  const form = useForm<Record<string, string>>({
+    defaultValues: initialValues,
+  });
 
   // Mutation to save parameters
   const { mutateAsync: saveParams, isPending } = useMutation(
@@ -78,18 +96,8 @@ export default function MCPParams() {
     trpc.integrations.reconnectMCPServer.mutationOptions({}),
   );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (values: Record<string, string>) => {
     setError(null);
-
-    // Validate all fields are filled
-    const missingFields = requiredParams.filter((param) => !values[param.key]?.trim());
-    if (missingFields.length > 0) {
-      setError(
-        `Please fill in all required fields: ${missingFields.map((f) => f.description).join(", ")}`,
-      );
-      return;
-    }
 
     try {
       // Save parameters
@@ -104,7 +112,11 @@ export default function MCPParams() {
       });
 
       // Trigger reconnection to the agent
-      if (durableObject.name && durableObject.id && durableObject.className) {
+      if (
+        durableObject.durableObjectName &&
+        durableObject.durableObjectId &&
+        durableObject.className
+      ) {
         await reconnect({
           estateId,
           agentDurableObject: durableObject,
@@ -114,7 +126,6 @@ export default function MCPParams() {
         });
       }
 
-      // Navigate back to integrations or close window
       if (window.opener) {
         window.close();
       } else {
@@ -148,76 +159,82 @@ export default function MCPParams() {
         </CardHeader>
 
         <CardContent>
-          <Form onSubmit={handleSubmit} className="space-y-6">
-            {requiredParams.map((param) => (
-              <div key={param.key} className="space-y-2">
-                <Label htmlFor={param.key} className="flex items-center gap-2">
-                  {param.description}
-                  {param.sensitive && <Shield className="w-3 h-3 text-muted-foreground" />}
-                </Label>
+          <Form {...form}>
+            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
+              {requiredParams.map((param) => (
+                <FormField
+                  key={param.key}
+                  control={form.control}
+                  name={param.key}
+                  rules={{ required: "This field is required" }}
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel className="flex items-center gap-2">
+                        {param.description}
+                        {param.sensitive && <Shield className="w-3 h-3 text-muted-foreground" />}
+                      </FormLabel>
 
-                <div className="relative">
-                  <Input
-                    id={param.key}
-                    type={param.sensitive && !showSensitive[param.key] ? "password" : "text"}
-                    placeholder={param.placeholder}
-                    value={values[param.key] || ""}
-                    onChange={(e) =>
-                      setValues((prev) => ({ ...prev, [param.key]: e.target.value }))
-                    }
-                    required
-                    className="pr-10"
-                  />
+                      <FormControl>
+                        <div className="relative">
+                          <Input
+                            type={
+                              param.sensitive && !showSensitive[param.key] ? "password" : "text"
+                            }
+                            placeholder={param.placeholder}
+                            className="pr-10"
+                            {...field}
+                          />
 
-                  {param.sensitive && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="absolute right-0 top-0 h-full px-3"
-                      onClick={() => toggleSensitive(param.key)}
-                    >
-                      {showSensitive[param.key] ? (
-                        <EyeOff className="w-4 h-4" />
-                      ) : (
-                        <Eye className="w-4 h-4" />
-                      )}
-                    </Button>
+                          {param.sensitive && (
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="absolute right-0 top-0 h-full px-3"
+                              onClick={() => toggleSensitive(param.key)}
+                            >
+                              {showSensitive[param.key] ? (
+                                <EyeOff className="w-4 h-4" />
+                              ) : (
+                                <Eye className="w-4 h-4" />
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </FormControl>
+
+                      <FormDescription>
+                        {param.type === "header" && "This will be sent as an HTTP header"}
+                        {param.type === "query_param" &&
+                          "This will be added to the server URL as a query parameter"}
+                      </FormDescription>
+
+                      <FormMessage />
+                    </FormItem>
                   )}
-                </div>
+                />
+              ))}
 
-                {param.type === "header" && (
-                  <p className="text-xs text-muted-foreground">
-                    This will be sent as an HTTP header
-                  </p>
-                )}
-                {param.type === "query_param" && (
-                  <p className="text-xs text-muted-foreground">
-                    This will be added to the server URL as a query parameter
-                  </p>
-                )}
+              {error && (
+                <Alert variant="destructive">
+                  <AlertDescription>{error}</AlertDescription>
+                </Alert>
+              )}
+
+              <div className="flex gap-3">
+                <Button type="submit" disabled={isPending} className="flex-1">
+                  {isPending ? "Saving..." : "Save and Connect"}
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate(-1)}
+                  disabled={isPending}
+                >
+                  Cancel
+                </Button>
               </div>
-            ))}
-
-            {error && (
-              <Alert variant="destructive">
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            <div className="flex gap-3">
-              <Button type="submit" disabled={isPending} className="flex-1">
-                {isPending ? "Saving..." : "Save and Connect"}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate(-1)}
-                disabled={isPending}
-              >
-                Cancel
-              </Button>
-            </div>
+            </form>
           </Form>
         </CardContent>
       </Card>

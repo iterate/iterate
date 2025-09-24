@@ -493,25 +493,62 @@ export const integrationsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { estateId, connectionKey, params } = input;
-      await ctx.db
-        .delete(schemas.mcpConnectionParam)
-        .where(
-          and(
-            eq(schemas.mcpConnectionParam.estateId, estateId),
-            eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
-          ),
-        );
-      if (params.length > 0) {
-        await ctx.db.insert(schemas.mcpConnectionParam).values(
-          params.map((param) => ({
-            estateId,
-            connectionKey,
-            paramKey: param.key,
-            paramValue: param.value,
-            paramType: param.type,
-          })),
-        );
-      }
+
+      await ctx.db.transaction(async (tx) => {
+        for (const param of params) {
+          await tx
+            .insert(schemas.mcpConnectionParam)
+            .values({
+              estateId,
+              connectionKey,
+              paramKey: param.key,
+              paramValue: param.value,
+              paramType: param.type,
+            })
+            .onConflictDoUpdate({
+              target: [
+                schemas.mcpConnectionParam.estateId,
+                schemas.mcpConnectionParam.connectionKey,
+                schemas.mcpConnectionParam.paramKey,
+                schemas.mcpConnectionParam.paramType,
+              ],
+              set: {
+                paramValue: param.value,
+                updatedAt: new Date(),
+              },
+            });
+        }
+
+        if (params.length > 0) {
+          const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
+          const existingParams = await tx.query.mcpConnectionParam.findMany({
+            where: and(
+              eq(schemas.mcpConnectionParam.estateId, estateId),
+              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+            ),
+          });
+
+          const paramsToDelete = existingParams.filter(
+            (existing) => !currentParamKeys.includes(`${existing.paramKey}:${existing.paramType}`),
+          );
+
+          for (const paramToDelete of paramsToDelete) {
+            await tx
+              .delete(schemas.mcpConnectionParam)
+              .where(eq(schemas.mcpConnectionParam.id, paramToDelete.id));
+          }
+        } else {
+          await tx
+            .delete(schemas.mcpConnectionParam)
+            .where(
+              and(
+                eq(schemas.mcpConnectionParam.estateId, estateId),
+                eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+              ),
+            );
+        }
+      });
+
       return { success: true };
     }),
 
@@ -540,8 +577,8 @@ export const integrationsRouter = router({
     .input(
       z.object({
         agentDurableObject: z.object({
-          name: z.string(),
-          id: z.string(),
+          durableObjectId: z.string(),
+          durableObjectName: z.string(),
           className: z.string(),
         }),
         serverUrl: z.string(),
@@ -553,7 +590,7 @@ export const integrationsRouter = router({
       const { agentDurableObject, serverUrl, mode, integrationSlug } = input;
       const params = {
         db: ctx.db,
-        agentInstanceName: agentDurableObject.name,
+        agentInstanceName: agentDurableObject.durableObjectName,
       };
 
       const agentStub =
@@ -564,7 +601,7 @@ export const integrationsRouter = router({
       if (!agentStub) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to get agent stub for ${agentDurableObject.className}: ${agentDurableObject.name}`,
+          message: `Failed to get agent stub for ${agentDurableObject.className}: ${agentDurableObject.durableObjectName}`,
         });
       }
       await agentStub.addEvents([
