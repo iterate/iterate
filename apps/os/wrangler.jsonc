@@ -16,6 +16,11 @@
       "pattern": "os.iterate.com",
       "custom_domain": true,
     },
+    {
+      // We need this to call ourselves from the sandbox
+      "pattern": "os.iterateproxy.com",
+      "custom_domain": true,
+    },
   ],
   "r2_buckets": [
     {

@@ -217,16 +217,6 @@ async function runConfigInSandboxInternal(
     timeout: 90000, // 90 seconds total timeout
   });
 
-  console.log("Build result", {
-    success: result.exitCode === 0,
-    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
-    output: {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    },
-  });
-
   // If callback URL is provided, the script will handle the callback
   // Otherwise, return the result directly
   if (callbackUrl) {

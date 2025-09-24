@@ -258,7 +258,7 @@ githubApp.post("/webhook", async (c) => {
     }
 
     // Generate a signed callback URL
-    let baseUrl = new URL(c.req.url).origin;
+    let baseUrl = new URL(c.req.url).origin.replace("os.iterate.com", "os.iterateproxy.com");
     if (baseUrl.includes("localhost")) {
       baseUrl = `https://${c.env.ITERATE_USER}.dev.iterate.com`;
     }
@@ -267,7 +267,6 @@ githubApp.post("/webhook", async (c) => {
       c.env.EXPIRING_URLS_SIGNING_KEY,
       3600, // 1 hour expiration
     );
-    console.log("Callback URL:", callbackUrl);
 
     // Run the configuration in the sandbox with callback
     const result = await runConfigInSandbox(c.env, {
