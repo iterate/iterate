@@ -271,8 +271,45 @@ export const integrationsRouter = router({
     const githubRepo = await getGithubRepoForEstate(ctx.db, estateId);
     if (!githubRepo) return null;
 
+    // Get the GitHub installation to fetch the repository details
+    const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+    let repoName: string | null = null;
+    let repoFullName: string | null = null;
+
+    if (githubInstallation) {
+      try {
+        const token = await getGithubInstallationToken(githubInstallation.accountId);
+
+        // Fetch repository details from GitHub API
+        const repoResponse = await fetch(
+          `https://api.github.com/repositories/${githubRepo.connectedRepoId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "User-Agent": "Iterate OS",
+              Accept: "application/vnd.github+json",
+            },
+          },
+        );
+
+        if (repoResponse.ok) {
+          const repoData = (await repoResponse.json()) as { name: string; full_name: string };
+          repoName = repoData.name;
+          repoFullName = repoData.full_name;
+        } else {
+          console.error(
+            `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
+          );
+        }
+      } catch (error) {
+        console.error("Error fetching repository details:", error);
+      }
+    }
+
     return {
       repoId: githubRepo.connectedRepoId,
+      repoName,
+      repoFullName,
       branch: githubRepo.connectedRepoRef || "main",
       path: githubRepo.connectedRepoPath || "/",
     };
