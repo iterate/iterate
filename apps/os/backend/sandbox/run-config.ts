@@ -29,7 +29,23 @@ export interface RunConfigError {
 /**
  * Runs a configuration build in a sandboxed environment
  */
+
 export async function runConfigInSandbox(
+  env: CloudflareEnv,
+  options: RunConfigOptions,
+): Promise<RunConfigResult | RunConfigError> {
+  try {
+    return await runConfigInSandboxInternal(env, options);
+  } catch (error) {
+    console.error("Error running config in sandbox:", error);
+    return {
+      error: "Internal server error during build",
+      details: error instanceof Error ? error.message : "Unknown error",
+    };
+  }
+}
+
+async function runConfigInSandboxInternal(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
@@ -82,7 +98,9 @@ export async function runConfigInSandbox(
 
   // Install dependencies first (suppress output)
   const installCommand = `cd ${repoPath} && pnpm i --silent`;
-  const installResult = await sandbox.exec(installCommand);
+  const installResult = await sandbox.exec(installCommand, {
+    timeout: 60000,
+  });
 
   if (installResult.exitCode !== 0) {
     return {
@@ -93,7 +111,9 @@ export async function runConfigInSandbox(
 
   // Run pnpm iterate (will use Node 24 by default)
   const iterateCommand = `cd ${repoPath} && pnpm iterate`;
-  const iterateResult = await sandbox.exec(iterateCommand);
+  const iterateResult = await sandbox.exec(iterateCommand, {
+    timeout: 30000,
+  });
 
   return {
     success: true,
