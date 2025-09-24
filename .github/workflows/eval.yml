@@ -28,6 +28,12 @@ jobs:
         run: pnpm docker:up
       - run: sleep 60
       - run: pnpm db:migrate
+      - name: pretend ngrok exists
+        run: |
+          ngrok() {
+            echo "pretending to be grok"
+          }
+          export -f ngrok
       - run: pnpm dev &
       - run: sleep 15
       - name: run evals
