@@ -69,6 +69,14 @@ export const ToolSpec = z.discriminatedUnion("type", [
 
 export type ToolSpec = z.infer<typeof ToolSpec>;
 
+export const MCPParam = z.object({
+  key: z.string(),
+  type: z.enum(["header", "query_param"]),
+  placeholder: z.string(),
+  description: z.string(),
+  sensitive: z.boolean(),
+});
+
 export const MCPServer = z.object({
   serverUrl: z.string(),
   mode: IntegrationMode.default("personal"),
@@ -78,17 +86,7 @@ export const MCPServer = z.object({
   allowedResources: z.array(z.string()).optional(),
   triggerLLMRequest: z.boolean().default(true).optional(),
   requiresOAuth: z.boolean().default(true), // When false, skip OAuth provider setup
-  requiresParams: z
-    .array(
-      z.object({
-        key: z.string(),
-        type: z.enum(["header", "query_param"]),
-        placeholder: z.string(),
-        description: z.string(),
-        sensitive: z.boolean().default(false),
-      }),
-    )
-    .optional(),
+  requiresParams: z.array(MCPParam).optional(),
 });
 export type MCPServer = z.infer<typeof MCPServer>;
 export type MCPServerInput = z.input<typeof MCPServer>;

@@ -10,11 +10,11 @@ import type { ResponseInputItem } from "../openai-response-schemas.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
+import { MCPParam } from "../tool-schemas.ts";
 import {
   generateRuntimeToolsFromConnections,
   type LazyConnectionDeps,
 } from "./mcp-tool-mapping.ts";
-
 // ------------------------- Schemas -------------------------
 
 /** Connection key format: serverUrl::mode::userId (personal) or serverUrl::company (company) */
@@ -51,14 +51,6 @@ export const MCPResource = z.object({
   name: z.string(),
   description: z.string().optional(),
   mimeType: z.string().optional(),
-});
-
-export const MCPParam = z.object({
-  key: z.string(),
-  type: z.enum(["header", "query_param"]),
-  placeholder: z.string(),
-  description: z.string(),
-  sensitive: z.boolean(),
 });
 
 export const MCPConnection = z.object({
