@@ -35,6 +35,7 @@
       "class_name": "Sandbox",
       "image": "./backend/sandbox/Dockerfile",
       "instance_type": "standard",
+      "max_instances": 10,
     },
   ],
   "durable_objects": {
