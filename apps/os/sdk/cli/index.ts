@@ -1,10 +1,12 @@
 import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
 import { t } from "./config.ts";
-import { checkoutEstateCommand } from "./commands/checkout-estate.ts";
+import { estate } from "./commands/checkout-estate.ts";
+import { gh } from "./commands/gh-commands.ts";
 
 const router = t.router({
-  estate: { checkout: checkoutEstateCommand },
+  estate,
+  gh,
 });
 
 const cli = createCli({ router });

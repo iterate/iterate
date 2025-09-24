@@ -1,5 +1,6 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { typeid } from "typeid-js";
+import dedent from "dedent";
 import type { CloudflareEnv } from "../../env.ts";
 
 export interface RunConfigOptions {
@@ -8,6 +9,9 @@ export interface RunConfigOptions {
   commitHash?: string;
   branch?: string;
   workingDirectory?: string;
+  callbackUrl?: string;
+  buildId?: string;
+  estateId?: string;
 }
 
 export interface RunConfigResult {
@@ -49,79 +53,193 @@ async function runConfigInSandboxInternal(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory } = options;
+  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory, callbackUrl } = options;
 
   // Get sandbox instance
   const sandboxId = typeid("build").toString();
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
-  // Clone the repository using the provided token
-  // For GitHub App installation tokens, use x-access-token as the username
-  const cloneCommand = `git clone https://x-access-token:${githubToken}@${githubRepoUrl.replace("https://", "")} /tmp/repo`;
-  const cloneResult = await sandbox.exec(cloneCommand);
+  // Determine the checkout target and working directory
+  const checkoutTarget = commitHash || branch || "main";
 
-  if (cloneResult.exitCode !== 0) {
-    return {
-      error: "Failed to clone repository",
-      details: cloneResult.stderr,
-    };
-  }
+  // Create a single bash script that handles the entire build process
+  const buildScript = dedent(`
+    #!/bin/bash
+    set -e  # Exit on any error
 
-  // Checkout specific commit or branch (prioritize commit hash since they're unique)
-  const checkoutTarget = commitHash || branch;
-  if (checkoutTarget) {
-    const checkoutCommand = `cd /tmp/repo && git checkout ${checkoutTarget}`;
-    const checkoutResult = await sandbox.exec(checkoutCommand);
+    # Read arguments passed to the script
+    GITHUB_REPO_URL="$1"
+    GITHUB_TOKEN="$2"
+    CHECKOUT_TARGET="$3"
+    WORKING_DIR="$4"
+    CALLBACK_URL="$5"
+    BUILD_ID="$6"
+    ESTATE_ID="$7"
 
-    if (checkoutResult.exitCode !== 0) {
-      return {
-        error: `Failed to checkout ${commitHash ? "commit" : "branch"}`,
-        details: checkoutResult.stderr,
-        commitHash: checkoutTarget,
-      };
+    # Function to send callback if URL is provided
+    send_callback() {
+      local success="$1"
+      local stdout="$2"
+      local stderr="$3"
+      local exit_code="$4"
+  
+      if [ -n "$CALLBACK_URL" ]; then
+        echo "=== Sending callback to: $CALLBACK_URL ===" >&2
+
+        # Prepare JSON payload safely using jq
+        local payload=$(jq -n \\
+          --arg buildId "$BUILD_ID" \\
+          --arg estateId "$ESTATE_ID" \\
+          --argjson success "$success" \\
+          --arg stdout "$stdout" \\
+          --arg stderr "$stderr" \\
+          --argjson exitCode "$exit_code" \\
+          '{buildId: $buildId, estateId: $estateId, success: $success, stdout: $stdout, stderr: $stderr, exitCode: $exitCode}')
+
+        # Send callback and wait for response
+        echo "=== Sending callback request ===" >&2
+        CURL_RESPONSE=$(curl -X POST "$CALLBACK_URL" \\
+          -H "Content-Type: application/json" \\
+          -d "$payload" \\
+          --max-time 10 \\
+          -w "\\n[HTTP_STATUS]: %{http_code}\\n[TIME]: %{time_total}s" \\
+          -s 2>&1) || CURL_EXIT=$?
+
+        # Log the response to stderr
+        echo "[CALLBACK_RESPONSE]: $CURL_RESPONSE" >&2
+        if [ -n "\${CURL_EXIT:-}" ]; then
+          echo "[CALLBACK_ERROR]: curl exited with code $CURL_EXIT" >&2
+        fi
+
+        echo "=== Callback completed ===" >&2
+      fi
     }
-  }
 
-  // Determine the actual working directory
-  const repoPath = workingDirectory ? `/tmp/repo/${workingDirectory}` : "/tmp/repo";
+    # Determine the actual working directory
+    if [ -n "$WORKING_DIR" ]; then
+      REPO_PATH="/tmp/repo/$WORKING_DIR"
+    else
+      REPO_PATH="/tmp/repo"
+    fi
 
-  // Verify the working directory exists
-  const checkDirCommand = `test -d ${repoPath}`;
-  const checkDirResult = await sandbox.exec(checkDirCommand);
+    echo "=== Starting build process ===" >&2
+    echo "Repository: $GITHUB_REPO_URL" >&2
+    echo "Checkout target: $CHECKOUT_TARGET" >&2
+    echo "Working directory: \${WORKING_DIR:-root}" >&2
+    if [ -n "$CALLBACK_URL" ]; then
+      echo "Callback URL: $CALLBACK_URL" >&2
+    fi
+    echo "" >&2
 
-  if (checkDirResult.exitCode !== 0) {
+    # Clone the repository
+    echo "=== Cloning repository ===" >&2
+    # Extract the repo path from the URL safely
+    REPO_PATH_FROM_URL=$(echo "$GITHUB_REPO_URL" | sed 's|https://||')
+    if ! git clone "https://x-access-token:$GITHUB_TOKEN@$REPO_PATH_FROM_URL" /tmp/repo 2>&1 >&2; then
+      STDERR="Failed to clone repository"
+      send_callback "false" "" "$STDERR" 1
+      echo "ERROR: $STDERR" >&2
+      exit 1
+    fi
+
+    # Checkout specific commit or branch
+    if [ "$CHECKOUT_TARGET" != "main" ] && [ -n "$CHECKOUT_TARGET" ]; then
+      echo "=== Checking out $CHECKOUT_TARGET ===" >&2
+      cd /tmp/repo
+      if ! git checkout "$CHECKOUT_TARGET" 2>&1 >&2; then
+        STDERR="Failed to checkout $CHECKOUT_TARGET"
+        send_callback "false" "" "$STDERR" 1
+        echo "ERROR: $STDERR" >&2
+        exit 1
+      fi
+    fi
+
+    # Verify working directory exists
+    echo "=== Verifying working directory ===" >&2
+    if [ ! -d "$REPO_PATH" ]; then
+      STDERR="Working directory $WORKING_DIR does not exist in the repository"
+      send_callback "false" "" "$STDERR" 1
+      echo "ERROR: $STDERR" >&2
+      exit 1
+    fi
+
+    # Install dependencies (suppress output)
+    echo "=== Installing dependencies ===" >&2
+    cd "$REPO_PATH"
+    if ! pnpm i --silent 2>&1 >&2; then
+      STDERR="Failed to install dependencies"
+      send_callback "false" "" "$STDERR" 1
+      echo "ERROR: $STDERR" >&2
+      exit 1
+    fi
+
+    # Run pnpm iterate and capture ONLY its stdout
+    echo "=== Running pnpm iterate ===" >&2
+    if OUTPUT=$(pnpm iterate 2>/dev/null); then
+      # Success - output to stdout and send callback
+      echo "$OUTPUT"
+      send_callback "true" "$OUTPUT" "" 0
+      exit 0
+    else
+      EXIT_CODE=$?
+      # Failure - capture stderr this time
+      STDERR=$(pnpm iterate 2>&1 >/dev/null || true)
+      send_callback "false" "" "$STDERR" $EXIT_CODE
+      echo "ERROR: pnpm iterate failed with exit code $EXIT_CODE" >&2
+      echo "$STDERR" >&2
+      exit $EXIT_CODE
+    fi
+  `);
+
+  // Write the script to a file in the sandbox
+  await sandbox.writeFile("/tmp/build.sh", buildScript);
+
+  // Prepare arguments for the script (properly escaped)
+  const scriptArgs = [
+    githubRepoUrl,
+    githubToken,
+    checkoutTarget,
+    workingDirectory || "",
+    callbackUrl || "",
+    options.buildId || "",
+    options.estateId || "",
+  ];
+
+  // Create the command with properly escaped arguments
+  const command = [
+    "chmod +x /tmp/build.sh &&",
+    "/tmp/build.sh",
+    ...scriptArgs.map((arg) => `'${arg.replace(/'/g, "'\\''")}'`),
+  ].join(" ");
+
+  // Make the script executable and run it with arguments
+  const result = await sandbox.exec(command, {
+    timeout: 90000, // 90 seconds total timeout
+  });
+
+  // If callback URL is provided, the script will handle the callback
+  // Otherwise, return the result directly
+  if (callbackUrl) {
+    // When using callback, we just return a simple acknowledgment
     return {
-      error: "Working directory not found",
-      details: `Directory ${workingDirectory} does not exist in the repository`,
+      success: true,
+      message: "Build started, results will be sent to callback",
+      output: {
+        stdout: "Build process initiated",
+        stderr: "",
+        exitCode: 0,
+      },
     };
   }
 
-  // Install dependencies first (suppress output)
-  const installCommand = `cd ${repoPath} && pnpm i --silent`;
-  const installResult = await sandbox.exec(installCommand, {
-    timeout: 60000,
-  });
-
-  if (installResult.exitCode !== 0) {
-    return {
-      error: "Failed to install dependencies",
-      details: installResult.stderr,
-    };
-  }
-
-  // Run pnpm iterate (will use Node 24 by default)
-  const iterateCommand = `cd ${repoPath} && pnpm iterate`;
-  const iterateResult = await sandbox.exec(iterateCommand, {
-    timeout: 30000,
-  });
-
+  // Return the result directly if no callback
   return {
-    success: true,
-    message: "Build completed successfully",
+    success: result.exitCode === 0,
+    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
     output: {
-      stdout: iterateResult.stdout,
-      stderr: iterateResult.stderr,
-      exitCode: iterateResult.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
     },
   };
 }
