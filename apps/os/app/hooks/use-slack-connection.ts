@@ -7,7 +7,7 @@ import { useEstateId } from "./use-estate.ts";
 export function useSlackConnection() {
   const estateId = useEstateId();
   const trpc = useTRPC();
-  
+
   const { data: integrations, refetch } = useSuspenseQuery(
     trpc.integrations.list.queryOptions({ estateId: estateId }),
   );
@@ -24,7 +24,7 @@ export function useSlackConnection() {
       return { error: { message: "No estate ID" } };
     }
 
-    const callbackURL = callbackPath 
+    const callbackURL = callbackPath
       ? callbackPath + "?success=true"
       : window.location.pathname + "?success=true";
 

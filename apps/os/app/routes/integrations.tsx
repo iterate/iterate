@@ -101,12 +101,9 @@ export default function Integrations() {
   const { mutateAsync: disconnectIntegration } = useMutation(
     trpc.integrations.disconnect.mutationOptions({}),
   );
-  
+
   // Use the Slack connection hook
-  const { 
-    connectSlackBot, 
-    disconnectSlackBot 
-  } = useSlackConnection();
+  const { connectSlackBot, disconnectSlackBot } = useSlackConnection();
 
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {
