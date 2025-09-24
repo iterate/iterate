@@ -36,6 +36,7 @@
       "image": "./backend/sandbox/Dockerfile",
       "instance_type": "standard",
       "max_instances": 10,
+      "rollout_active_grace_period": 900,
     },
   ],
   "durable_objects": {
