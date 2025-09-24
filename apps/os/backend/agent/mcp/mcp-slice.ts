@@ -74,7 +74,6 @@ export type MCPTool = z.infer<typeof MCPTool>;
 export type MCPPrompt = z.infer<typeof MCPPrompt>;
 export type MCPPromptArgument = z.infer<typeof MCPPromptArgument>;
 export type MCPResource = z.infer<typeof MCPResource>;
-export type MCPParam = z.infer<typeof MCPParam>;
 export type MCPConnection = z.infer<typeof MCPConnection>;
 
 export interface MCPSliceState {

@@ -19,6 +19,7 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
 };
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
+import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -40,7 +41,7 @@ import {
   mcpManagerCache,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput, type MCPParam } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";

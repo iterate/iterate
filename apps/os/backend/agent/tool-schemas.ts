@@ -77,6 +77,8 @@ export const MCPParam = z.object({
   sensitive: z.boolean(),
 });
 
+export type MCPParam = z.infer<typeof MCPParam>;
+
 export const MCPServer = z.object({
   serverUrl: z.string(),
   mode: IntegrationMode.default("personal"),

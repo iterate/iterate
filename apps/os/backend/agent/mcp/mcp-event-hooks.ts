@@ -11,6 +11,7 @@ import { getDb, type DB } from "../../db/client.ts";
 import { mcpConnectionParam } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
+import type { MCPParam } from "../tool-schemas.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
@@ -24,7 +25,6 @@ import {
   type MCPDisconnectRequestEventInput,
   type MCPOAuthRequiredEventInput,
   type MCPParamsRequiredEventInput,
-  type MCPParam,
 } from "./mcp-slice.ts";
 
 // ------------------------- Types -------------------------
