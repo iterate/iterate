@@ -267,6 +267,7 @@ githubApp.post("/webhook", async (c) => {
       c.env.EXPIRING_URLS_SIGNING_KEY,
       3600, // 1 hour expiration
     );
+    console.log("Callback URL:", callbackUrl);
 
     // Run the configuration in the sandbox with callback
     const result = await runConfigInSandbox(c.env, {
