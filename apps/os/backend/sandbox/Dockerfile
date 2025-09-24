@@ -1,5 +1,7 @@
 FROM docker.io/cloudflare/sandbox:0.3.2
 
+ENV COMMAND_TIMEOUT_MS=180000
+
 # Remove existing Node.js and install Node.js 24
 RUN apt-get remove -y nodejs npm && \
     curl -fsSL https://nodejs.org/dist/v24.0.0/node-v24.0.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1 && \
