@@ -14,12 +14,14 @@ buildCallbackApp.post("/callback", zValidator("json", BuildCallbackPayload), asy
   const url = c.req.url;
   const isValid = await verifySignedUrl(url, c.env.EXPIRING_URLS_SIGNING_KEY);
 
+  console.log("Build callback received", { url, isValid });
   if (!isValid) {
     console.error("Invalid or expired callback URL");
     return c.json({ error: "Invalid or expired callback URL" }, 401);
   }
 
   const { buildId, estateId, success, stdout, stderr, exitCode } = c.req.valid("json");
+  console.log("Build callback received", { buildId, estateId, success, stdout, stderr, exitCode });
 
   try {
     // Update the build record
