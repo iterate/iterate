@@ -17,6 +17,7 @@ import mishaImg from "../assets/misha.png?url";
 export default function Home() {
   const addToSlackRef = useRef<HTMLButtonElement>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  // const [setShowSlackButton] = useState(false);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -35,19 +36,22 @@ export default function Home() {
       <SiteHeader />
 
       {/* Main content */}
-      <main className="max-w-7xl mx-auto px-6 sm:px-8 md:px-10 pt-20 sm:pt-32 pb-12">
+      <main className="max-w-7xl mx-auto px-6 sm:px-8 md:px-10 pt-12 sm:pt-16 pb-8">
         {/* Hero section with monospace heading */}
         <div className="grid lg:grid-cols-2 gap-2 lg:gap-16 items-center">
           <div className="max-w-4xl">
-            <h1 className="text-4xl sm:text-5xl mb-10 sm:mb-12 tracking-tight leading-tight font-bold headline-mark">
-              Multiplayer AI. <span className="sm:whitespace-nowrap">Custom prompts.</span>{" "}
-              <span className="sm:whitespace-nowrap">MCP-connected.</span>
+            <h1 className="text-4xl sm:text-5xl mb-6 sm:mb-8 tracking-tight leading-tight font-bold headline-mark">
+              Hi 👋 I’m @iterate, your new co-worker
             </h1>
-            <p className="text-lg sm:text-xl text-gray-600 mb-12 sm:mb-14 leading-relaxed">
-              iterate is an AI employee that lives in Slack and can take action across your tools
-              like Linear, Notion, and GitHub. Customise its behaviour by tweaking rules, system
-              prompts, and integrations in a git repo you control.
-            </p>
+            <h2 className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed">
+              I work like ChatGPT, but:
+            </h2>
+            <div className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed space-y-2">
+              <p>...live in Slack</p>
+              <p>...multiplayer</p>
+              <p>...connect with your stack using MCP servers</p>
+              <p>...based on your rules/*.md</p>
+            </div>
             <div className="flex items-center gap-3 sm:gap-5 mb-6 sm:mb-24">
               <Button
                 ref={addToSlackRef}
@@ -75,24 +79,21 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Removed terminal-style helper block per request */}
-
-        {/* Additional copy (replaces operational capacity table) */}
         <section className="mt-2 sm:mt-4 mb-20">
-          <h2 className="text-2xl font-bold mb-8">How it works</h2>
+          <h2 className="text-2xl font-bold mb-8">How I work</h2>
           <div className="prose text-gray-700">
             <ul>
               <li>
-                <strong>Invite iterate to Slack.</strong> Message it with requests in DMs, channels,
-                or threads - just like you would with a human employee.
+                <strong>Invite me to Slack.</strong> Message me with requests in DMs, channels, or
+                threads - just like you would any other coworker.
               </li>
               <li>
-                <strong>Give it access to your tools.</strong> iterate can take actions across
-                GitHub, Linear, Notion, and more.
+                <strong>Give me access to your tools.</strong> I can take actions across GitHub,
+                Linear, Notion, and more.
               </li>
               <li>
-                <strong>Fine-tune its behaviour:</strong> Give iterate custom rules, context, and
-                integrations in a git repo you control.
+                <strong>Fine-tune my behaviour:</strong> Customise me using natural language, just
+                add rules/*.md in a git repo you control.
               </li>
             </ul>
           </div>
@@ -124,47 +125,55 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Pricing */}
-        <section className="mb-24" id="pricing">
-          <h2 className="text-2xl font-bold mb-8">Pricing</h2>
-          <div className="brutal-card brutal-dots p-6 w-full">
-            <div className="text-3xl font-semibold mb-4">$100/month + API cost</div>
-            <div className="mb-6 text-gray-700">
-              <p className="font-semibold mb-3">One plan. Everything included:</p>
-              <ul className="space-y-2 text-gray-600">
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>
-                    System prompts, rules and context fully customisable in your own git repo
-                  </span>
-                </li>
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>
-                    Free bespoke installation and setup with the former co-founder of Monzo
-                  </span>
-                </li>
-                <li className="flex items-start">
-                  <span className="mr-2">•</span>
-                  <span>Extend with your own MCP servers</span>
-                </li>
-              </ul>
-            </div>
-            <div className="flex items-center gap-3 sm:gap-5">
-              <Button className="w-64" size="lg" onClick={() => setIsCalendarOpen(true)}>
-                <span>Free installation</span>
-                <span className="hidden sm:flex items-center gap-2 ml-3">
-                  <kbd className="keycap keycap-invert" data-key="cmd">
-                    ⌘
-                  </kbd>
-                  <kbd className="keycap keycap-invert" data-key="k">
-                    K
-                  </kbd>
-                </span>
-              </Button>
-            </div>
-          </div>
-        </section>
+        {/* Pricing (commented out)
+<section className="mb-24" id="pricing">
+  <h2 className="text-2xl font-bold mb-8">Pricing</h2>
+  <div className="brutal-card brutal-dots p-6 w-full">
+      <div className="text-3xl font-semibold mb-4">$100/month + API cost</div>
+      <div className="mb-6 text-gray-700">
+        <p className="font-semibold mb-3">One plan. Everything included:</p>
+        <ul className="space-y-2 text-gray-600">
+          <li className="flex items-start">
+            <span className="mr-2">•</span>
+            <span>System prompts, rules and context fully customisable in your own git repo</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2">•</span>
+            <span>Free bespoke installation and setup with the former co-founder of Monzo</span>
+          </li>
+          <li className="flex items-start">
+            <span className="mr-2">•</span>
+            <span>Extend with your own MCP servers</span>
+          </li>
+        </ul>
+      </div>
+      <div className="flex items-center gap-3 sm:gap-5">
+        <Button 
+          className="w-64" 
+          size="lg"
+          onClick={() => setIsCalendarOpen(true)}
+        >
+          <span>Free installation</span>
+          <span className="hidden sm:flex items-center gap-2 ml-3">
+            <kbd className="keycap keycap-invert" data-key="cmd">⌘</kbd>
+            <kbd className="keycap keycap-invert" data-key="k">K</kbd>
+          </span>
+        </Button>
+        Easter egg Add to Slack button:
+        {showSlackButton && (
+          <Button 
+            variant="ghost"
+            size="sm"
+            className="text-xs text-gray-500 hover:text-gray-700"
+            onClick={() => window.location.href = 'https://bios.iterate.iterate.com/claim'}
+          >
+            Add to Slack (beta)
+          </Button>
+        )}
+      </div>
+  </div>
+</section>
+        */}
 
         {/* Team section */}
         <div className="mb-20">

@@ -1,10 +1,11 @@
+import * as React from "react";
 import BlogLayout from "../components/BlogLayout.tsx";
+import LegalPage from "../components/LegalPage.tsx";
 
 export default function PrivacyPolicy() {
   return (
     <BlogLayout>
-      <h1 className="text-3xl font-bold mb-8 text-gray-900 headline-mark">Privacy Policy</h1>
-      <div className="prose text-gray-700">
+      <LegalPage title="Privacy Policy">
         <p>
           <strong>Last updated June 06, 2025</strong>
         </p>
@@ -968,7 +969,7 @@ export default function PrivacyPolicy() {
           law. To request to review, update, or delete your personal information, please reach out
           to team@iterate.com
         </p>
-      </div>
+      </LegalPage>
     </BlogLayout>
   );
 }

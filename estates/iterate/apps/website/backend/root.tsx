@@ -1,4 +1,3 @@
-/// <reference path="./vite-env.d.ts" />
 import "./globals.css";
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
 import { PostHogProvider } from "./components/PostHogProvider.tsx";

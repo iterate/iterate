@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { cn } from "../../utils/cn";
+import { cn } from "../../utils/cn.ts";
 import logoAsset from "../../assets/logo.svg?url";
-import { DISPLAY_CARD_THREADS } from "../../constants/display-cards-data";
-import { getCardStackPositions } from "../../utils/animation-positions";
+import { DISPLAY_CARD_THREADS } from "../../constants/display-cards-data.ts";
+import { getCardStackPositions } from "../../utils/animation-positions.ts";
 
 interface ThreadProps {
   ask: string;

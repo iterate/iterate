@@ -125,7 +125,6 @@ export const slackSlice = defineAgentCoreSlice<{
           shouldTriggerLLM,
           role,
         } = slackWebhookEventToPromptFragment({
-          reducedState: next,
           webhookEvent: event,
           botUserId: next.botUserId,
         });
@@ -278,7 +277,6 @@ export function createSlackContextForState(params: {
  * Turn a Slack webhook event into zero or more messages and determine if LLM should be triggered.
  */
 export function slackWebhookEventToPromptFragment(params: {
-  reducedState: CoreReducedState<SlackSliceEventInput> & SlackSliceState;
   webhookEvent: SlackWebhookEventReceived;
   botUserId: string | undefined;
 }): {

@@ -4,7 +4,7 @@
  */
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "os-v2",
+  "name": "os",
   "compatibility_date": "2025-04-04",
   "compatibility_flags": ["nodejs_compat"],
   "main": "./backend/worker.ts",
@@ -14,6 +14,11 @@
   "routes": [
     {
       "pattern": "os.iterate.com",
+      "custom_domain": true,
+    },
+    {
+      // We need this to call ourselves from the sandbox
+      "pattern": "os.iterateproxy.com",
       "custom_domain": true,
     },
   ],
@@ -35,6 +40,8 @@
       "class_name": "Sandbox",
       "image": "./backend/sandbox/Dockerfile",
       "instance_type": "standard",
+      "max_instances": 10,
+      "rollout_active_grace_period": 900,
     },
   ],
   "durable_objects": {
@@ -71,6 +78,8 @@
       "new_sqlite_classes": ["Sandbox"],
     },
   ],
+  "services": [{ "binding": "SELF", "service": "os" }],
+
   /**
    * Smart Placement
    * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement

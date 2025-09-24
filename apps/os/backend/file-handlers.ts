@@ -66,6 +66,7 @@ const doUpload = async ({
     // Upload file to OpenAI
     // Note: the openai library requires us to buffer the request in memory
     const fileBlob = await new Response(stream2).blob();
+
     const openAIFile = await openai.files.create({
       file: new File([fileBlob], filename, {
         type: mimeType || "application/octet-stream",
@@ -158,7 +159,7 @@ export const uploadFileHandler = async (
   }
 };
 
-export const uploadFileFromUrl = async ({
+export const uploadFileFromURL = async ({
   url,
   filename,
   headers,
@@ -199,8 +200,48 @@ export const uploadFileFromUrl = async ({
   return fileRecord;
 };
 
-export async function getFilePublicUrl(iterateFileId: string, estateId: string) {
+export function getFilePublicURL(iterateFileId: string, estateId: string) {
   return `${env.VITE_PUBLIC_URL}/api/estate/${estateId}/files/${iterateFileId}`;
+}
+
+export async function getFileContent(params: { iterateFileId: string; db: DB; estateId: string }) {
+  const { iterateFileId, db, estateId } = params;
+
+  // Get file record from database
+  const [fileRecord] = await db.select().from(files).where(eq(files.id, iterateFileId)).limit(1);
+
+  if (!fileRecord) {
+    throw new Error(`File not found: ${iterateFileId}`);
+  }
+
+  // Verify the file belongs to the specified estate
+  if (fileRecord.estateId !== estateId) {
+    throw new Error(`File ${iterateFileId} does not belong to estate ${estateId}`);
+  }
+
+  if (fileRecord.status !== "completed") {
+    throw new Error(`File upload not completed for ${iterateFileId}`);
+  }
+
+  // Get file from R2
+  const r2Key = generateR2Key(iterateFileId);
+  const object = await env.ITERATE_FILES.get(r2Key);
+
+  if (!object) {
+    throw new Error(`File not found in storage: ${iterateFileId}`);
+  }
+
+  // Get content as stream
+  const stream = object.body;
+
+  if (!stream) {
+    throw new Error(`File stream not available: ${iterateFileId}`);
+  }
+
+  return {
+    content: stream,
+    fileRecord,
+  };
 }
 
 export const uploadFile = async ({
@@ -279,7 +320,7 @@ export const uploadFile = async ({
   }
 };
 
-export const uploadFileFromUrlHandler = async (
+export const uploadFileFromURLHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
   const estateId = c.req.param("estateId");
@@ -304,7 +345,7 @@ export const uploadFileFromUrlHandler = async (
       return c.json({ error: "Database unavailable" }, 500);
     }
 
-    const fileRecord = await uploadFileFromUrl({ url, filename, estateId, db });
+    const fileRecord = await uploadFileFromURL({ url, filename, estateId, db });
     return c.json(fileRecord);
   } catch (error) {
     console.error("Upload from URL error:", error);
@@ -320,9 +361,9 @@ export const uploadFileFromUrlHandler = async (
 export const getFileHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
-  const fileId = c.req.param("id");
+  const fileId = c.req.param("id").replace(".png", "");
   const estateId = c.req.param("estateId");
-  const disposition = c.req.query("disposition") || "attachment";
+  const disposition = c.req.query("disposition") || "inline";
 
   const db = c.var.db;
   if (!db) {
@@ -336,7 +377,6 @@ export const getFileHandler = async (
   try {
     // Get file record from database
     const [fileRecord] = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
-    console.log(`[getFileHandler] Looking for file ${fileId}:`, fileRecord);
     if (!fileRecord) {
       console.error(`[getFileHandler] File not found in database: ${fileId}`);
       return c.json({ error: "File not found" }, 404);
