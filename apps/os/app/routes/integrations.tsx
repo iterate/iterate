@@ -24,6 +24,7 @@ import {
 } from "../components/ui/dropdown-menu.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
+import { useSlackConnection } from "../hooks/use-slack-connection.ts";
 import type { Route } from "./+types/integrations";
 
 export function meta(_args: Route.MetaArgs) {
@@ -100,14 +101,20 @@ export default function Integrations() {
     trpc.integrations.disconnect.mutationOptions({}),
   );
 
+  // Use the Slack connection hook
+  const { connectSlackBot, disconnectSlackBot } = useSlackConnection();
+
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {
       const { installationUrl } = await startGithubAppInstallFlow({
         estateId: estateId,
       });
       window.location.href = installationUrl.toString();
+    } else if (integrationId === "slack-bot") {
+      // Use the shared Slack connection logic
+      await connectSlackBot("/integrations");
     }
-    // TODO: Implement OAuth flow for connecting integrations
+    // TODO: Implement OAuth flow for other integrations
     // This would redirect to the auth provider's OAuth URL
     console.log(`Connect to ${integrationId}`);
   };
@@ -117,13 +124,18 @@ export default function Integrations() {
     disconnectType: "estate" | "personal" | "both" = "both",
   ) => {
     try {
-      await disconnectIntegration({
-        estateId: estateId,
-        providerId: integrationId,
-        disconnectType,
-      });
-      // Refetch the integrations list to update the UI
-      await refetch();
+      if (integrationId === "slack-bot") {
+        // Use the shared Slack disconnection logic
+        await disconnectSlackBot(disconnectType);
+      } else {
+        await disconnectIntegration({
+          estateId: estateId,
+          providerId: integrationId,
+          disconnectType,
+        });
+        // Refetch the integrations list to update the UI
+        await refetch();
+      }
     } catch (error) {
       console.error(`Failed to disconnect ${integrationId}:`, error);
       // You might want to show a toast notification here

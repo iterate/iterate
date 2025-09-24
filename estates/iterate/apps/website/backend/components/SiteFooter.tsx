@@ -13,6 +13,8 @@ export default function SiteFooter() {
               <Link to="/privacy">Privacy</Link>
               <span className="mx-2 text-gray-400">|</span>
               <Link to="/terms">Terms</Link>
+              <span className="mx-2 text-gray-400">|</span>
+              <Link to="/contact">Contact Us</Link>
             </div>
             <div className="flex items-center gap-2">
               <SymbolIcon />
@@ -28,6 +30,14 @@ export default function SiteFooter() {
                 </Link>
               </span>
             </div>
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Disclaimer: This app uses generative AI to assist with operational tasks. AI-generated
+              responses may contain inaccuracies or outdated information. All critical decisions
+              should be validated by a human expert. Note: Your workspace needs to be on a paid
+              slack plan in order to interact with @iterate via Slack's Agent and Assistant view,
+              however users on a free plan can still interact with the bot as they would with any
+              other user.
+            </p>
           </div>
         </div>
       </div>
