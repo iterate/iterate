@@ -130,8 +130,8 @@ function EstateContent() {
   const [isEditing, setIsEditing] = useState(false);
   const [isEditingRepo, setIsEditingRepo] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
-  const [repoPath, setRepoPath] = useState<string>("");
-  const [repoBranch, setRepoBranch] = useState<string>("");
+  const [repoPath, setRepoPath] = useState<string | undefined>(undefined);
+  const [repoBranch, setRepoBranch] = useState<string | undefined>(undefined);
   const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
 
   // Get estate ID from URL
@@ -165,9 +165,10 @@ function EstateContent() {
   );
 
   // Compute display values for repo fields
+  // Use state values if they've been explicitly set (including empty string), otherwise use defaults
   const displaySelectedRepo = selectedRepo || connectedRepo?.repoId?.toString() || "";
-  const displayRepoPath = repoPath || connectedRepo?.path || "/";
-  const displayRepoBranch = repoBranch || connectedRepo?.branch || "main";
+  const displayRepoPath = repoPath !== undefined ? repoPath : connectedRepo?.path || "/";
+  const displayRepoBranch = repoBranch !== undefined ? repoBranch : connectedRepo?.branch || "main";
 
   // Update estate name mutation with optimistic updates
   const updateEstateMutation = useMutation(
@@ -344,8 +345,8 @@ function EstateContent() {
           onSuccess: () => {
             toast.success("Repository disconnected successfully");
             setSelectedRepo("");
-            setRepoPath("");
-            setRepoBranch("");
+            setRepoPath(undefined);
+            setRepoBranch(undefined);
             queryClient.invalidateQueries({
               queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ estateId }),
             });
@@ -493,8 +494,8 @@ function EstateContent() {
                     setIsEditingRepo(false);
                     // Clear the form state to reset to computed values
                     setSelectedRepo("");
-                    setRepoPath("");
-                    setRepoBranch("");
+                    setRepoPath(undefined);
+                    setRepoBranch(undefined);
                   }}
                   className="flex-1"
                 >
