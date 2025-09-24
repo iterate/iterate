@@ -2,6 +2,7 @@ import { dirname, join, resolve } from "path";
 import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
+import YAML from "yaml";
 import jsonataLib from "jsonata/sync";
 import type {
   ContextRule,
@@ -105,6 +106,101 @@ export const matchers = {
 export const defineRule = <Rule extends ContextRule>(rule: Rule) => rule;
 
 export const defineRules = <Rules extends ContextRule[]>(rules: Rules) => rules;
+
+/**
+ * Parse YAML front matter from a markdown string and return { attrs, body }.
+ * If no front matter is present, attrs is {} and body is the original string.
+ */
+function parseFrontMatter(markdown: string): { attrs: Record<string, unknown>; body: string } {
+  const fm = /^---\s*\r?\n([\s\S]*?)\r?\n---\s*\r?\n?/m.exec(markdown);
+  if (!fm) return { attrs: {}, body: markdown };
+  const yamlStr = fm[1] ?? "";
+  let attrs: Record<string, unknown> = {};
+  try {
+    attrs = (YAML.parse(yamlStr) as Record<string, unknown>) ?? {};
+  } catch {
+    // ignore YAML errors; treat as no attrs
+    attrs = {};
+  }
+  const body = markdown.slice(fm[0].length);
+  //console.log("parseFrontMatter:", { hasFrontMatter: true, keys: Object.keys(attrs) });
+  return { attrs, body };
+}
+
+/**
+ * Convert a front-matter `match` (string or object) to a ContextRuleMatcher or array.
+ * Supports expressions like always(), hasMCPConnection("foo"), and nested calls
+ * using the exported `matchers` object.
+ */
+function parseMatchField(raw: unknown): ContextRule["match"] | undefined {
+  //console.log("parseMatchField: raw:", raw);
+  if (raw == null) return undefined;
+  if (typeof raw === "object") {
+    // Already structured as a matcher or array - pass through
+    const result = raw as ContextRule["match"];
+    const summary = Array.isArray(result)
+      ? { kind: "array", types: result.map((m: any) => m?.type) }
+      : { kind: "single", type: (result as any)?.type };
+    //console.log("parseMatchField: structured matcher:", summary);
+    return result;
+  }
+  if (typeof raw !== "string") return undefined;
+  const expr = raw.trim();
+  if (!expr) return undefined;
+  try {
+    // Evaluate the expression with `matchers` and all of its properties in scope.
+    // This allows both `always()` and `matchers.always()` forms.
+    const matcherNames = Object.keys(matchers);
+    const argNames = ["matchers", ...matcherNames];
+    // eslint-disable-next-line no-new-func -- Needed to evaluate tiny matcher DSL from front matter with restricted scope
+    const fn = new Function(...argNames, `return (\n${expr}\n);`);
+    const argValues = [matchers, ...matcherNames.map((k) => (matchers as any)[k])];
+    const result = fn(...argValues);
+    const summary = Array.isArray(result)
+      ? { kind: "array", types: result.map((m: any) => m?.type) }
+      : { kind: "single", type: (result as any)?.type };
+    //console.log("parseMatchField: parsed matcher:", summary);
+    return result as ContextRule["match"];
+  } catch (err) {
+    console.warn("Failed to parse match expression:", err);
+    return undefined;
+  }
+}
+
+/**
+ * Build a ContextRule from a Markdown file's contents and path.
+ * - Parses YAML front matter for { slug, match }
+ * - Strips front matter from the prompt body
+ * - Falls back to file path (sans .md) for key
+ */
+export function contextRuleFromMarkdownFile({
+  fileContent,
+  filePath,
+  overrides = {},
+}: {
+  fileContent: string;
+  filePath: string;
+  overrides?: Partial<ContextRule>;
+}): ContextRule {
+  const { attrs, body } = parseFrontMatter(fileContent);
+  const slug =
+    typeof attrs.slug === "string" && attrs.slug.trim() ? (attrs.slug as string).trim() : undefined;
+  const match = parseMatchField((attrs as any)?.match);
+  const key = slug ?? filePath.replace(/\.md$/, "");
+  const matchSummary = Array.isArray(match)
+    ? { kind: "array", types: match.map((m: any) => m?.type) }
+    : { kind: match ? "single" : "none", type: (match as any)?.type };
+  const matchRaw = (attrs as any)?.match;
+  console.log("contextRuleFromMarkdownFile:", {
+    filePath,
+    key,
+    slug,
+    hasMatch: Boolean(match),
+    matchRaw,
+    matchSummary,
+  });
+  return defineRule({ key, prompt: body, match, ...overrides });
+}
 
 /**
  * Evaluates whether a context rule should be applied based on its matchers.
@@ -350,15 +446,13 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     if (!configDir) {
       throw new Error("iterate.config.ts not found");
     }
+    //console.log("contextRulesFromFiles:", { pattern, configDir });
     const files = globSync(pattern, { cwd: configDir }) as string[];
+    //console.log("contextRulesFromFiles: files:", files);
     return files.map((filePath: string) => {
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
-      // Get relative path from config directory and remove .md extension
-      return defineRule({
-        key: filePath.replace(/\.md$/, ""),
-        prompt: fileContent,
-        ...overrides,
-      });
+      // Use helper to parse front matter and match expression
+      return contextRuleFromMarkdownFile({ fileContent, filePath, overrides });
     });
   } catch (error) {
     console.error(`Error reading files with pattern ${pattern}:`, error);

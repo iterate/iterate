@@ -35,7 +35,7 @@ async function bootstrap() {
       throw new Error("No default export found in iterate config");
     }
 
-    console.log("Loaded iterate config from: ", resolvedPath, config);
+    console.log("Loaded iterate config from: ", resolvedPath);
 
     // Connect to the database - use same connection as drizzle config
     const connectionString = "postgres://postgres:postgres@localhost:5432/iterate";
