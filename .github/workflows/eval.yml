@@ -26,7 +26,10 @@ jobs:
         run: doppler setup --config dev --project os
       - name: run dependencies
         run: pnpm docker:up
-      - name:
+      - run: sleep 60
+      - run: pnpm db:migrate
+      - run: pnpm dev &
+      - run: sleep 15
       - name: run evals
         run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
         working-directory: apps/os
