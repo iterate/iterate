@@ -13,11 +13,11 @@ test("paginates investors", async ({ page }) => {
     return page.locator("#investors > :not(.hidden)").count();
   };
 
-  let _n = await countInvestors(0);
+  let n = await countInvestors(0);
   await page.getByTestId("more-investors").click();
-  _n = await countInvestors(_n);
+  n = await countInvestors(n);
   await page.getByTestId("more-investors").click();
-  _n = await countInvestors(_n);
+  await countInvestors(n);
 });
 
 test("submits email", async ({ page }) => {

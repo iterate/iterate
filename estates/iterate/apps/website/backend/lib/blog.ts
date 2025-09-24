@@ -1,4 +1,3 @@
-// Using URL API instead of node:path for browser compatibility
 import matter from "gray-matter";
 
 export interface BlogPost {
@@ -9,13 +8,18 @@ export interface BlogPost {
   content: string;
 }
 
+function getSlugFromPath(filePath: string): string {
+  const fileName = filePath.split("/").pop() || "";
+  return fileName.replace(".md", "");
+}
+
 export async function getSortedPostsData(): Promise<BlogPost[]> {
   const postsGlob = import.meta.glob("../content/blog/*.md", { as: "raw" });
   const entries = Object.entries(postsGlob);
   const allPostsData = await Promise.all(
     entries.map(async ([filePath, getContent]) => {
       const content = await getContent();
-      const slug = filePath.split("/").pop()?.replace(".md", "") || "";
+      const slug = getSlugFromPath(filePath);
       const matterResult = matter(content);
       return {
         slug,

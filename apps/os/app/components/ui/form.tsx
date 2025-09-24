@@ -12,7 +12,7 @@ import {
 import { cn } from "../../lib/utils.ts";
 import { Label } from "./label.tsx";
 
-const Form = FormProvider;
+const Form: typeof FormProvider = FormProvider;
 
 type FormFieldContextValue<
   TFieldValues extends FieldValues = FieldValues,
