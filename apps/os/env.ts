@@ -14,7 +14,9 @@ export type CloudflareEnv = Env & {
   GITHUB_APP_CLIENT_SECRET: string;
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_APP_SLUG: string;
+  EXPIRING_URLS_SIGNING_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
+  ITERATE_USER?: string;
 
   EXA_API_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
