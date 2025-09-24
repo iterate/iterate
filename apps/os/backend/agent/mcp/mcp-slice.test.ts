@@ -64,7 +64,7 @@ describe("mcp-slice", () => {
     prompts: [],
     resources: [],
     connectedAt: "2024-01-01T00:00:00.000Z",
-    requiresОAuth: true,
+    requiresOAuth: true,
     ...overrides,
   });
 
@@ -119,7 +119,7 @@ describe("mcp-slice", () => {
             mode: "personal",
             userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
           metadata: {},
@@ -151,7 +151,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
           metadata: {},
           triggerLLMRequest: false,
@@ -292,7 +292,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -302,8 +302,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -320,8 +321,9 @@ describe("mcp-slice", () => {
         const connectData = {
           serverUrl: "https://github.com/mcp",
           mode: "company" as const,
+          userId: "user123",
           integrationSlug: "github",
-          requiresОAuth: true,
+          requiresOAuth: true,
           triggerLLMRequestOnEstablishedConnection: false,
         };
 
@@ -377,8 +379,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -404,7 +407,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -448,8 +451,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -469,7 +473,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
           triggerLLMRequest: false, // Event doesn't trigger, but reducer should
         });
@@ -489,8 +493,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -500,8 +505,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://slack.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "slack",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -519,7 +525,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
           triggerLLMRequest: false,
         });
@@ -578,7 +584,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -666,7 +672,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -785,8 +791,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -827,8 +834,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -869,7 +877,7 @@ describe("mcp-slice", () => {
             mode: "personal" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresОAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -947,7 +955,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1028,7 +1036,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1081,7 +1089,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1141,8 +1149,9 @@ describe("mcp-slice", () => {
             data: {
               serverUrl: "https://github.com/mcp",
               mode: "company" as const,
+              userId: "user123",
               integrationSlug: "github",
-              requiresОAuth: true,
+              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1159,8 +1168,9 @@ describe("mcp-slice", () => {
             data: {
               serverUrl: "https://github.com/mcp",
               mode: "company" as const,
+              userId: "user123",
               integrationSlug: "github",
-              requiresОAuth: true,
+              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1176,7 +1186,7 @@ describe("mcp-slice", () => {
               tools: [],
               prompts: [],
               resources: [],
-              requiresОAuth: true,
+              requiresOAuth: true,
             },
           },
         ];
@@ -1241,7 +1251,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1290,7 +1300,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1348,7 +1358,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1405,7 +1415,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresОAuth: true,
+            requiresOAuth: true,
           },
         });
 
