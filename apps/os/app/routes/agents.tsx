@@ -1363,27 +1363,6 @@ function CoreEventRenderer({
               </div>
             );
 
-          case "app_mention":
-            return (
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium">App mentioned by</span>
-                  <Badge variant="outline" className="text-xs">
-                    {isFromBot
-                      ? "Agent (Bot)"
-                      : formatSlackUser(
-                          slackEvent.user || slackEvent.bot_profile?.name || "unknown",
-                        )}
-                  </Badge>
-                </div>
-                {slackEvent.text && (
-                  <div className="bg-muted/50 p-3 rounded-md border">
-                    <div className="text-sm whitespace-pre-wrap break-words">{slackEvent.text}</div>
-                  </div>
-                )}
-              </div>
-            );
-
           default:
             return (
               <div className="text-sm">
