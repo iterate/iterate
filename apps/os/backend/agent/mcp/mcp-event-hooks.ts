@@ -84,8 +84,8 @@ async function getMCPParamsCollectionURL(params: {
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   integrationSlug: string;
+  finalRedirectUrl: string | undefined;
 }): Promise<string> {
-  // Get the estate to find the organization ID
   const estate = await params.db.query.estate.findFirst({
     where: eq(schema.estate.id, params.estateId),
     columns: {
@@ -105,14 +105,10 @@ async function getMCPParamsCollectionURL(params: {
   url.searchParams.set("connectionKey", params.connectionKey);
   url.searchParams.set("requiredParams", JSON.stringify(params.requiredParams));
   url.searchParams.set("integrationSlug", params.integrationSlug);
-  url.searchParams.set(
-    "agentDurableObject",
-    JSON.stringify({
-      name: params.agentDurableObject.durableObjectName,
-      id: params.agentDurableObject.durableObjectId,
-      className: params.agentDurableObject.className,
-    }),
-  );
+  url.searchParams.set("agentDurableObject", JSON.stringify(params.agentDurableObject));
+  if (params.finalRedirectUrl) {
+    url.searchParams.set("finalRedirectUrl", params.finalRedirectUrl);
+  }
   return url.toString();
 }
 
@@ -169,6 +165,10 @@ export async function handleMCPConnectRequest(
   let appliedHeaders: Record<string, string> = {};
   let modifiedServerUrl = serverUrl;
 
+  const finalRedirectUrl = await params.getFinalRedirectUrl?.({
+    durableObjectInstanceName: agentDurableObject.durableObjectName,
+  });
+
   if (requiresParams && requiresParams.length > 0) {
     const storedParams = await db.query.mcpConnectionParam.findMany({
       where: and(
@@ -194,6 +194,7 @@ export async function handleMCPConnectRequest(
         agentDurableObject,
         estateId,
         integrationSlug: guaranteedIntegrationSlug,
+        finalRedirectUrl,
       });
 
       events.push({
@@ -231,10 +232,6 @@ export async function handleMCPConnectRequest(
       }, modifiedServerUrl),
     );
   }
-
-  const finalRedirectUrl = await params.getFinalRedirectUrl?.({
-    durableObjectInstanceName: agentDurableObject.durableObjectName,
-  });
 
   const oauthProvider = requiresOAuth
     ? new MCPOAuthProvider({
@@ -491,13 +488,11 @@ export async function getOrCreateMCPConnection(params: {
 }): Promise<Result<MCPConnectionResult>> {
   const { connectionKey } = params;
 
-  // Check cache first before even creating/using a queue
   const existingManager = mcpManagerCache.managers.get(connectionKey);
   if (existingManager) {
     return { success: true, data: { manager: existingManager, events: [] } };
   }
 
-  // Only use queue for actual connection attempts
   const { queue, controller } = getConnectionQueue(connectionKey);
 
   const result = await queue.add(
@@ -538,7 +533,6 @@ export async function getOrCreateMCPConnection(params: {
 
         return { success: true, data: { manager, events } };
       } catch (error) {
-        // Also abort on uncaught errors
         abortPendingConnections(params.connectionKey, `Connection error: ${String(error)}`);
         return { success: false, error: String(error) };
       } finally {

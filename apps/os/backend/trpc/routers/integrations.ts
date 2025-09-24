@@ -609,7 +609,7 @@ export const integrationsRouter = router({
           type: "MCP:CONNECT_REQUEST",
           data: {
             serverUrl,
-            mode: mode as "personal" | "company",
+            mode: mode,
             userId: ctx.user.id,
             integrationSlug,
             requiresOAuth: false,

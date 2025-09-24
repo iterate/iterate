@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { Shield, Eye, EyeOff } from "lucide-react";
+import { z } from "zod/v4";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import {
@@ -25,18 +26,11 @@ import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import { AgentDurableObjectInfo } from "../../backend/auth/oauth-state-schemas.ts";
-
-interface RequiredParam {
-  key: string;
-  type: "header" | "query_param";
-  placeholder: string;
-  description: string;
-  sensitive: boolean;
-}
+import { MCPParam } from "../../backend/agent/tool-schemas.ts";
 
 export function meta() {
   return [
-    { title: "Configure MCP Server - Iterate Dashboard" },
+    { title: "Configure MCP Server" },
     {
       name: "description",
       content: "Configure authentication parameters for MCP server connection",
@@ -50,25 +44,23 @@ export default function MCPParams() {
   const estateId = useEstateId();
   const trpc = useTRPC();
 
-  // Get parameters from URL
   const serverUrl = searchParams.get("serverUrl") || "";
   const mode = searchParams.get("mode") || "personal";
   const connectionKey = searchParams.get("connectionKey") || "";
   const requiredParamsStr = searchParams.get("requiredParams") || "[]";
   const agentDurableObject = searchParams.get("agentDurableObject") || "{}";
   const integrationSlug = searchParams.get("integrationSlug") || "";
+  const finalRedirectUrl = searchParams.get("finalRedirectUrl") || undefined;
 
-  // Parse required params with useMemo to prevent infinite re-renders
-  const requiredParams: RequiredParam[] = useMemo(
-    () => JSON.parse(requiredParamsStr),
+  const requiredParams = useMemo(
+    () => z.array(MCPParam).parse(JSON.parse(requiredParamsStr)),
     [requiredParamsStr],
   );
   const durableObject = useMemo(
-    () => AgentDurableObjectInfo.parse(agentDurableObject),
+    () => AgentDurableObjectInfo.parse(JSON.parse(agentDurableObject)),
     [agentDurableObject],
   );
 
-  // Memoized initial values
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};
     requiredParams.forEach((param) => {
@@ -77,21 +69,17 @@ export default function MCPParams() {
     return values;
   }, [requiredParams]);
 
-  // State for UI
   const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
-  // Set up React Hook Form
   const form = useForm<Record<string, string>>({
     defaultValues: initialValues,
   });
 
-  // Mutation to save parameters
   const { mutateAsync: saveParams, isPending } = useMutation(
     trpc.integrations.saveMCPConnectionParams.mutationOptions({}),
   );
 
-  // Mutation to reconnect MCP server
   const { mutateAsync: reconnect } = useMutation(
     trpc.integrations.reconnectMCPServer.mutationOptions({}),
   );
@@ -100,7 +88,6 @@ export default function MCPParams() {
     setError(null);
 
     try {
-      // Save parameters
       await saveParams({
         estateId,
         connectionKey,
@@ -111,7 +98,6 @@ export default function MCPParams() {
         })),
       });
 
-      // Trigger reconnection to the agent
       if (
         durableObject.durableObjectName &&
         durableObject.durableObjectId &&
@@ -125,11 +111,10 @@ export default function MCPParams() {
           integrationSlug,
         });
       }
-
-      if (window.opener) {
-        window.close();
+      if (finalRedirectUrl) {
+        window.location.href = finalRedirectUrl;
       } else {
-        navigate("/integrations");
+        window.location.href = "/";
       }
     } catch (err) {
       setError("Failed to save parameters. Please try again.");
