@@ -353,7 +353,6 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     const files = globSync(pattern, { cwd: configDir }) as string[];
     return files.map((filePath: string) => {
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
-      console.log("fileContent", fileContent);
       // Get relative path from config directory and remove .md extension
       return defineRule({
         key: filePath.replace(/\.md$/, ""),
@@ -361,8 +360,8 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
         ...overrides,
       });
     });
-  } catch {
-    console.log(new Error(`Error reading files with pattern ${pattern}:`));
+  } catch (error) {
+    console.error(`Error reading files with pattern ${pattern}:`, error);
     return [];
   }
 }

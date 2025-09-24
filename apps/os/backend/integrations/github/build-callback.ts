@@ -79,6 +79,7 @@ buildCallbackApp.post("/callback", zValidator("json", BuildCallbackPayload), asy
           });
       } catch (parseError) {
         console.error("Failed to parse configuration output:", parseError);
+        console.error("Stdout that failed to parse:", stdout);
         // The build succeeded but we couldn't parse the config
         // This is logged but not treated as a build failure
       }
