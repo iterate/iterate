@@ -583,8 +583,11 @@ function EstateContent() {
                             <ChevronRight className="h-5 w-5 text-gray-500" />
                           )}
                           {getBuildStatusIcon(build.status)}
-                          <div className="text-left">
-                            <div className="font-medium text-gray-900 dark:text-gray-100">
+                          <div className="text-left flex-1 min-w-0">
+                            <div
+                              className="font-medium text-gray-900 dark:text-gray-100 truncate"
+                              title={build.commitMessage}
+                            >
                               {build.commitMessage}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
