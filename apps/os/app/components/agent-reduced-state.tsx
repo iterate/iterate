@@ -16,11 +16,13 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
 
   // Create items from Object.keys of reducedState with agentCoreState. prefix
   const autocompleteItems = useMemo(() => {
-    return Object.keys(reducedState).map((key) => ({
-      value: `agentCoreState.${key}`,
-      label: `agentCoreState.${key}`,
-    }));
-  }, [reducedState]);
+    return Object.keys(reducedState)
+      .map((key) => ({
+        value: `agentCoreState.${key}`,
+        label: `agentCoreState.${key}`,
+      }))
+      .filter((item) => item.value.startsWith(searchValue));
+  }, [reducedState, searchValue]);
 
   const matchedState = useMemo(() => {
     const jsonataMatcher = selectedValue || searchValue;
