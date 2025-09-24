@@ -31,8 +31,6 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
       const evaluated = jsonata(jsonataMatcher).evaluate({
         agentCoreState: reducedState,
       });
-      if (!evaluated)
-        return { value: reducedState, error: `jsonata expression evaluated to ${evaluated}` };
       return { value: evaluated };
     } catch (error) {
       return { value: reducedState, error: (error as Error).message };
@@ -54,17 +52,10 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
             emptyMessage="No state properties found"
           />
         </div>
-        <div
-          className={cn(
-            "text-red-500 w-[30%]",
-            matchedState.error?.startsWith("jsonata expression evaluated to") && "text-slate-500",
-          )}
-        >
-          {matchedState.error}
-        </div>
+        <div className="text-red-500 w-[30%]">{matchedState.error}</div>
         {/* <SerializedObjectCodeBlock data={matchedState.value} className="h-full" /> */}
       </div>
-      <SerializedObjectCodeBlock data={matchedState.value || reducedState} className="h-full" />
+      <SerializedObjectCodeBlock data={matchedState.value ?? reducedState} className="h-full" />
     </div>
   );
 }

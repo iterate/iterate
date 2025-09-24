@@ -73,12 +73,18 @@ export function AutoComplete<T extends string>({
               asChild
               value={searchValue}
               onValueChange={onSearchValueChange}
-              onKeyDown={(e) => setOpen(e.key !== "Escape")}
+              onKeyDown={(e) => {
+                // Prevent arrow key events from propagating to global handlers (like PagerDialog)
+                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                  e.stopPropagation();
+                }
+                setOpen(e.key !== "Escape");
+              }}
               onMouseDown={() => setOpen((open) => !!searchValue || !open)}
               onFocus={() => setOpen(true)}
               onBlur={onInputBlur}
             >
-              <Input placeholder={placeholder} />
+              <Input placeholder={placeholder} value={searchValue} />
             </CommandPrimitive.Input>
           </PopoverAnchor>
           {!open && <CommandList aria-hidden="true" className="hidden" />}
