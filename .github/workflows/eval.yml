@@ -1,0 +1,32 @@
+name: run evals
+on:
+  push:
+    branches: [main, "**/*eval*", "*eval*"]
+
+permissions:
+  contents: read
+  deployments: write
+env:
+  DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
+jobs:
+  deploy:
+    runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+      - run: pnpm install
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+      - name: Setup Doppler
+        run: doppler setup --config dev --project os
+      - name: run dependencies
+        run: pnpm docker:up
+      - name:
+      - name: run evals
+        run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
+        working-directory: apps/os
