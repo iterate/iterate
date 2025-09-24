@@ -6,7 +6,7 @@ import { z } from "zod";
 export async function signUrl(
   url: string,
   signingKey: string,
-  expiresInSeconds: number = 3600,
+  expiresInSeconds = 3600,
 ): Promise<string> {
   const urlObj = new URL(url);
   const expiresAt = Math.floor(Date.now() / 1000) + expiresInSeconds;
@@ -37,7 +37,7 @@ export async function signUrl(
 
   // Add signature to URL
   urlObj.searchParams.set("signature", signatureHex);
-
+  urlObj.protocol = "https";
   return urlObj.toString();
 }
 

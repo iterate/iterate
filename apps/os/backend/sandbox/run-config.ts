@@ -96,14 +96,22 @@ async function runConfigInSandboxInternal(
           --argjson exitCode "$exit_code" \\
           '{buildId: $buildId, estateId: $estateId, success: $success, stdout: $stdout, stderr: $stderr, exitCode: $exitCode}')
 
-        # Send callback (fire and forget, don't wait for response)
-        curl -X POST "$CALLBACK_URL" \\
+        # Send callback and wait for response
+        echo "=== Sending callback request ===" >&2
+        CURL_RESPONSE=$(curl -X POST "$CALLBACK_URL" \\
           -H "Content-Type: application/json" \\
           -d "$payload" \\
           --max-time 10 \\
-          2>&1 | sed 's/^/[CALLBACK] /' >&2 || true
+          -w "\\n[HTTP_STATUS]: %{http_code}\\n[TIME]: %{time_total}s" \\
+          -s 2>&1) || CURL_EXIT=$?
 
-        echo "=== Callback sent ===" >&2
+        # Log the response to stderr
+        echo "[CALLBACK_RESPONSE]: $CURL_RESPONSE" >&2
+        if [ -n "\${CURL_EXIT:-}" ]; then
+          echo "[CALLBACK_ERROR]: curl exited with code $CURL_EXIT" >&2
+        fi
+
+        echo "=== Callback completed ===" >&2
       fi
     }
 
