@@ -43,24 +43,10 @@ app.use("*", async (c, next) => {
   const session = await auth.api.getSession({
     headers: c.req.raw.headers,
   });
-  console.log("session", session);
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
   return next();
-});
-
-app.all("/api/create-admin", async (c) => {
-  const auth = getAuth(c.var.db);
-  const admin = await auth.api.createUser({
-    body: {
-      email: "admin@example.com",
-      name: "Admin",
-      password: "password",
-      role: "admin",
-    },
-  });
-  return c.json({ admin });
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
@@ -98,10 +84,7 @@ app.all("/api/trpc/*", (c) => {
     router: appRouter,
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
-    onError: (opts) => {
-      console.error("TRPC error:", opts.error);
-      return opts.error;
-    },
+    onError: (opts) => console.error("TRPC error:", opts.error),
   });
 });
 
