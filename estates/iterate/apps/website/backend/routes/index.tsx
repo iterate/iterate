@@ -31,12 +31,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  // useEffect(() => {
-  //   // Check for easter egg query parameter
-  //   const urlParams = new URLSearchParams(window.location.search);
-  //   setShowSlackButton(urlParams.has("slack") || urlParams.has("beta"));
-  // }, []);
-
   return (
     <div className="min-h-screen bg-white">
       <SiteHeader />
@@ -85,43 +79,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* <div className="flex items-center gap-3 sm:gap-5 mb-6 sm:mb-10">
-            <Button 
-              ref={addToSlackRef} 
-              className="w-64" 
-              size="lg"
-              onClick={() => setIsCalendarOpen(true)}
-            >
-              <span>Free installation</span>
-              <span className="hidden sm:flex items-center gap-2 ml-3">
-                <kbd className="keycap keycap-invert" data-key="cmd">⌘</kbd>
-                <kbd className="keycap keycap-invert" data-key="k">K</kbd>
-              </span>
-            </Button>
-        //     {/* Easter egg Add to Slack button /}
-        //     {showSlackButton && (
-        //       <Button 
-        //         variant="ghost"
-        //         size="sm"
-        //         className="text-xs text-gray-500 hover:text-gray-700"
-        //         onClick={() => window.location.href = `${APP_URLS.bios}/claim`}
-        //       >
-        //         Add to Slack (beta)
-        //       </Button>
-        //     )}
-        //   </div>
-        //   </div>
-        //   <div className="block lg:hidden mt-4 mb-8">
-        //     <DisplayCards />
-        //   </div>
-        //   <div className="hidden lg:block">
-        //     <DisplayCards />
-        //   </div>
-        // </div> */}
-
-        {/* Removed terminal-style helper block per request */}
-
-        {/* Additional copy (replaces operational capacity table) */}
         <section className="mt-2 sm:mt-4 mb-20">
           <h2 className="text-2xl font-bold mb-8">How I work</h2>
           <div className="prose text-gray-700">
