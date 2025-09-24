@@ -24,50 +24,49 @@ if (!serviceAuthToken) {
   throw new Error("SERVICE_AUTH_TOKEN environment variable is required");
 }
 
-describe("Agent basics", () => {
-  let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
+let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
-  beforeAll(async () => {
-    trpcClient = await getAuthedTrpcClient();
-  });
+beforeAll(async () => {
+  trpcClient = await getAuthedTrpcClient();
+});
 
-  evalite("Agent says hello", {
-    data: async () => {
-      return [
-        { input: "Hello", expected: "Hi! How can I help you?" }, //
-        { input: "Hey", expected: "Hi! How can I help you?" }, //
-        { input: "Sup", expected: "Hi! How can I help you?" }, //
-      ];
-    },
-    task: async (input) => {
-      const h = await createTestHelper(trpcClient, testAgentName(input));
-      const userGreeting = await h.sendUserMessage(input);
-      return userGreeting.waitForReply();
-    },
-    scorers: [
-      autoevals.Factuality, //
-      autoevals.Moderation,
-    ],
-  });
+evalite("greetings", {
+  data: async () => {
+    return [
+      { input: "Hello", expected: "Hi! How can I help you?" }, //
+      { input: "Hey", expected: "Hi! How can I help you?" }, //
+      { input: "Sup", expected: "Hi! How can I help you?" }, //
+      { input: "Bonjour", expected: "Hi! How can I help you?" }, //
+    ];
+  },
+  task: async (input) => {
+    const h = await createTestHelper(trpcClient, testAgentName(input));
+    const userGreeting = await h.sendUserMessage(input);
+    return userGreeting.waitForReply();
+  },
+  scorers: [
+    autoevals.Factuality, //
+    autoevals.Moderation,
+  ],
+});
 
-  evalite("Agent answers basic facts", {
-    data: async () => {
-      return [
-        { input: "What is the capital of France?", expected: "Paris" }, //
-        { input: "What is an animal that barks?", expected: "A dog" }, //
-        { input: "What is a bendy yellow fruit?", expected: "A banana" }, //
-      ];
-    },
-    task: async (input) => {
-      const h = await createTestHelper(trpcClient, testAgentName(input));
-      const userGreeting = await h.sendUserMessage(input);
-      return userGreeting.waitForReply();
-    },
-    scorers: [
-      autoevals.Factuality, //
-      autoevals.Moderation,
-    ],
-  });
+evalite("Agent answers basic facts", {
+  data: async () => {
+    return [
+      { input: "What is the capital of France?", expected: "Paris" }, //
+      { input: "What is an animal that barks?", expected: "A dog" }, //
+      { input: "What is a bendy yellow fruit?", expected: "A banana" }, //
+    ];
+  },
+  task: async (input) => {
+    const h = await createTestHelper(trpcClient, testAgentName(input));
+    const userGreeting = await h.sendUserMessage(input);
+    return userGreeting.waitForReply();
+  },
+  scorers: [
+    autoevals.Factuality, //
+    autoevals.Moderation,
+  ],
 });
 
 /** Gets an agent name based on the currently running test name and some (text) input */
