@@ -11,6 +11,8 @@ import {
   getGithubRepoForEstate,
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
+import { IterateAgent } from "../../agent/iterate-agent.ts";
+import { SlackAgent } from "../../agent/slack-agent.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -473,5 +475,112 @@ export const integrationsRouter = router({
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
       };
+    }),
+
+  // Save MCP connection parameters
+  saveMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+        params: z.array(
+          z.object({
+            key: z.string(),
+            value: z.string(),
+            type: z.enum(["header", "query_param"]),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, connectionKey, params } = input;
+      await ctx.db
+        .delete(schemas.mcpConnectionParam)
+        .where(
+          and(
+            eq(schemas.mcpConnectionParam.estateId, estateId),
+            eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+          ),
+        );
+      if (params.length > 0) {
+        await ctx.db.insert(schemas.mcpConnectionParam).values(
+          params.map((param) => ({
+            estateId,
+            connectionKey,
+            paramKey: param.key,
+            paramValue: param.value,
+            paramType: param.type,
+          })),
+        );
+      }
+      return { success: true };
+    }),
+
+  getMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, connectionKey } = input;
+      const params = await ctx.db.query.mcpConnectionParam.findMany({
+        where: and(
+          eq(schemas.mcpConnectionParam.estateId, estateId),
+          eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+        ),
+      });
+      return params.map((param) => ({
+        key: param.paramKey,
+        value: param.paramValue,
+        type: param.paramType as "header" | "query_param",
+      }));
+    }),
+
+  reconnectMCPServer: estateProtectedProcedure
+    .input(
+      z.object({
+        agentDurableObject: z.object({
+          name: z.string(),
+          id: z.string(),
+          className: z.string(),
+        }),
+        serverUrl: z.string(),
+        mode: z.enum(["personal", "company"]),
+        integrationSlug: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { agentDurableObject, serverUrl, mode, integrationSlug } = input;
+      const params = {
+        db: ctx.db,
+        agentInstanceName: agentDurableObject.name,
+      };
+
+      const agentStub =
+        agentDurableObject.className === "SlackAgent"
+          ? await SlackAgent.getStubByName(params)
+          : await IterateAgent.getStubByName(params);
+
+      if (!agentStub) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to get agent stub for ${agentDurableObject.className}: ${agentDurableObject.name}`,
+        });
+      }
+      await agentStub.addEvents([
+        {
+          type: "MCP:CONNECT_REQUEST",
+          data: {
+            serverUrl,
+            mode: mode as "personal" | "company",
+            userId: ctx.user.id,
+            integrationSlug,
+            requiresOAuth: false,
+            triggerLLMRequestOnEstablishedConnection: false,
+          },
+        },
+      ]);
+
+      return { success: true };
     }),
 });

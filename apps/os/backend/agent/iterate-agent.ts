@@ -40,7 +40,7 @@ import {
   mcpManagerCache,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEventInput, type MCPParam } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
@@ -48,7 +48,6 @@ import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1052,17 +1051,39 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
     const formattedServerUrl = new URL(input.serverUrl);
-    if (input.requiresQueryParamsAuth) {
-      const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
-      formattedServerUrl.search = searchParams.toString();
-    }
-    const mcpServer: MCPServer = {
+
+    const requiresParams: MCPParam[] = [
+      ...R.pipe(
+        input.requiresHeadersAuth ?? {},
+        R.entries(),
+        R.map(([key, config]) => ({
+          key,
+          type: "header" as const,
+          placeholder: config.placeholder,
+          description: config.description,
+          sensitive: config.sensitive,
+        })),
+      ),
+      ...R.pipe(
+        input.requiresQueryParamsAuth ?? {},
+        R.entries(),
+        R.map(([key, config]) => ({
+          key,
+          type: "query_param" as const,
+          placeholder: config.placeholder,
+          description: config.description,
+          sensitive: config.sensitive,
+        })),
+      ),
+    ];
+
+    const mcpServer = {
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
-      requiresAuth: input.requiresOAuth || false,
-      headers: input.requiresHeadersAuth || undefined,
+      requiresOAuth: input.requiresOAuth || false,
+      requiresParams,
     };
-    // Check if already connected
+
     const connectionKey = getConnectionKey({
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
@@ -1071,7 +1092,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const existingManager = mcpManagerCache.managers.get(connectionKey);
     if (existingManager) {
-      // Already connected, just add the server to the state
       return {
         success: true,
         message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
@@ -1079,7 +1099,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       };
     }
 
-    // Not connected yet, proceed with connection
     const connectRequestEvent: MCPConnectRequestEventInput = {
       type: "MCP:CONNECT_REQUEST",
       data: {
@@ -1104,7 +1123,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
 
     if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-      // Extract error details from events
       const errorDetails = events
         .map((e) => {
           if (e.type === "MCP:CONNECTION_ERROR") {

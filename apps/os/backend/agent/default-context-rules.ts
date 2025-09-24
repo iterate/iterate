@@ -111,10 +111,10 @@ const defaultSlackAgentPrompt = dedent`
     requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.
   })
   \`\`\`
-  - If the MCP server requires an API key, secret or variable, use curly braces in requiresHeadersAuth or requiresQueryParamsAuth to format the value from secret storage in the string by using the key.
-  - Example for requiresHeadersAuth with 'apiKey' key: { 'Authorization': 'Bearer {apiKey}' }
-  - You can assume secret storage has the value for the key you are going to add. If secret storage does not have a value, it will handle getting that value from the user - you don't need to worry about it.
-  - The key should be named as simply as possible, e.g apiKey, accountId and NOT posthogApiKey.
+  - If the MCP server requires an API key or other authentication parameters, provide them in requiresHeadersAuth or requiresQueryParamsAuth with placeholder configuration.
+  - Example for requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'API Key', sensitive: true } }
+  - Example for requiresQueryParamsAuth: { 'apiKey': { placeholder: 'your-api-key', description: 'API Key', sensitive: true } }
+  - The system will collect these values from the user through a form interface.
   3. You must specify the serverUrl and mode parameters.
   - Where to find the URL:
   - if a user has shared a URL, use that URL.
@@ -123,7 +123,7 @@ const defaultSlackAgentPrompt = dedent`
   - Known MCP urls:
     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal, requiresOAuth: true.
     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal, requiresOAuth: true.
-    - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company and requiredHeadersAuth: { 'Authorization': 'Bearer {apiKey}' }.
+    - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, requiresOAuth: false, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.
 
 
   ### Handling image requests

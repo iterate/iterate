@@ -97,16 +97,30 @@ export const iterateAgentTools = defineDOTools({
           "Whether this MCP server requires OAuth authentication (use for OAuth servers that require authentication)",
         ),
       requiresHeadersAuth: z
-        .record(z.string(), z.string())
+        .record(
+          z.string(),
+          z.object({
+            placeholder: z.string(),
+            description: z.string(),
+            sensitive: z.boolean().default(true),
+          }),
+        )
         .nullable()
         .describe(
-          "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'Authorization': 'Bearer {apiKey}' }",
+          "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each header.",
         ),
       requiresQueryParamsAuth: z
-        .record(z.string(), z.string())
+        .record(
+          z.string(),
+          z.object({
+            placeholder: z.string(),
+            description: z.string(),
+            sensitive: z.boolean().default(false),
+          }),
+        )
         .nullable()
         .describe(
-          "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Use curly braces to present the user with a form to fill in the value, example: { 'apiKey': '{apiKey}', 'accountId': '123' }",
+          "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each query parameter.",
         ),
       onBehalfOfIterateUserId: z.string().describe("The iterate user ID to connect on behalf of."),
     }),

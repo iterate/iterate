@@ -135,6 +135,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   slackWebhookEvents: many(slackWebhookEvent),
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
+  mcpConnectionParam: many(mcpConnectionParam),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -343,6 +344,31 @@ export const builds = pgTable("builds", (t) => ({
 export const buildsRelations = relations(builds, ({ one }) => ({
   estate: one(estate, {
     fields: [builds.estateId],
+    references: [estate.id],
+  }),
+}));
+
+export const mcpConnectionParam = pgTable(
+  "mcp_connection_param",
+  (t) => ({
+    id: iterateId("mcp"),
+    connectionKey: t.text().notNull(),
+    estateId: t.text().notNull(),
+    paramKey: t.text().notNull(),
+    paramValue: t.text().notNull(),
+    paramType: t.text({ enum: ["header", "query_param"] }).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType),
+    index().on(t.estateId),
+    index().on(t.connectionKey),
+  ],
+);
+
+export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one }) => ({
+  estate: one(estate, {
+    fields: [mcpConnectionParam.estateId],
     references: [estate.id],
   }),
 }));

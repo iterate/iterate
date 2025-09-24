@@ -71,6 +71,13 @@
       "when": 1758621519299,
       "tag": "0009_omniscient_blindfold",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1758716446090,
+      "tag": "0010_mysterious_carlie_cooper",
+      "breakpoints": true
     }
   ]
 }

@@ -154,7 +154,7 @@ export const integrationsPlugin = () =>
                   mode: state.userId ? "personal" : "company",
                   userId: state.userId,
                   integrationSlug: state.integrationSlug,
-                  requiresAuth: true,
+                  requiresOAuth: true,
                   reconnect: {
                     oauthClientId: state.clientId,
                     oauthCode: code,

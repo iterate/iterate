@@ -8,6 +8,7 @@ import {
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
+import { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import {
   generateRuntimeToolsFromConnections,
@@ -52,6 +53,14 @@ export const MCPResource = z.object({
   mimeType: z.string().optional(),
 });
 
+export const MCPParam = z.object({
+  key: z.string(),
+  type: z.enum(["header", "query_param"]),
+  placeholder: z.string(),
+  description: z.string(),
+  sensitive: z.boolean(),
+});
+
 export const MCPConnection = z.object({
   serverId: z.string(), // ID from MCPClientManager
   serverUrl: z.string(),
@@ -63,8 +72,8 @@ export const MCPConnection = z.object({
   prompts: z.array(MCPPrompt),
   resources: z.array(MCPResource),
   connectedAt: z.string(),
-  requiresAuth: z.boolean().default(true).optional(), // For backwards compatibility with existing connections
-  headers: z.record(z.string(), z.string()).optional(),
+  requiresOAuth: z.boolean().default(true),
+  requiresParams: z.array(MCPParam).optional(),
 });
 
 // ------------------------- Types -------------------------
@@ -73,6 +82,7 @@ export type MCPTool = z.infer<typeof MCPTool>;
 export type MCPPrompt = z.infer<typeof MCPPrompt>;
 export type MCPPromptArgument = z.infer<typeof MCPPromptArgument>;
 export type MCPResource = z.infer<typeof MCPResource>;
+export type MCPParam = z.infer<typeof MCPParam>;
 export type MCPConnection = z.infer<typeof MCPConnection>;
 
 export interface MCPSliceState {
@@ -87,14 +97,14 @@ const mcpConnectRequestFields = {
   data: z.object({
     serverUrl: z.string(),
     mode: IntegrationMode,
-    userId: z.string().optional(),
+    userId: z.string(),
     integrationSlug: z.string().optional(),
     allowedTools: z.array(z.string()).optional(),
     allowedPrompts: z.array(z.string()).optional(),
     allowedResources: z.array(z.string()).optional(),
-    requiresAuth: z.boolean().default(true),
     triggerLLMRequestOnEstablishedConnection: z.boolean().default(false),
-    headers: z.record(z.string(), z.string()).optional(),
+    requiresOAuth: z.boolean().default(true),
+    requiresParams: z.array(MCPParam).optional(),
     reconnect: z
       .object({
         oauthClientId: z.string(),
@@ -127,8 +137,8 @@ const mcpConnectionEstablishedFields = {
     tools: z.array(MCPTool),
     prompts: z.array(MCPPrompt),
     resources: z.array(MCPResource),
-    requiresAuth: z.boolean().default(true),
-    headers: z.record(z.string(), z.string()).optional(),
+    requiresOAuth: z.boolean().default(true),
+    requiresParams: z.array(MCPParam).optional(),
   }),
 };
 
@@ -222,6 +232,29 @@ export const MCPOAuthRequiredEventInput = z.object({
   ...mcpOAuthRequiredFields,
 });
 
+const mcpParamsRequiredFields = {
+  type: z.literal("MCP:PARAMS_REQUIRED"),
+  data: z.object({
+    serverUrl: z.string(),
+    mode: IntegrationMode,
+    connectionKey: z.string(),
+    requiredParams: z.array(MCPParam),
+    userId: z.string(),
+    agentDurableObject: AgentDurableObjectInfo,
+    paramsCollectionUrl: z.string(),
+  }),
+};
+
+export const MCPParamsRequiredEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...mcpParamsRequiredFields,
+});
+
+export const MCPParamsRequiredEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...mcpParamsRequiredFields,
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const MCPEvent = z.discriminatedUnion("type", [
@@ -231,6 +264,7 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPToolsChanged,
   MCPConnectionErrorEvent,
   MCPOAuthRequiredEvent,
+  MCPParamsRequiredEvent,
 ]);
 
 export const MCPEventInput = z.discriminatedUnion("type", [
@@ -240,6 +274,7 @@ export const MCPEventInput = z.discriminatedUnion("type", [
   MCPToolsChangedInput,
   MCPConnectionErrorEventInput,
   MCPOAuthRequiredEventInput,
+  MCPParamsRequiredEventInput,
 ]);
 
 // ------------------------- Types -------------------------
@@ -249,12 +284,14 @@ export type MCPDisconnectRequestEvent = z.infer<typeof MCPDisconnectRequestEvent
 export type MCPConnectionEstablishedEvent = z.infer<typeof MCPConnectionEstablishedEvent>;
 export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
+export type MCPParamsRequiredEvent = z.infer<typeof MCPParamsRequiredEvent>;
 
 export type MCPConnectRequestEventInput = z.infer<typeof MCPConnectRequestEventInput>;
 export type MCPDisconnectRequestEventInput = z.infer<typeof MCPDisconnectRequestEventInput>;
 export type MCPConnectionEstablishedEventInput = z.infer<typeof MCPConnectionEstablishedEventInput>;
 export type MCPConnectionErrorEventInput = z.infer<typeof MCPConnectionErrorEventInput>;
 export type MCPOAuthRequiredEventInput = z.infer<typeof MCPOAuthRequiredEventInput>;
+export type MCPParamsRequiredEventInput = z.infer<typeof MCPParamsRequiredEventInput>;
 
 export type MCPEvent = z.infer<typeof MCPEvent>;
 export type MCPEventInput = z.input<typeof MCPEventInput>;
@@ -346,7 +383,6 @@ export const mcpSlice = defineAgentCoreSlice<{
         const { serverUrl, mode, userId } = event.data;
         const connectionKey = getConnectionKey({ serverUrl, mode, userId });
         const { [connectionKey]: _conn, ...rest } = state.mcpConnections;
-        // Add to pending connections if not already there
         const pendingConnections = state.pendingConnections || [];
         const newPendingConnections = pendingConnections.includes(connectionKey)
           ? pendingConnections
@@ -387,7 +423,6 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove from pending connections
         const pendingConnections = state.pendingConnections || [];
         const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
 
@@ -396,7 +431,6 @@ export const mcpSlice = defineAgentCoreSlice<{
           pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, connectionMessage],
-          // Only trigger LLM if no more pending connections
           triggerLLMRequest: newPendingConnections.length === 0,
         };
       }
@@ -451,14 +485,12 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove the connection from state on error
         const newConnections = { ...state.mcpConnections };
         if (connectionKey) {
           delete newConnections[connectionKey];
         }
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
 
-        // Remove from pending connections
         const pendingConnections = state.pendingConnections || [];
         const newPendingConnections = connectionKey
           ? pendingConnections.filter((key) => key !== connectionKey)
@@ -469,7 +501,6 @@ export const mcpSlice = defineAgentCoreSlice<{
           pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, errorMessage],
-          // Only trigger LLM if no more pending connections
           triggerLLMRequest: newPendingConnections.length === 0,
         };
       }
@@ -492,7 +523,6 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove from pending connections since OAuth is needed
         const pendingConnections = state.pendingConnections || [];
         const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
 
@@ -512,7 +542,6 @@ export const mcpSlice = defineAgentCoreSlice<{
           },
           pendingConnections: newPendingConnections,
           inputItems: [...state.inputItems, oauthMessage],
-          // Only trigger LLM if no more pending connections
           triggerLLMRequest: newPendingConnections.length === 0,
         };
         return newState;
