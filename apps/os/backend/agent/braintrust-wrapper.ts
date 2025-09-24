@@ -71,7 +71,7 @@ export function braintrustOpenAIWrapper({
   waitUntil,
 }: {
   openai: OpenAI;
-  getBraintrustParentSpanExportedId?: () => Promise<string>;
+  getBraintrustParentSpanExportedId: () => Promise<string>;
   waitUntil: (promise: Promise<void>) => void;
 }) {
   // proxy the openai.responses.stream method
@@ -114,7 +114,7 @@ export function braintrustOpenAIWrapper({
                       timeToFirstToken: timeToFirstToken ?? 0,
                     },
                   },
-                  braintrustParentSpanExportedId: await getBraintrustParentSpanExportedId?.(),
+                  braintrustParentSpanExportedId: await getBraintrustParentSpanExportedId(),
                 });
               }
 

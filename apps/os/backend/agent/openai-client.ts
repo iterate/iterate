@@ -22,7 +22,7 @@ export async function openAIProvider(opts: {
   };
   braintrust?: {
     projectName?: string;
-    getBraintrustParentSpanExportedId?: () => Promise<string>;
+    getBraintrustParentSpanExportedId: () => Promise<string>;
   };
 }): Promise<OpenAI> {
   const { env } = opts;
