@@ -7,9 +7,14 @@ pnpm install
 brew install doppler
 doppler login
 doppler setup # choose project `os` and config `dev_personal`
-pnpm docker:up # requires docker
+pnpm docker:up # requires docker compose - get docker desktop or orbstack first
 pnpm db:migrate
+brew install --cask ngrok # needed for receiving webhooks
+open https://dashboard.ngrok.com/get-started/your-authtoken # use npc ngrok account from 1password\
+# copy auth token to clipboard then:
+ngrok config add-authtoken $(pbpaste)
 pnpm dev
+# go to the local web ui and click "Connect to Slack". See below for details.
 ```
 
 To connect slack, you'll need to set the callback url in your app manifest.
