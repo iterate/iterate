@@ -130,8 +130,8 @@ function EstateContent() {
   const [isEditing, setIsEditing] = useState(false);
   const [isEditingRepo, setIsEditingRepo] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
-  const [repoPath, setRepoPath] = useState<string>("");
-  const [repoBranch, setRepoBranch] = useState<string>("");
+  const [repoPath, setRepoPath] = useState<string | undefined>(undefined);
+  const [repoBranch, setRepoBranch] = useState<string | undefined>(undefined);
   const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
 
   // Get estate ID from URL
@@ -165,9 +165,10 @@ function EstateContent() {
   );
 
   // Compute display values for repo fields
+  // Use state values if they've been explicitly set (including empty string), otherwise use defaults
   const displaySelectedRepo = selectedRepo || connectedRepo?.repoId?.toString() || "";
-  const displayRepoPath = repoPath || connectedRepo?.path || "/";
-  const displayRepoBranch = repoBranch || connectedRepo?.branch || "main";
+  const displayRepoPath = repoPath !== undefined ? repoPath : connectedRepo?.path || "/";
+  const displayRepoBranch = repoBranch !== undefined ? repoBranch : connectedRepo?.branch || "main";
 
   // Update estate name mutation with optimistic updates
   const updateEstateMutation = useMutation(
@@ -281,7 +282,7 @@ function EstateContent() {
         estateId: estateId!,
       });
       window.location.href = installationUrl;
-    } catch (error) {
+    } catch {
       toast.error("Failed to start GitHub connection flow");
     }
   };
@@ -344,8 +345,8 @@ function EstateContent() {
           onSuccess: () => {
             toast.success("Repository disconnected successfully");
             setSelectedRepo("");
-            setRepoPath("");
-            setRepoBranch("");
+            setRepoPath(undefined);
+            setRepoBranch(undefined);
             queryClient.invalidateQueries({
               queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ estateId }),
             });
@@ -396,7 +397,10 @@ function EstateContent() {
               <div className="flex items-center gap-2">
                 <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
                 <span className="text-green-700 dark:text-green-300 font-medium">
-                  Connected to Repository #{connectedRepo.repoId}
+                  Connected to{" "}
+                  {connectedRepo.repoFullName ||
+                    connectedRepo.repoName ||
+                    `Repository #${connectedRepo.repoId}`}
                 </span>
               </div>
               <div className="flex gap-2">
@@ -493,8 +497,8 @@ function EstateContent() {
                     setIsEditingRepo(false);
                     // Clear the form state to reset to computed values
                     setSelectedRepo("");
-                    setRepoPath("");
-                    setRepoBranch("");
+                    setRepoPath(undefined);
+                    setRepoBranch(undefined);
                   }}
                   className="flex-1"
                 >
@@ -579,8 +583,11 @@ function EstateContent() {
                             <ChevronRight className="h-5 w-5 text-gray-500" />
                           )}
                           {getBuildStatusIcon(build.status)}
-                          <div className="text-left">
-                            <div className="font-medium text-gray-900 dark:text-gray-100">
+                          <div className="text-left flex-1 min-w-0">
+                            <div
+                              className="font-medium text-gray-900 dark:text-gray-100 truncate"
+                              title={build.commitMessage}
+                            >
                               {build.commitMessage}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">

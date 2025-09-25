@@ -201,8 +201,8 @@ export const uploadFileFromURL = async ({
   return fileRecord;
 };
 
-export function getFilePublicURL(iterateFileId: string, estateId: string) {
-  return `${env.VITE_PUBLIC_URL}/api/estate/${estateId}/files/${iterateFileId}`;
+export function getFilePublicURL(iterateFileId: string) {
+  return `${env.VITE_PUBLIC_URL}/api/files/${iterateFileId}`;
 }
 
 export async function getFileContent(params: { iterateFileId: string; db: DB; estateId: string }) {
@@ -362,7 +362,6 @@ export const getFileHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
   const fileId = c.req.param("id").replace(".png", "");
-  const estateId = c.req.param("estateId");
   const disposition = c.req.query("disposition") || "inline";
 
   const db = c.var.db;
@@ -370,21 +369,11 @@ export const getFileHandler = async (
     return c.json({ error: "Database unavailable" }, 500);
   }
 
-  if (!estateId) {
-    return c.json({ error: "estateId parameter is required" }, 400);
-  }
-
   try {
     // Get file record from database
     const [fileRecord] = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
     if (!fileRecord) {
       console.error(`[getFileHandler] File not found in database: ${fileId}`);
-      return c.json({ error: "File not found" }, 404);
-    }
-
-    // Verify the file belongs to the specified estate
-    if (fileRecord.estateId !== estateId) {
-      console.error(`[getFileHandler] File ${fileId} does not belong to estate ${estateId}`);
       return c.json({ error: "File not found" }, 404);
     }
 

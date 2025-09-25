@@ -22,7 +22,7 @@
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@clack/prompts": "^0.11.0",
-    "@cloudflare/sandbox": "^0.3.1",
+    "@cloudflare/sandbox": "^0.3.2",
     "@codemirror/lang-json": "^6.0.2",
     "@codemirror/lang-yaml": "^6.1.2",
     "@codemirror/search": "^6.5.11",
@@ -72,6 +72,7 @@
     "react-syntax-highlighter": "^15.6.6",
     "recharts": "2.15.4",
     "remeda": "^2.31.1",
+    "replicate": "^1.2.0",
     "sonner": "^2.0.7",
     "streamdown": "^1.3.0",
     "superjson": "^2.2.2",

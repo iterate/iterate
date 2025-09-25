@@ -138,4 +138,35 @@ export const iterateAgentTools = defineDOTools({
       numResults: z.number().optional().default(10),
     }),
   },
+  generateImage: {
+    description:
+      "Generate a new image with aspect ratio control, model selection using Replicate API",
+    input: z.object({
+      prompt: z.string(),
+      model: z
+        .string()
+        .default("openai/gpt-image-1")
+        .describe(
+          "The image generation model to use. Only set this when explicitly asked to do so",
+        ),
+      quality: z.enum(["standard", "high"]).default("high"),
+      background: z.enum(["auto", "transparent", "opaque"]).default("auto"),
+    }),
+  },
+  editImage: {
+    description:
+      "Edit an existing image with model selection using the Replicate API. Supports using multiple input images.",
+    input: z.object({
+      input_images: z
+        .array(z.string())
+        .min(1, "URLs of images to edit. At least one image URL must be provided"),
+      prompt: z.string(),
+      model: z
+        .string()
+        .default("openai/gpt-image-1")
+        .describe("The image editing model to use. Only set this when explicitly asked to do so"),
+      background: z.enum(["auto", "transparent", "opaque"]).default("auto"),
+      quality: z.enum(["standard", "high"]).default("high"),
+    }),
+  },
 });

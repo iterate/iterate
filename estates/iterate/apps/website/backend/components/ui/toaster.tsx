@@ -6,8 +6,8 @@ import {
   ToastDescription,
   ToastClose,
   ToastAction,
-} from "./toast.js";
-import { useToast } from "../../hooks/use-toast.js";
+} from "./toast.tsx";
+import { useToast } from "../../hooks/use-toast.ts";
 
 export function Toaster() {
   const { toasts } = useToast();

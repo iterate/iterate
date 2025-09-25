@@ -22,6 +22,7 @@ import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getStage } from "../utils/staging.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
+import * as replicateIntegration from "../integrations/replicate/replicate.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -522,7 +523,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       turnFileIdIntoPublicURL: (fileId: string) => {
-        return getFilePublicURL(fileId, this.databaseRecord.estateId);
+        return getFilePublicURL(fileId);
       },
 
       getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
@@ -1183,6 +1184,56 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         author: r.author,
       })),
       totalResults: result.results.length,
+    };
+  }
+
+  async generateImage(input: Inputs["generateImage"]) {
+    const result = await replicateIntegration.generateImage(input, {
+      replicateApiToken: this.env.REPLICATE_API_TOKEN,
+      openaiApiKey: this.env.OPENAI_API_KEY,
+      iterateUser: this.env.ITERATE_USER,
+      estateId: this.databaseRecord.estateId,
+      db: this.db,
+    });
+
+    return {
+      ...result,
+      __addAgentCoreEvents: [
+        {
+          type: "CORE:FILE_SHARED" as const,
+          data: {
+            direction: "from-agent-to-user" as const,
+            iterateFileId: result.fileRecord.id,
+            openAIFileId: result.fileRecord.openAIFileId,
+            mimeType: result.fileRecord.mimeType,
+          },
+        },
+      ],
+    };
+  }
+
+  async editImage(input: Inputs["editImage"]) {
+    const result = await replicateIntegration.editImage(input, {
+      replicateApiToken: this.env.REPLICATE_API_TOKEN,
+      openaiApiKey: this.env.OPENAI_API_KEY,
+      iterateUser: this.env.ITERATE_USER,
+      estateId: this.databaseRecord.estateId,
+      db: this.db,
+    });
+
+    return {
+      ...result,
+      __addAgentCoreEvents: [
+        {
+          type: "CORE:FILE_SHARED" as const,
+          data: {
+            direction: "from-agent-to-user" as const,
+            iterateFileId: result.fileRecord.id,
+            openAIFileId: result.fileRecord.openAIFileId,
+            mimeType: result.fileRecord.mimeType,
+          },
+        },
+      ],
     };
   }
 }
