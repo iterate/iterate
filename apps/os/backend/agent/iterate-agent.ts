@@ -39,11 +39,7 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-import {
-  runMCPEventHooks,
-  mcpManagerCache,
-  getOrCreateMCPConnection,
-} from "./mcp/mcp-event-hooks.ts";
+import { runMCPEventHooks, getOrCreateMCPConnection } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -1123,15 +1119,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       mode: input.mode,
       userId: input.onBehalfOfIterateUserId,
     });
-
-    const existingManager = mcpManagerCache.managers.get(connectionKey);
-    if (existingManager) {
-      return {
-        success: true,
-        message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
-        addedMcpServer: mcpServer,
-      };
-    }
 
     const connectRequestEvent: MCPConnectRequestEventInput = {
       type: "MCP:CONNECT_REQUEST",

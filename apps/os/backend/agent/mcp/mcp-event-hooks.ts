@@ -54,8 +54,18 @@ interface MCPConnectionResult {
   events: MCPEventHookReturnEvent[];
 }
 
+type MCPManagerCacheKey = string;
+
+export function createCacheKey(
+  durableObjectId: string,
+  connectionKey: MCPConnectionKey,
+): MCPManagerCacheKey {
+  return `${durableObjectId}--${connectionKey}`;
+}
+
+// Use MCPManagerCacheKey to make sure we are not sharing managers between different durable objects (true for local dev)
 export const mcpManagerCache = {
-  managers: new Map<MCPConnectionKey, MCPClientManager>(),
+  managers: new Map<MCPManagerCacheKey, MCPClientManager>(),
 };
 
 function getIntegrationSlugFromServerUrl(serverUrl: string) {
@@ -155,8 +165,8 @@ export async function handleMCPConnectRequest(
   const connectionKey = getConnectionKey({ serverUrl, mode, userId });
   const existingConnection = reducedState.mcpConnections[connectionKey];
 
-  const isRehydration =
-    existingConnection?.connectedAt && !mcpManagerCache.managers.has(connectionKey);
+  const cacheKey = createCacheKey(agentDurableObject.durableObjectId, connectionKey);
+  const isRehydration = existingConnection?.connectedAt && !mcpManagerCache.managers.has(cacheKey);
 
   if (existingConnection?.connectedAt && !isRehydration) {
     return events;
@@ -330,7 +340,7 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
-  mcpManagerCache.managers.set(connectionKey, manager);
+  mcpManagerCache.managers.set(cacheKey, manager);
 
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
   if (!serverName) {
@@ -382,7 +392,7 @@ export async function handleMCPConnectRequest(
 async function handleMCPDisconnectRequest(
   params: MCPEventHandlerParams<MCPDisconnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState } = params;
+  const { event, reducedState, agentDurableObject } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const { connectionKey, serverUrl, userId } = event.data;
 
@@ -409,14 +419,14 @@ async function handleMCPDisconnectRequest(
     const connection = reducedState.mcpConnections[key];
     if (connection?.serverId) {
       try {
-        const manager = mcpManagerCache.managers.get(key);
+        const cacheKey = createCacheKey(agentDurableObject.durableObjectId, key);
+        const manager = mcpManagerCache.managers.get(cacheKey);
         if (manager) {
           await manager.closeConnection(connection.serverId);
-          mcpManagerCache.managers.delete(key);
-          // Clean up empty queue for this connection key
-          const entry = connectionQueues.get(key);
+          mcpManagerCache.managers.delete(cacheKey);
+          const entry = connectionQueues.get(cacheKey);
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
-            connectionQueues.delete(key);
+            connectionQueues.delete(cacheKey);
           }
           console.log(`[MCP] Disconnected and removed manager for ${key}`);
         } else {
@@ -454,23 +464,24 @@ interface ConnectionQueueEntry {
   controller: AbortController;
 }
 
-// One queue per connection key, each with concurrency: 1
-export const connectionQueues = new Map<MCPConnectionKey, ConnectionQueueEntry>();
+// One queue per cache key (durableObjectId--connectionKey), each with concurrency: 1
+// We include the durableObjectId in the cache key to ensure that we don't share queues between different durable objects (true for local dev)
+export const connectionQueues = new Map<MCPManagerCacheKey, ConnectionQueueEntry>();
 
-export function getConnectionQueue(connectionKey: MCPConnectionKey): ConnectionQueueEntry {
-  let entry = connectionQueues.get(connectionKey);
+export function getConnectionQueue(cacheKey: MCPManagerCacheKey): ConnectionQueueEntry {
+  let entry = connectionQueues.get(cacheKey);
   if (!entry) {
     entry = {
       queue: new PQueue({ concurrency: 1 }),
       controller: new AbortController(),
     };
-    connectionQueues.set(connectionKey, entry);
+    connectionQueues.set(cacheKey, entry);
   }
   return entry;
 }
 
-export function abortPendingConnections(connectionKey: MCPConnectionKey, reason: string) {
-  const entry = connectionQueues.get(connectionKey);
+export function abortPendingConnections(cacheKey: MCPManagerCacheKey, reason: string) {
+  const entry = connectionQueues.get(cacheKey);
   if (entry) {
     entry.controller.abort(reason);
   }
@@ -486,19 +497,20 @@ export async function getOrCreateMCPConnection(params: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
-  const { connectionKey } = params;
+  const { connectionKey, agentDurableObject } = params;
 
-  const existingManager = mcpManagerCache.managers.get(connectionKey);
+  const cacheKey = createCacheKey(agentDurableObject.durableObjectId, connectionKey);
+  const existingManager = mcpManagerCache.managers.get(cacheKey);
   if (existingManager) {
     return { success: true, data: { manager: existingManager, events: [] } };
   }
 
-  const { queue, controller } = getConnectionQueue(connectionKey);
+  const { queue, controller } = getConnectionQueue(cacheKey);
 
   const result = await queue.add(
     async ({ signal }): Promise<Result<MCPConnectionResult>> => {
       try {
-        const existingManager = mcpManagerCache.managers.get(connectionKey);
+        const existingManager = mcpManagerCache.managers.get(cacheKey);
         if (existingManager) {
           return { success: true, data: { manager: existingManager, events: [] } };
         }
@@ -520,20 +532,17 @@ export async function getOrCreateMCPConnection(params: {
           const abortReason = hasOAuthRequired
             ? "OAuth authorization required - aborting pending connection attempts"
             : "Connection failed - aborting pending connection attempts";
-          console.log("aborting pending connections", abortReason);
-          abortPendingConnections(params.connectionKey, abortReason);
-
-          console.log("aborted pending connections", abortReason);
+          abortPendingConnections(cacheKey, abortReason);
         }
 
-        const manager = mcpManagerCache.managers.get(params.connectionKey);
+        const manager = mcpManagerCache.managers.get(cacheKey);
         if (!manager) {
           return { success: true, data: { manager: undefined, events } };
         }
 
         return { success: true, data: { manager, events } };
       } catch (error) {
-        abortPendingConnections(params.connectionKey, `Connection error: ${String(error)}`);
+        abortPendingConnections(cacheKey, `Connection error: ${String(error)}`);
         return { success: false, error: String(error) };
       } finally {
         // Clean up empty queue after connection attempt.
@@ -541,9 +550,9 @@ export async function getOrCreateMCPConnection(params: {
         // is still being processed by the queue. The queue's internal state
         // (size and pending count) won't be updated until after our callback completes.
         setTimeout(() => {
-          const entry = connectionQueues.get(connectionKey);
+          const entry = connectionQueues.get(cacheKey);
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
-            connectionQueues.delete(connectionKey);
+            connectionQueues.delete(cacheKey);
           }
         }, 0); // Next tick is sufficient - just need to wait for queue to update its state
       }

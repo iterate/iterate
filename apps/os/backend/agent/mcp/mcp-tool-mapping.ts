@@ -6,7 +6,11 @@ import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
-import { rehydrateExistingMCPConnection, mcpManagerCache } from "./mcp-event-hooks.ts";
+import {
+  rehydrateExistingMCPConnection,
+  mcpManagerCache,
+  createCacheKey,
+} from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import type { MCPEventHookReturnEvent } from "./mcp-event-hooks.ts";
 
@@ -428,16 +432,17 @@ export function createRuntimeToolFromMCPTool(params: {
         }
       }
 
-      let manager = mcpManagerCache.managers.get(selectedConnectionKey);
+      if (!params.lazyConnectionDeps) {
+        throw new Error(
+          `Lazy connection deps are required for MCP tool execution to access the cache.`,
+        );
+      }
+
+      const durableObjectInfo = params.lazyConnectionDeps.getDurableObjectInfo();
+      const cacheKey = createCacheKey(durableObjectInfo.durableObjectId, selectedConnectionKey);
+      let manager = mcpManagerCache.managers.get(cacheKey);
 
       if (!manager) {
-        // Lazy connection handling
-        if (!params.lazyConnectionDeps) {
-          throw new Error(
-            `MCP manager not found for connection and lazy connection deps not provided. The connection may need to be re-established.`,
-          );
-        }
-
         const reducedState = params.lazyConnectionDeps.getReducedState();
         const connection = reducedState.mcpConnections[selectedConnectionKey];
 
