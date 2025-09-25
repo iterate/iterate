@@ -105,7 +105,7 @@ export async function getUserEstateAccess(
   estateId: string,
   organizationId?: string,
 ): Promise<{ hasAccess: boolean; estate: any | null }> {
-  const userWithEstates = await db.query.organizationUserMembership.findFirst({
+  const userWithEstates = await db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
     with: {
       organization: {
@@ -116,12 +116,14 @@ export async function getUserEstateAccess(
     },
   });
 
-  if (!userWithEstates?.organization?.estates) {
+  if (!userWithEstates?.length) {
     return { hasAccess: false, estate: null };
   }
 
+  const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
+
   // Check if the estate belongs to the user's organization
-  const userEstate = userWithEstates.organization.estates.find((e: any) => e.id === estateId);
+  const userEstate = allEstates.find((e) => e.id === estateId);
 
   if (!userEstate) {
     return { hasAccess: false, estate: null };

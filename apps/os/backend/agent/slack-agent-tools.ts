@@ -46,7 +46,7 @@ export const slackAgentTools = defineDOTools({
         .default(false)
         .optional()
         .describe(
-          "Optional. Set this to end-turn only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+          "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
         ),
     }),
   },

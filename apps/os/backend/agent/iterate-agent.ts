@@ -1,4 +1,3 @@
-import pTimeout from "p-suite/p-timeout";
 import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
@@ -39,11 +38,7 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-import {
-  runMCPEventHooks,
-  mcpManagerCache,
-  getOrCreateMCPConnection,
-} from "./mcp/mcp-event-hooks.ts";
+import { runMCPEventHooks, getOrCreateMCPConnection } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -719,12 +714,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected async getContextRules(): Promise<ContextRule[]> {
     const defaultRules = await defaultContextRules();
-    const { db, databaseRecord } = this;
+    // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
-    const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
-      milliseconds: 250,
-      fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
-    });
+    // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+    //   milliseconds: 250,
+    //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    // });
+    const rulesFromDb = [] as ContextRule[];
     const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
@@ -1123,15 +1119,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       mode: input.mode,
       userId: input.onBehalfOfIterateUserId,
     });
-
-    const existingManager = mcpManagerCache.managers.get(connectionKey);
-    if (existingManager) {
-      return {
-        success: true,
-        message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
-        addedMcpServer: mcpServer,
-      };
-    }
 
     const connectRequestEvent: MCPConnectRequestEventInput = {
       type: "MCP:CONNECT_REQUEST",
