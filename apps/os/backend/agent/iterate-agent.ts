@@ -22,8 +22,8 @@ import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
-import type { MCPParam } from "./tool-schemas.ts";
 import * as replicateIntegration from "../integrations/replicate/replicate.ts";
+import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -53,7 +53,6 @@ import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 
 // -----------------------------------------------------------------------------
