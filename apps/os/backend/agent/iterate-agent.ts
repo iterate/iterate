@@ -872,7 +872,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   // get the braintrust parent span exported id from the state
   // if it's not set, create it and set it in the state
-  async getOrCreateBraintrustParentSpanExportedId(estateName?: string) {
+  async getOrCreateBraintrustParentSpanExportedId(estateName: string) {
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
