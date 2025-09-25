@@ -1,0 +1,30 @@
+name: Publish Any Commit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  pkg-pr:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Build and Publish OS and SDK package
+        run: node ./publish.ts

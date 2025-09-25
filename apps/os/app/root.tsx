@@ -14,7 +14,7 @@ import type { Route } from "./+types/root";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
 import { Toaster } from "./components/ui/sonner.tsx";
-import { queryClient, trpcClient, TRPCProvider } from "./lib/trpc.ts";
+import { queryClient, trpcClient, TrpcContext } from "./lib/trpc.ts";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
@@ -41,7 +41,7 @@ export function Layout({ children }: { children: React.ReactNode }) {
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
+      <TrpcContext.TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
         <ThemeProvider
           attribute="class"
           defaultTheme="system"
@@ -57,7 +57,7 @@ export default function App() {
           </AuthGuard>
           <Toaster />
         </ThemeProvider>
-      </TRPCProvider>
+      </TrpcContext.TRPCProvider>
     </QueryClientProvider>
   );
 }

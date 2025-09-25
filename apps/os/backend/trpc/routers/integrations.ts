@@ -11,6 +11,7 @@ import {
   getGithubRepoForEstate,
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
+import { getGithubUserAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -509,6 +510,96 @@ export const integrationsRouter = router({
         estateDisconnected,
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
+      };
+    }),
+  createTemplateRepo: estateProtectedProcedure
+    .input(
+      z.object({
+        repoName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, repoName } = input;
+      const { accessToken, installationId } = await getGithubUserAccessTokenForEstate(
+        ctx.db,
+        estateId,
+      ).catch((e) => {
+        console.log(e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Failed to get GitHub user access token, Pleased reconnect your GitHub account if this persists",
+        });
+      });
+
+      const githubJWT = await generateGithubJWT();
+      const installationInfoRes = await fetch(
+        `https://api.github.com/app/installations/${installationId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubJWT}`,
+            "User-Agent": "Iterate OS",
+          },
+        },
+      );
+
+      if (!installationInfoRes.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to get GitHub installation info",
+        });
+      }
+
+      const installationInfoData = z
+        .object({ account: z.object({ login: z.string() }) })
+        .parse(await installationInfoRes.json());
+
+      const TEMPLATE_REPO_NAME = "iterate-com/estate-template";
+      const createRepoRes = await fetch(
+        `https://api.github.com/repos/${TEMPLATE_REPO_NAME}/generate`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "User-Agent": "Iterate OS",
+          },
+          body: JSON.stringify({
+            owner: installationInfoData.account.login,
+            name: repoName,
+            description: "Your iterate estate",
+            private: true,
+          }),
+        },
+      );
+
+      if (createRepoRes.status === 409) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Repository already exists, Please try a different name",
+        });
+      }
+
+      if (!createRepoRes.ok) {
+        console.error(await createRepoRes.text());
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create repository",
+        });
+      }
+
+      const repoRes = z.object({ id: z.number() }).parse(await createRepoRes.json());
+
+      await ctx.db
+        .update(schemas.estate)
+        .set({
+          connectedRepoId: repoRes.id,
+          connectedRepoRef: "main",
+          connectedRepoPath: "/",
+        })
+        .where(eq(schemas.estate.id, estateId));
+
+      return {
+        success: true,
       };
     }),
 });

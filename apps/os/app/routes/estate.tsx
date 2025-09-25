@@ -21,7 +21,6 @@ import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import {
   Select,
   SelectContent,
@@ -29,7 +28,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../components/ui/select.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog.tsx";
 import type { AppRouter } from "../../backend/trpc/root.ts";
+import { Badge } from "../components/ui/badge.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -133,6 +141,8 @@ function EstateContent() {
   const [repoPath, setRepoPath] = useState<string | undefined>(undefined);
   const [repoBranch, setRepoBranch] = useState<string | undefined>(undefined);
   const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
+  const [isTemplateDialogOpen, setIsTemplateDialogOpen] = useState(false);
+  const [templateRepoName, setTemplateRepoName] = useState("iterate");
 
   // Get estate ID from URL
   const estateId = useEstateId();
@@ -235,6 +245,11 @@ function EstateContent() {
   const startGithubAppInstallFlowMutation = useMutation(
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
   );
+
+  const createTemplateRepoMutation = useMutation(
+    trpc.integrations.createTemplateRepo.mutationOptions({}),
+  );
+
   const handleConnectRepo = () => {
     if (!displaySelectedRepo) {
       toast.error("Please select a repository");
@@ -359,96 +374,124 @@ function EstateContent() {
     }
   };
 
+  const handleCreateTemplateRepo = () => {
+    if (!templateRepoName.trim()) {
+      toast.error("Please enter a repository name");
+      return;
+    }
+
+    createTemplateRepoMutation.mutate(
+      {
+        estateId: estateId!,
+        repoName: templateRepoName.trim(),
+      },
+      {
+        onSuccess: () => {
+          toast.success("Template repository created successfully");
+          setIsTemplateDialogOpen(false);
+          setTemplateRepoName("iterate"); // Reset to default
+          // Refresh the available repos list
+          queryClient.invalidateQueries({
+            queryKey: trpc.integrations.listAvailableGithubRepos.queryKey({ estateId }),
+          });
+        },
+        onError: () => {
+          toast.error("Failed to create template repository");
+        },
+      },
+    );
+  };
+
   return (
-    <DashboardLayout>
-      <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
-        {/* Editable Title */}
-        <div className="mb-12">
-          <EditableTitle
-            value={estate.name}
-            isEditing={isEditing}
-            onToggleEdit={handleToggleEdit}
-            onSave={handleSave}
-            isLoading={updateEstateMutation.isPending}
-          />
-          <p className="text-slate-600 dark:text-slate-300 text-lg">
-            Connect your GitHub repository to manage your digital estate
-          </p>
+    <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
+      {/* Editable Title */}
+      <div className="mb-12">
+        <EditableTitle
+          value={estate.name}
+          isEditing={isEditing}
+          onToggleEdit={handleToggleEdit}
+          onSave={handleSave}
+          isLoading={updateEstateMutation.isPending}
+        />
+        <p className="text-slate-600 dark:text-slate-300 text-lg">
+          Connect your GitHub repository to manage your digital estate
+        </p>
+      </div>
+
+      {/* GitHub Connection */}
+      <div className="mb-8">
+        <div className="w-20 h-20 mb-6 rounded-2xl bg-gray-900 flex items-center justify-center">
+          <Github className="w-10 h-10 text-white" />
         </div>
 
-        {/* GitHub Connection */}
-        <div className="mb-8">
-          <div className="w-20 h-20 mb-6 rounded-2xl bg-gray-900 flex items-center justify-center">
-            <Github className="w-10 h-10 text-white" />
+        <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect GitHub</h2>
+
+        <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed mb-8">
+          Connect your GitHub account to automatically manage your digital estate, backup important
+          repositories, and ensure your code legacy is preserved.
+        </p>
+      </div>
+
+      {/* Connection Status */}
+      {connectedRepo && !isEditingRepo ? (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
+              <span className="text-green-700 dark:text-green-300 font-medium">
+                Connected to{" "}
+                {connectedRepo.repoFullName ||
+                  connectedRepo.repoName ||
+                  `Repository #${connectedRepo.repoId}`}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setIsEditingRepo(true)}>
+                <Edit2 className="h-4 w-4 mr-2" />
+                Edit Configuration
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleDisconnect}
+                disabled={disconnectGithubRepoMutation.isPending}
+              >
+                {disconnectGithubRepoMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="h-4 w-4" />
+                )}
+              </Button>
+            </div>
           </div>
 
-          <h2 className="text-3xl font-bold text-slate-900 dark:text-white mb-4">Connect GitHub</h2>
+          <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
+            <div className="flex justify-between">
+              <span className="text-sm text-gray-600 dark:text-gray-400">Branch:</span>
+              <span className="text-sm font-medium">{connectedRepo.branch}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-sm text-gray-600 dark:text-gray-400">Path:</span>
+              <span className="text-sm font-medium">{connectedRepo.path}</span>
+            </div>
+          </div>
 
-          <p className="text-slate-600 dark:text-slate-300 text-lg leading-relaxed mb-8">
-            Connect your GitHub account to automatically manage your digital estate, backup
-            important repositories, and ensure your code legacy is preserved.
-          </p>
+          <Button
+            size="lg"
+            className="bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold px-8 py-4 h-12"
+            onClick={handleGoToGitHub}
+          >
+            Go to GitHub
+            <ArrowRight className="h-4 w-4 ml-3" />
+          </Button>
         </div>
-
-        {/* Connection Status */}
-        {connectedRepo && !isEditingRepo ? (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Check className="h-6 w-6 text-green-600 dark:text-green-400" />
-                <span className="text-green-700 dark:text-green-300 font-medium">
-                  Connected to{" "}
-                  {connectedRepo.repoFullName ||
-                    connectedRepo.repoName ||
-                    `Repository #${connectedRepo.repoId}`}
-                </span>
-              </div>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={() => setIsEditingRepo(true)}>
-                  <Edit2 className="h-4 w-4 mr-2" />
-                  Edit Configuration
-                </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDisconnect}
-                  disabled={disconnectGithubRepoMutation.isPending}
-                >
-                  {disconnectGithubRepoMutation.isPending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Trash2 className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-
-            <div className="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 space-y-2">
-              <div className="flex justify-between">
-                <span className="text-sm text-gray-600 dark:text-gray-400">Branch:</span>
-                <span className="text-sm font-medium">{connectedRepo.branch}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-sm text-gray-600 dark:text-gray-400">Path:</span>
-                <span className="text-sm font-medium">{connectedRepo.path}</span>
-              </div>
-            </div>
-
-            <Button
-              size="lg"
-              className="bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold px-8 py-4 h-12"
-              onClick={handleGoToGitHub}
-            >
-              Go to GitHub
-              <ArrowRight className="h-4 w-4 ml-3" />
-            </Button>
-          </div>
-        ) : repos && repos.length > 0 ? (
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                Repository
-              </label>
+      ) : repos && repos.length > 0 ? (
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+              Repository
+            </label>
+            <div className="flex items-center gap-2">
               <Select value={displaySelectedRepo} onValueChange={setSelectedRepo}>
                 <SelectTrigger>
                   <SelectValue placeholder="Select a repository" />
@@ -461,184 +504,253 @@ function EstateContent() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Branch (default: main)
-                </label>
-                <Input
-                  value={displayRepoBranch}
-                  onChange={(e) => setRepoBranch(e.target.value)}
-                  placeholder="main"
-                  className="w-full"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Path (default: /)
-                </label>
-                <Input
-                  value={displayRepoPath}
-                  onChange={(e) => setRepoPath(e.target.value)}
-                  placeholder="/"
-                  className="w-full"
-                />
-              </div>
-            </div>
-
-            <div className="flex gap-2">
-              {isEditingRepo && (
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsEditingRepo(false);
-                    // Clear the form state to reset to computed values
-                    setSelectedRepo("");
-                    setRepoPath(undefined);
-                    setRepoBranch(undefined);
-                  }}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-              )}
+              <Badge variant="outline">OR</Badge>
               <Button
-                onClick={handleConnectRepo}
-                disabled={!displaySelectedRepo || setGithubRepoForEstateMutation.isPending}
-                className={`${isEditingRepo ? "flex-1" : "w-full"} bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold`}
+                onClick={() => setIsTemplateDialogOpen(true)}
+                disabled={createTemplateRepoMutation.isPending}
               >
-                {setGithubRepoForEstateMutation.isPending ? (
+                {createTemplateRepoMutation.isPending ? (
                   <>
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {isEditingRepo ? "Updating..." : "Connecting..."}
+                    Creating...
                   </>
                 ) : (
-                  <>
-                    {isEditingRepo ? "Update Configuration" : "Connect Repository"}
-                    <ArrowRight className="h-4 w-4 ml-2" />
-                  </>
+                  "Start with a Template Repo"
                 )}
               </Button>
             </div>
           </div>
-        ) : (
-          // GitHub not connected - show connect button
-          <div className="space-y-4">
-            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
-              <p className="text-sm text-amber-800 dark:text-amber-200">
-                GitHub is not connected. Connect your GitHub account to select a repository.
-              </p>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Branch (default: main)
+              </label>
+              <Input
+                value={displayRepoBranch}
+                onChange={(e) => setRepoBranch(e.target.value)}
+                placeholder="main"
+                className="w-full"
+              />
             </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Path (default: /)
+              </label>
+              <Input
+                value={displayRepoPath}
+                onChange={(e) => setRepoPath(e.target.value)}
+                placeholder="/"
+                className="w-full"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            {isEditingRepo && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setIsEditingRepo(false);
+                  // Clear the form state to reset to computed values
+                  setSelectedRepo("");
+                  setRepoPath(undefined);
+                  setRepoBranch(undefined);
+                }}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+            )}
             <Button
-              onClick={handleConnectGitHub}
-              disabled={startGithubAppInstallFlowMutation.isPending}
-              className="w-full bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold"
+              onClick={handleConnectRepo}
+              disabled={!displaySelectedRepo || setGithubRepoForEstateMutation.isPending}
+              className={`${isEditingRepo ? "flex-1" : "w-full"} bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold`}
             >
-              {startGithubAppInstallFlowMutation.isPending ? (
+              {setGithubRepoForEstateMutation.isPending ? (
                 <>
                   <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Connecting...
+                  {isEditingRepo ? "Updating..." : "Connecting..."}
                 </>
               ) : (
                 <>
-                  Connect GitHub
+                  {isEditingRepo ? "Update Configuration" : "Connect Repository"}
                   <ArrowRight className="h-4 w-4 ml-2" />
                 </>
               )}
             </Button>
           </div>
-        )}
+        </div>
+      ) : (
+        // GitHub not connected - show connect button
+        <div className="space-y-4">
+          <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-4">
+            <p className="text-sm text-amber-800 dark:text-amber-200">
+              GitHub is not connected. Connect your GitHub account to select a repository.
+            </p>
+          </div>
+          <Button
+            onClick={handleConnectGitHub}
+            disabled={startGithubAppInstallFlowMutation.isPending}
+            className="w-full bg-gradient-to-r from-gray-800 to-gray-900 hover:from-gray-900 hover:to-black text-white font-semibold"
+          >
+            {startGithubAppInstallFlowMutation.isPending ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Connecting...
+              </>
+            ) : (
+              <>
+                Connect GitHub
+                <ArrowRight className="h-4 w-4 ml-2" />
+              </>
+            )}
+          </Button>
+        </div>
+      )}
 
-        {/* Build History Section */}
-        {connectedRepo && (
-          <div className="mt-12">
-            <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">
-              Build History
-            </h3>
+      {/* Build History Section */}
+      {connectedRepo && (
+        <div className="mt-12">
+          <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">Build History</h3>
 
-            {buildsLoading ? (
-              <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
-              </div>
-            ) : builds && builds.length > 0 ? (
-              <div className="space-y-3">
-                {builds.map((build: Build) => {
-                  const isExpanded = expandedBuilds.has(build.id);
-                  return (
-                    <div
-                      key={build.id}
-                      className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+          {buildsLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
+            </div>
+          ) : builds && builds.length > 0 ? (
+            <div className="space-y-3">
+              {builds.map((build: Build) => {
+                const isExpanded = expandedBuilds.has(build.id);
+                return (
+                  <div
+                    key={build.id}
+                    className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden"
+                  >
+                    <button
+                      onClick={() => toggleBuildExpanded(build.id)}
+                      className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                     >
-                      <button
-                        onClick={() => toggleBuildExpanded(build.id)}
-                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
-                      >
-                        <div className="flex items-center gap-3 min-w-0 flex-1">
-                          {isExpanded ? (
-                            <ChevronDown className="h-5 w-5 text-gray-500 flex-shrink-0" />
-                          ) : (
-                            <ChevronRight className="h-5 w-5 text-gray-500 flex-shrink-0" />
-                          )}
-                          {getBuildStatusIcon(build.status)}
-                          <div className="text-left flex-1 min-w-0 overflow-hidden">
-                            <div
-                              className="font-medium text-gray-900 dark:text-gray-100 truncate"
-                              title={build.commitMessage}
-                            >
-                              {build.commitMessage}
-                            </div>
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
-                              {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
-                            </div>
+                      <div className="flex items-center gap-3 min-w-0 flex-1">
+                        {isExpanded ? (
+                          <ChevronDown className="h-5 w-5 text-gray-500 flex-shrink-0" />
+                        ) : (
+                          <ChevronRight className="h-5 w-5 text-gray-500 flex-shrink-0" />
+                        )}
+                        {getBuildStatusIcon(build.status)}
+                        <div className="text-left flex-1 min-w-0 overflow-hidden">
+                          <div
+                            className="font-medium text-gray-900 dark:text-gray-100 truncate"
+                            title={build.commitMessage}
+                          >
+                            {build.commitMessage}
+                          </div>
+                          <div className="text-sm text-gray-500 dark:text-gray-400">
+                            {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
                           </div>
                         </div>
-                        <span
-                          className={`px-3 py-1 rounded-full text-sm font-medium ${getBuildStatusColor(build.status)}`}
-                        >
-                          {build.status.replace("_", " ")}
-                        </span>
-                      </button>
+                      </div>
+                      <span
+                        className={`px-3 py-1 rounded-full text-sm font-medium ${getBuildStatusColor(build.status)}`}
+                      >
+                        {build.status.replace("_", " ")}
+                      </span>
+                    </button>
 
-                      {isExpanded && (
-                        <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
-                          <div className="space-y-2 text-sm">
+                    {isExpanded && (
+                      <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
+                        <div className="space-y-2 text-sm">
+                          <div>
+                            <span className="font-medium text-gray-700 dark:text-gray-300">
+                              Commit:{" "}
+                            </span>
+                            <span className="font-mono text-gray-600 dark:text-gray-400">
+                              {build.commitHash}
+                            </span>
+                          </div>
+                          {build.completedAt && (
                             <div>
                               <span className="font-medium text-gray-700 dark:text-gray-300">
-                                Commit:{" "}
+                                Completed:{" "}
                               </span>
-                              <span className="font-mono text-gray-600 dark:text-gray-400">
-                                {build.commitHash}
+                              <span className="text-gray-600 dark:text-gray-400">
+                                {formatDate(build.completedAt)}
                               </span>
                             </div>
-                            {build.completedAt && (
-                              <div>
-                                <span className="font-medium text-gray-700 dark:text-gray-300">
-                                  Completed:{" "}
-                                </span>
-                                <span className="text-gray-600 dark:text-gray-400">
-                                  {formatDate(build.completedAt)}
-                                </span>
-                              </div>
-                            )}
-                          </div>
+                          )}
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div className="text-center py-8 text-gray-500 dark:text-gray-400">
-                No builds yet. Push code to your repository to trigger a build.
-              </div>
-            )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+              No builds yet. Push code to your repository to trigger a build.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Template Repository Dialog */}
+      <Dialog open={isTemplateDialogOpen} onOpenChange={setIsTemplateDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create Template Repository</DialogTitle>
+            <DialogDescription>
+              Create a new GitHub repository with template code to get started quickly.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Repository Name
+              </label>
+              <Input
+                value={templateRepoName}
+                onChange={(e) => setTemplateRepoName(e.target.value)}
+                placeholder="iterate"
+                disabled={createTemplateRepoMutation.isPending}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && templateRepoName.trim()) {
+                    handleCreateTemplateRepo();
+                  }
+                }}
+              />
+            </div>
           </div>
-        )}
-      </div>
-    </DashboardLayout>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsTemplateDialogOpen(false);
+                setTemplateRepoName("iterate"); // Reset to default
+              }}
+              disabled={createTemplateRepoMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateTemplateRepo}
+              disabled={createTemplateRepoMutation.isPending || !templateRepoName.trim()}
+            >
+              {createTemplateRepoMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                "Create Repository"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 }
 
