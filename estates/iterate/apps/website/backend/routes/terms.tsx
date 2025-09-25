@@ -1,10 +1,10 @@
 import BlogLayout from "../components/BlogLayout.tsx";
+import LegalPage from "../components/LegalPage.tsx";
 
 export default function Terms() {
   return (
     <BlogLayout>
-      <h1 className="text-3xl font-bold mb-8 text-gray-900 headline-mark">Terms of Service</h1>
-      <div className="prose text-gray-700">
+      <LegalPage title="Terms of Service">
         <p>
           <strong>Last updated June 06, 2025</strong>
         </p>
@@ -909,7 +909,7 @@ export default function Terms() {
         <p>
           <strong>team@iterate.com</strong>
         </p>
-      </div>
+      </LegalPage>
     </BlogLayout>
   );
 }

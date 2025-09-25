@@ -14,11 +14,14 @@ export type CloudflareEnv = Env & {
   GITHUB_APP_CLIENT_SECRET: string;
   GITHUB_APP_PRIVATE_KEY: string;
   GITHUB_APP_SLUG: string;
+  EXPIRING_URLS_SIGNING_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
-
+  STAGE__PR_ID?: string;
   EXA_API_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
+  REPLICATE_API_TOKEN: string;
+  ITERATE_USER: string;
 };
 
 export const env = _env as CloudflareEnv;

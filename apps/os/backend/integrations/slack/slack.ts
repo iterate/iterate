@@ -57,10 +57,10 @@ slackApp.post("/webhook", async (c) => {
   ]);
 
   if (!estateId) {
-    console.warn(
-      `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
-      body,
-    );
+    // console.warn(
+    //   `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
+    //   body,
+    // );
     return c.text("ok");
   }
 
@@ -124,7 +124,6 @@ slackApp.post("/webhook", async (c) => {
         : false;
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
     if (!isBotMentioned && !isDM) {
-      console.log("IGNORING WEBHOOK EVENT BECAUSE BOT IS NOT MENTIONED OR IT'S NOT A DM");
       return c.text("ok");
     }
   }

@@ -170,14 +170,8 @@ export const defaultContextRules = async () => [
           }),
         ),
       }),
-
-      // TRPC tools (to be replaced with durable object versions)
-      // trpcCallableBuilder.firstparty.imageGenerator.generateImage.toolSpec({
-      //   overrideName: "generate_image",
-      // }),
-      // trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
-      //   overrideName: "edit_image",
-      // }),
+      iterateAgentTool.generateImage(),
+      iterateAgentTool.editImage(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
