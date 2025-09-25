@@ -1,8 +1,7 @@
 import { z } from "zod";
 import type { JSONSchema } from "zod/v4/core";
 import type { AgentDurableObjectToolSpec, ToolSpec } from "./tool-schemas.ts";
-import type { iterateAgentTools } from "./iterate-agent-tools.ts";
-import type { slackAgentTools } from "./slack-agent-tools.ts";
+import type { SlackAgent } from "./slack-agent.ts";
 
 export type RuntimeJsonSchema = {
   type: "query" | "mutation" | "subscription";
@@ -92,9 +91,6 @@ export function doToolToRuntimeJsonSchema(_value: unknown) {
   return runtimeJsonSchema;
 }
 
-export type AgentDOToolMethodName<TClassName extends "SlackAgent" | "IterateAgent"> =
-  TClassName extends "SlackAgent" ? keyof typeof slackAgentTools : keyof typeof iterateAgentTools;
-
 export function createDOToolFactory<T extends ReturnType<typeof defineDOTools>>(definitions: T) {
   return Object.fromEntries(
     Object.keys(definitions).map((key) => {
@@ -110,7 +106,7 @@ export function createDOToolFactory<T extends ReturnType<typeof defineDOTools>>(
       ];
     }),
   ) as {
-    [K in keyof typeof definitions]-?: (
+    [K in keyof SlackAgent]-?: (
       toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName" | "passThroughArgs"> & {
         passThroughArgs?: Partial<
           z.output<NonNullable<NonNullable<(typeof definitions)[K]>["input"]>>
