@@ -13,6 +13,7 @@ import {
 } from "../../integrations/github/github-utils.ts";
 import { IterateAgent } from "../../agent/iterate-agent.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
+import { MCPParam } from "../../agent/tool-schemas.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -621,10 +622,19 @@ export const integrationsRouter = router({
         serverUrl: z.string(),
         mode: z.enum(["personal", "company"]),
         integrationSlug: z.string(),
+        requiresOAuth: z.boolean().optional(),
+        requiresParams: z.array(MCPParam).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { agentDurableObject, serverUrl, mode, integrationSlug } = input;
+      const {
+        agentDurableObject,
+        serverUrl,
+        mode,
+        integrationSlug,
+        requiresOAuth,
+        requiresParams,
+      } = input;
       const params = {
         db: ctx.db,
         agentInstanceName: agentDurableObject.durableObjectName,
@@ -649,7 +659,8 @@ export const integrationsRouter = router({
             mode: mode,
             userId: ctx.user.id,
             integrationSlug,
-            requiresOAuth: false,
+            requiresOAuth,
+            requiresParams,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         },

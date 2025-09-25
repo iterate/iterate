@@ -109,6 +109,8 @@ export default function MCPParams() {
           serverUrl,
           mode: mode as "personal" | "company",
           integrationSlug,
+          requiresOAuth: false,
+          requiresParams: requiredParams,
         });
       }
       if (finalRedirectUrl) {
