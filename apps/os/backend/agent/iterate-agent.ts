@@ -279,11 +279,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   static async getOrCreateStubByRoute(params: {
     db: DB;
     estateId: string;
-    agentInstanceName: string;
     route: string;
     reason?: string;
   }) {
-    const { db, estateId, agentInstanceName, route, reason } = params;
+    const { db, estateId, route, reason } = params;
 
     // First check if an agent already exists for this route
     const existingRoutes = await db.query.agentInstanceRoute.findMany({
@@ -301,13 +300,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     // No existing agent for this route, create one with route
-    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+    const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
+    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
     const [record] = await db
       .insert(agentInstance)
       .values({
         estateId,
         className: this.name,
-        durableObjectName: agentInstanceName,
+        durableObjectName: durableObjectName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
       })

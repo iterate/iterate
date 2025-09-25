@@ -2,6 +2,7 @@ import { z } from "zod";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
+import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
@@ -14,7 +15,11 @@ import {
 import { IterateAgent } from "../../agent/iterate-agent.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
 import { MCPParam } from "../../agent/tool-schemas.ts";
-import { getGithubUserAccessTokenForEstate } from "../../auth/token-utils.ts";
+import {
+  getGithubUserAccessTokenForEstate,
+  getSlackAccessTokenForEstate,
+} from "../../auth/token-utils.ts";
+import { getRoutingKey } from "../../integrations/slack/slack.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -758,6 +763,96 @@ export const integrationsRouter = router({
 
       return {
         success: true,
+      };
+    }),
+
+  startThreadWithAgent: estateProtectedProcedure
+    .input(
+      z.object({
+        channel: z.string().describe("The Slack channel ID"),
+        firstMessage: z.string().optional().describe("The message text to send to Slack"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, channel, firstMessage } = input;
+
+      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
+      if (!accessToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack integration found for this estate",
+        });
+      }
+
+      const slackAPI = new WebClient(accessToken);
+
+      const chatResult = await slackAPI.chat.postMessage({
+        channel: channel,
+        text: firstMessage || "",
+      });
+      if (!chatResult.ok || !chatResult.ts) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to post message to Slack",
+        });
+      }
+
+      const routingKey = getRoutingKey({
+        estateId: estateId,
+        threadTs: chatResult.ts,
+      });
+
+      const slackAgent = (await SlackAgent.getOrCreateStubByRoute({
+        db: ctx.db,
+        estateId: estateId,
+        route: routingKey,
+        reason: "Start thread with agent",
+      })) as unknown as SlackAgent;
+
+      const events = await slackAgent.initSlack(channel, chatResult.ts);
+      await slackAgent.addEvents(events);
+
+      return {
+        success: true,
+        threadTs: chatResult.ts,
+      };
+    }),
+
+  listSlackChannels: estateProtectedProcedure
+    .input(
+      z.object({
+        types: z.string().optional().default("public_channel"),
+        excludeArchived: z.boolean().optional().default(true),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, types, excludeArchived } = input;
+
+      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
+      if (!accessToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack integration found for this estate",
+        });
+      }
+
+      const slackAPI = new WebClient(accessToken);
+      const result = await slackAPI.conversations.list({
+        types: types,
+        exclude_archived: excludeArchived,
+        limit: 999,
+      });
+
+      if (!result.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to fetch channels from Slack",
+        });
+      }
+
+      return {
+        success: true,
+        channels: result.channels || [],
       };
     }),
 });

@@ -8,6 +8,7 @@ import {
   Building2,
   Check,
   ChevronsUpDown,
+  MessageSquarePlus,
 } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
@@ -51,7 +52,10 @@ const navigation = [
   },
   {
     title: "Agents",
-    items: [{ title: "Manage agents", icon: Users, path: "agents" }],
+    items: [
+      { title: "Manage agents", icon: Users, path: "agents" },
+      { title: "Start Slack Agent", icon: MessageSquarePlus, path: "agents/start-slack" },
+    ],
   },
 ];
 

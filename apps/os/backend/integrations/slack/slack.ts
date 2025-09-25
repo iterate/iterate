@@ -93,13 +93,10 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  const routingKey = await getRoutingKey({
-    payload: body,
+  const routingKey = getRoutingKey({
     estateId: estateId,
     threadTs: messageMetadata.threadTs,
   });
-
-  const durableObjectName = `SlackAgent-${routingKey}`;
 
   // look up in the database to get all the agents by routing key
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
@@ -127,10 +124,10 @@ slackApp.post("/webhook", async (c) => {
       return c.text("ok");
     }
   }
+
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
-    agentInstanceName: durableObjectName,
     route: routingKey,
     reason: "Slack webhook received",
   });
@@ -339,19 +336,8 @@ slackApp.post("/webhook", async (c) => {
 //   }
 // }
 
-async function getRoutingKey({
-  payload,
-  estateId,
-  threadTs,
-}: {
-  payload: SlackWebhookPayload;
-  estateId: string;
-  threadTs: string;
-}) {
-  if (!payload.event || !payload.team_id) {
-    throw new Error("No event or team_id found in slack webhook payload");
-  }
-  const suffix = `slack-${estateId}-team-${payload.team_id}`;
+export function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
+  const suffix = `slack-${estateId}`;
   return `ts-${threadTs}-${suffix}`;
 }
 
