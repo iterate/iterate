@@ -7,9 +7,11 @@ import { defineRule, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { createDOToolFactory } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
+import type { IterateAgent } from "./iterate-agent.ts";
+import type { SlackAgent } from "./slack-agent.ts";
 
-const iterateAgentTool = createDOToolFactory(iterateAgentTools);
-const slackAgentTool = createDOToolFactory(slackAgentTools);
+const iterateAgentTool = createDOToolFactory<IterateAgent>()(iterateAgentTools);
+const slackAgentTool = createDOToolFactory<SlackAgent>()(slackAgentTools);
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
