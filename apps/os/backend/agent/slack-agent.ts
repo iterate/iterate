@@ -130,7 +130,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 }),
             );
             break;
-          case "CORE:INTERNAL_ERROR":
+          case "CORE:INTERNAL_ERROR": {
             console.error("[SlackAgent] Internal Error:", payload.event);
             const { data } = payload.event;
             this.getAgentDebugURL().then((url) =>
@@ -139,6 +139,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               }),
             );
             break;
+          }
         }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
