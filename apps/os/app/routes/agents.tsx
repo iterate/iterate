@@ -1830,6 +1830,15 @@ export default function AgentsPage() {
     ),
   );
 
+  // Get Braintrust permalink
+  const { data: braintrustPermalinkResult } = useQuery(
+    trpc.agents.getBraintrustPermalink.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+    }),
+  );
+
   const botUserId =
     agentClassName === "SlackAgent" && reducedState
       ? (reducedState as SlackSliceState).botUserId
@@ -2077,6 +2086,13 @@ export default function AgentsPage() {
                 placeholder="Search events..."
                 count={filteredEvents.length}
                 onCopy={copyAllEventsAsJson}
+                onBrainClick={
+                  braintrustPermalinkResult?.permalink
+                    ? () => {
+                        window.open(braintrustPermalinkResult.permalink, "_blank");
+                      }
+                    : undefined
+                }
               />
             </div>
           )}

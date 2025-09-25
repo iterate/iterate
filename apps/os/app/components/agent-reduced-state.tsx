@@ -1,7 +1,6 @@
 import { useMemo, useState } from "react";
 import jsonata from "jsonata/sync";
 import type { AugmentedCoreReducedState } from "../../backend/agent/agent-core-schemas.ts";
-import { cn } from "../lib/utils.ts";
 import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AutoComplete } from "./autocomplete.tsx";
 
