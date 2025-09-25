@@ -1153,21 +1153,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       }
       if (result.data.events) {
         const eventTypes = result.data.events.map((e) => e.type);
-        if ("MCP:OAUTH_REQUIRED" in eventTypes) {
+        if (eventTypes.includes("MCP:OAUTH_REQUIRED")) {
           return {
             __addAgentCoreEvents: result.data.events,
             success: true,
             message: `MCP server requires OAuth.`,
           };
         }
-        if ("MCP:PARAMS_REQUIRED" in eventTypes) {
+        if (eventTypes.includes("MCP:PARAMS_REQUIRED")) {
           return {
             __addAgentCoreEvents: result.data.events,
             success: true,
             message: `MCP server requires additional inputs from the user.`,
           };
         }
-        if ("MCP:CONNECTION_ERROR" in eventTypes) {
+        if (eventTypes.includes("MCP:CONNECTION_ERROR")) {
           return {
             __addAgentCoreEvents: result.data.events,
             success: false,

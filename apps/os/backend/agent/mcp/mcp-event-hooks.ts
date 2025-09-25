@@ -525,6 +525,7 @@ export async function getOrCreateMCPConnection(params: {
           estateId: params.estateId,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
+        console.log("events", events);
 
         const hasOAuthRequired = events.some((e) => e.type === "MCP:OAUTH_REQUIRED");
         const hasConnectionError = events.some((e) => e.type === "MCP:CONNECTION_ERROR");
