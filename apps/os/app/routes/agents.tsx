@@ -100,6 +100,7 @@ import type { SlackSliceEvent, SlackSliceState } from "../../backend/agent/slack
 import { isThinking } from "../../backend/agent/agent-core-schemas.ts";
 import { fulltextSearchInObject } from "../../backend/utils/type-helpers.ts";
 import type { SlackWebhookPayload } from "../../backend/agent/slack.types.ts";
+import { resolveEmoji } from "../lib/emoji-mapping.ts";
 
 // Types and interfaces
 interface FilterState {
@@ -1336,42 +1337,50 @@ function CoreEventRenderer({
       const Icon = isBot ? Bot : Users;
       const title = isBot ? "Agent Slack Activity" : "User Slack Activity";
 
-      const renderEventContent = () => {
-        switch (slackEvent.type) {
-          case "reaction_added":
-          case "reaction_removed":
-            return (
-              <div className="space-y-2">
-                <div className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-xs">
-                    {isFromBot ? "Agent (Bot)" : slackEvent.user || "Unknown user"}
-                  </Badge>
-                  <span className="text-sm">
-                    {slackEvent.type === "reaction_added" ? "added" : "removed"} reaction{" "}
-                    {slackEvent.reaction}
-                  </span>
-                </div>
-              </div>
-            );
+      // For reaction events, show as aligned message-like bubbles
+      if (slackEvent.type === "reaction_added" || slackEvent.type === "reaction_removed") {
+        const userName = isFromBot ? "@bot" : `@${slackEvent.user || "unknown"}`;
+        const action = slackEvent.type === "reaction_added" ? "reacted with" : "removed reaction";
+        const messageRef =
+          "item" in slackEvent && slackEvent.item && "ts" in slackEvent.item
+            ? slackEvent.item.ts
+            : "unknown";
 
-          default:
-            return (
-              <div className="text-sm">
-                <strong>Slack event: {slackEvent.type}</strong>
-                {"subtype" in slackEvent && slackEvent.subtype && (
-                  <span className="text-muted-foreground"> ({slackEvent.subtype})</span>
-                )}
-                <details className="mt-2">
-                  <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
-                    View raw event data
-                  </summary>
-                  <SerializedObjectCodeBlock data={slackEvent} className="mt-2" />
-                </details>
-              </div>
-            );
-        }
-      };
+        const from = isFromBot ? "assistant" : "user";
+        const userInitials = isFromBot
+          ? "AI"
+          : currentUser.name
+              .split(" ")
+              .map((name) => name.charAt(0))
+              .join("")
+              .toUpperCase()
+              .slice(0, 2);
 
+        return (
+          <Message from={from} className="mb-4">
+            <div className={`flex flex-col ${from === "assistant" ? "items-start" : "items-end"}`}>
+              <div className="text-xs text-muted-foreground mb-1">
+                {new Date(event.createdAt).toLocaleTimeString()}
+              </div>
+              <div
+                className={`px-3 py-2 rounded-lg border-2 border-dashed text-sm ${
+                  from === "assistant"
+                    ? "bg-muted/30 border-muted-foreground/30"
+                    : "bg-primary/5 border-primary/30"
+                }`}
+              >
+                {userName} {action} {resolveEmoji(slackEvent.reaction)} to {messageRef}
+              </div>
+            </div>
+            <MessageAvatar
+              src={isFromBot ? "/logo.svg" : currentUser.image || ""}
+              name={isFromBot ? "AI" : userInitials}
+            />
+          </Message>
+        );
+      }
+
+      // For other non-message events, show expanded card
       return (
         <Card className={`mb-3 ${borderColor} ${bgColor} p-3`}>
           <div className="space-y-3">
@@ -1385,7 +1394,18 @@ function CoreEventRenderer({
                 </div>
               </div>
             </div>
-            {renderEventContent()}
+            <div className="text-sm">
+              <strong>Slack event: {slackEvent.type}</strong>
+              {"subtype" in slackEvent && slackEvent.subtype && (
+                <span className="text-muted-foreground"> ({slackEvent.subtype})</span>
+              )}
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-muted-foreground hover:text-foreground">
+                  View raw event data
+                </summary>
+                <SerializedObjectCodeBlock data={slackEvent} className="mt-2" />
+              </details>
+            </div>
             <div className="pt-2 border-t border-muted">
               <div className="flex flex-wrap items-center gap-2">
                 <Badge variant="secondary" className="text-xs">
