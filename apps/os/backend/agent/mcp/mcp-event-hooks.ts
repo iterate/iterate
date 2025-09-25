@@ -1,11 +1,17 @@
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
+import { eq, and } from "drizzle-orm";
+import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { getAuth } from "../../auth/auth.ts";
-import { getDb } from "../../db/client.ts";
+import { getDb, type DB } from "../../db/client.ts";
+import { mcpConnectionParam } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
+import { IntegrationMode } from "../tool-schemas.ts";
+import type { MCPParam } from "../tool-schemas.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
@@ -18,6 +24,7 @@ import {
   type MCPDisconnectRequestEvent,
   type MCPDisconnectRequestEventInput,
   type MCPOAuthRequiredEventInput,
+  type MCPParamsRequiredEventInput,
 } from "./mcp-slice.ts";
 
 // ------------------------- Types -------------------------
@@ -29,7 +36,8 @@ export type MCPEventHookReturnEvent =
   | MCPDisconnectRequestEventInput
   | MCPConnectionEstablishedEventInput
   | MCPConnectionErrorEventInput
-  | MCPOAuthRequiredEventInput;
+  | MCPOAuthRequiredEventInput
+  | MCPParamsRequiredEventInput;
 
 interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> {
   event: TEvent;
@@ -41,52 +49,14 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   }) => Promise<string | undefined>;
 }
 
-// Single consolidated cache for MCP connections
 interface MCPConnectionResult {
   manager: MCPClientManager | undefined;
   events: MCPEventHookReturnEvent[];
 }
 
-// Keep the old cache for direct manager access (will be populated by handleMCPConnectRequest)
 export const mcpManagerCache = {
   managers: new Map<MCPConnectionKey, MCPClientManager>(),
 };
-
-function extractStringDependencies(targetString: string): string[] {
-  const dependencies = targetString.match(/\{([^}]+)\}/g);
-  return dependencies?.map((d) => d.slice(1, -1)) || [];
-}
-
-async function formatStringWithDependencyFromIntegrationSystem(params: {
-  targetString: string;
-  integrationSlug: string;
-  mode: "personal" | "company";
-  userId: string;
-}) {
-  const { targetString } = params;
-  const formattedResponse = {
-    formattedString: targetString,
-    missingDependencies: [] as string[],
-  };
-  const dependencies = extractStringDependencies(targetString);
-  for (const dependency of dependencies) {
-    try {
-      // TODO: fetch secret from better auth
-      const integrationSecret = {
-        token: "test",
-      };
-      formattedResponse.formattedString = formattedResponse.formattedString.replace(
-        `{${dependency}}`,
-        integrationSecret.token,
-      );
-    } catch (_error) {
-      console.log("Failed to get integration secret for", _error);
-      formattedResponse.missingDependencies.push(dependency);
-      continue;
-    }
-  }
-  return formattedResponse;
-}
 
 function getIntegrationSlugFromServerUrl(serverUrl: string) {
   try {
@@ -105,49 +75,40 @@ function getIntegrationSlugFromServerUrl(serverUrl: string) {
   }
 }
 
-function getIntegrationSecretFormUIURL(params: {
-  message: string;
+async function getMCPParamsCollectionURL(params: {
+  db: DB;
+  serverUrl: string;
+  mode: IntegrationMode;
+  connectionKey: string;
+  requiredParams: MCPParam[];
+  agentDurableObject: AgentDurableObjectInfo;
+  estateId: string;
   integrationSlug: string;
-  mode: "personal" | "company";
-  userId: string;
-  requiredDependencies: string[];
-  finalRedirectUrl?: string;
-  requestedByAgentDOId?: string;
-  serverUrl?: string;
-  requiresAuth?: boolean;
-  headers?: Record<string, string>;
-}) {
-  const url = new URL(`${import.meta.env.VITE_PUBLIC_URL}/integrations/manual`);
+  finalRedirectUrl: string | undefined;
+}): Promise<string> {
+  const estate = await params.db.query.estate.findFirst({
+    where: eq(schema.estate.id, params.estateId),
+    columns: {
+      organizationId: true,
+    },
+  });
 
-  // Add query parameters for the manual connection form
-  url.searchParams.set("appSlug", "platform");
-  url.searchParams.set("integrationSlug", params.integrationSlug);
+  if (!estate) {
+    throw new Error(`Estate ${params.estateId} not found`);
+  }
+
+  const url = new URL(
+    `${process.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
+  );
+  url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);
-  url.searchParams.set("name", `${params.integrationSlug}-${params.mode}-connection`);
-  url.searchParams.set("message", params.message);
+  url.searchParams.set("connectionKey", params.connectionKey);
+  url.searchParams.set("requiredParams", JSON.stringify(params.requiredParams));
+  url.searchParams.set("integrationSlug", params.integrationSlug);
+  url.searchParams.set("agentDurableObject", JSON.stringify(params.agentDurableObject));
   if (params.finalRedirectUrl) {
     url.searchParams.set("finalRedirectUrl", params.finalRedirectUrl);
   }
-
-  // Add MCP-specific parameters if provided
-  if (params.requestedByAgentDOId) {
-    url.searchParams.set("requestedByAgentDOId", params.requestedByAgentDOId);
-  }
-  if (params.serverUrl) {
-    url.searchParams.set("serverUrl", params.serverUrl);
-  }
-  if (params.requiresAuth) {
-    url.searchParams.set("requiresAuth", params.requiresAuth.toString());
-  }
-  if (params.headers) {
-    url.searchParams.set("headers", btoa(JSON.stringify(params.headers)));
-  }
-
-  // Add each required dependency as a separate query parameter
-  params.requiredDependencies.forEach((dependency) => {
-    url.searchParams.append("requiredDependencies", dependency);
-  });
-
   return url.toString();
 }
 
@@ -159,6 +120,8 @@ export async function handleMCPConnectRequest(
 ): Promise<MCPEventHookReturnEvent[]> {
   const { event, reducedState, agentDurableObject, estateId } = params;
   const events: MCPEventHookReturnEvent[] = [];
+  const db = getDb();
+  const auth = getAuth(db);
   const {
     serverUrl,
     mode,
@@ -167,11 +130,14 @@ export async function handleMCPConnectRequest(
     allowedTools,
     allowedPrompts,
     allowedResources,
-    requiresAuth,
+    requiresOAuth,
     triggerLLMRequestOnEstablishedConnection,
-    headers,
+    requiresParams,
     reconnect,
   } = event.data;
+
+  const guaranteedIntegrationSlug =
+    integrationSlug ?? getIntegrationSlugFromServerUrl(event.data.serverUrl);
 
   if (mode === "personal" && !userId) {
     events.push({
@@ -189,97 +155,92 @@ export async function handleMCPConnectRequest(
   const connectionKey = getConnectionKey({ serverUrl, mode, userId });
   const existingConnection = reducedState.mcpConnections[connectionKey];
 
-  // Check if we're being called from lazyConnectMCPServer for rehydration
   const isRehydration =
     existingConnection?.connectedAt && !mcpManagerCache.managers.has(connectionKey);
 
   if (existingConnection?.connectedAt && !isRehydration) {
-    console.log(
-      `[MCP] Already connected to ${connectionKey} with serverId: ${existingConnection.serverId}`,
-    );
     return events;
   }
 
-  if (isRehydration) {
-    console.log(
-      `[MCP] Rehydrating connection ${connectionKey} - connection exists but manager missing from cache`,
-    );
-  }
+  let appliedHeaders: Record<string, string> = {};
+  let modifiedServerUrl = serverUrl;
 
-  const guaranteedIntegrationSlug = integrationSlug ?? getIntegrationSlugFromServerUrl(serverUrl);
-
-  const { formattedString: formattedServerUrl, missingDependencies } =
-    await formatStringWithDependencyFromIntegrationSystem({
-      targetString: serverUrl,
-      integrationSlug: guaranteedIntegrationSlug,
-      mode,
-      userId: userId!,
-    });
-
-  const allMissingDependencies = missingDependencies;
-
-  const formattedHeaders: Record<string, string> = {};
-  if (headers) {
-    for (const header of Object.keys(headers)) {
-      const value = headers[header];
-      const {
-        formattedString: formattedHeaderValue,
-        missingDependencies: missingHeaderDependencies,
-      } = await formatStringWithDependencyFromIntegrationSystem({
-        targetString: value,
-        integrationSlug: guaranteedIntegrationSlug,
-        mode,
-        userId: userId!,
-      });
-      allMissingDependencies.push(...missingHeaderDependencies);
-      formattedHeaders[header] = formattedHeaderValue;
-    }
-  }
-
-  const requiredDependencies = [...new Set(allMissingDependencies)];
   const finalRedirectUrl = await params.getFinalRedirectUrl?.({
     durableObjectInstanceName: agentDurableObject.durableObjectName,
   });
 
-  if (allMissingDependencies.length > 0) {
-    events.push({
-      type: "MCP:OAUTH_REQUIRED",
-      data: {
-        connectionKey,
+  if (requiresParams && requiresParams.length > 0) {
+    const storedParams = await db.query.mcpConnectionParam.findMany({
+      where: and(
+        eq(mcpConnectionParam.estateId, estateId),
+        eq(mcpConnectionParam.connectionKey, connectionKey),
+      ),
+    });
+
+    const missingParams = requiresParams.filter(
+      (required) =>
+        !storedParams.some(
+          (stored) => stored.paramKey === required.key && stored.paramType === required.type,
+        ),
+    );
+
+    if (missingParams.length > 0) {
+      const paramsCollectionUrl = await getMCPParamsCollectionURL({
+        db,
         serverUrl,
         mode,
-        userId,
+        connectionKey,
+        requiredParams: missingParams,
+        agentDurableObject,
+        estateId,
         integrationSlug: guaranteedIntegrationSlug,
-        oauthUrl: getIntegrationSecretFormUIURL({
-          message: `Please add the following dependencies to the integration ${guaranteedIntegrationSlug}`,
-          integrationSlug: guaranteedIntegrationSlug,
-          mode,
-          userId: userId!,
-          requiredDependencies,
-          finalRedirectUrl,
-          requestedByAgentDOId: agentDurableObject.durableObjectId,
+        finalRedirectUrl,
+      });
+
+      events.push({
+        type: "MCP:PARAMS_REQUIRED",
+        data: {
           serverUrl,
-          requiresAuth,
-          headers,
-        }),
-      },
-      metadata: {},
-      triggerLLMRequest: false,
-    });
-    return events;
+          mode,
+          connectionKey,
+          requiredParams: missingParams,
+          integrationSlug: guaranteedIntegrationSlug,
+          userId,
+          agentDurableObject,
+          paramsCollectionUrl,
+        },
+        metadata: {},
+        triggerLLMRequest: false,
+      });
+      return events;
+    }
+
+    appliedHeaders = R.pipe(
+      storedParams,
+      R.filter((param) => param.paramType === "header"),
+      R.map((param) => [param.paramKey, param.paramValue] as const),
+      R.fromEntries(),
+    );
+
+    modifiedServerUrl = R.pipe(
+      storedParams,
+      R.filter((param) => param.paramType === "query_param"),
+      R.reduce((currentUrl, param) => {
+        const url = new URL(currentUrl);
+        url.searchParams.set(param.paramKey, param.paramValue);
+        return url.toString();
+      }, modifiedServerUrl),
+    );
   }
 
-  const db = getDb();
-  const auth = getAuth(db);
-
-  const oauthProvider = requiresAuth
+  const oauthProvider = requiresOAuth
     ? new MCPOAuthProvider({
         auth,
         db,
         userId: userId!,
         estateId: estateId,
         integrationSlug: guaranteedIntegrationSlug,
-        serverUrl: formattedServerUrl,
+        serverUrl: modifiedServerUrl,
         callbackUrl: finalRedirectUrl,
         agentDurableObject,
       })
@@ -295,7 +256,7 @@ export async function handleMCPConnectRequest(
         authProvider: oauthProvider,
         type: "auto",
         requestInit: {
-          headers: formattedHeaders,
+          headers: appliedHeaders,
         },
       },
       ...(reconnect && {
@@ -308,7 +269,7 @@ export async function handleMCPConnectRequest(
     };
 
     result = await Promise.race([
-      manager.connect(formattedServerUrl, connectOptions),
+      manager.connect(modifiedServerUrl, connectOptions),
       // wait 20 seconds - if fail, add an error event
       new Promise<typeof result>((_, reject) => {
         setTimeout(
@@ -318,11 +279,11 @@ export async function handleMCPConnectRequest(
       }),
     ]);
   } catch (error) {
-    if (requiresAuth) {
+    if (requiresOAuth) {
       oauthProvider?.clearTokens();
     }
 
-    if (requiresAuth && oauthProvider?.authUrl) {
+    if (requiresOAuth && oauthProvider?.authUrl) {
       events.push({
         type: "MCP:OAUTH_REQUIRED",
         data: {
@@ -405,8 +366,8 @@ export async function handleMCPConnectRequest(
       tools: filteredTools,
       prompts: filteredPrompts,
       resources: filteredResources,
-      requiresAuth,
-      headers,
+      requiresOAuth,
+      requiresParams,
     },
     metadata: {},
     triggerLLMRequest: triggerLLMRequestOnEstablishedConnection,
@@ -477,8 +438,7 @@ async function handleMCPDisconnectRequest(
  * Each connection key gets its own queue with concurrency: 1 to ensure
  * only one connection attempt happens at a time per key.
  *
- * Performance optimization: Once a connection is established and cached,
- * subsequent requests bypass the queue entirely for faster access.
+ * Once a connection is established and cached, subsequent requests bypass the queue entirely for faster access.
  *
  * Abort handling flow:
  * 1. When OAuth/error occurs, abortPendingConnections() is called
@@ -512,19 +472,13 @@ export function getConnectionQueue(connectionKey: MCPConnectionKey): ConnectionQ
 export function abortPendingConnections(connectionKey: MCPConnectionKey, reason: string) {
   const entry = connectionQueues.get(connectionKey);
   if (entry) {
-    // Abort all pending tasks - this will cause p-queue to reject promises
-    // for both executing and pending tasks when they check the signal
     entry.controller.abort(reason);
-
-    // Important: We don't delete the queue entry immediately to avoid race conditions.
-    // The queue will be cleaned up by the timeout in the finally block of getOrCreateMCPConnection
-    // after all tasks have been processed (either completed or aborted).
   }
 }
 
 export async function getOrCreateMCPConnection(params: {
   connectionKey: MCPConnectionKey;
-  connection: MCPConnection;
+  connectionRequestEvent: MCPConnectRequestEvent;
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
@@ -532,65 +486,37 @@ export async function getOrCreateMCPConnection(params: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
-  const { connectionKey, connection } = params;
+  const { connectionKey } = params;
 
-  // Check cache first before even creating/using a queue
   const existingManager = mcpManagerCache.managers.get(connectionKey);
   if (existingManager) {
     return { success: true, data: { manager: existingManager, events: [] } };
   }
 
-  // Only use queue for actual connection attempts
   const { queue, controller } = getConnectionQueue(connectionKey);
 
   const result = await queue.add(
     async ({ signal }): Promise<Result<MCPConnectionResult>> => {
-      // Actually create the connection (only one execution at a time per key)
       try {
-        // Double-check inside queue in case another concurrent request completed
         const existingManager = mcpManagerCache.managers.get(connectionKey);
         if (existingManager) {
           return { success: true, data: { manager: existingManager, events: [] } };
         }
-
-        // Check if we've been aborted before starting
         if (signal?.aborted) {
           return { success: false, error: signal.reason || "Connection aborted" };
         }
         const events = await handleMCPConnectRequest({
-          event: {
-            type: "MCP:CONNECT_REQUEST",
-            data: {
-              serverUrl: connection.serverUrl,
-              mode: connection.mode,
-              userId: connection.userId,
-              integrationSlug: connection.integrationSlug,
-              requiresAuth: connection.requiresAuth ?? true,
-              headers: connection.headers,
-              allowedTools: connection.tools.map((t) => t.name),
-              allowedPrompts: connection.prompts.map((p) => p.name),
-              allowedResources: connection.resources.map((r) => r.uri),
-              triggerLLMRequestOnEstablishedConnection: false,
-            },
-            eventIndex: 0,
-            createdAt: new Date().toISOString(),
-            metadata: {},
-            triggerLLMRequest: false,
-          } as MCPConnectRequestEvent,
+          event: params.connectionRequestEvent,
           reducedState: params.reducedState,
           agentDurableObject: params.agentDurableObject,
           estateId: params.estateId,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
-        console.log("events", events);
-
-        // Check if events contain oauth_required or connection_error
         const hasOAuthRequired = events.some((e) => e.type === "MCP:OAUTH_REQUIRED");
         const hasConnectionError = events.some((e) => e.type === "MCP:CONNECTION_ERROR");
 
         if (hasOAuthRequired || hasConnectionError) {
-          // Abort all pending connections for this key
           const abortReason = hasOAuthRequired
             ? "OAuth authorization required - aborting pending connection attempts"
             : "Connection failed - aborting pending connection attempts";
@@ -600,7 +526,6 @@ export async function getOrCreateMCPConnection(params: {
           console.log("aborted pending connections", abortReason);
         }
 
-        // The manager should be available after successful connection
         const manager = mcpManagerCache.managers.get(params.connectionKey);
         if (!manager) {
           return { success: true, data: { manager: undefined, events } };
@@ -608,7 +533,6 @@ export async function getOrCreateMCPConnection(params: {
 
         return { success: true, data: { manager, events } };
       } catch (error) {
-        // Also abort on uncaught errors
         abortPendingConnections(params.connectionKey, `Connection error: ${String(error)}`);
         return { success: false, error: String(error) };
       } finally {
@@ -633,14 +557,13 @@ export async function getOrCreateMCPConnection(params: {
 // ------------------------- Lazy Connection -------------------------
 
 /**
- * Lazily connect to an MCP server when a tool is first used.
+ * Rehydrate an existing MCP connection.
  *
- * Performance optimizations:
  * 1. Returns immediately if connection exists in cache (no queue overhead)
  * 2. Uses queue only for actual connection attempts to prevent duplicates
  * 3. Cleans up idle queues automatically after connection attempts
  */
-export async function lazyConnectMCPServer(params: {
+export async function rehydrateExistingMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
   agentDurableObject: AgentDurableObjectInfo;
@@ -650,15 +573,27 @@ export async function lazyConnectMCPServer(params: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPClientManager | undefined> & { events?: MCPEventHookReturnEvent[] }> {
-  const { connectionKey } = params;
-
-  const existingManager = mcpManagerCache.managers.get(connectionKey);
-  if (existingManager) {
-    return { success: true, data: existingManager };
-  }
-
-  // Use the memoized connection function
-  const result = await getOrCreateMCPConnection(params);
+  const result = await getOrCreateMCPConnection({
+    ...params,
+    connectionRequestEvent: {
+      type: "MCP:CONNECT_REQUEST",
+      data: {
+        serverUrl: params.connection.serverUrl,
+        mode: params.connection.mode,
+        userId: params.connection.userId,
+        integrationSlug: params.connection.integrationSlug,
+        requiresOAuth: params.connection.requiresOAuth ?? true,
+        allowedTools: params.connection.tools.map((t) => t.name),
+        allowedPrompts: params.connection.prompts.map((p) => p.name),
+        allowedResources: params.connection.resources.map((r) => r.uri),
+        triggerLLMRequestOnEstablishedConnection: false,
+      },
+      eventIndex: 0,
+      createdAt: new Date().toISOString(),
+      metadata: {},
+      triggerLLMRequest: false,
+    },
+  });
 
   if (result.success) {
     return {

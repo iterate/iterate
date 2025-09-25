@@ -6,7 +6,7 @@ import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
-import { lazyConnectMCPServer, mcpManagerCache } from "./mcp-event-hooks.ts";
+import { rehydrateExistingMCPConnection, mcpManagerCache } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import type { MCPEventHookReturnEvent } from "./mcp-event-hooks.ts";
 
@@ -451,7 +451,7 @@ export function createRuntimeToolFromMCPTool(params: {
           `[MCP] Tool ${toolName} triggering lazy connection to ${selectedConnectionKey}`,
         );
 
-        const result = await lazyConnectMCPServer({
+        const result = await rehydrateExistingMCPConnection({
           connectionKey: selectedConnectionKey,
           connection,
           agentDurableObject: params.lazyConnectionDeps.getDurableObjectInfo(),

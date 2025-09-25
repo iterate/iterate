@@ -31,7 +31,7 @@ describe("mcp-tool-mapping", () => {
     serverId: string,
     mode: "personal" | "company",
     tools: MCPTool[],
-    userId?: string,
+    userId: string,
   ): MCPConnection => ({
     integrationSlug,
     serverId,
@@ -43,6 +43,7 @@ describe("mcp-tool-mapping", () => {
     tools,
     prompts: [],
     resources: [],
+    requiresOAuth: true,
   });
 
   const createMockTool = (name: string, description?: string): MCPTool => ({
@@ -416,11 +417,17 @@ describe("mcp-tool-mapping", () => {
     it("should handle multiple tools from single connection", () => {
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories"),
-          createMockTool("create_issue"),
-          createMockTool("list_pulls"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [
+            createMockTool("search_repositories"),
+            createMockTool("create_issue"),
+            createMockTool("list_pulls"),
+          ],
+          "user123",
+        ),
       };
 
       const result = computeToolMapping(connections);
@@ -446,6 +453,7 @@ describe("mcp-tool-mapping", () => {
           tools: [createMockTool("search_repositories")],
           prompts: [],
           resources: [],
+          requiresOAuth: true,
         },
       };
 
@@ -468,6 +476,7 @@ describe("mcp-tool-mapping", () => {
           tools: [], // no tools
           prompts: [],
           resources: [],
+          requiresOAuth: true,
         },
       };
 
@@ -506,9 +515,13 @@ describe("mcp-tool-mapping", () => {
           [createMockTool("search_repositories")],
           "user123",
         ),
-        [slackConnectionKey]: createMockConnection("slack", "server-456", "company", [
-          createMockTool("send_message"),
-        ]),
+        [slackConnectionKey]: createMockConnection(
+          "slack",
+          "server-456",
+          "company",
+          [createMockTool("send_message")],
+          "user123",
+        ),
       };
 
       const result = computeToolMapping(connections);
@@ -524,9 +537,13 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories", "Search GitHub repositories"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [createMockTool("search_repositories", "Search GitHub repositories")],
+          "user123",
+        ),
       };
 
       const result = generateRuntimeToolsFromConnections(connections, mockUploadFile);
@@ -638,9 +655,13 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [createMockTool("search_repositories")],
+          "user123",
+        ),
       };
 
       // manually delete the connection to simulate missing connection

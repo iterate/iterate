@@ -23,6 +23,7 @@ import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -40,8 +41,8 @@ import {
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
-  handleMCPConnectRequest,
   mcpManagerCache,
+  getOrCreateMCPConnection,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
@@ -52,7 +53,6 @@ import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 
 // -----------------------------------------------------------------------------
@@ -1081,17 +1081,43 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
     const formattedServerUrl = new URL(input.serverUrl);
-    if (input.requiresQueryParamsAuth) {
-      const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
-      formattedServerUrl.search = searchParams.toString();
-    }
-    const mcpServer: MCPServer = {
+
+    const requiresParams: MCPParam[] = [
+      ...R.pipe(
+        input.requiresHeadersAuth ?? {},
+        R.entries(),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "header",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
+      ),
+      ...R.pipe(
+        input.requiresQueryParamsAuth ?? {},
+        R.entries(),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "query_param",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
+      ),
+    ];
+
+    const mcpServer = {
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
-      requiresAuth: input.requiresOAuth || false,
-      headers: input.requiresHeadersAuth || undefined,
+      requiresOAuth: input.requiresOAuth || false,
+      requiresParams,
     };
-    // Check if already connected
+
     const connectionKey = getConnectionKey({
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
@@ -1100,7 +1126,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const existingManager = mcpManagerCache.managers.get(connectionKey);
     if (existingManager) {
-      // Already connected, just add the server to the state
       return {
         success: true,
         message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
@@ -1108,7 +1133,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       };
     }
 
-    // Not connected yet, proceed with connection
     const connectRequestEvent: MCPConnectRequestEventInput = {
       type: "MCP:CONNECT_REQUEST",
       data: {
@@ -1119,9 +1143,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       metadata: {},
       triggerLLMRequest: false,
     };
-
-    const events = await handleMCPConnectRequest({
-      event: {
+    const result = await getOrCreateMCPConnection({
+      connectionKey,
+      connectionRequestEvent: {
         ...connectRequestEvent,
         eventIndex: 0,
         createdAt: new Date().toISOString(),
@@ -1131,10 +1155,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       reducedState: this.getReducedState(),
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
+    if (!result.success) {
+      return {
+        success: false,
+        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${result.error}`,
+      };
+    }
 
-    if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-      // Extract error details from events
-      const errorDetails = events
+    if (result.data.events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
+      const errorDetails = result.data.events
         .map((e) => {
           if (e.type === "MCP:CONNECTION_ERROR") {
             return `${e.type}: ${e.data.error}`;
@@ -1147,7 +1176,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         .join("; ");
 
       return {
-        __addAgentCoreEvents: events,
+        __addAgentCoreEvents: result.data.events,
         success: false,
         message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
         addedMcpServer: mcpServer,
@@ -1155,7 +1184,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     return {
-      __addAgentCoreEvents: events,
+      __addAgentCoreEvents: result.data.events,
       success: true,
       message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
       addedMcpServer: mcpServer,

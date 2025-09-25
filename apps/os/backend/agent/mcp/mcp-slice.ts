@@ -8,12 +8,13 @@ import {
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
+import { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
+import { MCPParam } from "../tool-schemas.ts";
 import {
   generateRuntimeToolsFromConnections,
   type LazyConnectionDeps,
 } from "./mcp-tool-mapping.ts";
-
 // ------------------------- Schemas -------------------------
 
 /** Connection key format: serverUrl::mode::userId (personal) or serverUrl::company (company) */
@@ -57,14 +58,14 @@ export const MCPConnection = z.object({
   serverUrl: z.string(),
   serverName: z.string(),
   mode: IntegrationMode,
-  userId: z.string().optional(),
+  userId: z.string(),
   integrationSlug: z.string().optional(),
   tools: z.array(MCPTool),
   prompts: z.array(MCPPrompt),
   resources: z.array(MCPResource),
   connectedAt: z.string(),
-  requiresAuth: z.boolean().default(true).optional(), // For backwards compatibility with existing connections
-  headers: z.record(z.string(), z.string()).optional(),
+  requiresOAuth: z.boolean().default(true),
+  requiresParams: z.array(MCPParam).optional(),
 });
 
 // ------------------------- Types -------------------------
@@ -77,7 +78,6 @@ export type MCPConnection = z.infer<typeof MCPConnection>;
 
 export interface MCPSliceState {
   mcpConnections: Record<MCPConnectionKey, MCPConnection>;
-  pendingConnections: string[]; // Track pending connection keys
 }
 
 // ------------------------- Event Schemas -------------------------
@@ -87,14 +87,14 @@ const mcpConnectRequestFields = {
   data: z.object({
     serverUrl: z.string(),
     mode: IntegrationMode,
-    userId: z.string().optional(),
+    userId: z.string(),
     integrationSlug: z.string().optional(),
     allowedTools: z.array(z.string()).optional(),
     allowedPrompts: z.array(z.string()).optional(),
     allowedResources: z.array(z.string()).optional(),
-    requiresAuth: z.boolean().default(true),
     triggerLLMRequestOnEstablishedConnection: z.boolean().default(false),
-    headers: z.record(z.string(), z.string()).optional(),
+    requiresOAuth: z.boolean().default(true),
+    requiresParams: z.array(MCPParam).optional(),
     reconnect: z
       .object({
         oauthClientId: z.string(),
@@ -127,8 +127,8 @@ const mcpConnectionEstablishedFields = {
     tools: z.array(MCPTool),
     prompts: z.array(MCPPrompt),
     resources: z.array(MCPResource),
-    requiresAuth: z.boolean().default(true),
-    headers: z.record(z.string(), z.string()).optional(),
+    requiresOAuth: z.boolean().default(true),
+    requiresParams: z.array(MCPParam).optional(),
   }),
 };
 
@@ -222,6 +222,30 @@ export const MCPOAuthRequiredEventInput = z.object({
   ...mcpOAuthRequiredFields,
 });
 
+const mcpParamsRequiredFields = {
+  type: z.literal("MCP:PARAMS_REQUIRED"),
+  data: z.object({
+    serverUrl: z.string(),
+    mode: IntegrationMode,
+    connectionKey: z.string(),
+    requiredParams: z.array(MCPParam),
+    userId: z.string(),
+    agentDurableObject: AgentDurableObjectInfo,
+    integrationSlug: z.string(),
+    paramsCollectionUrl: z.string(),
+  }),
+};
+
+export const MCPParamsRequiredEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...mcpParamsRequiredFields,
+});
+
+export const MCPParamsRequiredEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...mcpParamsRequiredFields,
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const MCPEvent = z.discriminatedUnion("type", [
@@ -231,6 +255,7 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPToolsChanged,
   MCPConnectionErrorEvent,
   MCPOAuthRequiredEvent,
+  MCPParamsRequiredEvent,
 ]);
 
 export const MCPEventInput = z.discriminatedUnion("type", [
@@ -240,6 +265,7 @@ export const MCPEventInput = z.discriminatedUnion("type", [
   MCPToolsChangedInput,
   MCPConnectionErrorEventInput,
   MCPOAuthRequiredEventInput,
+  MCPParamsRequiredEventInput,
 ]);
 
 // ------------------------- Types -------------------------
@@ -249,12 +275,14 @@ export type MCPDisconnectRequestEvent = z.infer<typeof MCPDisconnectRequestEvent
 export type MCPConnectionEstablishedEvent = z.infer<typeof MCPConnectionEstablishedEvent>;
 export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
+export type MCPParamsRequiredEvent = z.infer<typeof MCPParamsRequiredEvent>;
 
 export type MCPConnectRequestEventInput = z.infer<typeof MCPConnectRequestEventInput>;
 export type MCPDisconnectRequestEventInput = z.infer<typeof MCPDisconnectRequestEventInput>;
 export type MCPConnectionEstablishedEventInput = z.infer<typeof MCPConnectionEstablishedEventInput>;
 export type MCPConnectionErrorEventInput = z.infer<typeof MCPConnectionErrorEventInput>;
 export type MCPOAuthRequiredEventInput = z.infer<typeof MCPOAuthRequiredEventInput>;
+export type MCPParamsRequiredEventInput = z.infer<typeof MCPParamsRequiredEventInput>;
 
 export type MCPEvent = z.infer<typeof MCPEvent>;
 export type MCPEventInput = z.input<typeof MCPEventInput>;
@@ -338,7 +366,6 @@ export const mcpSlice = defineAgentCoreSlice<{
   eventInputSchema: MCPEventInput,
   initialState: {
     mcpConnections: {},
-    pendingConnections: [],
   },
   reduce(state, deps, event) {
     switch (event.type) {
@@ -346,18 +373,10 @@ export const mcpSlice = defineAgentCoreSlice<{
         const { serverUrl, mode, userId } = event.data;
         const connectionKey = getConnectionKey({ serverUrl, mode, userId });
         const { [connectionKey]: _conn, ...rest } = state.mcpConnections;
-        // Add to pending connections if not already there
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.includes(connectionKey)
-          ? pendingConnections
-          : [...pendingConnections, connectionKey];
-
-        // Update runtime tools to remove tools from the disconnected connection
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections: rest, deps });
 
         return {
           mcpConnections: { ...rest },
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems],
         };
@@ -387,17 +406,11 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove from pending connections
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
-
         return {
           mcpConnections: newConnections,
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, connectionMessage],
-          // Only trigger LLM if no more pending connections
-          triggerLLMRequest: newPendingConnections.length === 0,
+          triggerLLMRequest: true,
         };
       }
 
@@ -451,26 +464,17 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove the connection from state on error
         const newConnections = { ...state.mcpConnections };
         if (connectionKey) {
           delete newConnections[connectionKey];
         }
         const updatedRuntimeTools = updateRuntimeTools({ state, newConnections, deps });
 
-        // Remove from pending connections
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = connectionKey
-          ? pendingConnections.filter((key) => key !== connectionKey)
-          : pendingConnections;
-
         return {
           mcpConnections: newConnections,
-          pendingConnections: newPendingConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, errorMessage],
-          // Only trigger LLM if no more pending connections
-          triggerLLMRequest: newPendingConnections.length === 0,
+          triggerLLMRequest: true,
         };
       }
 
@@ -492,9 +496,40 @@ export const mcpSlice = defineAgentCoreSlice<{
           ],
         } satisfies ResponseInputItem;
 
-        // Remove from pending connections since OAuth is needed
-        const pendingConnections = state.pendingConnections || [];
-        const newPendingConnections = pendingConnections.filter((key) => key !== connectionKey);
+        const newState = {
+          mcpConnections: {
+            ...state.mcpConnections,
+            [connectionKey]: {
+              serverId: "",
+              serverUrl,
+              mode,
+              userId,
+              integrationSlug,
+              tools: [],
+              prompts: [],
+              resources: [],
+            },
+          },
+          inputItems: [...state.inputItems, oauthMessage],
+          triggerLLMRequest: true,
+        };
+        return newState;
+      }
+
+      case "MCP:PARAMS_REQUIRED": {
+        const { connectionKey, serverUrl, mode, userId, integrationSlug, paramsCollectionUrl } =
+          event.data;
+
+        const paramsRequiredMessage = {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Additional inputs are required to connect to ${integrationSlug}. Send the user this URL to add inputs: ${paramsCollectionUrl}. Connection will proceed automatically once inputs are added.`,
+            },
+          ],
+        } satisfies ResponseInputItem;
 
         const newState = {
           mcpConnections: {
@@ -510,10 +545,8 @@ export const mcpSlice = defineAgentCoreSlice<{
               resources: [],
             },
           },
-          pendingConnections: newPendingConnections,
-          inputItems: [...state.inputItems, oauthMessage],
-          // Only trigger LLM if no more pending connections
-          triggerLLMRequest: newPendingConnections.length === 0,
+          inputItems: [...state.inputItems, paramsRequiredMessage],
+          triggerLLMRequest: true,
         };
         return newState;
       }

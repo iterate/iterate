@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { estateProtectedProcedure, router } from "../trpc.ts";
@@ -11,6 +11,9 @@ import {
   getGithubRepoForEstate,
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
+import { IterateAgent } from "../../agent/iterate-agent.ts";
+import { SlackAgent } from "../../agent/slack-agent.ts";
+import { MCPParam } from "../../agent/tool-schemas.ts";
 import { getGithubUserAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 // Define the integration providers we support
@@ -511,6 +514,160 @@ export const integrationsRouter = router({
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
       };
+    }),
+
+  saveMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+        params: z.array(
+          z.object({
+            key: z.string(),
+            value: z.string(),
+            type: z.enum(["header", "query_param"]),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, connectionKey, params } = input;
+
+      await ctx.db.transaction(async (tx) => {
+        if (params.length > 0) {
+          const paramValues = params.map((param) => ({
+            estateId,
+            connectionKey,
+            paramKey: param.key,
+            paramValue: param.value,
+            paramType: param.type,
+          }));
+
+          await tx
+            .insert(schemas.mcpConnectionParam)
+            .values(paramValues)
+            .onConflictDoUpdate({
+              target: [
+                schemas.mcpConnectionParam.estateId,
+                schemas.mcpConnectionParam.connectionKey,
+                schemas.mcpConnectionParam.paramKey,
+                schemas.mcpConnectionParam.paramType,
+              ],
+              set: {
+                paramValue: sql`excluded.param_value`,
+                updatedAt: new Date(),
+              },
+            });
+
+          const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
+          const existingParams = await tx.query.mcpConnectionParam.findMany({
+            where: and(
+              eq(schemas.mcpConnectionParam.estateId, estateId),
+              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+            ),
+          });
+
+          const paramsToDelete = existingParams.filter(
+            (existing) => !currentParamKeys.includes(`${existing.paramKey}:${existing.paramType}`),
+          );
+
+          if (paramsToDelete.length > 0) {
+            const idsToDelete = paramsToDelete.map((p) => p.id);
+            await tx
+              .delete(schemas.mcpConnectionParam)
+              .where(inArray(schemas.mcpConnectionParam.id, idsToDelete));
+          }
+        } else {
+          await tx
+            .delete(schemas.mcpConnectionParam)
+            .where(
+              and(
+                eq(schemas.mcpConnectionParam.estateId, estateId),
+                eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+              ),
+            );
+        }
+      });
+
+      return { success: true };
+    }),
+
+  getMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, connectionKey } = input;
+      const params = await ctx.db.query.mcpConnectionParam.findMany({
+        where: and(
+          eq(schemas.mcpConnectionParam.estateId, estateId),
+          eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+        ),
+      });
+      return params.map((param) => ({
+        key: param.paramKey,
+        value: param.paramValue,
+        type: param.paramType,
+      }));
+    }),
+
+  reconnectMCPServer: estateProtectedProcedure
+    .input(
+      z.object({
+        agentDurableObject: z.object({
+          durableObjectId: z.string(),
+          durableObjectName: z.string(),
+          className: z.string(),
+        }),
+        serverUrl: z.string(),
+        mode: z.enum(["personal", "company"]),
+        integrationSlug: z.string(),
+        requiresOAuth: z.boolean().optional(),
+        requiresParams: z.array(MCPParam).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const {
+        agentDurableObject,
+        serverUrl,
+        mode,
+        integrationSlug,
+        requiresOAuth,
+        requiresParams,
+      } = input;
+      const params = {
+        db: ctx.db,
+        agentInstanceName: agentDurableObject.durableObjectName,
+      };
+
+      const agentStub =
+        agentDurableObject.className === "SlackAgent"
+          ? await SlackAgent.getStubByName(params)
+          : await IterateAgent.getStubByName(params);
+
+      if (!agentStub) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to get agent stub for ${agentDurableObject.className}: ${agentDurableObject.durableObjectName}`,
+        });
+      }
+      await agentStub.addEvents([
+        {
+          type: "MCP:CONNECT_REQUEST",
+          data: {
+            serverUrl,
+            mode: mode,
+            userId: ctx.user.id,
+            integrationSlug,
+            requiresOAuth,
+            requiresParams,
+            triggerLLMRequestOnEstablishedConnection: false,
+          },
+        },
+      ]);
+
+      return { success: true };
     }),
   createTemplateRepo: estateProtectedProcedure
     .input(
