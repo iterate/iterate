@@ -95,14 +95,27 @@ export function doToolToRuntimeJsonSchema(_value: unknown) {
 export type AgentDOToolMethodName<TClassName extends "SlackAgent" | "IterateAgent"> =
   TClassName extends "SlackAgent" ? keyof typeof slackAgentTools : keyof typeof iterateAgentTools;
 
-export function agentDOTool<TClassName extends "SlackAgent" | "IterateAgent">(
-  tool: Omit<AgentDurableObjectToolSpec, "type"> & {
-    className: TClassName;
-    methodName: AgentDOToolMethodName<TClassName>;
-  },
-): ToolSpec {
-  return {
-    type: "agent_durable_object_tool",
-    ...tool,
+export function createDOToolFactory<T extends ReturnType<typeof defineDOTools>>(definitions: T) {
+  return Object.fromEntries(
+    Object.keys(definitions).map((key) => {
+      return [
+        key,
+        (toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName">): ToolSpec => {
+          return {
+            type: "agent_durable_object_tool",
+            methodName: key,
+            ...toolSpec,
+          };
+        },
+      ];
+    }),
+  ) as {
+    [K in keyof typeof definitions]-?: (
+      toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName" | "passThroughArgs"> & {
+        passThroughArgs?: Partial<
+          z.output<NonNullable<NonNullable<(typeof definitions)[K]>["input"]>>
+        >;
+      },
+    ) => ToolSpec;
   };
 }

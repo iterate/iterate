@@ -5,7 +5,11 @@ import { z } from "zod/v4";
 import { SearchRequest } from "../default-tools.ts";
 import { defineRule, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
-import { agentDOTool } from "./do-tools.ts";
+import { createDOToolFactory } from "./do-tools.ts";
+import { iterateAgentTools } from "./iterate-agent-tools.ts";
+
+const iterateAgentTool = createDOToolFactory(iterateAgentTools);
+const slackAgentTool = createDOToolFactory(slackAgentTools);
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -147,57 +151,19 @@ export const defaultContextRules = async () => [
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
       // IterateAgent DO tools
-      // agentDOTool({
-      //   className: "IterateAgent",
-      //   methodName: "doNothing",
-      // }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "connectMCPServer",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "getAgentDebugURL",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "remindMyselfLater",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "listMyReminders",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "cancelReminder",
-      }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "stopRespondingUntilMentioned",
-      }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "addSlackReaction",
-      }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "removeSlackReaction",
-      }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "uploadAndShareFileInSlack",
-      }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "updateSlackMessage",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "getURLContent",
-      }),
-      agentDOTool({
-        className: "IterateAgent",
-        methodName: "searchWeb",
+      iterateAgentTool.doNothing(),
+      iterateAgentTool.connectMCPServer(),
+      iterateAgentTool.getAgentDebugURL(),
+      iterateAgentTool.remindMyselfLater(),
+      iterateAgentTool.listMyReminders(),
+      iterateAgentTool.cancelReminder(),
+      slackAgentTool.stopRespondingUntilMentioned(),
+      slackAgentTool.addSlackReaction(),
+      slackAgentTool.removeSlackReaction(),
+      slackAgentTool.uploadAndShareFileInSlack(),
+      slackAgentTool.updateSlackMessage(),
+      iterateAgentTool.getURLContent(),
+      iterateAgentTool.searchWeb({
         overrideInputJSONSchema: z.toJSONSchema(
           SearchRequest.pick({
             query: true,
@@ -212,9 +178,7 @@ export const defaultContextRules = async () => [
       // trpcCallableBuilder.firstparty.imageGenerator.editImage.toolSpec({
       //   overrideName: "edit_image",
       // }),
-      agentDOTool({
-        className: "SlackAgent",
-        methodName: "sendSlackMessage",
+      slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
             text: true,
