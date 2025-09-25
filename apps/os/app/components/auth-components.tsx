@@ -39,11 +39,11 @@ export function LoginProviders() {
   };
 
   const handleTestAdminUserSignIn = async () => {
-    console.log("🚀 Attempting email sign-in...");
-    const result = await authClient.signIn.email({
-      email: "admin@example.com",
-      password: "password",
-    });
+    const [email, password] = prompt(
+      "Enter email and password (space separated)",
+      "admin@example.com password",
+    )!.split(" ")!;
+    const result = await authClient.signIn.email({ email, password });
     window.location.href = result.data?.url ?? "/";
   };
 
