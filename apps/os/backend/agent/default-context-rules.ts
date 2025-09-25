@@ -261,14 +261,21 @@ export const defaultContextRules = async () => [
     key: "using-linear",
     prompt: dedent`
       When using Linear tools:
-      - When displaying Linear issues, use: "<issue.url|issue.identifier>: title".
+      - When displaying Linear issues, use: "<issue.url|issue.identifier>: title (_state_)".
       - For bug tickets, gather: steps to reproduce, expected vs. actual behavior, and environment.
       - For feature tickets, require: user story and success criteria.
       - If information is missing, ask targeted questions; avoid using placeholders like "TBD".
       - Tools that take a "limit" parameter can be slow if limit is > 10 so default to that
-      - When using the list_my_issues tool:
-        - make sure to exclude any issues that have status Canceled, Duplicate or Done
-        - default to limit 10
+      - When using the linear_oauth_proxy_list_issues tool:
+        - Active issues are recently (in the last 7 days) created or updated issues with state 'Up Next', 'In Progress' or 'In Review' 
+        - Inactive issues are issues with state 'Backlog', 'Done', 'Duplicate' or 'Cancelled'
+        - Filtering by state:
+          - The tool accepts one state per call. To filter fetched issues on multiple states, make parallel calls (one per state). To fetch all states, omit the state filter.
+          - Examples:
+            - linear_oauth_proxy_list_issues({ state: 'Up Next' })
+            - linear_oauth_proxy_list_issues({ state: 'In Progress' })
+            - linear_oauth_proxy_list_issues()
+        - Default limit: 10 per call
     `,
     match: matchers.hasMCPConnection("mcp.linear.app"),
   },
