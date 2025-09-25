@@ -1142,39 +1142,51 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       reducedState: this.getReducedState(),
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
-    if (!result.success) {
-      return {
-        success: false,
-        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${result.error}`,
-      };
+
+    if (result.success) {
+      if (result.data.manager) {
+        return {
+          __addAgentCoreEvents: result.data.events,
+          success: true,
+          message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
+        };
+      }
+      if (result.data.events) {
+        const eventTypes = result.data.events.map((e) => e.type);
+        if (eventTypes.includes("MCP:OAUTH_REQUIRED")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: true,
+            message: `MCP server requires OAuth.`,
+          };
+        }
+        if (eventTypes.includes("MCP:PARAMS_REQUIRED")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: true,
+            message: `MCP server requires additional inputs from the user.`,
+          };
+        }
+        if (eventTypes.includes("MCP:CONNECTION_ERROR")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: false,
+            message: `Failed to add MCP server.`,
+          };
+        }
+      }
     }
 
-    if (result.data.events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-      const errorDetails = result.data.events
-        .map((e) => {
-          if (e.type === "MCP:CONNECTION_ERROR") {
-            return `${e.type}: ${e.data.error}`;
-          } else if (e.type === "MCP:OAUTH_REQUIRED") {
-            return `${e.type}: OAuth required - ${e.data.oauthUrl}`;
-          } else {
-            return e.type;
-          }
-        })
-        .join("; ");
-
+    if (!result.success && result.error) {
       return {
-        __addAgentCoreEvents: result.data.events,
         success: false,
-        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
-        addedMcpServer: mcpServer,
+        message: `Failed to add MCP server: ${input.serverUrl}. ${result.error}`,
       };
     }
 
     return {
-      __addAgentCoreEvents: result.data.events,
-      success: true,
-      message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
-      addedMcpServer: mcpServer,
+      success: false,
+      message: `Something went wrong while adding MCP server - you should never see this message.`,
     };
   }
 
