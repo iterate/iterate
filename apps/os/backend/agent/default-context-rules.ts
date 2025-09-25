@@ -5,6 +5,11 @@ import { z } from "zod/v4";
 import { SearchRequest } from "../default-tools.ts";
 import { defineRule, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
+import { createDOToolFactory } from "./do-tools.ts";
+import { iterateAgentTools } from "./iterate-agent-tools.ts";
+
+const iterateAgentTool = createDOToolFactory(iterateAgentTools);
+const slackAgentTool = createDOToolFactory(slackAgentTools);
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -179,72 +184,27 @@ export const defaultContextRules = async () => [
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
       // IterateAgent DO tools
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "doNothing",
-      // },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "connectMCPServer",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getAgentDebugURL",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "remindMyselfLater",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "listMyReminders",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "cancelReminder",
-      },
-
-      // SlackAgent DO tools
-      {
-        type: "agent_durable_object_tool",
-        methodName: "stopRespondingUntilMentioned",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "addSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "removeSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "uploadAndShareFileInSlack",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "updateSlackMessage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getURLContent",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "searchWeb",
+      iterateAgentTool.doNothing(),
+      iterateAgentTool.connectMCPServer(),
+      iterateAgentTool.getAgentDebugURL(),
+      iterateAgentTool.remindMyselfLater(),
+      iterateAgentTool.listMyReminders(),
+      iterateAgentTool.cancelReminder(),
+      slackAgentTool.stopRespondingUntilMentioned(),
+      slackAgentTool.addSlackReaction(),
+      slackAgentTool.removeSlackReaction(),
+      slackAgentTool.uploadAndShareFileInSlack(),
+      slackAgentTool.updateSlackMessage(),
+      iterateAgentTool.getURLContent(),
+      iterateAgentTool.searchWeb({
         overrideInputJSONSchema: z.toJSONSchema(
           SearchRequest.pick({
             query: true,
           }),
         ),
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "generateImage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "sendSlackMessage",
+      }),
+      iterateAgentTool.generateImage(),
+      slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
             text: true,
@@ -254,7 +214,7 @@ export const defaultContextRules = async () => [
             endTurn: true,
           }),
         ),
-      },
+      }),
     ],
   }),
   {
