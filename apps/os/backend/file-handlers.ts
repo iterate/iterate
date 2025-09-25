@@ -7,7 +7,6 @@ import type { Variables } from "./worker.ts";
 import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
-import { getStage } from "./utils/staging.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;

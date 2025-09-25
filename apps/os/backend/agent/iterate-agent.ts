@@ -19,7 +19,7 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   contextRules: ContextRule[];
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { getStage } from "../utils/staging.ts";
+import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
 import * as replicateIntegration from "../integrations/replicate/replicate.ts";
@@ -413,12 +413,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
     const posthogClient = pMemoize(async () => {
       const estate = await getEstate();
-      const stage = getStage({
+      const environment = getEnvironmentName({
         ITERATE_USER: this.env.ITERATE_USER,
         STAGE__PR_ID: this.env.STAGE__PR_ID,
         ESTATE_NAME: estate.name,
       });
-      return new PosthogCloudflare(this.ctx, { estate: estate.name, environment: stage });
+      return new PosthogCloudflare(this.ctx, {
+        estateName: estate.name,
+        environmentName: environment,
+      });
     });
 
     const baseDeps: AgentCoreDeps = {
@@ -474,7 +477,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         return await openAIProvider({
           posthog: {
             estateName: estate.name,
-            environmentName: getStage({
+            environmentName: getEnvironmentName({
               STAGE__PR_ID: this.env.STAGE__PR_ID,
               ITERATE_USER: this.env.ITERATE_USER,
               ESTATE_NAME: estate.name,
@@ -873,7 +876,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
-      const projectName = `${getStage({
+      const projectName = `${getEnvironmentName({
         ITERATE_USER: this.env.ITERATE_USER,
         STAGE__PR_ID: this.env.STAGE__PR_ID,
         ESTATE_NAME: estateName,

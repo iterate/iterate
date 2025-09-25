@@ -40,7 +40,7 @@ export function posthogOpenAIWrapper(
   }) => {
     posthog.track({
       event: "$ai_generation",
-      distinctId: SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estate),
+      distinctId: SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estateName),
       properties: {
         // standard posthog LLM fields
         $ai_model: model,

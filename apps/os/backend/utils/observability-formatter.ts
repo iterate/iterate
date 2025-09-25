@@ -105,7 +105,7 @@ export function formatItemsForObservability(messages: OpenAI.Responses.ResponseI
       if (message.type === "reasoning") {
         return {
           role: "assistant",
-          content: message.content?.map((c) => c.text).join("\n\n"),
+          content: `Reasoning\n\n${message.content?.map((c) => c.text).join("\n\n")}`,
           type: message.type,
         };
       }
