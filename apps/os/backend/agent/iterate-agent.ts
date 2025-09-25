@@ -1,4 +1,3 @@
-import pTimeout from "p-suite/p-timeout";
 import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
@@ -715,12 +714,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected async getContextRules(): Promise<ContextRule[]> {
     const defaultRules = await defaultContextRules();
-    const { db, databaseRecord } = this;
+    // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
-    const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
-      milliseconds: 250,
-      fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
-    });
+    // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+    //   milliseconds: 250,
+    //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    // });
+    const rulesFromDb = [] as ContextRule[];
     const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
