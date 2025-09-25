@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mcpManagerCache } from "./mcp-event-hooks.ts";
+import { mcpManagerCache, createCacheKey } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import {
   computeToolMapping,
@@ -14,6 +14,8 @@ vi.mock("./mcp-event-hooks.ts", () => ({
   mcpManagerCache: {
     managers: new Map(),
   },
+  createCacheKey: (durableObjectId: string, connectionKey: string) =>
+    `${durableObjectId}--${connectionKey}`,
 }));
 
 describe("mcp-tool-mapping", () => {
@@ -762,7 +764,8 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
 
-      mcpManagerCache.managers.set(connectionKey, mockManager as any);
+      const cacheKey = createCacheKey("test-durable-object-id", connectionKey);
+      mcpManagerCache.managers.set(cacheKey, mockManager as any);
 
       const tool = createMockTool("search_repos");
       const connections = {
@@ -773,12 +776,23 @@ describe("mcp-tool-mapping", () => {
         },
       };
 
+      const mockLazyConnectionDeps = {
+        getDurableObjectInfo: () => ({
+          durableObjectId: "test-durable-object-id",
+          durableObjectName: "test-durable-object-name",
+          className: "TestClass",
+        }),
+        getEstateId: () => "test-estate-id",
+        getReducedState: () => ({ mcpConnections: {} }) as any,
+      };
+
       const runtimeTool = createRuntimeToolFromMCPTool({
         tool,
         toolName: "github_search_repos",
         integrationSlug: "github",
         connections,
         uploadFile: mockUploadFile,
+        lazyConnectionDeps: mockLazyConnectionDeps,
       });
 
       const result = await runtimeTool.execute(
@@ -894,7 +908,7 @@ describe("mcp-tool-mapping", () => {
           { query: "test" },
         ),
       ).rejects.toThrow(
-        "MCP manager not found for connection and lazy connection deps not provided. The connection may need to be re-established.",
+        "Lazy connection deps are required for MCP tool execution to access the cache.",
       );
     });
   });
