@@ -853,6 +853,13 @@ export const emojiMapping = Object.fromEntries(
   }),
 );
 
-export const resolveEmoji = (emoji: string) => {
-  return emojiMapping[emoji] ?? `:${emoji}:`;
+/**
+ * Resolves a slack emoji name (e.g. "smile", "eyes", "+1") to a Unicode character.
+ * If the emoji is not found in the mapping, it returns the emoji wrapped in colons.
+ *
+ * @param emojiName - The slack emoji name to resolve
+ * @returns The Unicode character for the emoji, or the emoji wrapped in colons if it is not found in the mapping
+ */
+export const resolveEmoji = (emojiName: string) => {
+  return emojiMapping[emojiName] ?? `:${emojiName}:`;
 };
