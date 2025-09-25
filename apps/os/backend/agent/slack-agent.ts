@@ -133,10 +133,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "CORE:INTERNAL_ERROR": {
             console.error("[SlackAgent] Internal Error:", payload.event);
             const { data } = payload.event;
-            this.getAgentDebugURL().then((url) =>
-              this.sendSlackMessage({
-                text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${data.error.slice(0, 256)}${data.error.length > 256 ? "..." : ""}`,
-              }),
+            waitUntil(
+              this.getAgentDebugURL().then((url) =>
+                this.sendSlackMessage({
+                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${data.error.slice(0, 256)}${data.error.length > 256 ? "..." : ""}`,
+                }),
+              ),
             );
             break;
           }
