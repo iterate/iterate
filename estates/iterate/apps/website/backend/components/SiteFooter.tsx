@@ -34,7 +34,7 @@ export default function SiteFooter() {
               Disclaimer: This app uses generative AI to assist with operational tasks. AI-generated
               responses may contain inaccuracies or outdated information. All critical decisions
               should be validated by a human expert. Note: Your workspace needs to be on a paid
-              slack plan in order to interact with @iterate via Slack's Agent and Assistant view,
+              Slack plan in order to interact with @iterate via Slack's Agent and Assistant view,
               however users on a free plan can still interact with the bot as they would with any
               other user.
             </p>

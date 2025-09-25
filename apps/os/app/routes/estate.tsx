@@ -282,7 +282,7 @@ function EstateContent() {
         estateId: estateId!,
       });
       window.location.href = installationUrl;
-    } catch (_error) {
+    } catch {
       toast.error("Failed to start GitHub connection flow");
     }
   };
@@ -576,14 +576,14 @@ function EstateContent() {
                         onClick={() => toggleBuildExpanded(build.id)}
                         className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
                       >
-                        <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-3 min-w-0 flex-1">
                           {isExpanded ? (
-                            <ChevronDown className="h-5 w-5 text-gray-500" />
+                            <ChevronDown className="h-5 w-5 text-gray-500 flex-shrink-0" />
                           ) : (
-                            <ChevronRight className="h-5 w-5 text-gray-500" />
+                            <ChevronRight className="h-5 w-5 text-gray-500 flex-shrink-0" />
                           )}
                           {getBuildStatusIcon(build.status)}
-                          <div className="text-left flex-1 min-w-0">
+                          <div className="text-left flex-1 min-w-0 overflow-hidden">
                             <div
                               className="font-medium text-gray-900 dark:text-gray-100 truncate"
                               title={build.commitMessage}

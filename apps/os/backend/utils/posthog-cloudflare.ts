@@ -44,16 +44,18 @@ type IdentityBot = {
   slackBotProfile: BotProfile;
 };
 
+export type Identity = IdentityUser | IdentityAgent | IdentityBot;
+
 export class PosthogCloudflare<
   TEvents extends Record<string, Record<string, unknown>> = Record<string, Record<string, unknown>>,
 > {
   private readonly ctx: { waitUntil: (promise: Promise<void>) => void };
   readonly client: PostHog;
-  readonly estateMeta: { estate: string; environment: string };
+  readonly estateMeta: { estateName: string; environmentName: string };
 
   constructor(
     ctx: { waitUntil: (promise: Promise<void>) => void },
-    estateMeta: { estate: string; environment: string },
+    estateMeta: { estateName: string; environmentName: string },
     client = createRawPosthogCloudflareClient(),
   ) {
     this.ctx = ctx;
@@ -62,9 +64,9 @@ export class PosthogCloudflare<
 
     this.client.groupIdentify({
       groupType: "estate",
-      groupKey: estateMeta.estate,
+      groupKey: estateMeta.estateName,
       properties: {
-        environment: estateMeta.environment,
+        environment: estateMeta.environmentName,
       },
     });
   }
@@ -72,7 +74,7 @@ export class PosthogCloudflare<
   identify(internalUserId: string, properties: IdentityAgent | IdentityUser | IdentityBot) {
     // `name` and `email` are special properties which get picked up as the UI label for a Person profile
     // This helps us identify agents/bots more clearly
-    const name = properties.type === "agent" ? `Agent on ${this.estateMeta.estate}` : undefined;
+    const name = properties.type === "agent" ? `Agent on ${this.estateMeta.estateName}` : undefined;
 
     this.ctx.waitUntil(
       this.client.identifyImmediate({
@@ -86,11 +88,15 @@ export class PosthogCloudflare<
     );
   }
 
-  track<TEvent extends keyof TEvents>(
-    event: TEvent,
-    distinctId: string,
-    properties: TEvents[TEvent],
-  ) {
+  track<TEvent extends keyof TEvents>({
+    event,
+    distinctId,
+    properties,
+  }: {
+    event: TEvent;
+    distinctId: string;
+    properties: TEvents[TEvent];
+  }) {
     this.ctx.waitUntil(
       this.client.captureImmediate({
         event: String(event),
@@ -100,7 +106,7 @@ export class PosthogCloudflare<
           ...this.estateMeta,
         },
         groups: {
-          estate: this.estateMeta.estate,
+          estate: this.estateMeta.estateName,
         },
       }),
     );
@@ -114,5 +120,4 @@ export class PosthogCloudflare<
   }
 }
 
-// TODO(@jonas): What is this?
-export const SELF_AGENT_DISTINCT_ID = `AGENT[TODO: Add estate]`;
+export const SELF_AGENT_DISTINCT_ID = (estateName: string) => `AGENT[${estateName}]`;
