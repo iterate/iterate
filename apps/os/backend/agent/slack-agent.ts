@@ -23,7 +23,6 @@ import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
-  LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
@@ -36,7 +35,7 @@ import {
   slackWebhookEventToIdempotencyKey,
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
-import { renderPromptFragment } from "./prompt-fragments.ts";
+// import { renderPromptFragment } from "./prompt-fragments.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -205,81 +204,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return [];
   }
 
-  /**
-   * Fetches previous messages in a Slack thread and returns an LLM input item event
-   */
-  public async getSlackThreadHistoryInputEvents(
-    threadTs: string,
-  ): Promise<LlmInputItemEventInput[]> {
-    const timings: Record<string, number> = { startTime: performance.now() };
-    const previousMessages = await this.db
-      .select()
-      .from(slackWebhookEvent)
-      .where(
-        and(
-          or(eq(slackWebhookEvent.thread_ts, threadTs), eq(slackWebhookEvent.ts, threadTs)),
-          eq(slackWebhookEvent.type, "message"),
-        ),
-      )
-      .orderBy(asc(slackWebhookEvent.ts));
-    timings.getMessagesInThread = performance.now() - timings.startTime;
-
-    type TextMessage = typeof slackWebhookEvent.$inferSelect & {
-      data: { text: string; ts: string; user: string };
-    };
-    const filteredPreviousMessages = previousMessages.filter(
-      (m): m is TextMessage => "text" in m.data && "ts" in m.data && "user" in m.data,
-    );
-    const dedupedPreviousMessages = Object.values(
-      Object.fromEntries(filteredPreviousMessages.map((m) => [m.data.ts, m])), // Use ts as key for deduplication
-    ).sort((a, b) => parseFloat(a.data.ts) - parseFloat(b.data.ts)); // Sort by timestamp
-
-    // Generate context for mid-thread joins
-    const context = renderPromptFragment({
-      tag: "slack_channel_context",
-      content: [
-        "You should use the previous messages in the thread to understand the context of the current message.",
-        // Deduplicate messages by ts and format them
-        ...(previousMessages.length > 0
-          ? [
-              "Previous messages:",
-              ...dedupedPreviousMessages.map((m) => {
-                return (
-                  JSON.stringify(
-                    {
-                      user: m.data.user,
-                      text: m.data.text,
-                      ts: m.data.ts,
-                      createdAt: new Date(parseFloat(m.data.ts) * 1000).toISOString(),
-                    },
-                    null,
-                    2,
-                  ) + "\n"
-                );
-              }),
-            ]
-          : []),
-      ],
-    });
-
-    return [
-      {
-        type: "CORE:LLM_INPUT_ITEM",
-        data: {
-          type: "message",
-          role: "developer",
-          content: [
-            {
-              type: "input_text",
-              text: context,
-            },
-          ],
-        },
-        triggerLLMRequest: false,
-        metadata: { timings },
-      },
-    ];
-  }
+  // Removed: getSlackThreadHistoryInputEvents
 
   /**
    * Adds a participant to the conversation when they send a message.
@@ -415,15 +340,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   public async initSlack(channelId: string, threadTs: string) {
-    const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
-    events.push({
-      type: "SLACK:UPDATE_SLICE_STATE" as const,
-      data: {
-        slackChannelId: channelId,
-        slackThreadId: threadTs,
+    const events: MergedEventInputForSlices<SlackAgentSlices>[] = [
+      {
+        type: "SLACK:UPDATE_SLICE_STATE" as const,
+        data: {
+          slackChannelId: channelId,
+          slackThreadId: threadTs,
+        },
+        triggerLLMRequest: false,
       },
-      triggerLLMRequest: false,
-    });
+    ];
     return events;
   }
 
@@ -519,15 +445,28 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // This function is the primary interface between Slack and our agent.
   // Slack sends us webhook events, we route them to a durable object and then here,
   // in the durable object, we create agent core events that get added to the agent.
-  async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
-    const slackEvent = slackWebhookPayload.event!;
-    const messageMetadata = await getMessageMetadata(slackEvent, this.db);
+  async onSlackWebhookEventReceived(
+    slackWebhookPayloadOrList: SlackWebhookPayload | SlackWebhookPayload[],
+  ) {
+    const inputPayloads: SlackWebhookPayload[] = Array.isArray(slackWebhookPayloadOrList)
+      ? slackWebhookPayloadOrList
+      : [slackWebhookPayloadOrList];
 
-    if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
+    const firstPayload = inputPayloads[0];
+    const firstEvent = firstPayload?.event;
+    if (!firstEvent) {
       return;
     }
 
-    const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
+    const firstMetadata = await getMessageMetadata(firstEvent, this.db);
+    if (!firstMetadata || !firstMetadata.channel || !firstMetadata.threadTs) {
+      return;
+    }
+
+    // Prefer botUserId from payload; fall back to slice state if present
+    const botUserId =
+      extractBotUserIdFromAuthorizations(firstPayload) ||
+      (this.agentCore.state as SlackSliceState)?.botUserId;
 
     if (!botUserId) {
       return;
@@ -535,75 +474,132 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const currentState = this.agentCore.state;
     const isSlackInitialized = !!currentState.slackChannelId;
-    const isThreadStarter = messageMetadata.ts === messageMetadata.threadTs;
+    const isThreadStarter = firstMetadata.ts === firstMetadata.threadTs;
 
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
 
-    if (!isSlackInitialized) {
-      const initEvents = await this.initSlack(messageMetadata.channel, messageMetadata.threadTs);
-      events.push(...initEvents);
-    }
-    if (currentState.paused && slackEvent.type === "message" && "text" in slackEvent) {
-      const messageText = slackEvent.text;
-      if (messageText) {
-        const mentionedUserIds = getMentionedExternalUserIds(messageText);
-        if (mentionedUserIds.includes(botUserId)) {
-          events.push({
-            type: "CORE:RESUME_LLM_REQUESTS",
-            triggerLLMRequest: false,
-          });
+    // One-time back & front fill: if first time and mid-thread, pull entire thread history
+    let payloadsToProcess: SlackWebhookPayload[] = inputPayloads;
+    if (!isSlackInitialized && !isThreadStarter) {
+      // Back & front fill: load all webhooks in this thread from DB
+      const allThreadRows = await this.db
+        .select()
+        .from(slackWebhookEvent)
+        .where(
+          and(
+            or(
+              eq(slackWebhookEvent.thread_ts, firstMetadata.threadTs),
+              eq(slackWebhookEvent.ts, firstMetadata.threadTs),
+            ),
+            eq(slackWebhookEvent.channel, firstMetadata.channel),
+            eq(slackWebhookEvent.estateId, this.databaseRecord.estateId),
+          ),
+        )
+        .orderBy(asc(slackWebhookEvent.ts));
+
+      const template: Omit<SlackWebhookPayload, "event"> = {
+        team_id: firstPayload.team_id,
+        authorizations: firstPayload.authorizations,
+      };
+
+      const backAndFrontFillPayloads: SlackWebhookPayload[] = allThreadRows.map((row) => ({
+        ...template,
+        event: row.data as any,
+      }));
+
+      // Merge DB payloads with input payloads, dedupe by idempotency key, sort by ts asc
+      const merged = [...backAndFrontFillPayloads, ...inputPayloads];
+      const dedupedMap = new Map<string, SlackWebhookPayload>();
+      for (const p of merged) {
+        const key = slackWebhookEventToIdempotencyKey(p);
+        if (!dedupedMap.has(key)) {
+          dedupedMap.set(key, p);
         }
       }
+      payloadsToProcess = Array.from(dedupedMap.values()).sort((a, b) => {
+        const ats = (a.event as any)?.ts || (a.event as any)?.event_ts || "0";
+        const bts = (b.event as any)?.ts || (b.event as any)?.event_ts || "0";
+        return parseFloat(ats) - parseFloat(bts);
+      });
     }
 
-    // Determine who authored the message and whether it mentions our bot
-    const isBotMessage =
-      botUserId &&
-      (("user" in slackEvent && slackEvent.user === botUserId) || "bot_id" in slackEvent);
-    const isFromOurBot = botUserId && "user" in slackEvent && slackEvent.user === botUserId;
-    // We always ignore our own bot's messages
-    // We ignore other bot messages unless they explicitly mention our bot - to avoid two bots getting in an infinite loop talking to each other
-    const isBotMessageThatShouldBeIgnored =
-      isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
+    // Ensure slice has channel/thread set as early as possible on first call
+    if (!isSlackInitialized) {
+      events.push({
+        type: "SLACK:UPDATE_SLICE_STATE" as const,
+        data: {
+          slackChannelId: firstMetadata.channel,
+          slackThreadId: firstMetadata.threadTs,
+        },
+        triggerLLMRequest: false,
+      });
+    }
 
-    // Parallelize participant management, file events, thread history, and mention extraction
-    const eventsLists = await Promise.all([
-      slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
-        ? this.getParticipantJoinedEvents(slackEvent.user, botUserId)
-        : Promise.resolve([]),
-      slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
-        ? this.getParticipantMentionedEvents(
-            slackEvent.text,
-            "user" in slackEvent ? slackEvent.user : undefined,
-            botUserId,
-          )
-        : Promise.resolve([]),
-      this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId),
-      !isSlackInitialized && !isThreadStarter
-        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs)
-        : Promise.resolve([]),
-    ]);
-    events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());
+    // Track to avoid emitting duplicates in this batch
+    const seenJoinSlackUserIds = new Set<string>();
+    const seenResume = { value: false };
 
-    // Pass the webhook event to the reducer
-    // The reducer will handle filtering and determine if LLM computation should be triggered
-    events.push({
-      type: "SLACK:WEBHOOK_EVENT_RECEIVED" as const,
-      data: {
-        payload: slackWebhookPayload,
-        updateThreadIds: true,
-      },
-      // Don't trigger LLM for bot messages or non-message events
-      triggerLLMRequest: slackEvent.type === "message" && !isBotMessageThatShouldBeIgnored,
-      idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
-    });
+    for (const slackWebhookPayload of payloadsToProcess) {
+      const slackEvent = slackWebhookPayload.event!;
 
-    // Batch add events
+      const isBotMessage =
+        botUserId &&
+        (("user" in slackEvent && slackEvent.user === botUserId) || "bot_id" in slackEvent);
+      const isFromOurBot = botUserId && "user" in slackEvent && slackEvent.user === botUserId;
+      const isBotMessageThatShouldBeIgnored =
+        isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
+
+      const messageMetadata = await getMessageMetadata(slackEvent, this.db);
+      if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
+        continue;
+      }
+
+      if (currentState.paused && slackEvent.type === "message" && "text" in slackEvent) {
+        const messageText = slackEvent.text;
+        if (messageText) {
+          const mentionedUserIds = getMentionedExternalUserIds(messageText);
+          if (!seenResume.value && mentionedUserIds.includes(botUserId)) {
+            events.push({ type: "CORE:RESUME_LLM_REQUESTS", triggerLLMRequest: false });
+            seenResume.value = true;
+          }
+        }
+      }
+
+      const eventsLists = await Promise.all([
+        slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
+          ? seenJoinSlackUserIds.has(slackEvent.user)
+            ? Promise.resolve([])
+            : this.getParticipantJoinedEvents(slackEvent.user, botUserId).then((evts) => {
+                if (evts.length > 0) seenJoinSlackUserIds.add(slackEvent.user as string);
+                return evts;
+              })
+          : Promise.resolve([]),
+        slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
+          ? this.getParticipantMentionedEvents(
+              slackEvent.text,
+              "user" in slackEvent ? (slackEvent.user as string | undefined) : undefined,
+              botUserId,
+            )
+          : Promise.resolve([]),
+        this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId),
+      ]);
+      events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());
+
+      // Always add the raw webhook event
+      events.push({
+        type: "SLACK:WEBHOOK_EVENT_RECEIVED" as const,
+        data: {
+          payload: slackWebhookPayload,
+          updateThreadIds: true,
+        },
+        triggerLLMRequest: slackEvent.type === "message" && !isBotMessageThatShouldBeIgnored,
+        idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
+      });
+    }
+
     await this.addEvents(events);
 
-    return {
-      success: true,
-    };
+    return { events };
   }
 
   async sendSlackMessage(input: Inputs["sendSlackMessage"]) {

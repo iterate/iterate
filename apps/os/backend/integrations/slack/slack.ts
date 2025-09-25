@@ -40,6 +40,7 @@ slackApp.post("/webhook", async (c) => {
   const db = getDb();
   // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
   const body = (await c.req.json()) as SlackWebhookPayload;
+  console.log(body);
   // Slack types say this doesn't exist but it was here in v1...
   if ("type" in body && body.type === "url_verification" && "challenge" in body) {
     return c.text(body.challenge as string);
@@ -88,6 +89,31 @@ slackApp.post("/webhook", async (c) => {
       })
       .returning(),
   );
+
+  // Handle channel join events by scanning recent messages from the database
+  // to find threads where the bot was mentioned previously, and initialize
+  // SlackAgent instances for those threads so they can continue the context.
+  if (
+    body.event.type === "message" &&
+    "subtype" in body.event &&
+    body.event.subtype === "channel_join"
+  ) {
+    const channelId = messageMetadata.channel;
+    const botUserId = extractBotUserIdFromAuthorizations(body);
+    if (estateId && channelId && botUserId) {
+      waitUntil(
+        handleChannelJoinUsingDb({
+          db,
+          estateId,
+          payload: body,
+          channelId,
+          botUserId,
+        }).catch((error) => {
+          console.error("[Slack webhook] channel_join handling failed:", error);
+        }),
+      );
+    }
+  }
 
   if (!messageMetadata.threadTs) {
     return c.text("ok");
@@ -353,6 +379,79 @@ async function getRoutingKey({
   }
   const suffix = `slack-${estateId}-team-${payload.team_id}`;
   return `ts-${threadTs}-${suffix}`;
+}
+
+// When the bot joins a channel, backfill context for any recent threads
+// in that channel where the bot was previously mentioned.
+async function handleChannelJoinUsingDb(params: {
+  db: DB;
+  estateId: string;
+  payload: SlackWebhookPayload;
+  channelId: string;
+  botUserId: string;
+}) {
+  const { db, estateId, payload, channelId, botUserId } = params;
+
+  // Fetch recent message events for this channel from our DB
+  const rows = await db
+    .select()
+    .from(slackWebhookEvent)
+    .where(and(eq(slackWebhookEvent.channel, channelId), eq(slackWebhookEvent.type, "message")));
+
+  // Group by thread and select threads where any message mentions the bot
+  const threadsToJoin = new Map<
+    string,
+    { threadTs: string; channel: string; mentionMessageTs: string }
+  >();
+
+  for (const row of rows) {
+    const data = row.data as any;
+    if (!data || data.type !== "message") {
+      continue;
+    }
+
+    const text: string | undefined = typeof data.text === "string" ? data.text : undefined;
+    const user: string | undefined = typeof data.user === "string" ? data.user : undefined;
+    const eventForMentionCheck = { type: "message", text, user };
+
+    const mentioned = isBotMentionedInMessage(eventForMentionCheck, botUserId);
+    if (!mentioned) {
+      continue;
+    }
+
+    const threadTs = row.thread_ts || row.ts;
+    if (!threadTs || !row.ts) {
+      continue;
+    }
+    if (!threadsToJoin.has(threadTs)) {
+      threadsToJoin.set(threadTs, {
+        threadTs,
+        channel: channelId,
+        mentionMessageTs: row.ts,
+      });
+    }
+  }
+
+  // Initialize a SlackAgent per thread to carry on in-context
+  for (const { threadTs } of threadsToJoin.values()) {
+    try {
+      const routingKey = await getRoutingKey({ payload, estateId, threadTs });
+      const durableObjectName = `SlackAgent-${routingKey}`;
+
+      const agentStub = (await SlackAgent.getOrCreateStubByRoute({
+        db,
+        estateId,
+        agentInstanceName: durableObjectName,
+        route: routingKey,
+        reason: "Slack channel_join backfill",
+      })) as unknown as SlackAgent;
+
+      const initEvents = await agentStub.initSlack(channelId, threadTs);
+      await agentStub.addEvents(initEvents);
+    } catch (error) {
+      console.error("[Slack webhook] Failed initializing agent for thread", threadTs, error);
+    }
+  }
 }
 
 export async function reactToSlackWebhook(
