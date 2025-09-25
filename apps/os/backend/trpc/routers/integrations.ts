@@ -514,7 +514,6 @@ export const integrationsRouter = router({
       };
     }),
 
-  // Save MCP connection parameters
   saveMCPConnectionParams: estateProtectedProcedure
     .input(
       z.object({
