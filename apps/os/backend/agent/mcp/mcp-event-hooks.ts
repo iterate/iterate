@@ -12,6 +12,7 @@ import { mcpConnectionParam } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { MCPParam } from "../tool-schemas.ts";
+import type { Branded } from "../callable.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
@@ -54,13 +55,13 @@ interface MCPConnectionResult {
   events: MCPEventHookReturnEvent[];
 }
 
-type MCPManagerCacheKey = string;
+type MCPManagerCacheKey = Branded<"MCPManagerCacheKey">;
 
 export function createCacheKey(
   durableObjectId: string,
   connectionKey: MCPConnectionKey,
 ): MCPManagerCacheKey {
-  return `${durableObjectId}--${connectionKey}`;
+  return `${durableObjectId}--${connectionKey}` as MCPManagerCacheKey;
 }
 
 // Use MCPManagerCacheKey to make sure we are not sharing managers between different durable objects (true for local dev)
