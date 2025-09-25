@@ -162,7 +162,7 @@ export interface AgentCoreDeps {
    * This allows host environments (e.g. Durable Objects) to react to newly
    * added events in a type-safe way (e.g. to send events to posthog)
    */
-  onEventAdded?: <E, S>(payload: { event: E; reducedState: S }) => void;
+  onEventAdded?: (payload: { event: AgentCoreEvent; reducedState: CoreReducedState }) => void;
   /**
    * Optional hook to collect context items (prompts and tools) that should be
    * included in LLM requests. Called right before making each LLM request.
