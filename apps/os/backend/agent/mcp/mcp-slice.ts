@@ -520,10 +520,6 @@ export const mcpSlice = defineAgentCoreSlice<{
         const { connectionKey, serverUrl, mode, userId, integrationSlug, paramsCollectionUrl } =
           event.data;
 
-        if (!paramsCollectionUrl) {
-          return {};
-        }
-
         const paramsRequiredMessage = {
           type: "message",
           role: "developer",

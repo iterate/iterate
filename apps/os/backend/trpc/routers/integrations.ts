@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { estateProtectedProcedure, router } from "../trpc.ts";
@@ -531,16 +531,18 @@ export const integrationsRouter = router({
       const { estateId, connectionKey, params } = input;
 
       await ctx.db.transaction(async (tx) => {
-        for (const param of params) {
+        if (params.length > 0) {
+          const paramValues = params.map((param) => ({
+            estateId,
+            connectionKey,
+            paramKey: param.key,
+            paramValue: param.value,
+            paramType: param.type,
+          }));
+
           await tx
             .insert(schemas.mcpConnectionParam)
-            .values({
-              estateId,
-              connectionKey,
-              paramKey: param.key,
-              paramValue: param.value,
-              paramType: param.type,
-            })
+            .values(paramValues)
             .onConflictDoUpdate({
               target: [
                 schemas.mcpConnectionParam.estateId,
@@ -549,13 +551,11 @@ export const integrationsRouter = router({
                 schemas.mcpConnectionParam.paramType,
               ],
               set: {
-                paramValue: param.value,
+                paramValue: sql`excluded.param_value`,
                 updatedAt: new Date(),
               },
             });
-        }
 
-        if (params.length > 0) {
           const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
           const existingParams = await tx.query.mcpConnectionParam.findMany({
             where: and(
@@ -568,10 +568,11 @@ export const integrationsRouter = router({
             (existing) => !currentParamKeys.includes(`${existing.paramKey}:${existing.paramType}`),
           );
 
-          for (const paramToDelete of paramsToDelete) {
+          if (paramsToDelete.length > 0) {
+            const idsToDelete = paramsToDelete.map((p) => p.id);
             await tx
               .delete(schemas.mcpConnectionParam)
-              .where(eq(schemas.mcpConnectionParam.id, paramToDelete.id));
+              .where(inArray(schemas.mcpConnectionParam.id, idsToDelete));
           }
         } else {
           await tx
@@ -605,7 +606,7 @@ export const integrationsRouter = router({
       return params.map((param) => ({
         key: param.paramKey,
         value: param.paramValue,
-        type: param.paramType as "header" | "query_param",
+        type: param.paramType,
       }));
     }),
 
