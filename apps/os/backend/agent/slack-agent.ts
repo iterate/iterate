@@ -1,7 +1,7 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
-import { waitUntil } from "cloudflare:workers";
+import pDebounce from "p-suite/p-debounce";
 import { env as _env, env } from "../../env.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
@@ -59,6 +59,52 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected slackAPI!: WebClient;
 
+  private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
+    const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
+    if (!slackChannelId || !slackThreadId) return;
+
+    await this.slackAPI.assistant.threads
+      .setStatus({
+        channel_id: slackChannelId,
+        thread_ts: slackThreadId,
+        status: status || "",
+      })
+      .catch((error) => {
+        console.error("[SlackAgent] Failed to update typing status:", error);
+      });
+  }, 300);
+
+  private checkAndClearTypingIndicator = pDebounce(async () => {
+    const state = this.agentCore.state as SlackSliceState;
+    const status = state.typingIndicatorStatus;
+
+    if (!status) return;
+
+    if (this.agentCore.llmRequestInProgress()) {
+      this.checkAndClearTypingIndicator();
+      return;
+    }
+
+    this.agentCore.addEvents([
+      {
+        type: "SLACK:UPDATE_TYPING_STATUS",
+        data: { status: null },
+      },
+    ]);
+    this.updateSlackStatusDebounced(null);
+  }, 15000);
+
+  private syncTypingIndicator() {
+    const state = this.agentCore.state as SlackSliceState;
+    const status = state.typingIndicatorStatus ?? null;
+
+    this.updateSlackStatusDebounced(status);
+
+    if (status) {
+      this.checkAndClearTypingIndicator();
+    }
+  }
+
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     await super.initAfterConstructorBeforeOnStart(params);
@@ -95,41 +141,29 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         }) => Promise<string | undefined>;
       }) => {
         deps?.onEventAdded?.(payload);
-        const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
-        if (!slackChannelId || !slackThreadId) {
-          return;
-        }
-        switch ((payload.event as AgentCoreEvent).type) {
+
+        const event = payload.event as AgentCoreEvent;
+        switch (event.type) {
           case "CORE:LLM_REQUEST_START":
-            // Start typing indicator
-            waitUntil(
-              this.slackAPI.assistant.threads
-                .setStatus({
-                  channel_id: slackChannelId,
-                  thread_ts: slackThreadId,
-                  status: "is typing...",
-                })
-                .catch((error) => {
-                  console.error("[SlackAgent] Failed to start typing indicator:", error);
-                }),
-            );
+            this.agentCore.addEvents([
+              {
+                type: "SLACK:UPDATE_TYPING_STATUS",
+                data: { status: "is typing..." },
+              },
+            ]);
             break;
+
           case "CORE:LLM_REQUEST_CANCEL":
-          case "CORE:LLM_REQUEST_END":
-            // Stop typing indicator by clearing status
-            waitUntil(
-              this.slackAPI.assistant.threads
-                .setStatus({
-                  channel_id: slackChannelId,
-                  thread_ts: slackThreadId,
-                  status: "",
-                })
-                .catch((error) => {
-                  console.error("[SlackAgent] Failed to stop typing indicator:", error);
-                }),
-            );
+            this.agentCore.addEvents([
+              {
+                type: "SLACK:UPDATE_TYPING_STATUS",
+                data: { status: null },
+              },
+            ]);
             break;
         }
+
+        this.syncTypingIndicator();
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
@@ -598,8 +632,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
     });
 
-    // Batch add events
     await this.addEvents(events);
+
+    if (this.agentCore.state.triggerLLMRequest) {
+      this.agentCore.addEvents([
+        {
+          type: "SLACK:UPDATE_TYPING_STATUS",
+          data: { status: "is typing..." },
+        },
+      ]);
+    }
+
+    this.syncTypingIndicator();
 
     return {
       success: true,
@@ -626,10 +670,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error(`Failed to send Slack message: ${result.error}`);
     }
 
-    // Build magic return properties based on behaviour
     const magic: MagicAgentInstructions = {};
     if (endTurn) {
       magic.__triggerLLMRequest = false;
+      this.agentCore.addEvents([
+        {
+          type: "SLACK:UPDATE_TYPING_STATUS",
+          data: { status: null },
+        },
+      ]);
+      this.syncTypingIndicator();
     }
 
     // return an empty object to conserve tokens in the success case, plus magic flags if any
