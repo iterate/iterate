@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "crypto";
+import { createHash } from "crypto";
 import { expect, beforeAll, vi } from "vitest";
 import { evalite } from "evalite";
 import { createTRPCClient, httpLink } from "@trpc/client";
@@ -8,17 +8,13 @@ import * as autoevals from "autoevals";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
-import {
-  SlackWebhookEventReceived,
-  SlackWebhookEventReceivedInput,
-  type SlackSliceEvent,
-} from "../backend/agent/slack-slice.ts";
+import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 
 type AgentEvent = AgentCoreEvent | MCPEvent | SlackSliceEvent;
 
 const baseURL = import.meta.env.VITE_PUBLIC_URL!;
-export const authClient = createAuthClient({
+const authClient = createAuthClient({
   baseURL: `${baseURL}/api/auth`,
   plugins: [adminClient()],
 });
@@ -55,7 +51,7 @@ evalite("greets user", {
 function testAgentName(input: string) {
   const testName = expect.getState().currentTestName!.split(" > ").slice(0, -1).join(" > "); // evalite duplicates the test name, so remove the last breadcrumb thing
   const suffix = `${input.split(" ")[0].replaceAll(/\W/g, "").slice(0, 6)}-${createHash("md5").update(input).digest("hex").slice(0, 6)}`;
-  return `${testName} | ${suffix} | ${randomUUID()}`;
+  return `mock_slack ${testName} | ${suffix} | ${Date.now()}`;
 }
 
 async function getAuthedTrpcClient() {
@@ -87,9 +83,26 @@ async function createTestHelper(
   expect(estateId).toBeTruthy();
   expect(agentName).toBeTruthy();
 
-  const addEvents = async (
+  const channel = "C0123456789";
+  const threadTs = Date.now().toString();
+
+  const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
+  fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
+  fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
+
+  // initialise slack state - right now we require channel and thread to be set independently of the webhook
+  // (although this is in the onWebhookReceived method, we don't actually call that in the eval, we create events directly)
+  await addEvents([
+    {
+      type: "SLACK:UPDATE_SLICE_STATE",
+      data: { slackChannelId: channel, slackThreadId: threadTs },
+      triggerLLMRequest: false,
+    },
+  ]);
+
+  async function addEvents(
     events: Omit<AgentEvent, "createdAt" | "eventIndex" | "metadata" | "eventIndex">[],
-  ) => {
+  ) {
     return trpcClient.agents.addEvents.mutate({
       agentInstanceName: agentName,
       agentClassName: "SlackAgent",
@@ -98,7 +111,7 @@ async function createTestHelper(
         typeof trpcClient.agents.addEvents.mutate
       >[0]["events"],
     });
-  };
+  }
   const getEvents = async () => {
     const events = await trpcClient.agents.getEvents.query({
       estateId,
@@ -154,12 +167,6 @@ async function createTestHelper(
     );
   };
 
-  const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
-  fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
-  fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
-
-  const threadTs = Date.now().toString();
-
   const buildSlackMessageEvent = (message: string) => {
     const ts = Date.now().toString();
     return {
@@ -181,51 +188,29 @@ async function createTestHelper(
     override: (event: MessageEvent) => MessageEvent = (ev) => ev,
   ) => {
     const added = await addEvents([
-      await SlackWebhookEventReceived.parseAsync({
+      {
         type: "SLACK:WEBHOOK_EVENT_RECEIVED",
         data: {
           payload: { event: override(buildSlackMessageEvent(message)) },
         },
         triggerLLMRequest: true,
-        createdAt: new Date().toISOString(),
-        eventIndex: 0,
-        metadata: {},
-      } satisfies SlackWebhookEventReceived).catch((e) => {
-        console.error({ e });
-        throw e;
-      }),
+      },
     ]);
 
     const waitForReply = async () => {
-      return waitForEvent("CORE:LLM_OUTPUT_ITEM", added, {
-        select: (e) =>
-          e.data.type === "message" &&
-          e.data.content[0].type === "output_text" &&
-          e.data.content[0].text,
+      return waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", added, {
+        select: (e) => {
+          if (e.data.call.status !== "completed" || e.data.call.name !== "sendSlackMessage") return;
+          const { text, endTurn } = JSON.parse(e.data.call.arguments) as {
+            text: string;
+            endTurn?: boolean;
+          };
+          return endTurn ? text : undefined;
+        },
       });
     };
     return { waitForReply };
   };
-
-  // const sendUserMessage = async (message: string) => {
-  //   const added = await addEvents([
-  //     {
-  //       type: "CORE:LLM_INPUT_ITEM",
-  //       data: { type: "message", role: "user", content: [{ type: "input_text", text: message }] },
-  //       triggerLLMRequest: true,
-  //     },
-  //   ]);
-
-  //   const waitForReply = async () => {
-  //     return waitForEvent("CORE:LLM_OUTPUT_ITEM", added, {
-  //       select: (e) =>
-  //         e.data.type === "message" &&
-  //         e.data.content[0].type === "output_text" &&
-  //         e.data.content[0].text,
-  //     });
-  //   };
-  //   return { waitForReply };
-  // };
 
   return {
     estateId,
@@ -234,6 +219,5 @@ async function createTestHelper(
     getState,
     waitForEvent: waitForEvent as WaitForEvent,
     sendUserMessage,
-    // console.log,
   };
 }

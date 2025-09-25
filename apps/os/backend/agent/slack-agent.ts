@@ -43,6 +43,18 @@ import { renderPromptFragment } from "./prompt-fragments.ts";
 const slackAgentSlices = [...CORE_AGENT_SLICES, slackSlice] as const;
 export type SlackAgentSlices = typeof slackAgentSlices;
 
+const mockSlack = (path: string[], log: (message: string) => void = console.log) => {
+  return new Proxy<any>(() => Promise.resolve({ ok: true }), {
+    get: (_target, prop) => {
+      return mockSlack(path.concat(String(prop)), log);
+    },
+    apply: (_target, _this, args) => {
+      log(`slack.${path.join(".")}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`);
+      return Promise.resolve({ ok: true });
+    },
+  });
+};
+
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 
@@ -62,6 +74,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     await super.initAfterConstructorBeforeOnStart(params);
+
+    if (params.record.durableObjectName.includes("mock_slack")) {
+      this.slackAPI = mockSlack([], (message) => {
+        this.addEvent({
+          type: "CORE:LOG",
+          data: { level: "debug", message },
+          triggerLLMRequest: false,
+        });
+      });
+      return;
+    }
 
     const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
     if (!slackAccessToken) {
