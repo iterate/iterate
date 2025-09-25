@@ -17,6 +17,83 @@ pnpm dev
 # go to the local web ui and click "Connect to Slack". See below for details.
 ```
 
-To connect slack, you'll need to set the callback url in your app manifest.
+### Using slack in development
 
-Open the URL printed out by `pnpm dev`, login, then click "Connect Slack" and you'll get an error page with the callback URL you need to add. Then go to https://api.slack.com/apps, click your app, then click "App Manifest" on the sidebar. Then paste the redirect URL from the error page into the manifest. You can then try again and you should be able to connect slack and talk to your bot.
+You need to create a slack app at https://api.slack.com/apps with a manifest that looks like this (replace `{ITERATE_USER}` with your username):
+
+```json
+{
+  "display_information": {
+    "name": "({ITERATE_USER} local) Iterate"
+  },
+  "features": {
+    "app_home": {
+      "home_tab_enabled": false,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "bot_user": {
+      "display_name": "(jonas local) Iterate",
+      "always_online": true
+    },
+    "assistant_view": {
+      "assistant_description": "T",
+      "suggested_prompts": []
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://iterateproxy.com/oauth/slack",
+      "https://{ITERATE_USER}.dev.iterate.com/api/integrations/slack/oauth",
+      "https://dev.iterateproxy.com/api/integrations/slack/oauth",
+      "http://localhost:5173/api/auth/integrations/callback/slack-bot"
+    ],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "channels:history",
+        "groups:history",
+        "im:history",
+        "mpim:history",
+        "users.profile:read",
+        "users:read",
+        "users:read.email",
+        "chat:write.public",
+        "chat:write",
+        "channels:join",
+        "channels:read",
+        "reactions:read",
+        "files:read",
+        "assistant:write"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://{ITERATE_USER}.dev.iterate.com/api/integrations/slack/webhook",
+      "bot_events": [
+        "file_shared",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "reaction_added",
+        "reaction_removed"
+      ]
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}
+```
+
+You'll also need to set the following env vars in your `dev_personal` config in our doppler project:
+
+```
+SLACK_CLIENT_ID
+SLACK_CLIENT_SECRET
+SLACK_SIGNING_SECRET
+```
+
+You can get them from the slack app settings page.

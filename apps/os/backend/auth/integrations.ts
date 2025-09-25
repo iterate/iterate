@@ -18,7 +18,8 @@ import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
-  "app_mentions:read",
+  // commented out as it may have broken slack integration
+  // "app_mentions:read",
   "channels:history",
   "channels:join",
   "channels:read",
@@ -172,9 +173,9 @@ export const integrationsPlugin = () =>
       directLoginWithSlack: createAuthEndpoint(
         "/integrations/direct-login-with-slack",
         {
-          method: "POST",
-          body: z.object({
-            callbackURL: z.string(),
+          method: "GET",
+          query: z.object({
+            callbackURL: z.string().default("/"),
           }),
         },
         async (ctx) => {
@@ -182,7 +183,7 @@ export const integrationsPlugin = () =>
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
           const data = JSON.stringify({
-            callbackURL: ctx.body.callbackURL,
+            callbackURL: ctx.query.callbackURL,
           });
 
           await ctx.context.internalAdapter.createVerificationValue({

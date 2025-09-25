@@ -701,6 +701,7 @@ export const integrationsRouter = router({
       );
 
       if (!installationInfoRes.ok) {
+        console.log("Failed to get GitHub installation info", await installationInfoRes.text());
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to get GitHub installation info",

@@ -5,6 +5,11 @@ import { z } from "zod/v4";
 import { SearchRequest } from "../default-tools.ts";
 import { defineRule, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
+import { createDOToolFactory } from "./do-tools.ts";
+import { iterateAgentTools } from "./iterate-agent-tools.ts";
+
+const iterateAgentTool = createDOToolFactory(iterateAgentTools);
+const slackAgentTool = createDOToolFactory(slackAgentTools);
 
 const defaultSlackAgentPrompt = dedent`
   You are @iterate, a helpful slackbot made by iterate.com.
@@ -91,12 +96,13 @@ const defaultSlackAgentPrompt = dedent`
   - If you are addressing the entire team / making an announcement, use "we" to refer to the team.
   - Never make up or guess facts or function tool parameters. Always be honest.  
   - Briefly acknowledge mistakes and correct yourself when you've made a mistake.
-  - Never repeat a message that has already been communicated to the user.
+  - Never repeat a message or update that has already been communicated to the user.
+    - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. 
 
   Message formatting:
   - Use Slack-flavour markdown
   - Don't use italics for multi-line messages
-  - Links: <URL|Display Text>
+  - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. 
   - Prefer inline links like "<URL|this image> is cool". Don't do <URL|click here to open>"
   - Mentions: <@user_id>
   - Never use: Markdown tables (use lists/bullets)
@@ -117,6 +123,7 @@ const defaultSlackAgentPrompt = dedent`
   - Proceed with reasonable assumptions whenever possible - don't ask for clarification unless absolutely necessary
     - If there's a clear first/best option, use it without asking
     - Only ask clarifying questions when there are multiple equally valid options and no reasonable default
+    - Note you may be given additional context items that related to a specific MCP server once you've connected to it - when asked to do something with an MCP server, connect first BEFORE asking the user for clarification. 
   - Never ask the same clarifying questions twice.
   - When you ask for input, use sendSlackMessage({ text, endTurn: true })
 
@@ -160,7 +167,8 @@ const defaultSlackAgentPrompt = dedent`
 
   ### Generating and editing images
   - Use the generateImage tool for creating images and editing existing ones
-  - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache"), use the participant's Slack avatar url. If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
+  - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
+    - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
 
   For generating emoji-styled images, call the generate_image tool with this exact prompt:
   "edit this image of me to be a super cute chibi twitch emote [ACTION] with a png transparent background, simple shapes, bold outline, high contrast, square composition (1:1)"
@@ -176,72 +184,27 @@ export const defaultContextRules = async () => [
     match: matchers.forAgentClass("SlackAgent"),
     tools: [
       // IterateAgent DO tools
-      // {
-      //   type: "agent_durable_object_tool",
-      //   methodName: "doNothing",
-      // },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "connectMCPServer",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getAgentDebugURL",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "remindMyselfLater",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "listMyReminders",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "cancelReminder",
-      },
-
-      // SlackAgent DO tools
-      {
-        type: "agent_durable_object_tool",
-        methodName: "stopRespondingUntilMentioned",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "addSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "removeSlackReaction",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "uploadAndShareFileInSlack",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "updateSlackMessage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "getURLContent",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "searchWeb",
+      iterateAgentTool.doNothing(),
+      iterateAgentTool.connectMCPServer(),
+      iterateAgentTool.getAgentDebugURL(),
+      iterateAgentTool.remindMyselfLater(),
+      iterateAgentTool.listMyReminders(),
+      iterateAgentTool.cancelReminder(),
+      slackAgentTool.stopRespondingUntilMentioned(),
+      slackAgentTool.addSlackReaction(),
+      slackAgentTool.removeSlackReaction(),
+      slackAgentTool.uploadAndShareFileInSlack(),
+      slackAgentTool.updateSlackMessage(),
+      iterateAgentTool.getURLContent(),
+      iterateAgentTool.searchWeb({
         overrideInputJSONSchema: z.toJSONSchema(
           SearchRequest.pick({
             query: true,
           }),
         ),
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "generateImage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "sendSlackMessage",
+      }),
+      iterateAgentTool.generateImage(),
+      slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
             text: true,
@@ -251,7 +214,7 @@ export const defaultContextRules = async () => [
             endTurn: true,
           }),
         ),
-      },
+      }),
     ],
   }),
   {
