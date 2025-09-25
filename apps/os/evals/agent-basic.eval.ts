@@ -1,7 +1,6 @@
 import { createHash } from "crypto";
-import { expect, describe, beforeAll, vi } from "vitest";
+import { expect, beforeAll, vi } from "vitest";
 import { evalite } from "evalite";
-import { Levenshtein } from "autoevals";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";

@@ -20,3 +20,6 @@ build
 .clinerules/
 
 .cache
+
+# ad-hoc ignored files/paths
+*ignoreme*

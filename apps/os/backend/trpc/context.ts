@@ -13,7 +13,6 @@ export async function createContext(
     session,
     user: session?.user || null,
     env: c.env,
-    req: { headers: c.req.raw.headers },
   };
 }
 
