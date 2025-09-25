@@ -81,7 +81,14 @@ githubApp.get(
     if (!userAccessTokenRes.ok) {
       return c.json({ error: "Failed to get user access token" }, 400);
     }
-    const userAccessTokenData = UserAccessTokenResponse.parse(await userAccessTokenRes.json());
+    let userAccessTokenData;
+    const data = await userAccessTokenRes.json();
+    try {
+      userAccessTokenData = UserAccessTokenResponse.parse(data);
+    } catch (error) {
+      console.log("Failed to parse user access token", data, error);
+      return c.json({ error: "Failed to get user access token" }, 400);
+    }
 
     const installationInfoRes = await fetch(`https://api.github.com/user/installations`, {
       headers: {
