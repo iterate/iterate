@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { JSONSchema } from "zod/v4/core";
+import type { AgentDurableObjectToolSpec, ToolSpec } from "./tool-schemas.ts";
 
 export type RuntimeJsonSchema = {
   type: "query" | "mutation" | "subscription";
@@ -87,4 +88,25 @@ export function doToolToRuntimeJsonSchema(_value: unknown) {
     }),
   };
   return runtimeJsonSchema;
+}
+
+export function createDOToolFactory<T extends ReturnType<typeof defineDOTools>>(definitions: T) {
+  return Object.fromEntries(
+    Object.keys(definitions).map((key) => {
+      return [
+        key,
+        (toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName">): ToolSpec => {
+          return {
+            type: "agent_durable_object_tool",
+            methodName: key,
+            ...toolSpec,
+          };
+        },
+      ];
+    }),
+  ) as {
+    [K in keyof T]: (
+      toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName">,
+    ) => ToolSpec;
+  };
 }
