@@ -1,6 +1,7 @@
 {
   "name": "@iterate-com/sdk",
   "type": "module",
+  "version": "0.0.1",
   "main": "./src/sdk.ts",
   "bin": {
     "iterate": "./cli.js"
@@ -11,5 +12,8 @@
   },
   "dependencies": {
     "@iterate-com/os": "workspace:*"
+  },
+  "devDependencies": {
+    "tsdown": "^0.15.4"
   }
 }

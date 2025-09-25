@@ -8,6 +8,7 @@ import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { waitUntil } from "cloudflare:workers";
+import Replicate from "replicate";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -21,8 +22,7 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
-import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
-import * as replicateIntegration from "../integrations/replicate/replicate.ts";
+import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -1220,52 +1220,63 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async generateImage(input: Inputs["generateImage"]) {
-    const result = await replicateIntegration.generateImage(input, {
-      replicateApiToken: this.env.REPLICATE_API_TOKEN,
-      openaiApiKey: this.env.OPENAI_API_KEY,
-      iterateUser: this.env.ITERATE_USER,
-      estateId: this.databaseRecord.estateId,
-      db: this.db,
+    const replicate = new Replicate({ auth: env.REPLICATE_API_TOKEN, useFileOutput: false });
+
+    // Because we set useFileOutput to false above, this will return an array of URLs
+    const replicateResponse = await replicate.run(input.model, {
+      input: {
+        prompt: input.prompt,
+        quality: input.quality,
+        background: input.background,
+        output_format: "png",
+        openai_api_key: env.OPENAI_API_KEY,
+        input_images: input.inputImages,
+        ...input.overrideReplicateParams,
+      },
     });
 
-    return {
-      ...result,
-      __addAgentCoreEvents: [
-        {
-          type: "CORE:FILE_SHARED" as const,
-          data: {
-            direction: "from-agent-to-user" as const,
-            iterateFileId: result.fileRecord.id,
-            openAIFileId: result.fileRecord.openAIFileId,
-            mimeType: result.fileRecord.mimeType,
-          },
-        },
-      ],
-    };
-  }
+    // I'm not 100% sure if other replicate models will have a different response format.
+    // Just in case, I'm returning the replicate response verbatim to the agent in case it's not an array of URLs.
+    if (
+      !Array.isArray(replicateResponse) ||
+      !replicateResponse.every((url) => typeof url === "string" && url.startsWith("https://"))
+    ) {
+      console.warn(
+        "Replicate API returned non-array response or array contains non-string values",
+        replicateResponse,
+      );
+      return replicateResponse;
+    }
 
-  async editImage(input: Inputs["editImage"]) {
-    const result = await replicateIntegration.editImage(input, {
-      replicateApiToken: this.env.REPLICATE_API_TOKEN,
-      openaiApiKey: this.env.OPENAI_API_KEY,
-      iterateUser: this.env.ITERATE_USER,
-      estateId: this.databaseRecord.estateId,
-      db: this.db,
-    });
+    // If replicate returns an array of URLs, upload them and return CORE:FILE_SHARED events
+    // That way the multimodal LLM can "see" the images
+    const now = Date.now();
+    const fileSharedEvents = await Promise.all(
+      replicateResponse.map(async (url: string, index: number) => {
+        const fileRecord = await uploadFileFromURL({
+          url,
+          filename: `generated-image-${now}-${index}.png`,
+          estateId: this.databaseRecord.estateId,
+          db: this.db,
+        });
+        return {
+          type: "CORE:FILE_SHARED",
+          data: {
+            direction: "from-agent-to-user",
+            iterateFileId: fileRecord.id,
+            openAIFileId: fileRecord.openAIFileId,
+            mimeType: fileRecord.mimeType,
+          },
+          openAIFileId: fileRecord.openAIFileId,
+          mimeType: fileRecord.mimeType,
+        };
+      }),
+    );
 
     return {
-      ...result,
-      __addAgentCoreEvents: [
-        {
-          type: "CORE:FILE_SHARED" as const,
-          data: {
-            direction: "from-agent-to-user" as const,
-            iterateFileId: result.fileRecord.id,
-            openAIFileId: result.fileRecord.openAIFileId,
-            mimeType: result.fileRecord.mimeType,
-          },
-        },
-      ],
+      success: true,
+      numberOfImagesGenerated: replicateResponse.length,
+      __addAgentCoreEvents: fileSharedEvents,
     };
   }
 }

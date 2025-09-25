@@ -159,8 +159,7 @@ const defaultSlackAgentPrompt = dedent`
     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, requiresOAuth: false, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.
 
   ### Generating and editing images
-  - New image → generate_image, Edit → edit_image
-  - If an image source is not provided, always assume you need to generate a new generic image.
+  - Use the generateImage tool for creating images and editing existing ones
   - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache"), use the participant's Slack avatar url. If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
 
   For generating emoji-styled images, call the generate_image tool with this exact prompt:
@@ -239,10 +238,6 @@ export const defaultContextRules = async () => [
       {
         type: "agent_durable_object_tool",
         methodName: "generateImage",
-      },
-      {
-        type: "agent_durable_object_tool",
-        methodName: "editImage",
       },
       {
         type: "agent_durable_object_tool",
