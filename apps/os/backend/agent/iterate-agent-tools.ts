@@ -140,33 +140,21 @@ export const iterateAgentTools = defineDOTools({
   },
   generateImage: {
     description:
-      "Generate a new image with aspect ratio control, model selection using Replicate API",
+      "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
     input: z.object({
       prompt: z.string(),
+      inputImages: z.array(z.string()).default([]),
       model: z
-        .string()
+        .custom<`${string}/${string}` | `${string}/${string}:${string}`>((val) => {
+          return typeof val === "string" && /^(?:[^/\s]+)\/(?:[^:/\s]+)(?::[^\s]+)?$/.test(val);
+        }, "Model must be in the form 'owner/name' or 'owner/name:tag'")
         .default("openai/gpt-image-1")
         .describe(
-          "The image generation model to use. Only set this when explicitly asked to do so",
+          "The replicate model to use. Only set this when explicitly asked to do so. Must be in the form 'owner/name' or 'owner/name:tag'",
         ),
-      quality: z.enum(["standard", "high"]).default("high"),
+      quality: z.enum(["low", "medium", "high"]).default("high"),
       background: z.enum(["auto", "transparent", "opaque"]).default("auto"),
-    }),
-  },
-  editImage: {
-    description:
-      "Edit an existing image with model selection using the Replicate API. Supports using multiple input images.",
-    input: z.object({
-      input_images: z
-        .array(z.string())
-        .min(1, "URLs of images to edit. At least one image URL must be provided"),
-      prompt: z.string(),
-      model: z
-        .string()
-        .default("openai/gpt-image-1")
-        .describe("The image editing model to use. Only set this when explicitly asked to do so"),
-      background: z.enum(["auto", "transparent", "opaque"]).default("auto"),
-      quality: z.enum(["standard", "high"]).default("high"),
+      overrideReplicateParams: z.record(z.string(), z.any()).optional(),
     }),
   },
 });

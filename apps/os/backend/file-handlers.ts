@@ -7,6 +7,7 @@ import type { Variables } from "./worker.ts";
 import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
+import { getBaseURL } from "./utils/utils.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
@@ -201,7 +202,7 @@ export const uploadFileFromURL = async ({
 };
 
 export function getFilePublicURL(iterateFileId: string) {
-  return `${env.VITE_PUBLIC_URL}/api/files/${iterateFileId}`;
+  return `${getBaseURL({ replaceLocalhostWithNgrok: true })}/api/files/${iterateFileId}`;
 }
 
 export async function getFileContent(params: { iterateFileId: string; db: DB; estateId: string }) {

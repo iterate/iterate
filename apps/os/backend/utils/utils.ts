@@ -37,3 +37,27 @@ export function getEnvironmentName(env: {
   const isDev = !!ITERATE_USER;
   return isDev ? `local-${ITERATE_USER}` : `estate-${ESTATE_NAME}`;
 }
+
+export function getBaseURL(
+  params: { replaceLocalhostWithNgrok: boolean } = { replaceLocalhostWithNgrok: false },
+) {
+  const baseURL = process.env.VITE_PUBLIC_URL;
+  if (!baseURL) {
+    throw new Error("VITE_PUBLIC_URL is not set");
+  }
+  if (params.replaceLocalhostWithNgrok) {
+    return replaceLocalhostWithNgrok(baseURL);
+  }
+  return baseURL;
+}
+
+// This function replaces localhost:5173 with the current iterate user's ngrok URL
+export function replaceLocalhostWithNgrok(url: string): string {
+  const iterateUser = process.env.ITERATE_USER;
+  if (iterateUser && url.includes("localhost")) {
+    return url
+      .replace("localhost:5173", `${iterateUser}.dev.iterate.com`)
+      .replace("http://", "https://");
+  }
+  return url;
+}
