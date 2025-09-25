@@ -99,7 +99,8 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
 
 app.post("/api/estate/:estateId/files", uploadFileHandler);
 app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
-app.get("/api/estate/:estateId/files/:id", getFileHandler);
+
+app.get("/api/files/:id", getFileHandler);
 
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);

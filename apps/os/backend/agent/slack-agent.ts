@@ -717,7 +717,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         ],
         channel_id: slackChannelId,
         thread_ts: slackThreadId,
-        initial_comment: input.initialComment,
+        // initial_comment: input.initialComment,
       });
 
       console.log("Upload successful:", completeResponse);
