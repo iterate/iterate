@@ -32,6 +32,7 @@ const createAdminUser = publicProcedure
     return { created: true };
   });
 
+/** At compile time, this router will be usable, but if you try to use it in production the procedures just won't exist (`as never`) */
 export const testingRouter = import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
   ? router({
       createAdminUser,

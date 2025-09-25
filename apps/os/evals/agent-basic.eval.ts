@@ -79,7 +79,7 @@ async function getAuthedTrpcClient() {
   const unauthedTrpc = createTRPCClient<AppRouter>({
     links: [httpLink({ url: `${baseURL}/api/trpc` })],
   });
-  await unauthedTrpc.test.createAdminUser.mutate();
+  await unauthedTrpc.testing.createAdminUser.mutate({});
   let cookie = "";
   await authClient.signIn.email(
     { email: "admin@example.com", password: "password" },
