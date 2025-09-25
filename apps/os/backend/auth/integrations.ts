@@ -18,7 +18,8 @@ import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
-  "app_mentions:read",
+  // commented out as it may have broken slack integration
+  // "app_mentions:read",
   "channels:history",
   "channels:join",
   "channels:read",
