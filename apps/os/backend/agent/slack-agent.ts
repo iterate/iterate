@@ -23,6 +23,7 @@ import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
+  CoreReducedState,
   LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
@@ -87,9 +88,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
-      onEventAdded: <E, S>(payload: {
-        event: E;
-        reducedState: S;
+      onEventAdded: (payload: {
+        event: AgentCoreEvent;
+        reducedState: CoreReducedState;
         getFinalRedirectUrl?: (payload: {
           durableObjectInstanceName: string;
         }) => Promise<string | undefined>;
@@ -99,7 +100,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         if (!slackChannelId || !slackThreadId) {
           return;
         }
-        switch ((payload.event as AgentCoreEvent).type) {
+        switch (payload.event.type) {
           case "CORE:LLM_REQUEST_START":
             // Start typing indicator
             waitUntil(
@@ -129,6 +130,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 }),
             );
             break;
+          case "CORE:INTERNAL_ERROR": {
+            console.error("[SlackAgent] Internal Error:", payload.event);
+            const { data } = payload.event;
+            waitUntil(
+              this.getAgentDebugURL().then((url) =>
+                this.sendSlackMessage({
+                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${data.error.slice(0, 256)}${data.error.length > 256 ? "..." : ""}`,
+                }),
+              ),
+            );
+            break;
+          }
         }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
