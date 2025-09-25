@@ -155,7 +155,7 @@ export const iterateAgentTools = defineDOTools({
   },
   editImage: {
     description:
-      "Edit an existing image with model selection using Replicate API. Use imageUrls array (single image goes in array with one URL). Supports multi-image editing tasks.",
+      "Edit an existing image with model selection using the Replicate API. Supports using multiple input images.",
     input: z.object({
       input_images: z
         .array(z.string())
