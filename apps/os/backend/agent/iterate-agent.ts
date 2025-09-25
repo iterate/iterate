@@ -238,6 +238,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
+        eq(agentInstance.estateId, estateId),
       ),
     });
 
