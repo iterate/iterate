@@ -2,6 +2,7 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
+import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
@@ -164,11 +165,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           case "CORE:INTERNAL_ERROR": {
             console.error("[SlackAgent] Internal Error:", payload.event);
-            const { data } = payload.event;
+            const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
+            const errorMessage = errorEvent.data?.error || "Unknown error";
             waitUntil(
               this.getAgentDebugURL().then((url) =>
                 this.sendSlackMessage({
-                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${data.error.slice(0, 256)}${data.error.length > 256 ? "..." : ""}`,
+                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
                 }),
               ),
             );
