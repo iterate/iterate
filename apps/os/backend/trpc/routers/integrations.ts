@@ -85,6 +85,7 @@ export const integrationsRouter = router({
 
     // Add estate-wide accounts
     estateAccounts.forEach(({ account: acc_item }) => {
+      if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
       }
@@ -96,6 +97,7 @@ export const integrationsRouter = router({
 
     // Add personal accounts (only if not already in estate-wide)
     personalAccounts.forEach((acc_item) => {
+      if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
       }
