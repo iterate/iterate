@@ -1,21 +1,15 @@
 import { createHash } from "crypto";
-import * as R from "remeda";
 import { expect, beforeAll, vi } from "vitest";
 import { evalite } from "evalite";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import * as autoevals from "autoevals";
-import OpenAI from "openai";
-import dedent from "dedent";
-import { z } from "zod";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
-import { zodTextFormat } from "./zod-openai.ts";
-import { multiTurnScorer, resultScorers } from "./scorer.ts";
+import { multiTurnScorer } from "./scorer.ts";
 
 type AgentEvent = AgentCoreEvent | MCPEvent | SlackSliceEvent;
 
@@ -48,28 +42,22 @@ evalite("multi-turn", {
   },
   task: async (input) => {
     const h = await createTestHelper(trpcClient, input.slug);
+    const scorer = multiTurnScorer();
 
     for (const message of input.messages) {
       const userMessage = await h.sendUserMessage(message.message);
       const reply = await userMessage.waitForReply();
 
-      await h.scoreLatest([`user: ${message.message}`, `assistant: ${reply}`], message.expected);
+      scorer.scoreTurn([`user: ${message.message}`, `assistant: ${reply}`], message.expected);
     }
-    return { scores: h.scores };
+    return { scores: await scorer.getScores() };
   },
   scorers: [
-    resultScorers.mean, //
-    resultScorers.median,
-    resultScorers.min,
+    multiTurnScorer.mean, //
+    multiTurnScorer.median,
+    multiTurnScorer.min,
   ],
-  columns: (result) =>
-    result.input.messages.map((m, i) => ({
-      label: `message ${i + 1}`,
-      value: [
-        m.message,
-        `[${result.output.scores[i].score}%] ${result.output.scores[i].reason}`,
-      ].join("\n\n"),
-    })),
+  columns: multiTurnScorer.renderColumns,
 });
 
 /** Gets an agent name based on the currently running test name and some (text) input */
@@ -98,7 +86,7 @@ async function getAuthedTrpcClient() {
   });
 }
 
-async function createTestHelper(
+export async function createTestHelper(
   trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>,
   input: string,
   { logger = console as Pick<Console, "info" | "error"> } = {},
@@ -154,25 +142,7 @@ async function createTestHelper(
       agentClassName: "SlackAgent",
     });
   };
-  type WaitUntilOptions = Exclude<Parameters<typeof vi.waitUntil>[1], number>;
-  type WaitForEvent = {
-    <T extends AgentEvent["type"]>(
-      type: T,
-      since: { eventIndex: number }[],
-      options?: WaitUntilOptions,
-    ): Promise<Extract<AgentEvent, { type: T }> | null>;
-    <T extends AgentEvent["type"], Selection>(
-      type: T,
-      since: { eventIndex: number }[],
-      options?: WaitUntilOptions & {
-        /**
-         * Optional mapper function. If it returns a truthy value, that value be returned instead of the event.
-         * If it returns a falsy value, the event is not returned and we continue waiting.
-         */
-        select?: (e: Extract<AgentEvent, { type: T }>) => Selection | null | undefined | false | 0;
-      },
-    ): Promise<Selection>;
-  };
+
   const waitForEvent: WaitForEvent = <T extends AgentEvent["type"], Selection>(
     type: T,
     since: { eventIndex: number }[],
@@ -249,9 +219,30 @@ async function createTestHelper(
     estateId,
     addEvents,
     getEvents,
-    getState,
+    // getState,
     waitForEvent: waitForEvent as WaitForEvent,
     sendUserMessage,
-    ...multiTurnScorer(),
   };
 }
+export type WaitUntilOptions = {
+  interval?: number;
+  timeout?: number;
+};
+export type WaitForEvent = {
+  <T extends AgentEvent["type"]>(
+    type: T,
+    since: { eventIndex: number }[],
+    options?: WaitUntilOptions,
+  ): Promise<Extract<AgentEvent, { type: T }> | null>;
+  <T extends AgentEvent["type"], Selection>(
+    type: T,
+    since: { eventIndex: number }[],
+    options?: WaitUntilOptions & {
+      /**
+       * Optional mapper function. If it returns a truthy value, that value be returned instead of the event.
+       * If it returns a falsy value, the event is not returned and we continue waiting.
+       */
+      select?: (e: Extract<AgentEvent, { type: T }>) => Selection | null | undefined | false | 0;
+    },
+  ): Promise<Selection>;
+};

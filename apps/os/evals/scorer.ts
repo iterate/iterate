@@ -1,3 +1,4 @@
+import PQueue from "p-queue";
 import * as R from "remeda";
 import OpenAI from "openai";
 import { z } from "zod";
@@ -25,13 +26,19 @@ const multiTurnScorerParamsDefaults = {
 } satisfies Omit<ResponsesCreateParams, "input">;
 type MultiTurnScorerParams = Omit<ResponsesCreateParams, "input" | "text">;
 
-export function multiTurnScorer(params: MultiTurnScorerParams = {}) {
-  const scores: ScoreResult[] = [];
+function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
+  const scores: (ScoreResult & { messages: string[] })[] = [];
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const conversation: string[] = [];
 
-  const scoreLatest = async (newMessages: string[], expectation: string) => {
+  const scoringQueue = new PQueue({ concurrency: 3 });
+  let scoringError: Error | null = null;
+  scoringQueue.on("error", (err) => {
+    scoringError = err;
+  });
+
+  const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
     const input = dedent`
       <conversation>
@@ -51,38 +58,31 @@ export function multiTurnScorer(params: MultiTurnScorerParams = {}) {
     if (!openaResponse.output_parsed) {
       throw new Error(`Didn't get a valid output for input:\n${input}`);
     }
-    scores.push(openaResponse.output_parsed);
-  };
-
-  const addScore = async (conversation: string[], expectation: string) => {
-    const input = dedent`
-      ${conversation.join("\n")}
-
-      expectation: ${expectation}
-    `;
-    const openaResponse = await openai.responses.parse({
-      ...multiTurnScorerParamsDefaults,
-      ...params,
-      input,
+    scores.push({
+      ...openaResponse.output_parsed,
+      messages: newMessages,
     });
-    if (!openaResponse.output_parsed) {
-      throw new Error(`Didn't get a valid output for input:\n${input}`);
-    }
-    scores.push(openaResponse.output_parsed);
   };
 
   return {
-    addScore,
-    scores,
-    scoreLatest,
+    getScores: async () => {
+      if (scoringError) throw scoringError;
+      await scoringQueue.onIdle();
+      if (scoringError) throw scoringError;
+      return scores;
+    },
+    scoreTurn: (...args: Parameters<typeof scoreTurn>) => {
+      if (scoringError) throw scoringError;
+      scoringQueue.add(() => scoreTurn(...args));
+    },
     conversation,
   };
 }
 
-type ScoreResult = { score: number; reason: string };
+type ScoreResult = { score: number; reason: string; messages: string[] };
 type ScoreOutput = { scores: ScoreResult[] };
 
-export const resultScorers = {
+const resultScorers = {
   mean: {
     name: "mean",
     scorer: (result: { output: ScoreOutput }) => ({
@@ -112,3 +112,14 @@ export const resultScorers = {
     }),
   },
 };
+
+const renderColumns = (result: { output: ScoreOutput }) =>
+  result.output.scores.map((s, i) => ({
+    label: `turn ${i + 1}`,
+    value: [...s.messages, `[${s.score}%] ${s.reason}`].join("\n\n"),
+  }));
+
+export const multiTurnScorer = Object.assign(_multiTurnScorer, {
+  ...resultScorers,
+  renderColumns,
+});
