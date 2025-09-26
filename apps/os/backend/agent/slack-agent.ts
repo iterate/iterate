@@ -71,9 +71,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         thread_ts: slackThreadId,
         status: status || "",
       })
-      .catch((error) => {
-        console.error("[SlackAgent] Failed to update typing status:", error);
-      });
   }, 300);
 
   private checkAndClearTypingIndicator = pDebounce(async () => {
