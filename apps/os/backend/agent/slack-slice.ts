@@ -99,7 +99,7 @@ export interface SlackSliceState {
   slackThreadId?: string | null;
   slackChannelId?: string | null;
   botUserId?: string;
-  typingIndicatorStatus?: string | null;
+  typingIndicatorStatus: string | null;
 }
 
 export interface SlackSliceDeps {}
@@ -117,7 +117,7 @@ export const slackSlice = defineAgentCoreSlice<{
     slackThreadId: undefined,
     slackChannelId: undefined,
     botUserId: undefined,
-    typingIndicatorStatus: undefined,
+    typingIndicatorStatus: null,
   },
   reduce(state, _deps, event) {
     const next = { ...state };
