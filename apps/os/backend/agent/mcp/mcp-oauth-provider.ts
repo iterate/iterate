@@ -8,6 +8,7 @@ import * as schema from "../../db/schema.ts";
 import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
+import { env } from "../../../env.ts";
 
 /**
  * Connector between MCP OAuthClientProvider and our better auth plugin
@@ -229,6 +230,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       throw new Error("Cannot redirect to authorization without client information");
     }
     const state = generateRandomString(32);
+    authUrl.searchParams.set("state", state);
+
     const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
       serverUrl: this.params.serverUrl,
@@ -236,6 +239,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       userId: this.params.userId,
       callbackUrl: this.params.callbackUrl,
       clientId: clientInformation.client_id,
+      fullUrl: authUrl.toString(),
       agentDurableObject: {
         durableObjectId: this.params.agentDurableObject.durableObjectId,
         durableObjectName: this.params.agentDurableObject.durableObjectName,
@@ -254,9 +258,18 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       expiresAt,
     });
 
-    authUrl.searchParams.set("state", state);
+    const organization = await this.params.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.params.estateId),
+      columns: {
+        organizationId: true,
+      },
+    });
 
-    this.authUrl = authUrl.toString();
+    if (!organization) {
+      throw new Error("Organization not found");
+    }
+
+    this.authUrl = `${env.VITE_PUBLIC_URL}/${organization.organizationId}/${this.params.estateId}/integrations/redirect?key=${state}`;
   }
 
   async codeVerifier(): Promise<string> {

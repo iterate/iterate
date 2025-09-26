@@ -13,6 +13,7 @@ export default [
     index("./routes/home.tsx"),
     route("integrations", "./routes/integrations.tsx"),
     route("integrations/mcp-params", "./routes/integrations.mcp-params.tsx"),
+    route("integrations/redirect", "./routes/integrations.redirect.tsx"),
     route("estate", "./routes/estate.tsx"),
     route("agents", "./routes/agents-index.tsx"),
     route("agents/start-slack", "./routes/agents.start-slack.tsx"),
