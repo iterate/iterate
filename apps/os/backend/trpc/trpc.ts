@@ -1,12 +1,90 @@
 import { initTRPC, TRPCError } from "@trpc/server";
-import { z } from "zod";
+import { prettifyError, z, ZodError } from "zod";
 import { eq } from "drizzle-orm";
 import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import type { Context } from "./context.ts";
 
-const t = initTRPC.context<Context>().create();
+type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
+const looksLikeStandardSchemaFailureResult = (
+  error: unknown,
+): error is StandardSchemaFailureResult => {
+  return typeof error === "object" && !!error && "issues" in error && Array.isArray(error.issues);
+};
+
+const t = initTRPC.context<Context>().create({
+  errorFormatter: (opts) => {
+    const { shape, error } = opts;
+
+    // Check if this is a ZodError and format it nicely
+    let formattedError = error.message;
+    let zodFormatted: any;
+
+    // Helper to extract ZodError from error or error.cause
+    const zodError =
+      error.cause instanceof ZodError ? error.cause : error instanceof ZodError ? error : undefined;
+
+    if (zodError) {
+      // Format the ZodError into a more readable structure
+      const formattedIssues = zodError.issues.map((issue, index) => {
+        const path = issue.path.length > 0 ? issue.path.join(".") : "root";
+        return `#${index + 1}: ${issue.message} (at ${path})`;
+      });
+
+      formattedError = `Validation error:\n${formattedIssues.join("\n")}`;
+
+      // Create a structured error format similar to flattenError
+      zodFormatted = {
+        formErrors: zodError.issues
+          .filter((issue) => issue.path.length === 0)
+          .map((issue) => issue.message),
+        fieldErrors: zodError.issues.reduce(
+          (acc, issue) => {
+            if (issue.path.length > 0) {
+              const path = issue.path.join(".");
+              if (!acc[path]) {
+                acc[path] = [];
+              }
+              acc[path].push(issue.message);
+            }
+            return acc;
+          },
+          {} as Record<string, string[]>,
+        ),
+        issues: zodError.issues,
+      };
+    }
+
+    console.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
+      code: error.code,
+      message: formattedError,
+      zodFormatted,
+      stack: error.stack,
+      cause: error.cause,
+      input: opts.input,
+      type: opts.type,
+    });
+
+    return {
+      ...shape,
+      // zod errors are big and ugly, but it ships a built-in pretty printer, so let's override the `message` with a more useful one if we can.
+      //  we need to check that it's a zod error (or other standard schema failure) before using it though.
+      ...(looksLikeStandardSchemaFailureResult(error.cause) && {
+        message: prettifyError(error.cause),
+      }),
+      data: {
+        ...shape.data,
+        // Add stack trace in development
+        stack: process.env.NODE_ENV === "development" ? error.stack : undefined,
+        // Add formatted Zod error details
+        zodFormatted: zodFormatted,
+        // Include raw issues for clients that want to format themselves
+        zodIssues: zodError?.issues,
+      },
+    };
+  },
+});
 
 // Base router and procedure helpers
 export const router = t.router;
