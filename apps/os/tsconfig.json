@@ -3,9 +3,9 @@
     "module": "esnext",
     "target": "esnext",
     "types": ["@cloudflare/workers-types", "node", "vite/client"],
-    "sourceMap": true,
+    "sourceMap": false,
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": false, // this makes defining workers a bit of a PITA

@@ -26,5 +26,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Build and Publish OS and SDK package
-        run: node ./publish.ts
+      - name: Build SDK package (from OS!)
+        run: pnpm tsdown
+        working-directory: apps/os
+
+      - name: Publish SDK package
+        run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk

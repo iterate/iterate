@@ -53,7 +53,7 @@
     "hono": "^4.9.7",
     "isbot": "^5.1.30",
     "jose": "^6.1.0",
-    "jsonata": "github:mmkal/jsonata#e892b028ccb52d795cf29468e6a12c81db029c90",
+    "jsonata": "github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337",
     "lucide-react": "^0.544.0",
     "next-themes": "^0.4.6",
     "openai": "^5.20.3",
