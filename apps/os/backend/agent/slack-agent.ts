@@ -83,7 +83,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (!status) return;
 
     if (this.agentCore.llmRequestInProgress()) {
-      this.checkAndClearTypingIndicator();
+      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
       return;
     }
 
@@ -93,17 +93,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         data: { status: null },
       },
     ]);
-    this.updateSlackStatusDebounced(null);
+    this.ctx.waitUntil(this.updateSlackStatusDebounced(null));
   }, 15000);
 
   private syncTypingIndicator() {
     const state = this.agentCore.state as SlackSliceState;
     const status = state.typingIndicatorStatus ?? null;
 
-    this.updateSlackStatusDebounced(status);
+    this.ctx.waitUntil(this.updateSlackStatusDebounced(status));
 
     if (status) {
-      this.checkAndClearTypingIndicator();
+      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
     }
   }
 
@@ -648,18 +648,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     });
 
     await this.addEvents(events);
-
-    if (this.agentCore.state.triggerLLMRequest) {
-      this.agentCore.addEvents([
-        {
-          type: "SLACK:UPDATE_TYPING_STATUS",
-          data: { status: "is typing..." },
-        },
-      ]);
-    }
-
-    this.syncTypingIndicator();
-
     return {
       success: true,
     };
