@@ -146,7 +146,7 @@ export async function getUserEstateAccess(
 // Estate protected procedure that requires both authentication and estate access
 export const estateProtectedProcedure = protectedProcedure
   .input(z.object({ estateId: z.string() }))
-  .use(async ({ ctx, input, next }) => {
+  .use(async ({ ctx, input, next, path }) => {
     const { hasAccess, estate: userEstate } = await getUserEstateAccess(
       ctx.db,
       ctx.user.id,
@@ -156,7 +156,7 @@ export const estateProtectedProcedure = protectedProcedure
     if (!hasAccess || !userEstate) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Access denied: User does not have permission to access this estate",
+        message: `Access to ${path} denied: User ${ctx.user.id} does not have permission to access this estate ${input.estateId}`,
       });
     }
 

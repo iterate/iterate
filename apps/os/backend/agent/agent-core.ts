@@ -1119,7 +1119,10 @@ export class AgentCore<
           )?.item;
           const associatedReasoningItem =
             lastNonFunctionCallItem?.type === "reasoning" ? lastNonFunctionCallItem : undefined;
-          const triggerLLMRequest = result.triggerLLMRequest !== false;
+          let triggerLLMRequest = result.triggerLLMRequest !== false;
+          if (triggerLLMRequest && !result.success) {
+            triggerLLMRequest = false;
+          }
           const ev = {
             type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
             data: {
