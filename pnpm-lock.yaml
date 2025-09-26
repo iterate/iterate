@@ -463,9 +463,6 @@ importers:
 
   packages/sdk:
     dependencies:
-      '@iterate-com/os':
-        specifier: workspace:*
-        version: link:../../apps/os
       dedent:
         specifier: ^1.7.0
         version: 1.7.0
