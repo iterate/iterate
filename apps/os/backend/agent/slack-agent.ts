@@ -659,10 +659,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const { endTurn, ...sendInput } = input;
 
+    if (typeof sendInput.unfurl === "undefined") {
+      const links = sendInput.text.match(/https?:\/\/[^\s|]+/g);
+      sendInput.unfurl = links?.length === 1;
+    }
+
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
       text: sendInput.text,
+      // for some reason, I have to set both of these to the same value to get unfurling to stop
+      unfurl_links: sendInput.unfurl,
+      unfurl_media: sendInput.unfurl,
     });
 
     if (!result.ok) {
