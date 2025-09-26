@@ -5,6 +5,10 @@
   "bin": {
     "iterate": "./cli.js"
   },
+  "files": [
+    "dist",
+    "cli.js"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

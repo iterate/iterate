@@ -24,11 +24,7 @@ jobs:
           cache: "pnpm"
 
       - name: Install dependencies
-        run: pnpm install
-
-      - name: Build SDK package (from OS!)
-        run: pnpm tsdown
-        working-directory: apps/os
+        run: pnpm install # this prepares the sdk package for publishing
 
       - name: Publish SDK package
         run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk
