@@ -65,12 +65,18 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   };
 
   return {
+    /** Waits for all scores to come in and returns them as a list */
     getScores: async () => {
       if (scoringError) throw scoringError;
       await scoringQueue.onIdle();
       if (scoringError) throw scoringError;
       return scores;
     },
+    /**
+     * Pushes the new messages into the conversation history, and
+     * enqueues a task to score a turn. This will be done in the background,
+     * use `await getScores()` afterwards if you want to block until it's done.
+     * */
     scoreTurn: (...args: Parameters<typeof scoreTurn>) => {
       if (scoringError) throw scoringError;
       scoringQueue.add(() => scoreTurn(...args));
