@@ -37,7 +37,6 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   serverId: string | undefined;
   authUrl: string | undefined;
 
-  private dbAccountId: string | undefined;
   private baseUrl: string;
 
   constructor(
@@ -59,42 +58,45 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     return this.params.integrationSlug;
   }
 
-  async clearTokens() {
-    if (!this.dbAccountId) {
-      return;
-    }
+  async resetClientAndTokens() {
     await this.params.db
       .delete(schema.account)
       .where(
         and(
-          eq(schema.account.id, this.dbAccountId),
+          eq(schema.account.userId, this.params.userId),
           eq(schema.account.providerId, this.providerId),
         ),
       );
-
-    this.dbAccountId = undefined;
+    await this.params.db
+      .delete(schema.dynamicClientInfo)
+      .where(
+        and(
+          eq(schema.dynamicClientInfo.userId, this.params.userId),
+          eq(schema.dynamicClientInfo.providerId, this.providerId),
+        ),
+      );
   }
 
   async tokens() {
     const account = await this.params.db.query.account.findFirst({
       where: and(
-        eq(schema.account.userId, this.params.userId),
         eq(schema.account.providerId, this.providerId),
+        eq(schema.account.userId, this.params.userId),
       ),
     });
 
-    // Refresh logic comes from mcp typescript sdk (we assume)
-    // https://github.com/modelcontextprotocol/typescript-sdk/blob/1d475bb3f75674a46d81dba881ea743a763cbc12/src/client/auth.ts#L980
-    if (account?.accessToken) {
-      this.dbAccountId = account.id;
-      return {
-        access_token: account.accessToken,
-        token_type: "Bearer",
-        refresh_token: account.refreshToken || undefined,
-      };
+    if (!account || !account.accessToken) {
+      return undefined;
     }
 
-    return undefined;
+    // Refresh logic comes from mcp typescript sdk (we assume)
+    // https://github.com/modelcontextprotocol/typescript-sdk/blob/1d475bb3f75674a46d81dba881ea743a763cbc12/src/client/auth.ts#L980
+    // Set the clientId to the accountId so that clientInformation() will not early return
+    return {
+      access_token: account.accessToken,
+      token_type: "Bearer",
+      refresh_token: account.refreshToken || undefined,
+    };
   }
 
   get redirectUrl(): string {
@@ -110,14 +112,10 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async clientInformation() {
-    if (!this.clientId) {
-      return undefined;
-    }
-
     const dynamicClientInfo = await this.params.db.query.dynamicClientInfo.findFirst({
       where: and(
         eq(schema.dynamicClientInfo.providerId, this.providerId),
-        eq(schema.dynamicClientInfo.clientId, this.clientId),
+        eq(schema.dynamicClientInfo.userId, this.params.userId),
       ),
     });
 
@@ -138,10 +136,6 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     refresh_token?: string;
     expires_in?: number;
   }): Promise<void> {
-    if (!this.clientId) {
-      throw new Error("Cannot save tokens without clientId");
-    }
-
     const expiresAt = tokens.expires_in
       ? new Date(Date.now() + tokens.expires_in * 1000)
       : undefined;
@@ -162,14 +156,16 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           accessTokenExpiresAt: expiresAt,
         })
         .where(eq(schema.account.id, existingAccount.id));
-
-      this.dbAccountId = existingAccount.id;
     } else {
-      const newAccount = await this.params.db.transaction(async (tx) => {
+      const clientInformation = await this.clientInformation();
+      if (!clientInformation) {
+        throw new Error("Cannot save tokens without client information");
+      }
+      await this.params.db.transaction(async (tx) => {
         const [newAccount] = await tx
           .insert(schema.account)
           .values({
-            accountId: this.clientId!, // Dynamic client id is the closest thing to an *external* account id
+            accountId: clientInformation.client_id,
             providerId: this.providerId,
             userId: this.params.userId,
             accessToken: tokens.access_token,
@@ -185,35 +181,34 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         });
         return newAccount;
       });
-
-      this.dbAccountId = newAccount.id;
     }
   }
 
   async saveClientInformation(_info: unknown): Promise<void> {
     const info = DynamicClientInfo.parse(_info);
-    this.clientId = info.client_id;
     await this.params.db
       .insert(schema.dynamicClientInfo)
       .values({
+        userId: this.params.userId,
         clientId: info.client_id,
         providerId: this.providerId,
         clientInfo: info,
       })
       .onConflictDoUpdate({
-        target: [schema.dynamicClientInfo.providerId, schema.dynamicClientInfo.clientId],
+        target: [schema.dynamicClientInfo.providerId, schema.dynamicClientInfo.userId],
         set: {
+          clientId: info.client_id,
           clientInfo: info,
         },
       });
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {
-    if (!this.clientId) {
-      throw new Error("Cannot save code verifier without clientId");
+    const clientInformation = await this.clientInformation();
+    if (!clientInformation) {
+      throw new Error("Cannot save code verifier without client information");
     }
-
-    const verificationKey = `mcp-verifier-${this.providerId}-${this.clientId}`;
+    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow
 
     await this.params.db
@@ -228,10 +223,10 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async redirectToAuthorization(authUrl: URL): Promise<void> {
-    if (!this.clientId) {
-      throw new Error("Cannot redirect to authorization without clientId");
+    const clientInformation = await this.clientInformation();
+    if (!clientInformation) {
+      throw new Error("Cannot redirect to authorization without client information");
     }
-
     const state = generateRandomString(32);
     const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
@@ -239,7 +234,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       estateId: this.params.estateId,
       userId: this.params.userId,
       callbackUrl: this.params.callbackUrl,
-      clientId: this.clientId,
+      clientId: clientInformation.client_id,
       agentDurableObject: {
         durableObjectId: this.params.agentDurableObject.durableObjectId,
         durableObjectName: this.params.agentDurableObject.durableObjectName,
@@ -264,11 +259,11 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async codeVerifier(): Promise<string> {
-    if (!this.clientId) {
-      throw new Error("Cannot get code verifier without clientId");
+    const clientInformation = await this.clientInformation();
+    if (!clientInformation) {
+      throw new Error("Cannot get code verifier without client information");
     }
-
-    const verificationKey = `mcp-verifier-${this.providerId}-${this.clientId}`;
+    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
     const verification = await this.params.db.query.verification.findFirst({
       where: eq(schema.verification.identifier, verificationKey),
     });

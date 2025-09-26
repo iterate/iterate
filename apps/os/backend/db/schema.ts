@@ -50,20 +50,24 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable("account", (t) => ({
-  id: iterateId("acc"),
-  accountId: t.text().notNull(),
-  providerId: t.text().notNull(),
-  userId: t.text().notNull(),
-  accessToken: t.text(),
-  refreshToken: t.text(),
-  idToken: t.text(),
-  accessTokenExpiresAt: t.timestamp(),
-  refreshTokenExpiresAt: t.timestamp(),
-  scope: t.text(),
-  password: t.text(),
-  ...withTimestamps,
-}));
+export const account = pgTable(
+  "account",
+  (t) => ({
+    id: iterateId("acc"),
+    accountId: t.text().notNull(),
+    providerId: t.text().notNull(),
+    userId: t.text().notNull(),
+    accessToken: t.text(),
+    refreshToken: t.text(),
+    idToken: t.text(),
+    accessTokenExpiresAt: t.timestamp(),
+    refreshTokenExpiresAt: t.timestamp(),
+    scope: t.text(),
+    password: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.providerId, t.userId)],
+);
 export const accountRelations = relations(account, ({ one, many }) => ({
   user: one(user, {
     fields: [account.userId],
@@ -87,11 +91,12 @@ export const dynamicClientInfo = pgTable(
   (t) => ({
     id: iterateId("dci"),
     providerId: t.text().notNull(),
+    userId: t.text().notNull(),
     clientId: t.text().notNull(),
     clientInfo: t.jsonb().$type<DynamicClientInfo>().notNull(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.providerId, t.clientId)],
+  (t) => [uniqueIndex().on(t.providerId, t.userId)],
 );
 
 export const files = pgTable("files", (t) => ({
