@@ -25,8 +25,8 @@ const multiTurnScorerParamsDefaults = {
 } satisfies Omit<ResponsesCreateParams, "input">;
 type MultiTurnScorerParams = Omit<ResponsesCreateParams, "input" | "text">;
 
-function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
-  const scores: { reason: string; score: number }[] = [];
+export function multiTurnScorer(params: MultiTurnScorerParams = {}) {
+  const scores: ScoreResult[] = [];
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   const conversation: string[] = [];
@@ -73,47 +73,42 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
 
   return {
     addScore,
-    scores: {
-      raw: scores,
-      // precalculated useful aggregations
-      aggregated: {
-        mean: {
-          score: 0.01 * (R.meanBy(scores, (s) => s.score) ?? 0),
-          metadata: { allScores: scores },
-        },
-        median: {
-          score:
-            0.01 *
-            R.pipe(
-              scores,
-              R.sortBy((s) => s.score),
-              R.filter((_, i, { length }) => Math.abs(length / 2 - i) < 1), // either one or two middle items
-              R.meanBy((s) => s.score),
-            ),
-          metadata: { allScores: scores },
-        },
-        min: {
-          score: 0.01 * (R.firstBy(scores, (s) => s.score)?.score ?? 0),
-          metadata: { allScores: scores },
-        },
-      },
-    },
+    scores,
     scoreLatest,
     conversation,
   };
 }
 
-type MultiTurnScorer = ReturnType<typeof _multiTurnScorer>;
-function getScorer<T extends keyof MultiTurnScorer["scores"]["aggregated"]>(name: T) {
-  return {
-    name,
-    scorer: (result: { output: { scores: MultiTurnScorer["scores"] } }) =>
-      result.output.scores.aggregated[name],
-  };
-}
+type ScoreResult = { score: number; reason: string };
+type ScoreOutput = { scores: ScoreResult[] };
 
-export const multiTurnScorer = Object.assign(_multiTurnScorer, {
-  mean: getScorer("mean"),
-  median: getScorer("median"),
-  min: getScorer("min"),
-});
+export const resultScorers = {
+  mean: {
+    name: "mean",
+    scorer: (result: { output: ScoreOutput }) => ({
+      score: 0.01 * R.meanBy(result.output.scores, (s) => s.score),
+      metadata: { allScores: result.output.scores },
+    }),
+  },
+  median: {
+    name: "median",
+    scorer: (result: { output: ScoreOutput }) => ({
+      score:
+        0.01 *
+        R.pipe(
+          result.output.scores,
+          R.sortBy((s) => s.score),
+          R.filter((_, i, { length }) => Math.abs(length / 2 - i) < 1), // either one or two middle items
+          R.meanBy((s) => s.score),
+        ),
+      metadata: { allScores: result.output.scores },
+    }),
+  },
+  min: {
+    name: "min",
+    scorer: (result: { output: ScoreOutput }) => ({
+      score: 0.01 * (R.firstBy(result.output.scores, (s) => s.score)?.score ?? 0),
+      metadata: { allScores: result.output.scores },
+    }),
+  },
+};

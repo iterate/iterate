@@ -15,7 +15,7 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { zodTextFormat } from "./zod-openai.ts";
-import { multiTurnScorer } from "./scorer.ts";
+import { multiTurnScorer, resultScorers } from "./scorer.ts";
 
 type AgentEvent = AgentCoreEvent | MCPEvent | SlackSliceEvent;
 
@@ -55,7 +55,10 @@ evalite("multi-turn", {
         input: {
           slug: "fruit-naming",
           messages: [
-            { message: "name a green fruit", expected: "a green fruit" },
+            {
+              message: "name a green fruit",
+              expected: "a green fruit. penalize emoji usage by 10%",
+            },
             { message: "name another", expected: "a green fruit, not the same as the first" },
             { message: "name another", expected: "a green fruit, not the same as the 1st or 2nd" },
           ],
@@ -74,12 +77,20 @@ evalite("multi-turn", {
     }
     return { scores: h.scores };
   },
-  scorers: [multiTurnScorer.mean, multiTurnScorer.median, multiTurnScorer.min],
+  scorers: [
+    resultScorers.mean, //
+    resultScorers.median,
+    resultScorers.min,
+  ],
+  columns: (result) =>
+    result.input.messages.map((m, i) => ({
+      label: `message ${i + 1}`,
+      value: [
+        m.message,
+        `[${result.output.scores[i].score}%] ${result.output.scores[i].reason}`,
+      ].join("\n\n"),
+    })),
 });
-
-// function mscorers() {
-//   return { mean: getScorer("mean"), median: getScorer("median"), min: getScorer("min") };
-// }
 
 /** Gets an agent name based on the currently running test name and some (text) input */
 function testAgentName(input: string) {
