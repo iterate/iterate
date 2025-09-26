@@ -352,12 +352,7 @@ async function handleBotChannelJoin(params: {
       continue;
     }
 
-    const hasBotMention = threadHistory.messages.some(
-      (m) =>
-        m.type === "message" &&
-        m.type &&
-        isBotMentionedInMessage(m as { user?: string; text?: string; type: string }, botUserId),
-    );
+    const hasBotMention = threadHistory.messages.some((m) => isBotMentionedInMessage(m, botUserId));
 
     if (!hasBotMention) continue;
 
@@ -402,12 +397,7 @@ async function handleBotChannelJoin(params: {
 
     const mentionMessage = [...threadHistory.messages]
       .reverse()
-      .find(
-        (m) =>
-          m.type === "message" &&
-          m.type &&
-          isBotMentionedInMessage(m as { user?: string; text?: string; type: string }, botUserId),
-      );
+      .find((m) => isBotMentionedInMessage(m, botUserId));
 
     if (mentionMessage?.ts) {
       try {

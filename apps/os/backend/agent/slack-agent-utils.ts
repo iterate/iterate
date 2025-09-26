@@ -12,7 +12,7 @@ export function getMentionedExternalUserIds(body: string) {
 }
 
 export function isBotMentionedInMessage(
-  slackEvent: { user?: string; text?: string; type: string },
+  slackEvent: { user?: string; text?: string; type?: string },
   botUserId: string,
 ): boolean {
   // Skip messages from the bot itself - they shouldn't be treated as mentions
