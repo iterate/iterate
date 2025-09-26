@@ -1,4 +1,4 @@
-import pTimeout from "p-suite/p-timeout";
+import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -7,6 +7,7 @@ import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { waitUntil } from "cloudflare:workers";
+import Replicate from "replicate";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -17,8 +18,11 @@ import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   contextRules: ContextRule[];
 };
+import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
+import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
-import { getFilePublicURL, uploadFile } from "../file-handlers.ts";
+import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
@@ -34,11 +38,7 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-import {
-  runMCPEventHooks,
-  handleMCPConnectRequest,
-  mcpManagerCache,
-} from "./mcp/mcp-event-hooks.ts";
+import { runMCPEventHooks, getOrCreateMCPConnection } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -48,7 +48,7 @@ import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
-import type { MCPServer } from "./tool-schemas.ts";
+import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -275,11 +275,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   static async getOrCreateStubByRoute(params: {
     db: DB;
     estateId: string;
-    agentInstanceName: string;
     route: string;
     reason?: string;
   }) {
-    const { db, estateId, agentInstanceName, route, reason } = params;
+    const { db, estateId, route, reason } = params;
 
     // First check if an agent already exists for this route
     const existingRoutes = await db.query.agentInstanceRoute.findMany({
@@ -297,13 +296,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     // No existing agent for this route, create one with route
-    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
+    const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
+    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
     const [record] = await db
       .insert(agentInstance)
       .values({
         estateId,
         className: this.name,
-        durableObjectName: agentInstanceName,
+        durableObjectName: durableObjectName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
       })
@@ -382,14 +382,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
   }
 
-  private posthog: PosthogCloudflare | undefined = undefined;
-  private getPosthogClient() {
-    if (!this.posthog) {
-      this.posthog = new PosthogCloudflare(this.ctx, { estate: "some estate", environment: "dev" });
-    }
-    return this.posthog;
-  }
-
   /**
    * Get all slices for this agent. This method must be overridden by subclasses
    * to return the correct statically-typed slice array.
@@ -410,7 +402,23 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const _posthogClient = this.getPosthogClient();
+    const getEstate = pMemoize(() => this.getEstate());
+    const getBraintrustParentSpanExportedId = pMemoize(async () => {
+      const estate = await getEstate();
+      return await this.getOrCreateBraintrustParentSpanExportedId(estate.name);
+    });
+    const posthogClient = pMemoize(async () => {
+      const estate = await getEstate();
+      const environment = getEnvironmentName({
+        ITERATE_USER: this.env.ITERATE_USER,
+        STAGE__PR_ID: this.env.STAGE__PR_ID,
+        ESTATE_NAME: estate.name,
+      });
+      return new PosthogCloudflare(this.ctx, {
+        estateName: estate.name,
+        environmentName: environment,
+      });
+    });
 
     const baseDeps: AgentCoreDeps = {
       getRuleMatchData: (state) => ({
@@ -461,17 +469,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       getOpenAIClient: async () => {
+        const estate = await getEstate();
         return await openAIProvider({
           posthog: {
-            traceId: this.name,
+            estateName: estate.name,
+            environmentName: getEnvironmentName({
+              STAGE__PR_ID: this.env.STAGE__PR_ID,
+              ITERATE_USER: this.env.ITERATE_USER,
+              ESTATE_NAME: estate.name,
+            }),
+            traceId: `${this.constructor.name}-${this.name}`,
           },
           env: {
             BRAINTRUST_API_KEY: this.env.BRAINTRUST_API_KEY,
             OPENAI_API_KEY: this.env.OPENAI_API_KEY,
             POSTHOG_PUBLIC_KEY: this.env.POSTHOG_PUBLIC_KEY,
           },
-          projectName: `iterate-platform`,
-          braintrustParentSpanExportedId: this.state.braintrustParentSpanExportedId,
+          braintrust: {
+            getBraintrustParentSpanExportedId,
+          },
         });
       },
 
@@ -506,7 +522,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       turnFileIdIntoPublicURL: (fileId: string) => {
-        return getFilePublicURL(fileId, this.databaseRecord.estateId);
+        return getFilePublicURL(fileId);
       },
 
       getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
@@ -554,39 +570,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           waitUntil(this.refreshContextRules());
         }
 
-        //   // this.ctx.waitUntil(
-        //     /**
-        //      * Initially we wanted to publish this payload onto the event bus and then consume it in worker.ts with processPosthogEvent
-        //      *
-        //      * Unfortunately we hit an issue with the CloudFlare workerd process behaving in an unexpected manner, where fetch() calls would never resolve
-        //      * and so both posthog and braintrust calls would break.
-        //      *
-        //      * We suspect this is related to the way that durable objects handle their own liveliness when handing off to a worker via RPC or Event Queues,
-        //      * causing async work like promises and timers to never process.
-        //      *
-        //      * For more details read this thread:
-        //      * https://iterate-com.slack.com/archives/C06LU7PGK0S/p1754985703369859
-        //      */
-        //     // processPosthogAgentCoreEvent(posthogClient, {
-        //     //   event: `AGENT_CORE_EVENT_ADDED`,
-        //     //   data: {
-        //     //     event,
-        //     //     reducedState,
-        //     //     className: this.constructor.name,
-        //     //     // TODO we don't have the agent instance name here - in the future we will.
-        //     //     // But for now I'm just using the ID to identify the agent instance.
-        //     //     // I think Rahul has some witchcraft in the works to get us the name
-        //     //     agentInstanceName: this.name,
-        //     //     agentDebugURL: getAgentDebugUri({
-        //     //       durableObjectName: this.name,
-        //     //       agentClassName: this.constructor.name,
-        //     //     }),
-        //     //   },
-        //     //   source: {
-        //     //     service: "platform",
-        //     //   },
-        //     // }),
-        //   // );
+        this.ctx.waitUntil(
+          (async () => {
+            const posthog = await posthogClient();
+            return await processPosthogAgentCoreEvent({
+              posthog,
+              data: {
+                event,
+                reducedState,
+              },
+            });
+          })(),
+        );
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
@@ -720,12 +715,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    */
   protected async getContextRules(): Promise<ContextRule[]> {
     const defaultRules = await defaultContextRules();
-    const { db, databaseRecord } = this;
+    // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
-    const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
-      milliseconds: 250,
-      fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
-    });
+    // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+    //   milliseconds: 250,
+    //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    // });
+    const rulesFromDb = [] as ContextRule[];
     const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
@@ -871,6 +867,30 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return this.state.braintrustParentSpanExportedId;
   }
 
+  // get the braintrust parent span exported id from the state
+  // if it's not set, create it and set it in the state
+  async getOrCreateBraintrustParentSpanExportedId(estateName: string) {
+    if (this.state.braintrustParentSpanExportedId) {
+      return this.state.braintrustParentSpanExportedId;
+    } else {
+      const projectName = `${getEnvironmentName({
+        ITERATE_USER: this.env.ITERATE_USER,
+        STAGE__PR_ID: this.env.STAGE__PR_ID,
+        ESTATE_NAME: estateName,
+      })}-platform`;
+      const spanExportedId = await makeBraintrustSpan({
+        braintrustKey: this.env.BRAINTRUST_API_KEY,
+        projectName,
+        spanName: `${this.constructor.name}-${this.name}`,
+      });
+      this.setState({
+        ...this.state,
+        braintrustParentSpanExportedId: spanExportedId,
+      });
+      return spanExportedId;
+    }
+  }
+
   ping() {
     return { message: "pong back at you!" };
   }
@@ -896,17 +916,22 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   doNothing() {
     return {};
   }
-  async getAgentDebugURL() {
+  async getEstate() {
     const estate = await this.db.query.estate.findFirst({
       where: eq(schema.estate.id, this.databaseRecord.estateId),
       columns: {
         organizationId: true,
         id: true,
+        name: true,
       },
     });
     if (!estate) {
       throw new Error("Estate not found");
     }
+    return estate;
+  }
+  async getAgentDebugURL() {
+    const estate = await this.getEstate();
     return {
       debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
     };
@@ -1053,34 +1078,49 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
     const formattedServerUrl = new URL(input.serverUrl);
-    if (input.requiresQueryParamsAuth) {
-      const searchParams = new URLSearchParams(input.requiresQueryParamsAuth);
-      formattedServerUrl.search = searchParams.toString();
-    }
-    const mcpServer: MCPServer = {
+
+    const requiresParams: MCPParam[] = [
+      ...R.pipe(
+        input.requiresHeadersAuth ?? {},
+        R.entries(),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "header",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
+      ),
+      ...R.pipe(
+        input.requiresQueryParamsAuth ?? {},
+        R.entries(),
+        R.map(
+          ([key, config]): MCPParam => ({
+            key,
+            type: "query_param",
+            placeholder: config.placeholder,
+            description: config.description,
+            sensitive: config.sensitive,
+          }),
+        ),
+      ),
+    ];
+
+    const mcpServer = {
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
-      requiresAuth: input.requiresOAuth || false,
-      headers: input.requiresHeadersAuth || undefined,
+      requiresOAuth: input.requiresOAuth || false,
+      requiresParams,
     };
-    // Check if already connected
+
     const connectionKey = getConnectionKey({
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
       userId: input.onBehalfOfIterateUserId,
     });
 
-    const existingManager = mcpManagerCache.managers.get(connectionKey);
-    if (existingManager) {
-      // Already connected, just add the server to the state
-      return {
-        success: true,
-        message: `Already connected to MCP server: ${input.serverUrl}. The tools from this server are available.`,
-        addedMcpServer: mcpServer,
-      };
-    }
-
-    // Not connected yet, proceed with connection
     const connectRequestEvent: MCPConnectRequestEventInput = {
       type: "MCP:CONNECT_REQUEST",
       data: {
@@ -1091,9 +1131,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       metadata: {},
       triggerLLMRequest: false,
     };
-
-    const events = await handleMCPConnectRequest({
-      event: {
+    const result = await getOrCreateMCPConnection({
+      connectionKey,
+      connectionRequestEvent: {
         ...connectRequestEvent,
         eventIndex: 0,
         createdAt: new Date().toISOString(),
@@ -1104,33 +1144,50 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
-    if (events.at(-1)?.type !== "MCP:CONNECTION_ESTABLISHED") {
-      // Extract error details from events
-      const errorDetails = events
-        .map((e) => {
-          if (e.type === "MCP:CONNECTION_ERROR") {
-            return `${e.type}: ${e.data.error}`;
-          } else if (e.type === "MCP:OAUTH_REQUIRED") {
-            return `${e.type}: OAuth required - ${e.data.oauthUrl}`;
-          } else {
-            return e.type;
-          }
-        })
-        .join("; ");
+    if (result.success) {
+      if (result.data.manager) {
+        return {
+          __addAgentCoreEvents: result.data.events,
+          success: true,
+          message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
+        };
+      }
+      if (result.data.events) {
+        const eventTypes = result.data.events.map((e) => e.type);
+        if (eventTypes.includes("MCP:OAUTH_REQUIRED")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: true,
+            message: `MCP server requires OAuth.`,
+          };
+        }
+        if (eventTypes.includes("MCP:PARAMS_REQUIRED")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: true,
+            message: `MCP server requires additional inputs from the user.`,
+          };
+        }
+        if (eventTypes.includes("MCP:CONNECTION_ERROR")) {
+          return {
+            __addAgentCoreEvents: result.data.events,
+            success: false,
+            message: `Failed to add MCP server.`,
+          };
+        }
+      }
+    }
 
+    if (!result.success && result.error) {
       return {
-        __addAgentCoreEvents: events,
         success: false,
-        message: `Failed to add MCP server: ${input.serverUrl}. Details: ${errorDetails}`,
-        addedMcpServer: mcpServer,
+        message: `Failed to add MCP server: ${input.serverUrl}. ${result.error}`,
       };
     }
 
     return {
-      __addAgentCoreEvents: events,
-      success: true,
-      message: `Successfully added MCP server: ${input.serverUrl}. This means you don't need to ask the user for any extra inputs can start using the tools from this server.`,
-      addedMcpServer: mcpServer,
+      success: false,
+      message: `Something went wrong while adding MCP server - you should never see this message.`,
     };
   }
 
@@ -1159,6 +1216,67 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         author: r.author,
       })),
       totalResults: result.results.length,
+    };
+  }
+
+  async generateImage(input: Inputs["generateImage"]) {
+    const replicate = new Replicate({ auth: env.REPLICATE_API_TOKEN, useFileOutput: false });
+
+    // Because we set useFileOutput to false above, this will return an array of URLs
+    const replicateResponse = await replicate.run(input.model, {
+      input: {
+        prompt: input.prompt,
+        quality: input.quality,
+        background: input.background,
+        output_format: "png",
+        openai_api_key: env.OPENAI_API_KEY,
+        input_images: input.inputImages,
+        ...input.overrideReplicateParams,
+      },
+    });
+
+    // I'm not 100% sure if other replicate models will have a different response format.
+    // Just in case, I'm returning the replicate response verbatim to the agent in case it's not an array of URLs.
+    if (
+      !Array.isArray(replicateResponse) ||
+      !replicateResponse.every((url) => typeof url === "string" && url.startsWith("https://"))
+    ) {
+      console.warn(
+        "Replicate API returned non-array response or array contains non-string values",
+        replicateResponse,
+      );
+      return replicateResponse;
+    }
+
+    // If replicate returns an array of URLs, upload them and return CORE:FILE_SHARED events
+    // That way the multimodal LLM can "see" the images
+    const now = Date.now();
+    const fileSharedEvents = await Promise.all(
+      replicateResponse.map(async (url: string, index: number) => {
+        const fileRecord = await uploadFileFromURL({
+          url,
+          filename: `generated-image-${now}-${index}.png`,
+          estateId: this.databaseRecord.estateId,
+          db: this.db,
+        });
+        return {
+          type: "CORE:FILE_SHARED",
+          data: {
+            direction: "from-agent-to-user",
+            iterateFileId: fileRecord.id,
+            openAIFileId: fileRecord.openAIFileId,
+            mimeType: fileRecord.mimeType,
+          },
+          openAIFileId: fileRecord.openAIFileId,
+          mimeType: fileRecord.mimeType,
+        };
+      }),
+    );
+
+    return {
+      success: true,
+      numberOfImagesGenerated: replicateResponse.length,
+      __addAgentCoreEvents: fileSharedEvents,
     };
   }
 }

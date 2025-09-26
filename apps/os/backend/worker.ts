@@ -17,6 +17,7 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
+import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -84,7 +85,16 @@ app.all("/api/trpc/*", (c) => {
     router: appRouter,
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
-    onError: (opts) => console.error("TRPC error:", opts.error),
+    onError: ({ path, error, type, input }) => {
+      console.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
+        type,
+        code: error.code,
+        message: error.message,
+        cause: error.cause,
+        input,
+        stack: error.stack,
+      });
+    },
   });
 });
 
@@ -99,11 +109,13 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
 
 app.post("/api/estate/:estateId/files", uploadFileHandler);
 app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
-app.get("/api/estate/:estateId/files/:id", getFileHandler);
+
+app.get("/api/files/:id", getFileHandler);
 
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
+app.route("/api/build", buildCallbackApp);
 
 // WebSocket endpoint for organization connections
 app.get("/api/ws/:organizationId", async (c) => {

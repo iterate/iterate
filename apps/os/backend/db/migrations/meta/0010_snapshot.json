@@ -1,5 +1,5 @@
 {
-  "id": "50842ff0-3eca-4f9e-b709-037a18e98b4b",
+  "id": "d2fba511-1fc4-4e77-8394-9577395e5d55",
   "prevId": "bedbd7f0-4588-404e-aded-c5d1fef853b4",
   "version": "7",
   "dialect": "postgresql",
@@ -704,6 +704,133 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
+    "public.mcp_connection_param": {
+      "name": "mcp_connection_param",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "connection_key": {
+          "name": "connection_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estate_id": {
+          "name": "estate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "param_key": {
+          "name": "param_key",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "param_value": {
+          "name": "param_value",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "param_type": {
+          "name": "param_type",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "mcp_connection_param_estate_id_connection_key_param_key_param_type_index": {
+          "name": "mcp_connection_param_estate_id_connection_key_param_key_param_type_index",
+          "columns": [
+            {
+              "expression": "estate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "connection_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "param_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "param_type",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mcp_connection_param_estate_id_index": {
+          "name": "mcp_connection_param_estate_id_index",
+          "columns": [
+            {
+              "expression": "estate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "mcp_connection_param_connection_key_index": {
+          "name": "mcp_connection_param_connection_key_index",
+          "columns": [
+            {
+              "expression": "connection_key",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
     "public.organization": {
       "name": "organization",
       "schema": "",
@@ -995,12 +1122,6 @@
           "primaryKey": false,
           "notNull": true
         },
-        "impersonated_by": {
-          "name": "impersonated_by",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -1194,31 +1315,6 @@
         "image": {
           "name": "image",
           "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "role": {
-          "name": "role",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "default": "'user'"
-        },
-        "banned": {
-          "name": "banned",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ban_reason": {
-          "name": "ban_reason",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "ban_expires": {
-          "name": "ban_expires",
-          "type": "timestamp",
           "primaryKey": false,
           "notNull": false
         },

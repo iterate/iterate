@@ -56,22 +56,43 @@ export const SlackUpdateSliceStateInput = z.object({
   ...slackUpdateSliceStateFields,
 });
 
+// SLACK:UPDATE_TYPING_STATUS
+export const slackUpdateTypingStatusFields = {
+  type: z.literal("SLACK:UPDATE_TYPING_STATUS"),
+  data: z.object({
+    status: z.string().nullable(),
+  }),
+};
+
+export const SlackUpdateTypingStatus = z.object({
+  ...agentCoreBaseEventFields,
+  ...slackUpdateTypingStatusFields,
+});
+
+export const SlackUpdateTypingStatusInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...slackUpdateTypingStatusFields,
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const SlackSliceEvent = z.discriminatedUnion("type", [
   SlackWebhookEventReceived,
   SlackUpdateSliceState,
+  SlackUpdateTypingStatus,
 ]);
 
 export const SlackEventInput = z.discriminatedUnion("type", [
   SlackWebhookEventReceivedInput,
   SlackUpdateSliceStateInput,
+  SlackUpdateTypingStatusInput,
 ]);
 
 // ------------------------- Types -------------------------
 
 export type SlackWebhookEventReceived = z.infer<typeof SlackWebhookEventReceived>;
 export type SlackUpdateSliceState = z.infer<typeof SlackUpdateSliceState>;
+export type SlackUpdateTypingStatus = z.infer<typeof SlackUpdateTypingStatus>;
 export type SlackSliceEvent = z.infer<typeof SlackSliceEvent>;
 export type SlackSliceEventInput = z.input<typeof SlackEventInput>;
 
@@ -79,6 +100,7 @@ export interface SlackSliceState {
   slackThreadId?: string | null;
   slackChannelId?: string | null;
   botUserId?: string;
+  typingIndicatorStatus?: string | null;
 }
 
 export interface SlackSliceDeps {}
@@ -96,6 +118,7 @@ export const slackSlice = defineAgentCoreSlice<{
     slackThreadId: undefined,
     slackChannelId: undefined,
     botUserId: undefined,
+    typingIndicatorStatus: null,
   },
   reduce(state, _deps, event) {
     const next = { ...state };
@@ -108,6 +131,11 @@ export const slackSlice = defineAgentCoreSlice<{
         if (event.data.slackThreadId !== undefined) {
           next.slackThreadId = event.data.slackThreadId;
         }
+        break;
+      }
+
+      case "SLACK:UPDATE_TYPING_STATUS": {
+        next.typingIndicatorStatus = event.data.status;
         break;
       }
 

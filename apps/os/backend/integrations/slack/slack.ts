@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
 import { WebClient, type UsersListResponse } from "@slack/web-api";
@@ -38,8 +39,35 @@ async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string })
 
 slackApp.post("/webhook", async (c) => {
   const db = getDb();
-  // TODO we need to verify the webhook signature - once we've done that, I think we can do the type assertion safely
-  const body = (await c.req.json()) as SlackWebhookPayload;
+
+  // Get raw request body for signature verification
+  const rawBody = await c.req.text();
+  const signature = c.req.header("x-slack-signature");
+  const requestTimestamp = c.req.header("x-slack-request-timestamp");
+  if (!signature || !requestTimestamp) {
+    return c.text("Slack webhook received without required signature headers", 400);
+  }
+  const signingSecret = c.env.SLACK_SIGNING_SECRET;
+  if (!signingSecret) {
+    return c.text("SLACK_SIGNING_SECRET not configured", 500);
+  }
+  const verification = verifySlackRequest({
+    signingSecret,
+    body: rawBody,
+    headers: {
+      "x-slack-signature": signature,
+      "x-slack-request-timestamp": requestTimestamp,
+    },
+  });
+  if (!verification.success) {
+    return c.text(
+      verification.errorMessage ?? "Slack webhook signature verification failed",
+      verification.httpStatusCode,
+    );
+  }
+
+  // Parse the verified body
+  const body = JSON.parse(rawBody) as SlackWebhookPayload;
   // Slack types say this doesn't exist but it was here in v1...
   if ("type" in body && body.type === "url_verification" && "challenge" in body) {
     return c.text(body.challenge as string);
@@ -57,10 +85,10 @@ slackApp.post("/webhook", async (c) => {
   ]);
 
   if (!estateId) {
-    console.warn(
-      `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
-      body,
-    );
+    // console.warn(
+    //   `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
+    //   body,
+    // );
     return c.text("ok");
   }
 
@@ -93,13 +121,10 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  const routingKey = await getRoutingKey({
-    payload: body,
+  const routingKey = getRoutingKey({
     estateId: estateId,
     threadTs: messageMetadata.threadTs,
   });
-
-  const durableObjectName = `SlackAgent-${routingKey}`;
 
   // look up in the database to get all the agents by routing key
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
@@ -124,14 +149,13 @@ slackApp.post("/webhook", async (c) => {
         : false;
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
     if (!isBotMentioned && !isDM) {
-      console.log("IGNORING WEBHOOK EVENT BECAUSE BOT IS NOT MENTIONED OR IT'S NOT A DM");
       return c.text("ok");
     }
   }
+
   const agentStub = await SlackAgent.getOrCreateStubByRoute({
     db,
     estateId,
-    agentInstanceName: durableObjectName,
     route: routingKey,
     reason: "Slack webhook received",
   });
@@ -340,19 +364,8 @@ slackApp.post("/webhook", async (c) => {
 //   }
 // }
 
-async function getRoutingKey({
-  payload,
-  estateId,
-  threadTs,
-}: {
-  payload: SlackWebhookPayload;
-  estateId: string;
-  threadTs: string;
-}) {
-  if (!payload.event || !payload.team_id) {
-    throw new Error("No event or team_id found in slack webhook payload");
-  }
-  const suffix = `slack-${estateId}-team-${payload.team_id}`;
+export function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
+  const suffix = `slack-${estateId}`;
   return `ts-${threadTs}-${suffix}`;
 }
 
@@ -472,4 +485,74 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string) {
       }),
     );
   }
+}
+
+/**
+ * Verifies the signature of an incoming request from Slack.
+ * Returns a structured result and avoids throwing for control flow.
+ */
+export function verifySlackRequest(options: {
+  signingSecret: string;
+  body: string;
+  headers: {
+    "x-slack-signature": string;
+    "x-slack-request-timestamp": number | string;
+  };
+  nowMilliseconds?: number;
+}): { success: true } | { success: false; httpStatusCode: 400 | 401; errorMessage: string } {
+  const verifyErrorPrefix = "Slack request verification";
+  const requestTimestampRaw = options.headers["x-slack-request-timestamp"];
+  const requestTimestampSec =
+    typeof requestTimestampRaw === "string"
+      ? parseInt(requestTimestampRaw, 10)
+      : requestTimestampRaw;
+  const signature = options.headers["x-slack-signature"];
+
+  if (Number.isNaN(requestTimestampSec)) {
+    return {
+      success: false,
+      httpStatusCode: 400,
+      errorMessage: `${verifyErrorPrefix}: header x-slack-request-timestamp did not have the expected type (${requestTimestampRaw})`,
+    };
+  }
+
+  // Calculate time-dependent values
+  const nowMs = options.nowMilliseconds ?? Date.now();
+  const requestTimestampMaxDeltaMin = 5;
+  const fiveMinutesAgoSec = Math.floor(nowMs / 1000) - 60 * requestTimestampMaxDeltaMin;
+
+  // Rule 1: Check staleness
+  if (requestTimestampSec < fiveMinutesAgoSec) {
+    return {
+      success: false,
+      httpStatusCode: 401,
+      errorMessage: `${verifyErrorPrefix}: x-slack-request-timestamp must differ from system time by no more than ${requestTimestampMaxDeltaMin} minutes or request is stale`,
+    };
+  }
+
+  // Rule 2: Check signature
+  const [signatureVersion, signatureHash] = signature.split("=");
+  if (signatureVersion !== "v0") {
+    return {
+      success: false,
+      httpStatusCode: 401,
+      errorMessage: `${verifyErrorPrefix}: unknown signature version`,
+    };
+  }
+
+  const hmac = createHmac("sha256", options.signingSecret);
+  hmac.update(`${signatureVersion}:${requestTimestampSec}:${options.body}`);
+  const ourSignatureHash = hmac.digest("hex");
+  if (
+    !signatureHash ||
+    !timingSafeEqual(Buffer.from(signatureHash), Buffer.from(ourSignatureHash))
+  ) {
+    return {
+      success: false,
+      httpStatusCode: 401,
+      errorMessage: `${verifyErrorPrefix}: signature mismatch`,
+    };
+  }
+
+  return { success: true };
 }

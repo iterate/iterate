@@ -1,6 +1,4 @@
 import { CheckCircle, ArrowRight } from "lucide-react";
-import { toast } from "sonner";
-import { useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import {
@@ -10,9 +8,7 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
-import { authClient } from "../lib/auth-client.ts";
-import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "../hooks/use-estate.ts";
+import { useSlackConnection } from "../hooks/use-slack-connection.ts";
 import type { Route } from "./+types/home";
 
 export function meta(_args: Route.MetaArgs) {
@@ -23,37 +19,14 @@ export function meta(_args: Route.MetaArgs) {
 }
 
 function ConnectSlackCard() {
-  const estateId = useEstateId();
-  const trpc = useTRPC();
-  const { data: integrations } = useSuspenseQuery(
-    trpc.integrations.list.queryOptions({ estateId: estateId }),
-  );
-
-  // Check if Slack bot is connected at the estate level
-  const slackBotIntegration = integrations.find((i) => i.id === "slack-bot");
-  const isConnected = slackBotIntegration?.isConnected || false;
+  const { isConnected, connectSlackBot, openSlackApp } = useSlackConnection();
 
   const handleConnectSlack = async () => {
-    if (!estateId) {
-      toast.error("Unable to get estate information");
-      return;
-    }
-
-    const result = await authClient.integrations.link.slackBot({
-      estateId: estateId,
-      callbackURL: window.location.pathname + "?success=true",
-    });
-
-    if (result.error) {
-      toast.error(result.error.message);
-    } else {
-      window.location.href = result.data.url.toString();
-    }
+    await connectSlackBot();
   };
 
   const handleGoToSlack = () => {
-    // Open Slack
-    window.open("slack://open", "_blank");
+    openSlackApp();
   };
 
   return (

@@ -57,20 +57,24 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable("account", (t) => ({
-  id: iterateId("acc"),
-  accountId: t.text().notNull(),
-  providerId: t.text().notNull(),
-  userId: t.text().notNull(),
-  accessToken: t.text(),
-  refreshToken: t.text(),
-  idToken: t.text(),
-  accessTokenExpiresAt: t.timestamp(),
-  refreshTokenExpiresAt: t.timestamp(),
-  scope: t.text(),
-  password: t.text(),
-  ...withTimestamps,
-}));
+export const account = pgTable(
+  "account",
+  (t) => ({
+    id: iterateId("acc"),
+    accountId: t.text().notNull(),
+    providerId: t.text().notNull(),
+    userId: t.text().notNull(),
+    accessToken: t.text(),
+    refreshToken: t.text(),
+    idToken: t.text(),
+    accessTokenExpiresAt: t.timestamp(),
+    refreshTokenExpiresAt: t.timestamp(),
+    scope: t.text(),
+    password: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.providerId, t.userId)],
+);
 export const accountRelations = relations(account, ({ one, many }) => ({
   user: one(user, {
     fields: [account.userId],
@@ -94,11 +98,12 @@ export const dynamicClientInfo = pgTable(
   (t) => ({
     id: iterateId("dci"),
     providerId: t.text().notNull(),
+    userId: t.text().notNull(),
     clientId: t.text().notNull(),
     clientInfo: t.jsonb().$type<DynamicClientInfo>().notNull(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.providerId, t.clientId)],
+  (t) => [uniqueIndex().on(t.providerId, t.userId)],
 );
 
 export const files = pgTable("files", (t) => ({
@@ -142,6 +147,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   slackWebhookEvents: many(slackWebhookEvent),
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
+  mcpConnectionParam: many(mcpConnectionParam),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -350,6 +356,31 @@ export const builds = pgTable("builds", (t) => ({
 export const buildsRelations = relations(builds, ({ one }) => ({
   estate: one(estate, {
     fields: [builds.estateId],
+    references: [estate.id],
+  }),
+}));
+
+export const mcpConnectionParam = pgTable(
+  "mcp_connection_param",
+  (t) => ({
+    id: iterateId("mcp"),
+    connectionKey: t.text().notNull(),
+    estateId: t.text().notNull(),
+    paramKey: t.text().notNull(),
+    paramValue: t.text().notNull(),
+    paramType: t.text({ enum: ["header", "query_param"] }).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType),
+    index().on(t.estateId),
+    index().on(t.connectionKey),
+  ],
+);
+
+export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one }) => ({
+  estate: one(estate, {
+    fields: [mcpConnectionParam.estateId],
     references: [estate.id],
   }),
 }));

@@ -7,6 +7,7 @@ import type { Variables } from "../../worker";
 import * as schema from "../../db/schema.ts";
 import { runConfigInSandbox } from "../../sandbox/run-config.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
+import { signUrl } from "../../utils/url-signing.ts";
 import {
   validateGithubWebhookSignature,
   getEstateByRepoId,
@@ -80,7 +81,14 @@ githubApp.get(
     if (!userAccessTokenRes.ok) {
       return c.json({ error: "Failed to get user access token" }, 400);
     }
-    const userAccessTokenData = UserAccessTokenResponse.parse(await userAccessTokenRes.json());
+    let userAccessTokenData;
+    const data = await userAccessTokenRes.json();
+    try {
+      userAccessTokenData = UserAccessTokenResponse.parse(data);
+    } catch (error) {
+      console.log("Failed to parse user access token", data, error);
+      return c.json({ error: "Failed to get user access token" }, 400);
+    }
 
     const installationInfoRes = await fetch(`https://api.github.com/user/installations`, {
       headers: {
@@ -256,72 +264,65 @@ githubApp.post("/webhook", async (c) => {
       return c.json({ error: "Repository URL not found" }, 400);
     }
 
-    // Run the configuration in the sandbox
+    // Generate a signed callback URL
+    let baseUrl = new URL(c.req.url).origin.replace("os.iterate.com", "os.iterateproxy.com");
+    if (baseUrl.includes("localhost")) {
+      baseUrl = `https://${c.env.ITERATE_USER}.dev.iterate.com`;
+    }
+    const callbackUrl = await signUrl(
+      `${baseUrl}/api/build/callback`,
+      c.env.EXPIRING_URLS_SIGNING_KEY,
+      3600, // 1 hour expiration
+    );
+
+    // Run the configuration in the sandbox with callback
     const result = await runConfigInSandbox(c.env, {
       githubRepoUrl: repoUrl,
       githubToken: installationToken,
       branch: estate.connectedRepoRef || "main",
       commitHash,
       workingDirectory: estate.connectedRepoPath || undefined,
+      callbackUrl,
+      buildId: build.id,
+      estateId: estate.id,
     });
 
-    // Determine build status based on result
-    const buildStatus = "error" in result ? "failed" : "complete";
-    const output =
-      "error" in result ? { stderr: result.error, details: result.details } : result.output;
+    // When using callback, the build is handled asynchronously
+    // The callback endpoint will handle updating the build status and iterate config
+    if ("error" in result) {
+      // If there was an immediate error (e.g., sandbox not available), update the build
+      await c.var.db
+        .update(schema.builds)
+        .set({
+          status: "failed",
+          completedAt: new Date(),
+          output: { stderr: result.details ? `${result.error}: ${result.details}` : result.error },
+        })
+        .where(eq(schema.builds.id, build.id));
 
-    // Update the build log with the result
-    await c.var.db
-      .update(schema.builds)
-      .set({
-        status: buildStatus,
-        completedAt: new Date(),
-        output,
-      })
-      .where(eq(schema.builds.id, build.id));
+      // Invalidate organization queries to show the failed build
+      if (estateWithOrg?.organization) {
+        await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
+          type: "INVALIDATE",
+          invalidateInfo: {
+            type: "TRPC_QUERY",
+            paths: ["estate.getBuilds"],
+          },
+        });
+      }
 
-    // Invalidate organization queries to show the completed/failed build
-    // (We already have estateWithOrg from earlier)
-    if (estateWithOrg?.organization) {
-      await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
-        type: "INVALIDATE",
-        invalidateInfo: {
-          type: "TRPC_QUERY",
-          paths: ["estate.getBuilds"],
-        },
+      return c.json({
+        message: "Build failed to start",
+        buildId: build.id,
+        status: "failed",
       });
     }
 
-    // Store the configuration in the iterateConfig table if successful
-    if (buildStatus === "complete" && "stdout" in output && output.stdout) {
-      try {
-        // Parse the output to extract the configuration
-        const configData = JSON.parse(output.stdout);
-
-        // Upsert the config - always overwrite if it exists
-        await c.var.db
-          .insert(schema.iterateConfig)
-          .values({
-            config: configData,
-            estateId: estate.id,
-          })
-          .onConflictDoUpdate({
-            target: schema.iterateConfig.estateId,
-            set: {
-              config: configData,
-            },
-          });
-      } catch (parseError) {
-        console.error("Failed to parse configuration output:", parseError);
-        // The build succeeded but we couldn't parse the config
-        // This is logged but not treated as a build failure
-      }
-    }
-
+    // Build started successfully, results will be sent to callback
     return c.json({
-      message: "Webhook processed",
+      message: "Build started, results will be sent via callback",
       buildId: build.id,
-      status: buildStatus,
+      status: "in_progress",
     });
   } catch (error) {
     console.error("GitHub webhook error:", error);

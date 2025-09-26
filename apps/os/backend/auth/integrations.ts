@@ -18,12 +18,12 @@ import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
+  "app_mentions:read",
   "channels:history",
   "channels:join",
   "channels:read",
   "chat:write",
   "chat:write.public",
-  "commands",
   "files:read",
   "files:write",
   "groups:history",
@@ -31,11 +31,8 @@ export const SLACK_BOT_SCOPES = [
   "im:history",
   "im:read",
   "im:write",
-  "im:write.topic",
   "mpim:history",
   "mpim:read",
-  "mpim:write",
-  "mpim:write.topic",
   "reactions:read",
   "reactions:write",
   "users.profile:read",
@@ -154,7 +151,7 @@ export const integrationsPlugin = () =>
                   mode: state.userId ? "personal" : "company",
                   userId: state.userId,
                   integrationSlug: state.integrationSlug,
-                  requiresAuth: true,
+                  requiresOAuth: true,
                   reconnect: {
                     oauthClientId: state.clientId,
                     oauthCode: code,
@@ -175,9 +172,9 @@ export const integrationsPlugin = () =>
       directLoginWithSlack: createAuthEndpoint(
         "/integrations/direct-login-with-slack",
         {
-          method: "POST",
-          body: z.object({
-            callbackURL: z.string(),
+          method: "GET",
+          query: z.object({
+            callbackURL: z.string().default("/"),
           }),
         },
         async (ctx) => {
@@ -185,7 +182,7 @@ export const integrationsPlugin = () =>
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
           const data = JSON.stringify({
-            callbackURL: ctx.body.callbackURL,
+            callbackURL: ctx.query.callbackURL,
           });
 
           await ctx.context.internalAdapter.createVerificationValue({
@@ -419,6 +416,38 @@ export const integrationsPlugin = () =>
 
             waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
 
+            const existingSlackTeam = await db.query.providerEstateMapping.findFirst({
+              where: and(
+                eq(schema.providerEstateMapping.providerId, "slack-bot"),
+                eq(schema.providerEstateMapping.externalId, tokens.team?.id),
+              ),
+              columns: {},
+              with: {
+                internalEstate: {
+                  columns: {
+                    id: true,
+                  },
+                  with: {
+                    organization: {
+                      columns: {
+                        id: true,
+                      },
+                    },
+                  },
+                },
+              },
+            });
+
+            // If the slack team is already linked to an estate, add the user to that estate too
+            if (existingSlackTeam) {
+              await db.insert(schema.organizationUserMembership).values({
+                organizationId: existingSlackTeam?.internalEstate.organization.id,
+                userId: user.id,
+                role: "member",
+              });
+              estateId = existingSlackTeam?.internalEstate.id;
+            }
+
             // When a user is created, an estate and organization is created automatically via hooks
             // SO we can be sure that the user has only that estate
             const memberships = await db.query.organizationUserMembership.findFirst({
@@ -451,7 +480,10 @@ export const integrationsPlugin = () =>
               user,
             });
 
-            estateId = memberships.organization.estates[0].id;
+            // If the estate id is not set, set it to the first estate in the organization
+            if (!estateId) {
+              estateId = memberships.organization.estates[0].id;
+            }
           } else {
             const linkedUser = await ctx.context.internalAdapter.findUserByEmail(link.email);
             if (!linkedUser) {

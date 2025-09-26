@@ -60,11 +60,12 @@ describe("mcp-slice", () => {
     serverName: "GitHub",
     mode: "company" as const,
     integrationSlug: "github",
+    userId: "user123",
     tools: [],
     prompts: [],
     resources: [],
     connectedAt: "2024-01-01T00:00:00.000Z",
-    requiresAuth: true,
+    requiresOAuth: true,
     ...overrides,
   });
 
@@ -119,7 +120,7 @@ describe("mcp-slice", () => {
             mode: "personal",
             userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
           metadata: {},
@@ -151,7 +152,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
           metadata: {},
           triggerLLMRequest: false,
@@ -266,7 +267,6 @@ describe("mcp-slice", () => {
 
       const state = h.agentCore.state as any;
       expect(state.mcpConnections).toEqual({});
-      expect(state.pendingConnections).toEqual([]);
     });
 
     describe("MCP:CONNECT_REQUEST", () => {
@@ -292,7 +292,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -302,44 +302,15 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
 
         const state = h.agentCore.state as any;
         expect(state.mcpConnections).not.toHaveProperty(connectionKey);
-        expect(state.pendingConnections).toContain(connectionKey);
-      });
-
-      test1("should not duplicate pending connections", async ({ h }) => {
-        await h.initializeAgent();
-
-        // Add same connection request twice
-        const connectData = {
-          serverUrl: "https://github.com/mcp",
-          mode: "company" as const,
-          integrationSlug: "github",
-          requiresAuth: true,
-          triggerLLMRequestOnEstablishedConnection: false,
-        };
-
-        await h.agentCore.addEvent({
-          type: "MCP:CONNECT_REQUEST",
-          data: connectData,
-        });
-
-        await h.agentCore.addEvent({
-          type: "MCP:CONNECT_REQUEST",
-          data: connectData,
-        });
-
-        const state = h.agentCore.state as any;
-        const connectionKey = "https://github.com/mcp::company";
-        expect(
-          state.pendingConnections.filter((key: string) => key === connectionKey),
-        ).toHaveLength(1);
       });
     });
 
@@ -377,8 +348,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -404,7 +376,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -417,7 +389,6 @@ describe("mcp-slice", () => {
           integrationSlug: "github",
           isConnected: true,
         });
-        expect(state.pendingConnections).not.toContain(connectionKey);
 
         // Should add developer message
         const devMessages = state.inputItems.filter(
@@ -448,14 +419,12 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
-
-        const beforeState = h.agentCore.state as any;
-        expect(beforeState.pendingConnections).toContain(connectionKey);
 
         await h.agentCore.addEvent({
           type: "MCP:CONNECTION_ESTABLISHED",
@@ -469,7 +438,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
           triggerLLMRequest: false, // Event doesn't trigger, but reducer should
         });
@@ -478,59 +447,6 @@ describe("mcp-slice", () => {
         const events = h.getEvents();
         const llmStartEvents = events.filter((e: any) => e.type === "CORE:LLM_REQUEST_START");
         expect(llmStartEvents).toHaveLength(1);
-      });
-
-      test2("should not trigger LLM when pending connections remain", async ({ h }) => {
-        await h.initializeAgent();
-
-        // Add two pending connections
-        await h.agentCore.addEvent({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            serverUrl: "https://github.com/mcp",
-            mode: "company" as const,
-            integrationSlug: "github",
-            requiresAuth: true,
-            triggerLLMRequestOnEstablishedConnection: false,
-          },
-        });
-
-        await h.agentCore.addEvent({
-          type: "MCP:CONNECT_REQUEST",
-          data: {
-            serverUrl: "https://slack.com/mcp",
-            mode: "company" as const,
-            integrationSlug: "slack",
-            requiresAuth: true,
-            triggerLLMRequestOnEstablishedConnection: false,
-          },
-        });
-
-        // Establish only one connection
-        await h.agentCore.addEvent({
-          type: "MCP:CONNECTION_ESTABLISHED",
-          data: {
-            connectionKey: "https://github.com/mcp::company",
-            serverId: "server-123",
-            serverUrl: "https://github.com/mcp",
-            serverName: "GitHub",
-            mode: "company" as const,
-            integrationSlug: "github",
-            tools: [],
-            prompts: [],
-            resources: [],
-            requiresAuth: true,
-          },
-          triggerLLMRequest: false,
-        });
-
-        // Should not trigger LLM because slack connection is still pending
-        const events = h.getEvents();
-        const llmStartEvents = events.filter((e: any) => e.type === "CORE:LLM_REQUEST_START");
-        expect(llmStartEvents).toHaveLength(0);
-
-        const state = h.agentCore.state as any;
-        expect(state.pendingConnections).toContain("https://slack.com/mcp::company");
       });
     });
 
@@ -578,7 +494,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -666,7 +582,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -785,8 +701,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -805,7 +722,6 @@ describe("mcp-slice", () => {
 
         const state = h.agentCore.state as any;
         expect(state.mcpConnections).not.toHaveProperty(connectionKey);
-        expect(state.pendingConnections).not.toContain(connectionKey);
 
         // Should add error message
         const devMessages = state.inputItems.filter(
@@ -827,8 +743,9 @@ describe("mcp-slice", () => {
           data: {
             serverUrl: "https://github.com/mcp",
             mode: "company" as const,
+            userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -869,7 +786,7 @@ describe("mcp-slice", () => {
             mode: "personal" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresAuth: true,
+            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -898,7 +815,6 @@ describe("mcp-slice", () => {
           prompts: [],
           resources: [],
         });
-        expect(state.pendingConnections).not.toContain(connectionKey);
 
         // Should add OAuth message
         const devMessages = state.inputItems.filter(
@@ -947,7 +863,7 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1028,7 +944,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1081,7 +997,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1141,8 +1057,9 @@ describe("mcp-slice", () => {
             data: {
               serverUrl: "https://github.com/mcp",
               mode: "company" as const,
+              userId: "user123",
               integrationSlug: "github",
-              requiresAuth: true,
+              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1159,8 +1076,9 @@ describe("mcp-slice", () => {
             data: {
               serverUrl: "https://github.com/mcp",
               mode: "company" as const,
+              userId: "user123",
               integrationSlug: "github",
-              requiresAuth: true,
+              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1176,18 +1094,17 @@ describe("mcp-slice", () => {
               tools: [],
               prompts: [],
               resources: [],
-              requiresAuth: true,
+              requiresOAuth: true,
             },
           },
         ];
 
         for (const event of events) {
-          await h.agentCore.addEvent(event);
+          h.agentCore.addEvent(event);
         }
 
         const finalState = h.agentCore.state as any;
         expect(finalState.mcpConnections).toHaveProperty("https://github.com/mcp::company");
-        expect(finalState.pendingConnections).toEqual([]);
 
         // Should have error message and success message
         const devMessages = finalState.inputItems.filter(
@@ -1241,7 +1158,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1290,7 +1207,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1348,7 +1265,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 
@@ -1405,7 +1322,7 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresAuth: true,
+            requiresOAuth: true,
           },
         });
 

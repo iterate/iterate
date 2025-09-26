@@ -1,7 +1,8 @@
 import { z } from "zod";
-import { eq, and, inArray } from "drizzle-orm";
+import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
+import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
@@ -11,6 +12,14 @@ import {
   getGithubRepoForEstate,
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
+import { IterateAgent } from "../../agent/iterate-agent.ts";
+import { SlackAgent } from "../../agent/slack-agent.ts";
+import { MCPParam } from "../../agent/tool-schemas.ts";
+import {
+  getGithubUserAccessTokenForEstate,
+  getSlackAccessTokenForEstate,
+} from "../../auth/token-utils.ts";
+import { getRoutingKey } from "../../integrations/slack/slack.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -76,6 +85,7 @@ export const integrationsRouter = router({
 
     // Add estate-wide accounts
     estateAccounts.forEach(({ account: acc_item }) => {
+      if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
       }
@@ -87,6 +97,7 @@ export const integrationsRouter = router({
 
     // Add personal accounts (only if not already in estate-wide)
     personalAccounts.forEach((acc_item) => {
+      if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
       }
@@ -271,8 +282,45 @@ export const integrationsRouter = router({
     const githubRepo = await getGithubRepoForEstate(ctx.db, estateId);
     if (!githubRepo) return null;
 
+    // Get the GitHub installation to fetch the repository details
+    const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+    let repoName: string | null = null;
+    let repoFullName: string | null = null;
+
+    if (githubInstallation) {
+      try {
+        const token = await getGithubInstallationToken(githubInstallation.accountId);
+
+        // Fetch repository details from GitHub API
+        const repoResponse = await fetch(
+          `https://api.github.com/repositories/${githubRepo.connectedRepoId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "User-Agent": "Iterate OS",
+              Accept: "application/vnd.github+json",
+            },
+          },
+        );
+
+        if (repoResponse.ok) {
+          const repoData = (await repoResponse.json()) as { name: string; full_name: string };
+          repoName = repoData.name;
+          repoFullName = repoData.full_name;
+        } else {
+          console.error(
+            `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
+          );
+        }
+      } catch (error) {
+        console.error("Error fetching repository details:", error);
+      }
+    }
+
     return {
       repoId: githubRepo.connectedRepoId,
+      repoName,
+      repoFullName,
       branch: githubRepo.connectedRepoRef || "main",
       path: githubRepo.connectedRepoPath || "/",
     };
@@ -472,6 +520,341 @@ export const integrationsRouter = router({
         estateDisconnected,
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
+      };
+    }),
+
+  saveMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+        params: z.array(
+          z.object({
+            key: z.string(),
+            value: z.string(),
+            type: z.enum(["header", "query_param"]),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, connectionKey, params } = input;
+
+      await ctx.db.transaction(async (tx) => {
+        if (params.length > 0) {
+          const paramValues = params.map((param) => ({
+            estateId,
+            connectionKey,
+            paramKey: param.key,
+            paramValue: param.value,
+            paramType: param.type,
+          }));
+
+          await tx
+            .insert(schemas.mcpConnectionParam)
+            .values(paramValues)
+            .onConflictDoUpdate({
+              target: [
+                schemas.mcpConnectionParam.estateId,
+                schemas.mcpConnectionParam.connectionKey,
+                schemas.mcpConnectionParam.paramKey,
+                schemas.mcpConnectionParam.paramType,
+              ],
+              set: {
+                paramValue: sql`excluded.param_value`,
+                updatedAt: new Date(),
+              },
+            });
+
+          const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
+          const existingParams = await tx.query.mcpConnectionParam.findMany({
+            where: and(
+              eq(schemas.mcpConnectionParam.estateId, estateId),
+              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+            ),
+          });
+
+          const paramsToDelete = existingParams.filter(
+            (existing) => !currentParamKeys.includes(`${existing.paramKey}:${existing.paramType}`),
+          );
+
+          if (paramsToDelete.length > 0) {
+            const idsToDelete = paramsToDelete.map((p) => p.id);
+            await tx
+              .delete(schemas.mcpConnectionParam)
+              .where(inArray(schemas.mcpConnectionParam.id, idsToDelete));
+          }
+        } else {
+          await tx
+            .delete(schemas.mcpConnectionParam)
+            .where(
+              and(
+                eq(schemas.mcpConnectionParam.estateId, estateId),
+                eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+              ),
+            );
+        }
+      });
+
+      return { success: true };
+    }),
+
+  getMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, connectionKey } = input;
+      const params = await ctx.db.query.mcpConnectionParam.findMany({
+        where: and(
+          eq(schemas.mcpConnectionParam.estateId, estateId),
+          eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+        ),
+      });
+      return params.map((param) => ({
+        key: param.paramKey,
+        value: param.paramValue,
+        type: param.paramType,
+      }));
+    }),
+
+  reconnectMCPServer: estateProtectedProcedure
+    .input(
+      z.object({
+        agentDurableObject: z.object({
+          durableObjectId: z.string(),
+          durableObjectName: z.string(),
+          className: z.string(),
+        }),
+        serverUrl: z.string(),
+        mode: z.enum(["personal", "company"]),
+        integrationSlug: z.string(),
+        requiresOAuth: z.boolean().optional(),
+        requiresParams: z.array(MCPParam).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const {
+        agentDurableObject,
+        serverUrl,
+        mode,
+        integrationSlug,
+        requiresOAuth,
+        requiresParams,
+      } = input;
+      const params = {
+        db: ctx.db,
+        agentInstanceName: agentDurableObject.durableObjectName,
+      };
+
+      const agentStub =
+        agentDurableObject.className === "SlackAgent"
+          ? await SlackAgent.getStubByName(params)
+          : await IterateAgent.getStubByName(params);
+
+      if (!agentStub) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to get agent stub for ${agentDurableObject.className}: ${agentDurableObject.durableObjectName}`,
+        });
+      }
+      await agentStub.addEvents([
+        {
+          type: "MCP:CONNECT_REQUEST",
+          data: {
+            serverUrl,
+            mode: mode,
+            userId: ctx.user.id,
+            integrationSlug,
+            requiresOAuth,
+            requiresParams,
+            triggerLLMRequestOnEstablishedConnection: false,
+          },
+        },
+      ]);
+
+      return { success: true };
+    }),
+  createTemplateRepo: estateProtectedProcedure
+    .input(
+      z.object({
+        repoName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, repoName } = input;
+      const { accessToken, installationId } = await getGithubUserAccessTokenForEstate(
+        ctx.db,
+        estateId,
+      ).catch((e) => {
+        console.log(e);
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message:
+            "Failed to get GitHub user access token, Pleased reconnect your GitHub account if this persists",
+        });
+      });
+
+      const githubJWT = await generateGithubJWT();
+      const installationInfoRes = await fetch(
+        `https://api.github.com/app/installations/${installationId}`,
+        {
+          headers: {
+            Authorization: `Bearer ${githubJWT}`,
+            "User-Agent": "Iterate OS",
+          },
+        },
+      );
+
+      if (!installationInfoRes.ok) {
+        console.log("Failed to get GitHub installation info", await installationInfoRes.text());
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to get GitHub installation info",
+        });
+      }
+
+      const installationInfoData = z
+        .object({ account: z.object({ login: z.string() }) })
+        .parse(await installationInfoRes.json());
+
+      const TEMPLATE_REPO_NAME = "iterate-com/estate-template";
+      const createRepoRes = await fetch(
+        `https://api.github.com/repos/${TEMPLATE_REPO_NAME}/generate`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "User-Agent": "Iterate OS",
+          },
+          body: JSON.stringify({
+            owner: installationInfoData.account.login,
+            name: repoName,
+            description: "Your iterate estate",
+            private: true,
+          }),
+        },
+      );
+
+      if (createRepoRes.status === 409) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Repository already exists, Please try a different name",
+        });
+      }
+
+      if (!createRepoRes.ok) {
+        console.error(await createRepoRes.text());
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create repository",
+        });
+      }
+
+      const repoRes = z.object({ id: z.number() }).parse(await createRepoRes.json());
+
+      await ctx.db
+        .update(schemas.estate)
+        .set({
+          connectedRepoId: repoRes.id,
+          connectedRepoRef: "main",
+          connectedRepoPath: "/",
+        })
+        .where(eq(schemas.estate.id, estateId));
+
+      return {
+        success: true,
+      };
+    }),
+
+  startThreadWithAgent: estateProtectedProcedure
+    .input(
+      z.object({
+        channel: z.string().describe("The Slack channel ID"),
+        firstMessage: z.string().optional().describe("The message text to send to Slack"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, channel, firstMessage } = input;
+
+      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
+      if (!accessToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack integration found for this estate",
+        });
+      }
+
+      const slackAPI = new WebClient(accessToken);
+
+      const chatResult = await slackAPI.chat.postMessage({
+        channel: channel,
+        text: firstMessage || "",
+      });
+      if (!chatResult.ok || !chatResult.ts) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to post message to Slack",
+        });
+      }
+
+      const routingKey = getRoutingKey({
+        estateId: estateId,
+        threadTs: chatResult.ts,
+      });
+
+      const slackAgent = (await SlackAgent.getOrCreateStubByRoute({
+        db: ctx.db,
+        estateId: estateId,
+        route: routingKey,
+        reason: "Start thread with agent",
+      })) as unknown as SlackAgent;
+
+      const events = await slackAgent.initSlack(channel, chatResult.ts);
+      await slackAgent.addEvents(events);
+
+      return {
+        success: true,
+        threadTs: chatResult.ts,
+      };
+    }),
+
+  listSlackChannels: estateProtectedProcedure
+    .input(
+      z.object({
+        types: z.string().optional().default("public_channel"),
+        excludeArchived: z.boolean().optional().default(true),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, types, excludeArchived } = input;
+
+      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
+      if (!accessToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack integration found for this estate",
+        });
+      }
+
+      const slackAPI = new WebClient(accessToken);
+      const result = await slackAPI.conversations.list({
+        types: types,
+        exclude_archived: excludeArchived,
+        limit: 999,
+      });
+
+      if (!result.ok) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to fetch channels from Slack",
+        });
+      }
+
+      return {
+        success: true,
+        channels: result.channels || [],
       };
     }),
 });

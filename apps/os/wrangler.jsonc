@@ -16,6 +16,11 @@
       "pattern": "os.iterate.com",
       "custom_domain": true,
     },
+    {
+      // We need this to call ourselves from the sandbox
+      "pattern": "os.iterateproxy.com",
+      "custom_domain": true,
+    },
   ],
   "r2_buckets": [
     {
@@ -35,6 +40,8 @@
       "class_name": "Sandbox",
       "image": "./backend/sandbox/Dockerfile",
       "instance_type": "standard",
+      "max_instances": 10,
+      "rollout_active_grace_period": 900,
     },
   ],
   "durable_objects": {

@@ -24,7 +24,9 @@ export function LoginProviders() {
     try {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
-        callbackURL: "/",
+        query: {
+          callbackURL: "/",
+        },
       });
 
       if (result.error || !result.data?.url) {

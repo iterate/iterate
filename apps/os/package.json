@@ -1,7 +1,7 @@
 {
   "name": "@iterate-com/os",
-  "private": true,
   "type": "module",
+  "version": "0.0.1",
   "exports": {
     "./sdk": "./sdk/index.ts"
   },
@@ -40,7 +40,7 @@
     "async-mutex": "^0.5.0",
     "better-auth": "^1.3.11",
     "better-sqlite3": "^12.4.1",
-    "braintrust": "^0.3.7",
+    "braintrust": "^0.3.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
@@ -62,7 +62,7 @@
     "p-suite": "^0.3.0",
     "partysocket": "^1.1.5",
     "postgres": "^3.4.7",
-    "posthog-node": "^5.8.4",
+    "posthog-node": "^5.8.6",
     "radix-ui": "^1.4.3",
     "react": "^19.1.1",
     "react-day-picker": "^9.10.0",
@@ -73,6 +73,7 @@
     "react-syntax-highlighter": "^15.6.6",
     "recharts": "2.15.4",
     "remeda": "^2.31.1",
+    "replicate": "^1.2.0",
     "sonner": "^2.0.7",
     "streamdown": "^1.3.0",
     "superjson": "^2.2.2",
@@ -105,6 +106,7 @@
     "drizzle-kit": "^0.31.4",
     "evalite": "0.11.5",
     "tailwindcss": "^4.1.13",
+    "tsdown": "^0.15.4",
     "tw-animate-css": "^1.3.8",
     "typescript": "^5.9.2",
     "vite": "^7.1.5",

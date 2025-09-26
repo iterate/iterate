@@ -46,7 +46,7 @@ export const slackAgentTools = defineDOTools({
         .default(false)
         .optional()
         .describe(
-          "Optional. Set this to end-turn only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+          "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
         ),
     }),
   },
@@ -69,7 +69,10 @@ export const slackAgentTools = defineDOTools({
       "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
     input: z.object({
       iterateFileId: z.string().describe("The Iterate file ID to upload"),
-      initialComment: z.string().optional().describe("Optional comment to include with the file"),
+      // If you allow the agent to provide a comment with the file, it will say something like "here's your file",
+      // and then again sendSlackMessage({ text: "here's your file", endTurn: true })
+      // TODO: Find a better solution to that prompting issue that doens't take away the ability to provide a comment with the file
+      // initialComment: z.string().optional().describe("Optional comment to include with the file"),
     }),
   },
   updateSlackMessage: {

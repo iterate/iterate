@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mcpManagerCache } from "./mcp-event-hooks.ts";
+import { mcpManagerCache, createCacheKey } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import {
   computeToolMapping,
@@ -14,6 +14,8 @@ vi.mock("./mcp-event-hooks.ts", () => ({
   mcpManagerCache: {
     managers: new Map(),
   },
+  createCacheKey: (durableObjectId: string, connectionKey: string) =>
+    `${durableObjectId}--${connectionKey}`,
 }));
 
 describe("mcp-tool-mapping", () => {
@@ -31,7 +33,7 @@ describe("mcp-tool-mapping", () => {
     serverId: string,
     mode: "personal" | "company",
     tools: MCPTool[],
-    userId?: string,
+    userId: string,
   ): MCPConnection => ({
     integrationSlug,
     serverId,
@@ -43,6 +45,7 @@ describe("mcp-tool-mapping", () => {
     tools,
     prompts: [],
     resources: [],
+    requiresOAuth: true,
   });
 
   const createMockTool = (name: string, description?: string): MCPTool => ({
@@ -416,11 +419,17 @@ describe("mcp-tool-mapping", () => {
     it("should handle multiple tools from single connection", () => {
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories"),
-          createMockTool("create_issue"),
-          createMockTool("list_pulls"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [
+            createMockTool("search_repositories"),
+            createMockTool("create_issue"),
+            createMockTool("list_pulls"),
+          ],
+          "user123",
+        ),
       };
 
       const result = computeToolMapping(connections);
@@ -446,6 +455,7 @@ describe("mcp-tool-mapping", () => {
           tools: [createMockTool("search_repositories")],
           prompts: [],
           resources: [],
+          requiresOAuth: true,
         },
       };
 
@@ -468,6 +478,7 @@ describe("mcp-tool-mapping", () => {
           tools: [], // no tools
           prompts: [],
           resources: [],
+          requiresOAuth: true,
         },
       };
 
@@ -506,9 +517,13 @@ describe("mcp-tool-mapping", () => {
           [createMockTool("search_repositories")],
           "user123",
         ),
-        [slackConnectionKey]: createMockConnection("slack", "server-456", "company", [
-          createMockTool("send_message"),
-        ]),
+        [slackConnectionKey]: createMockConnection(
+          "slack",
+          "server-456",
+          "company",
+          [createMockTool("send_message")],
+          "user123",
+        ),
       };
 
       const result = computeToolMapping(connections);
@@ -524,9 +539,13 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories", "Search GitHub repositories"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [createMockTool("search_repositories", "Search GitHub repositories")],
+          "user123",
+        ),
       };
 
       const result = generateRuntimeToolsFromConnections(connections, mockUploadFile);
@@ -638,9 +657,13 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
       const connections: Record<MCPConnectionKey, MCPConnection> = {
-        [connectionKey]: createMockConnection("github", "server-123", "company", [
-          createMockTool("search_repositories"),
-        ]),
+        [connectionKey]: createMockConnection(
+          "github",
+          "server-123",
+          "company",
+          [createMockTool("search_repositories")],
+          "user123",
+        ),
       };
 
       // manually delete the connection to simulate missing connection
@@ -741,7 +764,8 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
 
-      mcpManagerCache.managers.set(connectionKey, mockManager as any);
+      const cacheKey = createCacheKey("test-durable-object-id", connectionKey);
+      mcpManagerCache.managers.set(cacheKey, mockManager as any);
 
       const tool = createMockTool("search_repos");
       const connections = {
@@ -752,12 +776,23 @@ describe("mcp-tool-mapping", () => {
         },
       };
 
+      const mockLazyConnectionDeps = {
+        getDurableObjectInfo: () => ({
+          durableObjectId: "test-durable-object-id",
+          durableObjectName: "test-durable-object-name",
+          className: "TestClass",
+        }),
+        getEstateId: () => "test-estate-id",
+        getReducedState: () => ({ mcpConnections: {} }) as any,
+      };
+
       const runtimeTool = createRuntimeToolFromMCPTool({
         tool,
         toolName: "github_search_repos",
         integrationSlug: "github",
         connections,
         uploadFile: mockUploadFile,
+        lazyConnectionDeps: mockLazyConnectionDeps,
       });
 
       const result = await runtimeTool.execute(
@@ -873,7 +908,7 @@ describe("mcp-tool-mapping", () => {
           { query: "test" },
         ),
       ).rejects.toThrow(
-        "MCP manager not found for connection and lazy connection deps not provided. The connection may need to be re-established.",
+        "Lazy connection deps are required for MCP tool execution to access the cache.",
       );
     });
   });
