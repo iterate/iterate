@@ -60,26 +60,70 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async clearTokens() {
-    if (!this.dbAccountId) {
-      return;
-    }
-    await this.params.db
-      .delete(schema.account)
-      .where(
-        and(
-          eq(schema.account.id, this.dbAccountId),
+    // If we have a cached dbAccountId, use it for efficiency
+    if (this.dbAccountId) {
+      await this.params.db
+        .delete(schema.account)
+        .where(
+          and(
+            eq(schema.account.id, this.dbAccountId),
+            eq(schema.account.providerId, this.providerId),
+          ),
+        );
+    } else if (this.clientId) {
+      // If we have clientId, delete by userId, providerId, and clientId
+      await this.params.db
+        .delete(schema.account)
+        .where(
+          and(
+            eq(schema.account.userId, this.params.userId),
+            eq(schema.account.providerId, this.providerId),
+            eq(schema.account.accountId, this.clientId),
+          ),
+        );
+    } else {
+      // If we don't have clientId, find and delete the most recent account
+      const recentAccount = await this.params.db.query.account.findFirst({
+        where: and(
+          eq(schema.account.userId, this.params.userId),
           eq(schema.account.providerId, this.providerId),
         ),
-      );
+        orderBy: (account, { desc }) => [desc(account.createdAt)],
+      });
+
+      if (recentAccount) {
+        await this.params.db.delete(schema.account).where(eq(schema.account.id, recentAccount.id));
+      }
+    }
 
     this.dbAccountId = undefined;
+    this.clientId = undefined;
   }
 
   async tokens() {
+    // If we don't have a clientId, try to find the most recent account for this user/provider
+    if (!this.clientId) {
+      const recentAccount = await this.params.db.query.account.findFirst({
+        where: and(
+          eq(schema.account.userId, this.params.userId),
+          eq(schema.account.providerId, this.providerId),
+        ),
+        orderBy: (account, { desc }) => [desc(account.createdAt)],
+      });
+
+      if (recentAccount?.accountId) {
+        this.clientId = recentAccount.accountId;
+        this.dbAccountId = recentAccount.id;
+      } else {
+        return undefined;
+      }
+    }
+
     const account = await this.params.db.query.account.findFirst({
       where: and(
         eq(schema.account.userId, this.params.userId),
         eq(schema.account.providerId, this.providerId),
+        eq(schema.account.accountId, this.clientId),
       ),
     });
 
@@ -150,6 +194,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       where: and(
         eq(schema.account.userId, this.params.userId),
         eq(schema.account.providerId, this.providerId),
+        eq(schema.account.accountId, this.clientId),
       ),
     });
 
