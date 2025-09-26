@@ -26,7 +26,12 @@ export default defineConfig({
     const packageNameWithoutSubmodule = id.startsWith("@")
       ? id.split("/").slice(0, 2).join("/")
       : id.split("/")[0];
-    // we want almost everything to be internal, so it gets bundled with the sdk. the exceptions need to be added as dependencies in the sdk package.json
+    // we want almost everything to be internal, so it gets bundled with the sdk, so that we don't need to worry
+    // about keeping the dependencies of the sdk package in sync with the sdk/ folder of this package.
+    // the exceptions need to be added as dependencies in the sdk package.json
+    // the reason we want these exceptions is that in some cases we depend on third-party types (e.g. zod)
+    // unfortunately tsdown can't bundle types right now.
+    // other dependencies that are not part of the types of the API surface can be bundled.
     // this is different from tsdown's default behavior, which is to make all prod dependencies external
     const isExternal = packageNameWithoutSubmodule in (sdkPackageJson.dependencies || {});
     return !isExternal;
