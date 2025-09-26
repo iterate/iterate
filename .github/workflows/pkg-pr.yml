@@ -26,5 +26,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install # this prepares the sdk package for publishing
 
+      - run: ls -R
+        working-directory: packages/sdk
+
+      - run: ls -R
+        working-directory: packages/sdk/dist
+
       - name: Publish SDK package
         run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk
