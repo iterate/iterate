@@ -463,15 +463,12 @@ importers:
 
   packages/sdk:
     dependencies:
-      '@iterate-com/os':
-        specifier: workspace:*
-        version: link:../../apps/os
       dedent:
         specifier: ^1.7.0
         version: 1.7.0
       jsonata:
-        specifier: ^2.1.0
-        version: 2.1.0
+        specifier: github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337
+        version: https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337
       type-fest:
         specifier: ^5.0.0
         version: 5.0.0
@@ -5113,10 +5110,6 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
-
-  jsonata@2.1.0:
-    resolution: {integrity: sha512-OCzaRMK8HobtX8fp37uIVmL8CY1IGc/a6gLsDqz3quExFR09/U78HUzWYr7T31UEB6+Eu0/8dkVD5fFDOl9a8w==}
-    engines: {node: '>= 8'}
 
   jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337:
     resolution: {tarball: https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337}
@@ -12378,8 +12371,6 @@ snapshots:
       minimist: 1.2.8
 
   json5@2.2.3: {}
-
-  jsonata@2.1.0: {}
 
   jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337: {}
 
