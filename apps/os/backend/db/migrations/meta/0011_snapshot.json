@@ -1,5 +1,5 @@
 {
-  "id": "a787766a-dcc1-4fcd-874f-90df73bb69ec",
+  "id": "e2524a57-ebe1-44a0-8116-ff07cdbe74d9",
   "prevId": "d2fba511-1fc4-4e77-8394-9577395e5d55",
   "version": "7",
   "dialect": "postgresql",
@@ -89,29 +89,7 @@
           "default": "now()"
         }
       },
-      "indexes": {
-        "account_provider_id_user_id_index": {
-          "name": "account_provider_id_user_id_index",
-          "columns": [
-            {
-              "expression": "provider_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": true,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
+      "indexes": {},
       "foreignKeys": {},
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
