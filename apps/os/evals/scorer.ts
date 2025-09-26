@@ -40,6 +40,10 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
 
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
+    const score: ScoreResult = { score: 0, reason: "pending", messages: newMessages };
+    // push score immediately so the scores array is in the right order, we'll overwrite the pending props later
+    scores.push(score);
+
     const input = dedent`
       <conversation>
       ${conversation.join("\n")}
@@ -58,10 +62,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     if (!openaResponse.output_parsed) {
       throw new Error(`Didn't get a valid output for input:\n${input}`);
     }
-    scores.push({
-      ...openaResponse.output_parsed,
-      messages: newMessages,
-    });
+    Object.assign(score, openaResponse.output_parsed);
   };
 
   return {
