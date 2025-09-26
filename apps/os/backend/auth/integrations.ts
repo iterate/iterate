@@ -458,6 +458,7 @@ export const integrationsPlugin = () =>
               return ctx.json({ error: "Can't find the existing user to link to" });
             }
             user = linkedUser.user;
+            waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
           }
 
           if (!user) {
