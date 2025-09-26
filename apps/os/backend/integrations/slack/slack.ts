@@ -60,6 +60,11 @@ slackApp.post("/webhook", async (c) => {
     },
   });
   if (!verification.success) {
+    console.warn(
+      "Slack webhook signature verification failed",
+      verification.httpStatusCode,
+      verification.errorMessage,
+    );
     return c.text(
       verification.errorMessage ?? "Slack webhook signature verification failed",
       verification.httpStatusCode,
