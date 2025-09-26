@@ -31,23 +31,6 @@ beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
 });
 
-// evalite("greets user", {
-//   data: async () => {
-//     return [
-//       { input: "hi", expected: "hi! how can i help you today?" }, //
-//     ];
-//   },
-//   task: async (input) => {
-//     const h = await createTestHelper(trpcClient, testAgentName(input));
-//     const userGreeting = await h.sendUserMessage(input);
-//     return userGreeting.waitForReply();
-//   },
-//   scorers: [
-//     autoevals.Factuality, //
-//     autoevals.Moderation,
-//   ],
-// });
-
 evalite("multi-turn", {
   data: async () => {
     return [
@@ -55,10 +38,7 @@ evalite("multi-turn", {
         input: {
           slug: "fruit-naming",
           messages: [
-            {
-              message: "name a green fruit",
-              expected: "a green fruit. penalize emoji usage by 10%",
-            },
+            { message: "name a green fruit", expected: "a green fruit. penalize emojis by 10%" },
             { message: "name another", expected: "a green fruit, not the same as the first" },
             { message: "name another", expected: "a green fruit, not the same as the 1st or 2nd" },
           ],
