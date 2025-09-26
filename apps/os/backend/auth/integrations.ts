@@ -123,6 +123,7 @@ export const integrationsPlugin = () =>
 
           const estateWithMembership = result[0]?.estate;
 
+          // TODO restore this but it's causing problems with MCP connections
           // if (!estateWithMembership) {
           //   console.error("Estate not found or user not authorized", {
           //     estateId: state.estateId,
