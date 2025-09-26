@@ -123,13 +123,13 @@ export const integrationsPlugin = () =>
 
           const estateWithMembership = result[0]?.estate;
 
-          if (!estateWithMembership) {
-            console.error("Estate not found or user not authorized", {
-              estateId: state.estateId,
-              userId: state.userId,
-            });
-            return ctx.json({ error: "Estate not found" }, { status: 404 });
-          }
+          // if (!estateWithMembership) {
+          //   console.error("Estate not found or user not authorized", {
+          //     estateId: state.estateId,
+          //     userId: state.userId,
+          //   });
+          //   return ctx.json({ error: "Estate not found" }, { status: 404 });
+          // }
 
           await ctx.context.internalAdapter.deleteVerificationValue(stateId);
 

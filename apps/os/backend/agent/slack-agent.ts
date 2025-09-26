@@ -663,6 +663,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
       text: sendInput.text,
+      unfurl_links: false,
+      unfurl_media: false,
     });
 
     if (!result.ok) {
