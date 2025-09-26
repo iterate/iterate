@@ -38,7 +38,7 @@ export const slackAgentTools = defineDOTools({
         .default("auto")
         .optional()
         .describe(
-          "Whether to unfurl links and media. If auto, unfurls links and media iff there is exactly 1 link in the message.",
+          "Whether to unfurl links and media. If auto, unfurls links and media when and only when there is exactly 1 link in the message.",
         ),
       endTurn: z
         .boolean()
