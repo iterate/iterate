@@ -65,15 +65,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
 
-    await this.slackAPI.assistant.threads
-      .setStatus({
-        channel_id: slackChannelId,
-        thread_ts: slackThreadId,
-        status: status || "",
-      })
-      .catch((error) => {
-        console.error("[SlackAgent] Failed to update typing status:", error);
-      });
+    await this.slackAPI.assistant.threads.setStatus({
+      channel_id: slackChannelId,
+      thread_ts: slackThreadId,
+      status: status || "",
+    });
   }, 300);
 
   private checkAndClearTypingIndicator = pDebounce(async () => {
