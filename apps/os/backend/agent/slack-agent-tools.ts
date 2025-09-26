@@ -33,14 +33,12 @@ export const slackAgentTools = defineDOTools({
         .describe(
           "Modal definitions for button interactions - maps action_id to modal view definition",
         ),
-      unfurlLinks: z
-        .boolean()
+      unfurl: z
+        .enum(["never", "auto", "all"])
+        .default("auto")
         .optional()
-        .describe("Whether to unfurl links. If undefined, uses intelligent heuristics."),
-      unfurlMedia: z
-        .boolean()
-        .optional()
-        .describe("Whether to unfurl media. If undefined, uses intelligent heuristics."),
+        // If auto, unfurls links and media when and only when there is exactly 1 link in the message.
+        .describe("Whether to unfurl links and media."),
       endTurn: z
         .boolean()
         .default(false)

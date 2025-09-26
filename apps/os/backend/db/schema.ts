@@ -57,24 +57,20 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable(
-  "account",
-  (t) => ({
-    id: iterateId("acc"),
-    accountId: t.text().notNull(),
-    providerId: t.text().notNull(),
-    userId: t.text().notNull(),
-    accessToken: t.text(),
-    refreshToken: t.text(),
-    idToken: t.text(),
-    accessTokenExpiresAt: t.timestamp(),
-    refreshTokenExpiresAt: t.timestamp(),
-    scope: t.text(),
-    password: t.text(),
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.providerId, t.userId)],
-);
+export const account = pgTable("account", (t) => ({
+  id: iterateId("acc"),
+  accountId: t.text().notNull(),
+  providerId: t.text().notNull(),
+  userId: t.text().notNull(),
+  accessToken: t.text(),
+  refreshToken: t.text(),
+  idToken: t.text(),
+  accessTokenExpiresAt: t.timestamp(),
+  refreshTokenExpiresAt: t.timestamp(),
+  scope: t.text(),
+  password: t.text(),
+  ...withTimestamps,
+}));
 export const accountRelations = relations(account, ({ one, many }) => ({
   user: one(user, {
     fields: [account.userId],

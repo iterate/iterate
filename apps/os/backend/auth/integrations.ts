@@ -416,38 +416,6 @@ export const integrationsPlugin = () =>
 
             waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
 
-            const existingSlackTeam = await db.query.providerEstateMapping.findFirst({
-              where: and(
-                eq(schema.providerEstateMapping.providerId, "slack-bot"),
-                eq(schema.providerEstateMapping.externalId, tokens.team?.id),
-              ),
-              columns: {},
-              with: {
-                internalEstate: {
-                  columns: {
-                    id: true,
-                  },
-                  with: {
-                    organization: {
-                      columns: {
-                        id: true,
-                      },
-                    },
-                  },
-                },
-              },
-            });
-
-            // If the slack team is already linked to an estate, add the user to that estate too
-            if (existingSlackTeam) {
-              await db.insert(schema.organizationUserMembership).values({
-                organizationId: existingSlackTeam?.internalEstate.organization.id,
-                userId: user.id,
-                role: "member",
-              });
-              estateId = existingSlackTeam?.internalEstate.id;
-            }
-
             // When a user is created, an estate and organization is created automatically via hooks
             // SO we can be sure that the user has only that estate
             const memberships = await db.query.organizationUserMembership.findFirst({
@@ -490,6 +458,7 @@ export const integrationsPlugin = () =>
               return ctx.json({ error: "Can't find the existing user to link to" });
             }
             user = linkedUser.user;
+            waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
           }
 
           if (!user) {

@@ -6,6 +6,8 @@ packages:
   - vibe-rules
 
 minimumReleaseAge: 1440
+minimumReleaseAgeExclude:
+  - drizzle-kit
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
