@@ -32,5 +32,9 @@ jobs:
       - run: ls -R
         working-directory: packages/sdk/dist
 
+      - name: check types/exports
+        run: pnpx --package @arethetypeswrong/cli attw --pack --profile esm-only
+        working-directory: packages/sdk
+
       - name: Publish SDK package
         run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk
