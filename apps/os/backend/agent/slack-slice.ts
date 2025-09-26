@@ -99,7 +99,7 @@ export interface SlackSliceState {
   slackThreadId?: string | null;
   slackChannelId?: string | null;
   botUserId?: string;
-  typingIndicatorStatus: string | null;
+  typingIndicatorStatus?: string | null;
 }
 
 export interface SlackSliceDeps {}
