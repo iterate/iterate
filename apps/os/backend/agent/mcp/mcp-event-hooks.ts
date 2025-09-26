@@ -248,7 +248,7 @@ export async function handleMCPConnectRequest(
     ? new MCPOAuthProvider({
         auth,
         db,
-        userId: userId!,
+        userId,
         estateId: estateId,
         integrationSlug: guaranteedIntegrationSlug,
         serverUrl: modifiedServerUrl,
@@ -291,7 +291,7 @@ export async function handleMCPConnectRequest(
     ]);
   } catch (error) {
     if (requiresOAuth) {
-      oauthProvider?.clearTokens();
+      oauthProvider?.resetClientAndTokens();
     }
 
     if (requiresOAuth && oauthProvider?.authUrl) {
