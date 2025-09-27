@@ -197,7 +197,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           }
         }
 
-        this.syncTypingIndicator();
+        if (event.type !== "CORE:LOG") {
+          this.syncTypingIndicator();
+        }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
