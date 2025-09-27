@@ -7,9 +7,6 @@ import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 const router = t.router({
   estate,
   gh,
@@ -18,7 +15,7 @@ const router = t.router({
 if (process.argv.length === 2) {
   console.error("No command provided, assuming you want to run `iterate` sdk cli");
   // Run the cli.js script from packages/sdk
-  const cliPath = resolve(__dirname, "../../../../packages/sdk/cli.js");
+  const cliPath = resolve(import.meta.dirname, "../../../../packages/sdk/cli.js");
   const result = spawnSync("node", [cliPath], {
     stdio: "inherit",
     cwd: process.cwd(),
@@ -27,4 +24,4 @@ if (process.argv.length === 2) {
 }
 
 const cli = createCli({ router });
-if (process.argv) cli.run({ prompts });
+cli.run({ prompts });
