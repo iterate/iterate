@@ -11,6 +11,7 @@
     "os": "pnpm run --filter ./apps/os",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
+    "prepare": "cd apps/os && pnpm tsdown",
     "test": "pnpm -r --parallel test",
     "test:watch": "pnpm -r --parallel test:watch",
     "docker:up": "docker compose up -d postgres",
