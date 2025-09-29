@@ -26,12 +26,28 @@ jobs:
         run: doppler setup --config dev --project os
       - name: run dependencies
         run: pnpm docker:up
-      - run: sleep 60
-      - run: pnpm db:migrate
-      - name: get rid of ngrok
+      - name: migrate db
+        uses: nick-fields/retry@v3
+        with:
+          timeout_seconds: 30
+          max_attempts: 10
+          retry_wait_seconds: 5
+          command: pnpm db:migrate
+      - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
-      - run: pnpm dev &
-      - run: sleep 60
+      - run: doppler run -- pnpm preview &
+      - name: wait for preview to be ready
+        uses: nick-fields/retry@v3
+        with:
+          timeout_seconds: 30
+          max_attempts: 10
+          retry_wait_seconds: 5
+          command: |
+            echo '
+              const res = await fetch("http://localhost:5173");
+              if (!res.ok) throw new Error("Preview not ready");
+            ' > fetch.mjs
+            node fetch.mjs
       - name: run evals
         run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
         working-directory: apps/os
