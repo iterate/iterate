@@ -25,6 +25,11 @@ export const user = pgTable("user", (t) => ({
   email: t.text().notNull().unique(),
   emailVerified: t.boolean().default(false).notNull(),
   image: t.text(),
+  // https://www.better-auth.com/docs/plugins/admin#schema
+  role: t.text().default("user"),
+  banned: t.boolean(),
+  banReason: t.text(),
+  banExpires: t.timestamp(),
   ...withTimestamps,
 }));
 export const userRelations = relations(user, ({ many }) => ({
@@ -41,6 +46,8 @@ export const session = pgTable("session", (t) => ({
   ipAddress: t.text(),
   userAgent: t.text(),
   userId: t.text().notNull(),
+  // https://www.better-auth.com/docs/plugins/admin#schema
+  impersonatedBy: t.text(),
   ...withTimestamps,
 }));
 export const sessionRelations = relations(session, ({ one }) => ({
