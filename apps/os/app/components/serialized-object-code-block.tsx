@@ -8,6 +8,8 @@ import { json } from "@codemirror/lang-json";
 import { yaml } from "@codemirror/lang-yaml";
 import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
+import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
+import { useTheme } from "next-themes";
 import { Switch } from "./ui/switch.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.js";
 
@@ -30,7 +32,7 @@ function CodeMirror({ value, extensions }: CodeMirrorProps) {
 
     const view = new EditorView({
       doc: value,
-      extensions: extensions,
+      extensions,
       parent: containerRef.current,
     });
 
@@ -61,6 +63,7 @@ export function SerializedObjectCodeBlock({
   showCopyButton = true,
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<"yaml" | "json">(initialFormat);
+  const { resolvedTheme } = useTheme();
 
   // Generate the code string based on current format with defensive checks
   let code: string;
@@ -137,8 +140,10 @@ export function SerializedObjectCodeBlock({
 
   // Extensions with search support
   const lang = currentFormat === "yaml" ? yaml : json;
+  const codeMirrorTheme = resolvedTheme === "dark" ? vsCodeDark : vsCodeLight;
   const extensions: CodeMirrorProps["extensions"] = [
     basicSetup,
+    codeMirrorTheme,
     lang(),
     search({ top: true }),
     keymap.of(searchKeymap),
