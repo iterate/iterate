@@ -44,7 +44,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
-import { Impersonate, useImpersonation } from "./impersonate.tsx";
+import { useImpersonation } from "./impersonate.tsx";
 
 const navigation = [
   {
@@ -79,7 +79,7 @@ function UserSwitcher() {
   const params = useParams();
   const currentEstateId = params.estateId;
 
-  const impersonation = {} as any; //|| useImpersonation();
+  const impersonation = useImpersonation();
 
   const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
 
@@ -166,24 +166,19 @@ function UserSwitcher() {
                     {currentEstateId === estate.id && <Check className="size-4" />}
                   </DropdownMenuItem>
                 ))}
-                <DropdownMenuSeparator />
               </>
             )}
             {impersonation.isAdmin && (
-              <>
-                <DropdownMenuSeparator />
-                {impersonation.isImpersonating ? (
-                  <DropdownMenuItem onClick={() => impersonation.unimpersonate.mutate()}>
-                    Stop impersonating
-                  </DropdownMenuItem>
-                ) : (
-                  <DropdownMenuItem onClick={() => impersonation.impersonate.mutate()}>
-                    Impersonate another user
-                  </DropdownMenuItem>
-                )}
-                <DropdownMenuSeparator />
-              </>
+              <DropdownMenuItem onClick={() => impersonation.impersonate.mutate()}>
+                Impersonate another user
+              </DropdownMenuItem>
             )}
+            {impersonation.isImpersonating && (
+              <DropdownMenuItem onClick={() => impersonation.unimpersonate.mutate()}>
+                Stop impersonating
+              </DropdownMenuItem>
+            )}
+            <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>
