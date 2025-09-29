@@ -1,7 +1,7 @@
 name: run evals
 on:
   push:
-    branches: [main, "**/*eval*", "*eval*"]
+    branches: ["**/*eval*", "*eval*"]
 
 permissions:
   contents: read

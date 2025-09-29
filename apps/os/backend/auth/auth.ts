@@ -21,7 +21,8 @@ export const getAuth = (db: DB) =>
         allowDifferentEmails: true,
       },
     },
-    emailAndPassword: { enabled: true },
+    // for now, we only want to enable email and password login if we know we need it for testing
+    ...(import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && { emailAndPassword: { enabled: true } }),
     plugins: [admin(), integrationsPlugin()],
     socialProviders: {
       google: {
