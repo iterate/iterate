@@ -112,6 +112,7 @@ const exportEvaliteUI = async (
       fs.writeFileSync(target, content);
     } else if (filepath.endsWith(".html")) {
       let content = fs.readFileSync(filepath, "utf8");
+      // assets are referred to with an absolute path, which only works when index.html is served from the origin root. fix this
       content = content.replaceAll(`"/assets/`, `"./assets/`);
       fs.writeFileSync(target, content);
     } else {
