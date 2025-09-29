@@ -85,6 +85,13 @@
       "when": 1758894020649,
       "tag": "0011_common_alice",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1759145491988,
+      "tag": "0012_motionless_spot",
+      "breakpoints": true
     }
   ]
 }

@@ -4,6 +4,7 @@ import * as fs from "fs/promises";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
+import { addUserToEstate } from "./add-to-estate.ts";
 
 export const checkoutEstateCommand = t.procedure
   .input(
@@ -69,4 +70,5 @@ export const checkoutEstateCommand = t.procedure
 
 export const estate = t.router({
   checkout: checkoutEstateCommand,
+  addUser: addUserToEstate,
 });
