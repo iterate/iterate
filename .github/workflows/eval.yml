@@ -35,12 +35,15 @@ jobs:
           command: pnpm db:migrate
       - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
-      - name: run os preview
+      - name: run server and test
+        # run the server and test in one big step so logs are visible
         run: |
+          # for some reason `doppler run -- ...` doesn't inject env vars into the server process, so write to .env
           doppler run -- printenv > apps/os/.env
+
           cd apps/os
-          doppler run -- pnpm build
-          doppler run -- pnpm vite preview &
+          pnpm preview
+
           echo '
             const main = async () => {
               for (let i = 0; i < 120; i++) {
@@ -57,9 +60,18 @@ jobs:
               throw new Error("Preview not ready");
             }
             await main();
-          ' > fetch.mjs
-          node fetch.mjs
+          ' > wait.mjs
+
+          node wait.mjs
+
+          # finally, run the tests
           doppler run -- pnpm evalite run-once
-      # - name: run evals
-      #   run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
-      #   working-directory: apps/os
+      - name: export ui
+        working-directory: apps/os
+        run: pnpm tsx evals/evalite-exporter.ts
+      - name: upload evalite ui
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: evalite
+          path: apps/os/evalite/ignoreme/evalite-ui
