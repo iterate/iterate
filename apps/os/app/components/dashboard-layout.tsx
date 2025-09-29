@@ -44,6 +44,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
+import { Impersonate, useImpersonation } from "./impersonate.tsx";
 
 const navigation = [
   {
@@ -77,6 +78,8 @@ function UserSwitcher() {
   const navigate = useNavigate();
   const params = useParams();
   const currentEstateId = params.estateId;
+
+  const impersonation = {} as any; //|| useImpersonation();
 
   const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
 
@@ -163,6 +166,21 @@ function UserSwitcher() {
                     {currentEstateId === estate.id && <Check className="size-4" />}
                   </DropdownMenuItem>
                 ))}
+                <DropdownMenuSeparator />
+              </>
+            )}
+            {impersonation.isAdmin && (
+              <>
+                <DropdownMenuSeparator />
+                {impersonation.isImpersonating ? (
+                  <DropdownMenuItem onClick={() => impersonation.unimpersonate.mutate()}>
+                    Stop impersonating
+                  </DropdownMenuItem>
+                ) : (
+                  <DropdownMenuItem onClick={() => impersonation.impersonate.mutate()}>
+                    Impersonate another user
+                  </DropdownMenuItem>
+                )}
                 <DropdownMenuSeparator />
               </>
             )}
