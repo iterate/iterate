@@ -63,7 +63,7 @@ export function SerializedObjectCodeBlock({
   showCopyButton = true,
 }: SerializedObjectCodeBlockProps) {
   const [currentFormat, setCurrentFormat] = useState<"yaml" | "json">(initialFormat);
-  const { theme } = useTheme();
+  const { resolvedTheme } = useTheme();
 
   // Generate the code string based on current format with defensive checks
   let code: string;
@@ -140,7 +140,7 @@ export function SerializedObjectCodeBlock({
 
   // Extensions with search support
   const lang = currentFormat === "yaml" ? yaml : json;
-  const codeMirrorTheme = theme === "dark" ? vsCodeDark : vsCodeLight;
+  const codeMirrorTheme = resolvedTheme === "dark" ? vsCodeDark : vsCodeLight;
   const extensions: CodeMirrorProps["extensions"] = [
     basicSetup,
     codeMirrorTheme,
