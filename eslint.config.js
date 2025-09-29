@@ -302,6 +302,7 @@ export default defineConfig([
   },
   {
     name: "iterate-os-backend", // backend-only rule config
+    files: ["apps/os/backend/**/*.ts"],
     rules: {
       "no-console": "error",
     },
