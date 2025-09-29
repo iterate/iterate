@@ -74,4 +74,4 @@ jobs:
         if: always()
         with:
           name: evalite
-          path: apps/os/evalite/ignoreme/evalite-ui
+          path: apps/os/ignoreme/evalite-ui
