@@ -13,34 +13,22 @@ export const useImpersonation = () => {
   });
   const impersonate = useMutation({
     mutationFn: async () => {
-      const email = prompt("email to impersonate");
-      if (!email) return;
-      const user = await trpcClient.admin.findUserByEmail.query({ email });
+      const userIdOrEmail = prompt("user id or email to impersonate");
+      if (!userIdOrEmail) return;
+      const user = userIdOrEmail.includes("@")
+        ? await trpcClient.admin.findUserByEmail.query({ email: userIdOrEmail })
+        : { id: userIdOrEmail };
       if (!user) return;
       const impersonateResult = await authClient.admin.impersonateUser({
         userId: user.id,
       });
-      if (impersonateResult.error) throw impersonateResult.error; // todo: have better auth throw errors
+      if (impersonateResult.error) throw impersonateResult.error; // todo: have better auth throw errors by default
       return impersonateResult.data;
     },
-    onSuccess: () => window.location.reload(),
+    onSuccess: (data) => {
+      if (data?.user?.email) window.location.reload();
+    },
   });
 
   return { unimpersonate, impersonate, ...impersonationInfo };
 };
-
-// export const Impersonate = () => {
-//   const { isImpersonating, unimpersonate, impersonate, checkAuth } = useImpersonation();
-//   return (
-//     <div className="flex flex-row gap-2 p-2">
-//       {isImpersonating && (
-//         <Button onClick={() => unimpersonate.mutate()}>stop impersonating</Button>
-//       )}
-//       {checkAuth.data?.message === "admin" && !isImpersonating && (
-//         <Button disabled={isImpersonating} onClick={() => impersonate.mutate()}>
-//           impersonate {impersonate.status.replace("idle", "")} {impersonate.data?.user?.email || ""}
-//         </Button>
-//       )}
-//     </div>
-//   );
-// };

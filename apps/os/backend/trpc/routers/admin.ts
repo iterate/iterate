@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { protectedProcedure, publicProcedure, router } from "../trpc.ts";
+import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -25,22 +25,11 @@ const findUserByEmail = adminProcedure
 
 export const adminRouter = router({
   findUserByEmail,
-  impersonationInfo: publicProcedure.query(async ({ ctx }) => {
-    const isImpersonating = Boolean(ctx?.session?.session.impersonatedBy);
+  impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
+    // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
+    // important because it's available to anyone signed in
     const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
-    const isAdmin = ctx?.user?.role === "admin";
-    return { isImpersonating, impersonatedBy, isAdmin };
-  }),
-  checkAuth: publicProcedure.query(async ({ ctx }) => {
-    if (ctx?.user?.role === "admin") {
-      return { message: "admin" as const, user: ctx.user, session: ctx.session };
-    }
-    if (!ctx?.user?.email) {
-      return { message: "not_logged_in" as const };
-    }
-    return {
-      message: "logged_in" as const,
-      impersonatedBy: ctx?.session?.session.impersonatedBy || undefined,
-    };
+    const isAdmin = ctx?.user?.role === "admin" || undefined;
+    return { impersonatedBy, isAdmin };
   }),
 });
