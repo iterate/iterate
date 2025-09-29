@@ -35,7 +35,7 @@ const createAdminUser = publicProcedure
           // return users.users[0];
           return { created: false };
         }
-        return { created: false };
+        if (true) return { created: false };
         throw e;
       });
     return { created: true };
