@@ -509,7 +509,19 @@ export const integrationsPlugin = () =>
                 team: tokens.team,
               },
             })
-            .onConflictDoNothing();
+            .onConflictDoUpdate({
+              target: [
+                schema.providerEstateMapping.providerId,
+                schema.providerEstateMapping.externalId,
+              ],
+              set: {
+                internalEstateId: estateId, // We may want to require a confirmation to change the estate
+                providerMetadata: {
+                  botUserId,
+                  team: tokens.team,
+                },
+              },
+            });
 
           if (!callbackURL) {
             return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
