@@ -1,11 +1,10 @@
-import type { WebClient } from "@slack/web-api";
 import jsonata from "jsonata/sync";
 
 export type SlackAPIMockOptions = {
   log: (message: string) => void;
 };
 
-export type SlackAPIMock = ReturnType<typeof createSlackAPIMock>;
+export type SlackAPIMock<T> = ReturnType<typeof createSlackAPIMock<T>>;
 
 /**
  * Creates a mocked version of the Slack API. Features:
@@ -16,7 +15,7 @@ export type SlackAPIMock = ReturnType<typeof createSlackAPIMock>;
  *
  * in theory you could make this a general-purpose mocking tool but for now it's slack-only
  */
-export const createSlackAPIMock = (options?: Partial<SlackAPIMockOptions>) => {
+export const createSlackAPIMock = <T>(options?: Partial<SlackAPIMockOptions>) => {
   const calls: Array<{ path: string[]; args: unknown[]; time: Date }> = [];
 
   const matchers: Array<{ expression: string; value: unknown }> = [
@@ -25,6 +24,12 @@ export const createSlackAPIMock = (options?: Partial<SlackAPIMockOptions>) => {
 
   /**
    * a jsonata expression and a value - any call matching the expression will return this value
+   *
+   * ```js
+   * mockReturnValue("path = 'chat.getPermalink'", { ok: true, permalink: "https://example.com" })
+   * mockReturnValue("path = 'files.getUploadURLExternal'", { ok: true, upload_url: "https://example.com", file_id: "F08R1SMTZGD" })
+   * ```
+   *
    * the expression will be evaluated against an object looking like:
    *
    * ```js
@@ -32,12 +37,6 @@ export const createSlackAPIMock = (options?: Partial<SlackAPIMockOptions>) => {
    *   path: string;
    *   args: any[];
    *   time: string; // ISO date string
-   * }
-   *
-   * const exampleCallInfo: CallInfo = {
-   *   path: "chat.postMessage",
-   *   args: [{ text: "Hello, world!", thread_ts: "1234567890", channel: "C08R1SMTZGD" }],
-   *   time: new Date().toISOString(),
    * }
    * ```
    */
@@ -59,7 +58,7 @@ export const createSlackAPIMock = (options?: Partial<SlackAPIMockOptions>) => {
       );
       return matcher?.value;
     },
-  }) as WebClient & Partial<typeof props>;
+  }) as T & typeof props;
 };
 
 const mockSlack = (

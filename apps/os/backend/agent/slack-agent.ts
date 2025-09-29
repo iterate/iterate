@@ -39,23 +39,12 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
+import { createSlackAPIMock } from "./slack-api-mock.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
 const slackAgentSlices = [...CORE_AGENT_SLICES, slackSlice] as const;
 export type SlackAgentSlices = typeof slackAgentSlices;
-
-const mockSlack = (path: string[], log: (message: string) => void = console.log) => {
-  return new Proxy<any>(() => Promise.resolve({ ok: true }), {
-    get: (_target, prop) => {
-      return mockSlack(path.concat(String(prop)), log);
-    },
-    apply: (_target, _this, args) => {
-      log(`slack.${path.join(".")}(${args.map((arg) => JSON.stringify(arg)).join(", ")})`);
-      return Promise.resolve({ ok: true });
-    },
-  });
-};
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
@@ -120,13 +109,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     await super.initAfterConstructorBeforeOnStart(params);
 
     if (params.record.durableObjectName.includes("mock_slack")) {
-      this.slackAPI = mockSlack([], (message) => {
-        this.addEvent({
-          type: "CORE:LOG",
-          data: { level: "debug", message },
-          triggerLLMRequest: false,
-        });
-      });
+      this.slackAPI = createSlackAPIMock<WebClient>();
       return;
     }
 
