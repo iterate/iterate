@@ -497,88 +497,87 @@ export function createRuntimeToolFromMCPTool(params: {
         );
       }
 
-      try {
-        const mcpResult = await manager.callTool({
+      const mcpResult = await manager
+        .callTool({
           serverId: actualServerId,
           name: tool.name,
           arguments: toolArgs,
+        })
+        .catch((error) => {
+          console.error(
+            `[MCP] Tool execution failed for ${tool.name}:`,
+            (error as Error)?.stack || error,
+          );
+          throw error;
         });
 
-        // Handle resource_link if present
-        if (mcpResult?.resource_link) {
-          try {
-            const resourceContent = await manager.readResource(
-              {
-                serverId: actualServerId,
-                uri: mcpResult.resource_link as string,
-              },
-              {},
-            );
+      if (mcpResult?.resource_link) {
+        try {
+          const resourceContent = await manager.readResource(
+            {
+              serverId: actualServerId,
+              uri: mcpResult.resource_link as string,
+            },
+            {},
+          );
 
-            // Process the content with resource_content added
-            const contentToProcess = Array.isArray(mcpResult.content)
-              ? [...mcpResult.content, { type: "resource", resource: resourceContent }]
-              : [mcpResult.content, { type: "resource", resource: resourceContent }];
+          const contentToProcess = Array.isArray(mcpResult.content)
+            ? [...mcpResult.content, { type: "resource", resource: resourceContent }]
+            : [mcpResult.content, { type: "resource", resource: resourceContent }];
 
-            const { textContent, processedContent, fileEvents } = await processMCPContent(
-              contentToProcess,
-              uploadFile,
-            );
+          const { textContent, processedContent, fileEvents } = await processMCPContent(
+            contentToProcess,
+            uploadFile,
+          );
 
-            const result: any = {
-              content: processedContent,
-              textSummary: textContent.join("\n"),
-            };
+          const result: any = {
+            content: processedContent,
+            textSummary: textContent.join("\n"),
+          };
 
-            if (mcpResult.structuredContent) {
-              result.structuredContent = mcpResult.structuredContent;
-            }
-
-            return {
-              toolCallResult: result,
-              triggerLLMRequest: true,
-              addEvents: [...additionalMCPEvents, ...fileEvents],
-            };
-          } catch (error) {
-            console.warn(`Failed to fetch resource ${mcpResult.resource_link}:`, error);
-            // Fall through to regular content processing
+          if (mcpResult.structuredContent) {
+            result.structuredContent = mcpResult.structuredContent;
           }
+
+          return {
+            toolCallResult: result,
+            triggerLLMRequest: true,
+            addEvents: [...additionalMCPEvents, ...fileEvents],
+          };
+        } catch (error) {
+          console.warn(`Failed to fetch resource ${mcpResult.resource_link}:`, error);
         }
-
-        // Process the regular content
-        const contentArray = Array.isArray(mcpResult.content)
-          ? mcpResult.content
-          : mcpResult.content
-            ? [mcpResult.content]
-            : [];
-
-        const { textContent, processedContent, fileEvents } = await processMCPContent(
-          contentArray,
-          uploadFile,
-        );
-
-        const result: any = {
-          content: processedContent,
-          textSummary: textContent.join("\n"),
-        };
-
-        if (mcpResult.structuredContent) {
-          result.structuredContent = mcpResult.structuredContent;
-        }
-
-        if (mcpResult.isError) {
-          result.isError = mcpResult.isError;
-        }
-
-        return {
-          toolCallResult: result,
-          triggerLLMRequest: true,
-          addEvents: [...additionalMCPEvents, ...fileEvents] as any,
-        };
-      } catch (error) {
-        console.error(`[MCP] Tool execution failed for ${tool.name}:`, error);
-        throw error;
       }
+
+      const contentArray = Array.isArray(mcpResult.content)
+        ? mcpResult.content
+        : mcpResult.content
+          ? [mcpResult.content]
+          : [];
+
+      const { textContent, processedContent, fileEvents } = await processMCPContent(
+        contentArray,
+        uploadFile,
+      );
+
+      const result: any = {
+        content: processedContent,
+        textSummary: textContent.join("\n"),
+      };
+
+      if (mcpResult.structuredContent) {
+        result.structuredContent = mcpResult.structuredContent;
+      }
+
+      if (mcpResult.isError) {
+        result.isError = mcpResult.isError;
+      }
+
+      return {
+        toolCallResult: result,
+        triggerLLMRequest: true,
+        addEvents: [...additionalMCPEvents, ...fileEvents] as any,
+      };
     },
   };
 }
