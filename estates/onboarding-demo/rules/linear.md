@@ -3,11 +3,10 @@ slug: linear
 match: hasMCPConnection("mcp.linear.app")
 ---
 
-Whenever you make a linear issue, you need to ask the user for a priority.
+create issues in the "Scranton Branch" project.
 
-- create new issues in the "Virtual Bananas" project, create the project if it doesn't yet exist.
-
-Each issue must have one of the following labels:
-
-- "banana"
-- "bug"
+labels:
+- "paper-emergency" — threat level: midnight
+- "pretzel-day" — can wait until pretzel day
+- "corporate-says-no" — michael tried, they said no
+- "bug" — probably the temp's fault

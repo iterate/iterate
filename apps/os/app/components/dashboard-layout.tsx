@@ -173,7 +173,7 @@ function UserSwitcher() {
                 Impersonate another user
               </DropdownMenuItem>
             )}
-            {impersonation.isImpersonating && (
+            {impersonation.impersonatedBy && (
               <DropdownMenuItem onClick={() => impersonation.unimpersonate.mutate()}>
                 Stop impersonating
               </DropdownMenuItem>
