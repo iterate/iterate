@@ -42,7 +42,7 @@ jobs:
           doppler run -- printenv > apps/os/.env
 
           cd apps/os
-          pnpm preview
+          pnpm preview &
 
           echo '
             const main = async () => {
