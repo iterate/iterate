@@ -1,4 +1,3 @@
- 
 // this is the most embryonic form of the iterate cli
 // the main purpose is to make it possible to run
 // `pnpm iterate iterate.config.ts` and get JSON stringified output
