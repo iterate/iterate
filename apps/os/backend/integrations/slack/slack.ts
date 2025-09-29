@@ -346,7 +346,6 @@ async function handleBotChannelJoin(params: {
   const validMessages = history.messages.filter((m) => m.ts);
   const threadsByTs = R.groupBy(validMessages, (m) => m.thread_ts || m.ts!);
 
-  // Fetch all thread replies in parallel
   const threadEntries = Object.entries(threadsByTs);
   const threadRepliesResults = await Promise.allSettled(
     threadEntries.map(async ([threadTs]) => {
@@ -361,11 +360,10 @@ async function handleBotChannelJoin(params: {
         throw new Error(`Failed to fetch thread history for ${threadTs}`);
       }
 
-      return { threadTs, threadHistory: threadHistory as ConversationsRepliesResponse };
+      return { threadTs, threadHistory };
     }),
   );
 
-  // Process successful thread replies and filter for bot mentions
   const threadsWithMentions = R.pipe(
     threadRepliesResults,
     R.filter(
@@ -383,7 +381,6 @@ async function handleBotChannelJoin(params: {
     ),
   );
 
-  // Process each thread with mentions in parallel
   await Promise.allSettled(
     threadsWithMentions.map(async ({ threadTs, threadHistory }) => {
       const routingKey = getRoutingKey({ estateId, threadTs });
@@ -424,15 +421,13 @@ async function handleBotChannelJoin(params: {
         R.find((m) => isBotMentionedInMessage(m, botUserId)),
       );
 
-      // Execute agent creation and reaction addition in parallel
       const [agentStub] = await Promise.allSettled([
         SlackAgent.getOrCreateStubByRoute({
           db,
           estateId,
           route: routingKey,
           reason: "Bot joined channel with existing mention",
-        }),
-        // Add reaction if there's a mention message
+        }) as unknown as Promise<SlackAgent>,
         mentionMessage?.ts
           ? slackAPI.reactions
               .add({
@@ -446,9 +441,9 @@ async function handleBotChannelJoin(params: {
           : Promise.resolve(),
       ]);
 
-      // Add events to agent if agent creation was successful
       if (agentStub.status === "fulfilled") {
-        await agentStub.value.addEvents(contextEvents);
+        const initEvents = await agentStub.value.initSlack(channelId, threadTs);
+        await agentStub.value.addEvents([...initEvents, ...contextEvents]);
       } else {
         console.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
       }
