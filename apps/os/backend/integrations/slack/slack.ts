@@ -1,7 +1,11 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq } from "drizzle-orm";
-import { WebClient, type UsersListResponse } from "@slack/web-api";
+import {
+  WebClient,
+  type UsersListResponse,
+  type ConversationsRepliesResponse,
+} from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
 import { type CloudflareEnv } from "../../../env.ts";
@@ -19,6 +23,9 @@ import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
 import type { AgentCoreEventInput } from "../../agent/agent-core.ts";
+
+// Type alias for Slack message elements from ConversationsRepliesResponse
+type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
@@ -339,78 +346,114 @@ async function handleBotChannelJoin(params: {
   const validMessages = history.messages.filter((m) => m.ts);
   const threadsByTs = R.groupBy(validMessages, (m) => m.thread_ts || m.ts!);
 
-  for (const [threadTs] of Object.entries(threadsByTs)) {
-    const threadHistory = await slackAPI.conversations.replies({
-      channel: channelId,
-      ts: threadTs,
-      inclusive: true,
-      limit: 100,
-    });
+  // Fetch all thread replies in parallel
+  const threadEntries = Object.entries(threadsByTs);
+  const threadRepliesResults = await Promise.allSettled(
+    threadEntries.map(async ([threadTs]) => {
+      const threadHistory = await slackAPI.conversations.replies({
+        channel: channelId,
+        ts: threadTs,
+        inclusive: true,
+        limit: 100,
+      });
 
-    if (!threadHistory.ok || !threadHistory.messages) {
-      console.error(`Failed to fetch thread history for ${threadTs}`);
-      continue;
-    }
-
-    const hasBotMention = threadHistory.messages.some((m) => isBotMentionedInMessage(m, botUserId));
-
-    if (!hasBotMention) continue;
-
-    const routingKey = getRoutingKey({ estateId, threadTs });
-
-    const agentStub = await SlackAgent.getOrCreateStubByRoute({
-      db,
-      estateId,
-      route: routingKey,
-      reason: "Bot joined channel with existing mention",
-    });
-
-    const threadContext = threadHistory.messages
-      .filter((msg) => msg.user && msg.text && msg.ts && msg.type)
-      .sort((a, b) => parseFloat(a.ts!) - parseFloat(b.ts!))
-      .map((msg) => ({
-        user: msg.user,
-        text: msg.text,
-        ts: msg.ts,
-        type: msg.type,
-        timestamp: new Date(parseFloat(msg.ts!) * 1000).toISOString(),
-      }));
-
-    const contextEvents: AgentCoreEventInput[] = [
-      {
-        type: "CORE:LLM_INPUT_ITEM",
-        data: {
-          type: "message",
-          role: "developer",
-          content: [
-            {
-              type: "input_text",
-              text: `The bot was just added to this Slack channel and is joining an existing thread where it was mentioned. Here is the thread history:\n\n${JSON.stringify(threadContext, null, 2)}\n\nThe bot should acknowledge it's joining an existing conversation and respond helpfully to any questions or requests in the thread above.`,
-            },
-          ],
-        },
-        triggerLLMRequest: true,
-      },
-    ];
-
-    await agentStub.addEvents(contextEvents);
-
-    const mentionMessage = [...threadHistory.messages]
-      .reverse()
-      .find((m) => isBotMentionedInMessage(m, botUserId));
-
-    if (mentionMessage?.ts) {
-      try {
-        await slackAPI.reactions.add({
-          channel: channelId,
-          timestamp: mentionMessage.ts,
-          name: "eyes",
-        });
-      } catch (error) {
-        console.error("[SlackAgent] Failed to add reaction:", error);
+      if (!threadHistory.ok || !threadHistory.messages) {
+        throw new Error(`Failed to fetch thread history for ${threadTs}`);
       }
-    }
-  }
+
+      return { threadTs, threadHistory: threadHistory as ConversationsRepliesResponse };
+    }),
+  );
+
+  // Process successful thread replies and filter for bot mentions
+  const threadsWithMentions = R.pipe(
+    threadRepliesResults,
+    R.filter(
+      (
+        result,
+      ): result is PromiseFulfilledResult<{
+        threadTs: string;
+        threadHistory: ConversationsRepliesResponse;
+      }> => result.status === "fulfilled",
+    ),
+    R.map((result) => result.value),
+    R.filter(
+      ({ threadHistory }) =>
+        threadHistory.messages?.some((m) => isBotMentionedInMessage(m, botUserId)) ?? false,
+    ),
+  );
+
+  // Process each thread with mentions in parallel
+  await Promise.allSettled(
+    threadsWithMentions.map(async ({ threadTs, threadHistory }) => {
+      const routingKey = getRoutingKey({ estateId, threadTs });
+
+      const threadContext = R.pipe(
+        threadHistory.messages ?? [],
+        R.filter((msg): msg is SlackMessage => Boolean(msg.user && msg.text && msg.ts && msg.type)),
+        R.sortBy((msg) => parseFloat(msg.ts!)),
+        R.map((msg) => ({
+          user: msg.user!,
+          text: msg.text!,
+          ts: msg.ts!,
+          type: msg.type!,
+          timestamp: new Date(parseFloat(msg.ts!) * 1000).toISOString(),
+        })),
+      );
+
+      const contextEvents: AgentCoreEventInput[] = [
+        {
+          type: "CORE:LLM_INPUT_ITEM",
+          data: {
+            type: "message",
+            role: "developer",
+            content: [
+              {
+                type: "input_text",
+                text: `The bot was just added to this Slack channel and is joining an existing thread where it was mentioned. Here is the thread history:\n\n${JSON.stringify(threadContext, null, 2)}\n\nThe bot should acknowledge it's joining an existing conversation and respond helpfully to any questions or requests in the thread above.`,
+              },
+            ],
+          },
+          triggerLLMRequest: true,
+        },
+      ];
+
+      const mentionMessage = R.pipe(
+        threadHistory.messages ?? [],
+        R.reverse(),
+        R.find((m) => isBotMentionedInMessage(m, botUserId)),
+      );
+
+      // Execute agent creation and reaction addition in parallel
+      const [agentStub] = await Promise.allSettled([
+        SlackAgent.getOrCreateStubByRoute({
+          db,
+          estateId,
+          route: routingKey,
+          reason: "Bot joined channel with existing mention",
+        }),
+        // Add reaction if there's a mention message
+        mentionMessage?.ts
+          ? slackAPI.reactions
+              .add({
+                channel: channelId,
+                timestamp: mentionMessage.ts,
+                name: "eyes",
+              })
+              .catch((error) => {
+                console.error("[SlackAgent] Failed to add reaction:", error);
+              })
+          : Promise.resolve(),
+      ]);
+
+      // Add events to agent if agent creation was successful
+      if (agentStub.status === "fulfilled") {
+        await agentStub.value.addEvents(contextEvents);
+      } else {
+        console.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
+      }
+    }),
+  );
 }
 
 /**
