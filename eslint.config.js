@@ -308,6 +308,9 @@ export default defineConfig([
       "iterate/zod-schema-naming": "error",
     },
   },
+  {
+    ignores: ["**/*ignoreme*"],
+  },
 ]);
 
 /** @param {import("eslint").Rule.RuleModule} builtinRule */
