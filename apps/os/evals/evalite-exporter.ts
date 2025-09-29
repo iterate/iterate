@@ -110,6 +110,10 @@ const exportEvaliteUI = async (
         `.trimEnd(),
       );
       fs.writeFileSync(target, content);
+    } else if (filepath.endsWith(".html")) {
+      let content = fs.readFileSync(filepath, "utf8");
+      content = content.replaceAll(`"/assets/`, `"./assets/`);
+      fs.writeFileSync(target, content);
     } else {
       fs.copyFileSync(filepath, target);
     }
