@@ -48,7 +48,7 @@ jobs:
                   console.log("Preview ready");
                   return;
                 } catch (error) {
-                  console.log(`Preview not ready, retrying ${i + 1}/60`);
+                  console.log(`Preview not ready, retrying ${i + 1}/120`);
                   await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               }
