@@ -35,7 +35,9 @@ jobs:
           command: pnpm db:migrate
       - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
-      - run: doppler run -- pnpm preview &
+      - name: run os preview
+        run: doppler run -- pnpm preview &
+        working-directory: apps/os
       - name: wait for preview to be ready
         uses: nick-fields/retry@v3
         with:
