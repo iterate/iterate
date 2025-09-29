@@ -24,7 +24,11 @@ jobs:
           cache: "pnpm"
 
       - name: Install dependencies
-        run: pnpm install
+        run: pnpm install # this prepares the sdk package for publishing
 
-      - name: Build and Publish OS and SDK package
-        run: node ./publish.ts
+      - name: check types/exports
+        run: pnpx --package @arethetypeswrong/cli attw --pack --profile esm-only
+        working-directory: packages/sdk
+
+      - name: Publish SDK package
+        run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk

@@ -4,7 +4,7 @@ import * as fs from "fs/promises";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
-import { getRepoAccessToken } from "../github-utils.ts";
+import { addUserToEstate } from "./add-to-estate.ts";
 
 export const checkoutEstateCommand = t.procedure
   .input(
@@ -22,6 +22,7 @@ export const checkoutEstateCommand = t.procedure
     }
 
     await fs.mkdir(path.dirname(repoPath), { recursive: true });
+    const { getRepoAccessToken } = await import("../github-utils.ts");
     const {
       token,
       repoId,
@@ -69,4 +70,5 @@ export const checkoutEstateCommand = t.procedure
 
 export const estate = t.router({
   checkout: checkoutEstateCommand,
+  addUser: addUserToEstate,
 });

@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { t } from "../config.ts";
-import { getRepoAccessToken } from "../github-utils.ts";
 
 export const ghPrintSetup = t.procedure
   .input(
@@ -10,6 +9,7 @@ export const ghPrintSetup = t.procedure
   )
   .mutation(async ({ input }) => {
     const { estateId } = input;
+    const { getRepoAccessToken } = await import("../github-utils.ts");
     const { token } = await getRepoAccessToken(estateId);
     console.log(`Use this token to authenticate with the token scoped to this estate`);
     console.log(`export GH_TOKEN=${token}`);

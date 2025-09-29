@@ -32,6 +32,7 @@ import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
  * Then when it requires to get tokens(), it will get them from the account table.
  * Congrats, we successfully connected to the MCP server.
  */
+
 export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
   serverId: string | undefined;

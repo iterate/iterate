@@ -218,16 +218,20 @@ export const providerEstateMappingRelations = relations(providerEstateMapping, (
   }),
 }));
 
-export const organizationUserMembership = pgTable("organization_user_membership", (t) => ({
-  id: iterateId("member"),
-  organizationId: t.text().notNull(),
-  userId: t.text().notNull(),
-  role: t
-    .text({ enum: ["member", "admin", "owner", "guest"] })
-    .notNull()
-    .default("member"),
-  ...withTimestamps,
-}));
+export const organizationUserMembership = pgTable(
+  "organization_user_membership",
+  (t) => ({
+    id: iterateId("member"),
+    organizationId: t.text().notNull(),
+    userId: t.text().notNull(),
+    role: t
+      .text({ enum: ["member", "admin", "owner", "guest"] })
+      .notNull()
+      .default("member"),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.userId, t.organizationId)],
+);
 export const organizationUserMembershipRelations = relations(
   organizationUserMembership,
   ({ one }) => ({

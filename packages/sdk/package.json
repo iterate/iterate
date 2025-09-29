@@ -2,18 +2,30 @@
   "name": "@iterate-com/sdk",
   "type": "module",
   "version": "0.0.1",
-  "main": "./src/sdk.ts",
   "bin": {
     "iterate": "./cli.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "cli.js",
+    "tsconfig.json"
+  ],
   "exports": {
-    ".": "./src/sdk.ts",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
     "./tsconfig.json": "./tsconfig.json"
   },
   "dependencies": {
-    "@iterate-com/os": "workspace:*"
+    "dedent": "^1.7.0",
+    "jsonata": "github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337",
+    "type-fest": "^5.0.0",
+    "zod": "^4.1.11"
   },
   "devDependencies": {
-    "tsdown": "^0.15.4"
+    "tinyexec": "^1.0.1"
   }
 }
