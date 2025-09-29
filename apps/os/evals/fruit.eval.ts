@@ -8,12 +8,12 @@ beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
 });
 
-evalite("agent knows when to end their turn", {
+evalite("fruit", {
   data: async () => {
     return [
       {
         input: {
-          slug: "multi-turn conversation",
+          slug: "green-fruit",
           messages: [
             // broken tool call
             { message: "name a green fruit", expected: "a green fruit" },
