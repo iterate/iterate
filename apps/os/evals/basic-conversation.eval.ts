@@ -1,11 +1,201 @@
+import * as path from "path";
+import * as fs from "fs";
+import { createRequire } from "module";
 import { evalite } from "evalite";
-import { beforeAll } from "vitest";
+import { createDatabase } from "evalite/db";
+import { createServer } from "evalite/server";
+import { afterAll, beforeAll } from "vitest";
 import { createTestHelper, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
 beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
+});
+
+beforeAll(async () => {
+  const server = createServer({
+    db: createDatabase(`node_modules/.evalite/cache.sqlite`),
+  });
+  server.start(7100);
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+
+  await fetch("http://localhost:7100/api/server-state").then(async (res) =>
+    console.log({ json: await res.json() }),
+  );
+  await fetch("http://localhost:7100/api/all-evals").then(async (res) =>
+    console.log({ json: await res.json() }),
+  );
+});
+
+afterAll(async () => {
+  await fetch("http://localhost:7100/api/all-evals").then(async (res) => {
+    const json: {
+      runs: { id: number; runType: "full" | "partial"; created_at: string };
+      evals: Array<{
+        created_at: string;
+        id: number;
+        name: string;
+        status: "fail" | "success" | "running";
+        filepath: string;
+        duration: number;
+        run_id: number;
+        results: Array<{
+          duration: number;
+          status: string; //Evalite.ResultStatus;
+          id: number;
+          eval_id: number;
+          created_at: string;
+          col_order: number;
+          input: unknown;
+          expected: unknown;
+          output: unknown;
+          rendered_columns: unknown;
+        }>;
+      }>;
+    } = await res.json();
+
+    const require = createRequire(import.meta.url);
+    const evalitePath = require.resolve("evalite");
+    const evaliteUIPath = path.join(evalitePath, "../..", "dist/ui");
+    console.log({ evaliteUIPath });
+
+    const pathsToStore = ["/api/server-state", "/api/menu-items"];
+    console.log({ json });
+    for (const e of json.evals) {
+      const query = { name: e.name };
+      pathsToStore.push(`/api/eval?${new URLSearchParams(query)}`);
+
+      e.results.forEach((r, i) => {
+        const query = {
+          name: e.name,
+          index: i.toString(),
+        };
+        pathsToStore.push(`/api/eval/result?${new URLSearchParams(query)}`);
+      });
+    }
+
+    const storedApiResponses = {} as Record<string, any>;
+    for (const path of pathsToStore) {
+      const res = await fetch("http://localhost:7100" + path);
+      const text = await res.text();
+      storedApiResponses[path] = text;
+    }
+
+    const uiFiles = fs.globSync(path.join(evaliteUIPath, "**/*"), { withFileTypes: true });
+    console.log({ uiFiles });
+    for (const file of uiFiles) {
+      if (!file.isFile()) continue;
+      const filepath = path.join(file.parentPath, file.name);
+      const target = path.join(
+        process.cwd(),
+        filepath.replace(evaliteUIPath, "ignoreme/evalite-ui"),
+      );
+      console.log({ target });
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      let content = fs.readFileSync(filepath, "utf8");
+      if (filepath.endsWith(".js")) {
+        content = content.replace(
+          /const (\w+)=await fetch/,
+          `
+          // shimmed fetch to return stored api responses
+          const storedApiResponses = ${JSON.stringify(storedApiResponses)};
+          ${async function fakeFetch(urlString: string, _whatever: {}) {
+            const url = new URL(urlString);
+
+            const match = Object.keys(storedApiResponses).find((p) => {
+              const storedUrl = new URL(url.origin + p);
+              if (storedUrl.pathname !== url.pathname) return false;
+              for (const [key, value] of url.searchParams.entries()) {
+                if ((storedUrl.searchParams.get(key) || "") !== (value || "")) return false;
+              }
+              return true;
+            });
+
+            if (match) {
+              return {
+                ok: true,
+                status: 200,
+                headers: {},
+                text: async () => storedApiResponses[match],
+                json: async () => JSON.parse(storedApiResponses[match]),
+              };
+            } else {
+              console.error("not found", url, Error().stack);
+              console.error("available paths:", Object.keys(storedApiResponses));
+
+              return {
+                ok: false,
+                status: 404,
+                headers: {},
+                text: async () => JSON.stringify({ error: "Not found" }),
+                json: async () => ({ error: "Not found" }),
+              };
+            }
+
+            // let pathname = new URL(url).pathname;
+
+            // pathname = url.slice("https://".length).split("/").slice(1).join("/");
+
+            // if (!(pathname in storedApiResponses)) {
+            //   if (window.location.pathname.startsWith("/eval/")) {
+            //     const [evalName, _resultDivider, resultIndex] = window.location.pathname
+            //       .replace("/eval/", "")
+            //       .split("/");
+            //     if (pathname === "/api/eval") {
+            //       pathname = `/api/eval?name=${evalName}`;
+            //     }
+            //     if (pathname === "/api/eval/result") {
+            //       pathname = `/api/eval/result?name=${evalName}&index=${resultIndex}`;
+            //     }
+            //   }
+            // }
+            // if (!(pathname in storedApiResponses) && pathname === "/api/eval") {
+            //   pathname = `/api/eval?name=${window.location.pathname.split("/").at(-1)!}`;
+            // }
+            // if (!(pathname in storedApiResponses)) {
+            //   pathname = pathname.replaceAll("%20", "+");
+            // }
+            // if (pathname in storedApiResponses) {
+            //   return {
+            //     ok: true,
+            //     status: 200,
+            //     headers: {},
+            //     text: async () => storedApiResponses[pathname],
+            //     json: async () => JSON.parse(storedApiResponses[pathname]),
+            //   };
+            // } else {
+            //   console.error("not found", pathname, Error().stack);
+            //   console.error("available paths:", Object.keys(storedApiResponses));
+
+            //   return {
+            //     ok: false,
+            //     status: 404,
+            //     headers: {},
+            //     text: async () => JSON.stringify({ error: "Not found" }),
+            //     json: async () => ({ error: "Not found" }),
+            //   };
+            // }
+          }.toString()}
+
+          const $1 = await fakeFetch
+        `.trim(),
+        );
+
+        content = content.replace(
+          /const (\w+)=new WebSocket/,
+          `
+          return;
+          const $1 = new WebSocket
+        `.trimEnd(),
+        );
+      }
+      fs.writeFileSync(target, content);
+    }
+
+    console.log({ evaliteUIPath });
+    // console.log({ json: await res.json() });
+  });
 });
 
 evalite("agent knows when to end their turn", {
