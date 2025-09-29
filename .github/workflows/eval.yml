@@ -36,8 +36,8 @@ jobs:
       - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
       - name: run os preview
-        working-directory: apps/os
         run: |
+          cd apps/os
           doppler run -- pnpm build
           doppler run -- pnpm vite preview &
           echo '
