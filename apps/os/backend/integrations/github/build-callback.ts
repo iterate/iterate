@@ -6,6 +6,7 @@ import type { Variables } from "../../worker";
 import * as schema from "../../db/schema.ts";
 import { verifySignedUrl, BuildCallbackPayload } from "../../utils/url-signing.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
+import { logger as console } from "../../tag-logger.ts";
 
 export const buildCallbackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 

@@ -3,6 +3,7 @@ import PQueue from "p-queue";
 import { eq, and } from "drizzle-orm";
 import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
+import { logger as console } from "../../tag-logger.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";

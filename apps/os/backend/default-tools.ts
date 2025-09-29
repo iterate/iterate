@@ -6,6 +6,7 @@ import type { AgentCoreEventInput } from "./agent/agent-core-schemas.ts";
 import type { DB } from "./db/client.ts";
 import { slackWebhookEvent } from "./db/schema.ts";
 import { uploadFile } from "./file-handlers.ts";
+import { logger as console } from "./tag-logger.ts";
 
 const ContentsOptions = z.object({
   text: z

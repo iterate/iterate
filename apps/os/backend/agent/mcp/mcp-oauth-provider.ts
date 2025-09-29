@@ -2,6 +2,7 @@ import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
+import { logger as console } from "../../tag-logger.ts";
 import type { Auth } from "../../auth/auth.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";

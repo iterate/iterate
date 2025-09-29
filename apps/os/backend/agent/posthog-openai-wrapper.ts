@@ -1,6 +1,7 @@
 import type OpenAI from "openai";
 import { SELF_AGENT_DISTINCT_ID, type PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { formatItemsForObservability } from "../utils/observability-formatter.ts";
+import { logger as console } from "../tag-logger.ts";
 
 // Global trace storage for conversation continuity
 const _traceStorage = new Map<

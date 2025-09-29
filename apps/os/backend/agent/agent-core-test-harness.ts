@@ -6,6 +6,7 @@
 
 import type { OpenAI } from "openai";
 import { test as base, vi } from "vitest";
+import { logger as console } from "../tag-logger.ts";
 import type { AgentCoreEvent, AgentCoreEventInput } from "./agent-core-schemas.ts";
 import {
   AgentCore,

@@ -6,6 +6,7 @@ import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
+import { logger as console } from "../../tag-logger.ts";
 import {
   rehydrateExistingMCPConnection,
   mcpManagerCache,

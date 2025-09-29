@@ -8,6 +8,7 @@ import type { DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
 import { getBaseURL } from "./utils/utils.ts";
+import { logger as console } from "./tag-logger.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;

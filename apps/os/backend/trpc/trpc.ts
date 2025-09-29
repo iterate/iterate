@@ -4,6 +4,7 @@ import { eq } from "drizzle-orm";
 import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
+import { logger as console } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];

@@ -9,6 +9,7 @@ import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
+import { logger as console } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";

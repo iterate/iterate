@@ -4,6 +4,7 @@ import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
+import { logger as console } from "../tag-logger.ts";
 import { integrationsPlugin } from "./integrations.ts";
 import { createUserOrganizationAndEstate } from "./hooks.ts";
 

@@ -4,6 +4,7 @@ import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
+import { logger as console } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";

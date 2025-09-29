@@ -8,6 +8,7 @@ import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
+import { logger as console } from "../../tag-logger.ts";
 import {
   extractBotUserIdFromAuthorizations,
   extractUserId,
