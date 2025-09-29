@@ -36,20 +36,24 @@ jobs:
       - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
       - name: run os preview
-        run: doppler run -- pnpm preview &
         working-directory: apps/os
-      - name: wait for preview to be ready
-        uses: nick-fields/retry@v3
-        with:
-          timeout_seconds: 30
-          max_attempts: 10
-          retry_wait_seconds: 5
-          command: |
-            echo '
-              const res = await fetch("http://localhost:5173");
-              if (!res.ok) throw new Error("Preview not ready");
-            ' > fetch.mjs
-            node fetch.mjs
+        run: |
+          doppler run -- pnpm preview &
+          echo '
+            const main = async () => {
+              for (let i = 0; i < 20; i++) {
+                try {
+                  const res = await fetch("http://localhost:5173");
+                  if (!res.ok) throw new Error("Preview not ready");
+                  return;
+                } catch (error) {
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+              }
+            }
+            await main();
+          ' > fetch.mjs
+          node fetch.mjs
       - name: run evals
         run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
         working-directory: apps/os
