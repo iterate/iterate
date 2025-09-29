@@ -129,8 +129,8 @@ export class TagLogger {
 /* eslint-disable no-console -- this is the one place where we use console */
 export const logger = new TagLogger({
   // cloudflare ignores everything after the first arg
-  debug: (...args) => (args.length === 0 ? console.debug(args[0]) : console.debug(args)),
-  info: (...args) => (args.length === 0 ? console.info(args[0]) : console.info(args)),
-  warn: (...args) => (args.length === 0 ? console.warn(args[0]) : console.warn(args)),
-  error: (...args) => (args.length === 0 ? console.error(args[0]) : console.error(args)),
+  debug: (...args) => (args.length <= 1 ? console.debug(...args) : console.debug(args)),
+  info: (...args) => (args.length <= 1 ? console.info(...args) : console.info(args)),
+  warn: (...args) => (args.length <= 1 ? console.warn(...args) : console.warn(args)),
+  error: (...args) => (args.length <= 1 ? console.error(...args) : console.error(args)),
 });
