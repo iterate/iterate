@@ -37,7 +37,7 @@ jobs:
         run: rm packages/ngrok/package.json
       - name: run os preview
         run: |
-          doppler run -- printenv
+          doppler run -- printenv > apps/os/.env
           cd apps/os
           doppler run -- pnpm build
           doppler run -- pnpm vite preview &
