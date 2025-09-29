@@ -41,12 +41,14 @@ jobs:
           doppler run -- pnpm preview &
           echo '
             const main = async () => {
-              for (let i = 0; i < 20; i++) {
+              for (let i = 0; i < 60; i++) {
                 try {
                   const res = await fetch("http://localhost:5173");
                   if (!res.ok) throw new Error("Preview not ready");
+                  console.log("Preview ready");
                   return;
                 } catch (error) {
+                  console.log(`Preview not ready, retrying ${i + 1}/60`);
                   await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               }
