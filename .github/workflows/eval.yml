@@ -57,6 +57,7 @@ jobs:
             await main();
           ' > fetch.mjs
           node fetch.mjs
-      - name: run evals
-        run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
-        working-directory: apps/os
+          doppler run -- pnpm evalite run-once
+      # - name: run evals
+      #   run: doppler run -- pnpm evalite | tee $GITHUB_STEP_SUMMARY
+      #   working-directory: apps/os
