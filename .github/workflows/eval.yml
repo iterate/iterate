@@ -38,7 +38,8 @@ jobs:
       - name: run os preview
         working-directory: apps/os
         run: |
-          doppler run -- pnpm preview &
+          doppler run -- pnpm build
+          doppler run -- pnpm vite preview &
           echo '
             const main = async () => {
               for (let i = 0; i < 120; i++) {

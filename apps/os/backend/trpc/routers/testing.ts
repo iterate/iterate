@@ -13,6 +13,12 @@ const createAdminUser = publicProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
+    const existing = await ctx.db.query.user.findFirst({
+      where: eq(schema.user.email, input.email),
+    });
+    if (existing) {
+      return { created: false }; // hope ur password is right, good luck
+    }
     const auth = getAuth(ctx.db);
     const _user = await auth.api
       .createUser({
