@@ -103,6 +103,7 @@ const exportEvaliteUI = async (
       );
 
       content = content.replace(
+        // no server so just disable websockets
         /const (\w+)=new WebSocket/,
         `
           return;
