@@ -65,7 +65,7 @@ const exportEvaliteUI = async (
             const url = new URL(urlString);
 
             const match = storedApiResponses.find((p) => {
-              const storedUrl = new URL(url.origin + p);
+              const storedUrl = new URL(url.origin + p.path);
               if (storedUrl.pathname !== url.pathname) return false;
 
               for (const [key, value] of url.searchParams.entries()) {

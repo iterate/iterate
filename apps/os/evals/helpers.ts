@@ -153,7 +153,7 @@ export async function createTestHelper(
     message: string,
     override: (event: MessageEvent) => MessageEvent = (ev) => ev,
   ) => {
-    logger.info(`[${agentName}] Sending user message: ${message}`);
+    // logger.info(`[${agentName}] Sending user message: ${message}`);
     const added = await addEvents([
       {
         type: "SLACK:WEBHOOK_EVENT_RECEIVED",
@@ -175,7 +175,7 @@ export async function createTestHelper(
           return endTurn ? text : undefined;
         },
       });
-      logger.info(`[${agentName}] Received reply: ${reply}`);
+      // logger.info(`[${agentName}] Received reply: ${reply}`);
       return reply;
     };
     return { waitForReply };
