@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
@@ -20,7 +21,11 @@ export const getAuth = (db: DB) =>
         allowDifferentEmails: true,
       },
     },
-    plugins: [integrationsPlugin()],
+    // for now, we only want to enable email and password login if we know we need it for testing
+    ...(import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
+      ? { emailAndPassword: { enabled: true } }
+      : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
+    plugins: [admin(), integrationsPlugin()],
     socialProviders: {
       google: {
         scope: [
