@@ -32,11 +32,11 @@ const exportEvaliteUI = async (
   const evalitePath = require.resolve("evalite");
   const evaliteUIPath = path.join(evalitePath, "../..", "dist/ui");
 
-  const storedApiResponses = {} as Record<string, any>;
+  const storedApiResponses: Array<{ path: string; text: string }> = [];
   for (const path of pathsToStore) {
     const res = await fetch(`http://localhost:${options.port}` + path);
     const text = await res.text();
-    storedApiResponses[path] = text;
+    storedApiResponses.push({ path, text });
   }
 
   const uiFiles = fs.globSync(path.join(evaliteUIPath, "**/*"), { withFileTypes: true });
@@ -57,11 +57,14 @@ const exportEvaliteUI = async (
           /** API responses stored during test run */
           const storedApiResponses = ${JSON.stringify(storedApiResponses)};
 
-          /** Shimmed fetch function to return stored API responses from test run */
+          /**
+           * Shimmed fetch function to return stored API responses from test run.
+           * this function is ✨serialized✨ and dumped into the UI bundle, so can't use any out-of-scope variables
+           */
           ${async function fakeFetch(urlString: string, _whatever: {}) {
             const url = new URL(urlString);
 
-            const match = Object.keys(storedApiResponses).find((p) => {
+            const match = storedApiResponses.find((p) => {
               const storedUrl = new URL(url.origin + p);
               if (storedUrl.pathname !== url.pathname) return false;
 
@@ -77,12 +80,13 @@ const exportEvaliteUI = async (
                 ok: true,
                 status: 200,
                 headers: {},
-                text: async () => storedApiResponses[match],
-                json: async () => JSON.parse(storedApiResponses[match]),
+                text: async () => match.text,
+                json: async () => JSON.parse(match.text),
               };
             } else {
-              console.error("not found", url.href, Error().stack);
-              console.error("available paths:", Object.keys(storedApiResponses));
+              const error = new Error(`path ${url} not found`);
+              const availablePaths = storedApiResponses.map((p) => p.path);
+              console.error(error, "Available paths: ", availablePaths);
 
               return {
                 ok: false,
@@ -95,7 +99,7 @@ const exportEvaliteUI = async (
           }.toString()}
 
           const $1 = await fakeFetch
-        `.trim(),
+        `.trimEnd(),
       );
 
       content = content.replace(
