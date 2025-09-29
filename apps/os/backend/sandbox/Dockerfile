@@ -8,7 +8,7 @@ ENV COMMAND_TIMEOUT_MS=180000
 #     npm install -g pnpm tsx
 
 # seems like the base image has npm already? https://hub.docker.com/layers/cloudflare/sandbox/0.0.0-0dad837-beta/images/sha256-7e55790050f562049cdd2292a57e9404b480de1c5fcba50417b2836542a4e68b
-RUN npm install -g pnpm tsx
+# RUN npm install -g pnpm tsx
 
 # Expose the ports you want to expose
 EXPOSE 3000
