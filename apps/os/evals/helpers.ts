@@ -3,13 +3,13 @@ import { expect, vi } from "vitest";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
+import { Eval, initLogger, type Span } from "braintrust";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
-import { Eval, initLogger, type Span } from "braintrust";
 
 export * from "./scorer.ts";
 

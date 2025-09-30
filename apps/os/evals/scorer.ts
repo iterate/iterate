@@ -3,8 +3,8 @@ import * as R from "remeda";
 import OpenAI from "openai";
 import { z } from "zod";
 import dedent from "dedent";
-import { zodTextFormat } from "./zod-openai.ts";
 import { startSpan } from "braintrust";
+import { zodTextFormat } from "./zod-openai.ts";
 
 const ScoreResult = z.object({
   score: z
