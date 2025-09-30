@@ -11,6 +11,14 @@ function codeblock(lang: string, code: string) {
 
 const rules: PackageRuleItem[] = [
   {
+    name: "iterate-branding",
+    description: "iterate branding",
+    rule: dedent`
+      When used inside a sentence, iterate doesn't need to be capitalised.
+    `,
+    alwaysApply: true,
+  },
+  {
     name: "naming-things",
     description: "Guidelines for naming things",
     rule: dedent`
