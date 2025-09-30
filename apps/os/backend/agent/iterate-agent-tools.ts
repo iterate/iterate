@@ -30,6 +30,10 @@ export const iterateAgentTools = defineDOTools({
         behaviour: z.literal("return-secret"),
         secret: z.string().describe("Secret value to return"),
       }),
+      z.object({
+        behaviour: z.literal("mystery-box"),
+        passphrase: z.string().describe("Passphrase to open the mystery box"),
+      }),
     ]),
   },
   reverse: {

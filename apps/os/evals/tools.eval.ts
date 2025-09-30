@@ -13,15 +13,13 @@ evalite("agent knows when to end their turn", {
     return [
       {
         input: {
-          slug: "multi-turn conversation",
+          slug: "reverse-string",
           messages: [
-            { message: "name a green fruit", expected: "a green fruit" },
-            { message: "name another", expected: "a green fruit, not the same as the first" },
-            { message: "name another", expected: "a green fruit, not the same as the 1st or 2nd" },
-          ].map((m, i) => {
-            m.expected += `. penalize emojis by ${10 + i * 5}%`;
-            return m;
-          }),
+            {
+              message: "reverse the string 'supercalifragilisticexpialidocious'",
+              expected: "supercalifragilisticexpialidocious",
+            },
+          ],
         },
       },
     ];

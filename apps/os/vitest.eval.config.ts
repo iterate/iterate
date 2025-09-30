@@ -18,7 +18,7 @@ type EvaliteRunnerTestCase = Omit<RunnerTestCase, "meta"> & {
 };
 class MyEvaliteReporter extends EvaliteReporter {
   override reportTestSummary(...args: MethodInputs["reportTestSummary"]): void {
-    console.log("reportTestSummary", args);
+    // console.log("reportTestSummary", args);
     const flattenSuiteTasks = (task: RunnerTask): Exclude<RunnerTask, { type: "suite" }>[] => {
       if (task.type !== "suite") return [task];
       return task.tasks.flatMap(flattenSuiteTasks);
@@ -26,20 +26,20 @@ class MyEvaliteReporter extends EvaliteReporter {
     const flatTasks = args[0].flatMap((test) =>
       test.tasks.flatMap(flattenSuiteTasks),
     ) as EvaliteRunnerTestCase[];
-    console.dir(
-      flatTasks.map((task) => ({
-        name: task.name,
-        type: task.type,
-        path: "filepath" in task ? String(task.filepath).replace(process.cwd() + "/", "") : null,
-        evalName: task.meta.evalite.result.evalName,
-        duration: task.meta.evalite.duration,
-        input: task.meta.evalite.result.input,
-        expect: task.meta.evalite.result.expected,
-        output: task.meta.evalite.result.output,
-        scores: task.meta.evalite.result.scores,
-      })),
-      { depth: null },
-    );
+    // console.dir(
+    //   flatTasks.map((task) => ({
+    //     name: task.name,
+    //     type: task.type,
+    //     path: "filepath" in task ? String(task.filepath).replace(process.cwd() + "/", "") : null,
+    //     evalName: task.meta.evalite.result.evalName,
+    //     duration: task.meta.evalite.duration,
+    //     input: task.meta.evalite.result.input,
+    //     expect: task.meta.evalite.result.expected,
+    //     output: task.meta.evalite.result.output,
+    //     scores: task.meta.evalite.result.scores,
+    //   })),
+    //   { depth: null },
+    // );
     super.reportTestSummary(...args);
     // console.dir(summary, { depth: null });
   }
