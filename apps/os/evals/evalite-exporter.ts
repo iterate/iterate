@@ -75,27 +75,7 @@ const exportEvaliteUI = async (
               return true;
             });
 
-            if (match) {
-              return {
-                ok: true,
-                status: 200,
-                headers: {},
-                text: async () => match.text,
-                json: async () => JSON.parse(match.text),
-              };
-            } else {
-              const error = new Error(`path ${url} not found`);
-              const availablePaths = storedApiResponses.map((p) => p.path);
-              console.error(error, "Available paths: ", availablePaths);
-
-              return {
-                ok: false,
-                status: 404,
-                headers: {},
-                text: async () => JSON.stringify({ error: "Not found" }),
-                json: async () => ({ error: "Not found" }),
-              };
-            }
+            return match ? new Response(match.text) : new Response("Not found", { status: 404 });
           }.toString()}
 
           const $1 = await fakeFetch
