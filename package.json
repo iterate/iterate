@@ -11,7 +11,7 @@
     "os": "pnpm run --filter ./apps/os",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
-    "lint:inspect": "npx @eslint/config-inspector",
+    "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "cd apps/os && pnpm tsdown",
     "test": "pnpm -r --parallel test",
     "test:watch": "pnpm -r --parallel test:watch",
