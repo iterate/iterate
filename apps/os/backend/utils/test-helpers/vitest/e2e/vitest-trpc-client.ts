@@ -3,7 +3,6 @@
 import { createTRPCClient, httpBatchLink, loggerLink } from "@trpc/client";
 import SuperJSON from "superjson";
 import type { AppRouter } from "../../../../trpc/root";
-import { logger as console } from "../../../tag-logger.ts";
 
 // TODO this needs a better place and obvs depends on which app we want to hit etc
 function _getDeployedURI() {
