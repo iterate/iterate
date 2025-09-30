@@ -31,11 +31,8 @@ const createAdminUser = publicProcedure
       })
       .catch(async (e) => {
         if (e.message.includes("already exists")) {
-          // const users = await auth.api.lis;
-          // return users.users[0];
           return { created: false };
         }
-        if (Math.random()) return { created: false };
         throw e;
       });
     return { created: true };
