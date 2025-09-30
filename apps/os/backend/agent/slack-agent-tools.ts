@@ -97,4 +97,22 @@ export const slackAgentTools = defineDOTools({
         ),
     }),
   },
+  searchSlackHistory: {
+    description: "Search the Slack workspace for more context",
+    input: z.object({
+      query: z
+        .string()
+        .describe(
+          'Full text search query to search Slack workspace. If more than one search term is provided, users and channels are also matched at a lower priority. To specifically search within a channel, group, or DM, add in:channel_name, in:group_name, or in:<@UserID>. To search for messages from a specific speaker, add from:<@UserID> or from:botname. For IM results, the type is set to "im" and the channel.name property contains the user ID of the target user. For private group results, type is set to "group". You can call this tool multiple times to search for more context in parallel.',
+        ),
+      sort: z
+        .enum(["score", "timestamp"])
+        .default("score")
+        .describe("Sort results by score or timestamp"),
+      sortDirection: z.enum(["asc", "desc"]).default("desc").describe("Sort direction"),
+      onBehalfOfIterateUserId: z
+        .string()
+        .describe("The Iterate user ID to search Slack workspace on behalf of"),
+    }),
+  },
 });

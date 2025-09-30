@@ -191,6 +191,7 @@ export const defaultContextRules = async () => [
       iterateAgentTool.listMyReminders(),
       iterateAgentTool.cancelReminder(),
       slackAgentTool.stopRespondingUntilMentioned(),
+      slackAgentTool.searchSlackHistory(),
       slackAgentTool.addSlackReaction(),
       slackAgentTool.removeSlackReaction(),
       slackAgentTool.uploadAndShareFileInSlack(),

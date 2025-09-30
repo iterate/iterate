@@ -3,9 +3,15 @@ import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import { waitUntil } from "cloudflare:workers";
+import { createAuthorizationURL } from "better-auth/oauth2";
+import { generateRandomString } from "better-auth/crypto";
 import { env as _env, env } from "../../env.ts";
-import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import {
+  getSlackAccessTokenForEstate,
+  getUserSlackAccessTokenForEstate,
+} from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
+import * as schema from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import type {
   AgentCoreDeps,
@@ -39,6 +45,7 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
+
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -811,5 +818,62 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       __pauseAgentUntilMentioned: true,
       __triggerLLMRequest: false,
     } satisfies MagicAgentInstructions;
+  }
+
+  // TODO: once we get access to the Slack Data Access API, we can use their semantic search in combination with full-text search
+  async searchSlackHistory(input: Inputs["searchSlackHistory"]) {
+    const userSlackAccessToken = await getUserSlackAccessTokenForEstate(
+      this.db,
+      this.databaseRecord.estateId,
+      input.onBehalfOfIterateUserId,
+    );
+    if (!userSlackAccessToken) {
+      const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
+      const state = generateRandomString(32);
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      const data = JSON.stringify({
+        callbackURL: "https://iterate.com",
+      });
+
+      await this.db.insert(schema.verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      const userSlackOAuthUrl = await createAuthorizationURL({
+        id: "slack-bot",
+        options: {
+          clientId: env.SLACK_CLIENT_ID,
+          clientSecret: env.SLACK_CLIENT_SECRET,
+          redirectURI,
+        },
+        redirectURI,
+        authorizationEndpoint: "https://slack.com/oauth/v2/authorize",
+        scopes: [],
+        state,
+        additionalParams: {
+          user_scope: "search:read",
+        },
+      });
+      return {
+        success: false,
+        error:
+          "To search Slack history, you need to ask user to grant access to search Slack history on their behalf",
+        url: userSlackOAuthUrl.toString(),
+      };
+    }
+    const userSlackAPI = new WebClient(userSlackAccessToken, {
+      rejectRateLimitedCalls: true,
+      retryConfig: { retries: 0 },
+    });
+
+    return await userSlackAPI.search.messages({
+      query: input.query,
+      count: 100,
+      sort: input.sort,
+      sort_dir: input.sortDirection,
+    });
   }
 }
