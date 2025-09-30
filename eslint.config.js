@@ -1,3 +1,6 @@
+// @ts-check
+import "tsx/esm";
+import { tsImport } from "tsx/esm/api";
 import js from "@eslint/js";
 import typescript from "@typescript-eslint/eslint-plugin";
 import typescriptParser from "@typescript-eslint/parser";
@@ -10,6 +13,16 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import eslintRisky from "eslint/use-at-your-own-risk";
 import globals from "globals";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
+
+/** @param {string} name */
+const getBuiltinRule = (name) => {
+  const rule = eslintRisky.builtinRules.get(name);
+  if (!rule) throw new Error(`Builtin rule ${name} not found`);
+  return rule;
+};
+
+/** @type {(typeof import("./vibe-rules/llms.ts"))} */
+const { default: vibeRules } = await tsImport("./vibe-rules/llms.ts", import.meta.url);
 
 export default defineConfig([
   {
@@ -253,7 +266,7 @@ export default defineConfig([
             },
           },
           "prefer-const": fixToSuggestionInIDE(
-            eslintRisky.builtinRules.get("prefer-const"),
+            getBuiltinRule("prefer-const"),
             "Change to const, if you're finished tinkering",
           ),
           "side-effect-imports-first": {
@@ -300,14 +313,11 @@ export default defineConfig([
       "iterate/zod-schema-naming": "error",
     },
   },
-  {
-    name: "iterate-os-backend", // backend-only rule config
-    files: ["apps/os/backend/**/*.ts"],
-    ignores: ["**/*test*/**", "**/*test*"],
-    rules: {
-      "no-console": "error",
-    },
-  },
+  ...vibeRules.flatMap((rule) => {
+    if (!rule.eslint) return [];
+    const { eslint, globs: files, name } = rule;
+    return [{ name: `vibe-rules/${name}`, files, ...eslint }];
+  }),
 ]);
 
 /** @param {import("eslint").Rule.RuleModule} builtinRule */
