@@ -19,7 +19,8 @@
     "typecheck": "pnpm run cf-typegen && react-router typegen && tsc -b",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "db:studio:prd": "bash -c 'echo \"\" && echo \"🚨🚨🚨 PRODUCTION DATABASE - REALLY DANGEROUS 🚨🚨🚨\" && echo \"\" && read -p \"Press RETURN to continue or Ctrl+C to abort...\" && export PSCALE_DATABASE_URL=$(doppler secrets get --plain DRIZZLE_RW_POSTGRES_CONNECTION_STRING) && drizzle-kit studio'"
   },
   "dependencies": {
     "@cfworker/json-schema": "^4.1.1",
