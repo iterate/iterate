@@ -1,5 +1,4 @@
 // @ts-check
-import "tsx/esm";
 import { tsImport } from "tsx/esm/api";
 import js from "@eslint/js";
 import typescript from "@typescript-eslint/eslint-plugin";
