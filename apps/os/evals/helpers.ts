@@ -9,6 +9,7 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
+import { Eval, initLogger, type Span } from "braintrust";
 
 export * from "./scorer.ts";
 
@@ -19,6 +20,31 @@ export const authClient = createAuthClient({
   baseURL: `${baseURL}/api/auth`,
   plugins: [adminClient()],
 });
+
+async function makeEvalSpan({
+  projectName,
+  experimentName,
+  metadata,
+}: {
+  projectName: string;
+  experimentName: string;
+  metadata: Record<string, unknown>;
+}): Promise<Span> {
+  // this is a hack to get a span inside the 'experiments' tab
+  // instead of the 'logs' tab - it allows us to create better graphs
+  return new Promise((resolve, reject) => {
+    Eval(projectName, {
+      experimentName,
+      data: [{ input: null }],
+      scores: [],
+      metadata,
+      task: (_input, hooks) => {
+        resolve(hooks.span);
+        return null;
+      },
+    }).then(() => reject(new Error("Failed to create eval span")));
+  });
+}
 
 /** Gets an agent name based on the currently running test name and some (text) input */
 export function testAgentName(input: string) {
@@ -70,6 +96,27 @@ export async function createTestHelper(
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
   fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
   fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
+
+  // inject braintrust span id into the agent
+  initLogger({
+    projectName: `boris-evals`,
+    apiKey: process.env.BRAINTRUST_API_KEY,
+  });
+  const evalSpan = await makeEvalSpan({
+    projectName: "boris-evals",
+    experimentName: input,
+    metadata: {
+      evalName: input,
+      batchId: Date.now().toString(),
+    },
+  });
+  const braintrustSpanExportedId = await evalSpan.export();
+  await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
+    agentInstanceName: agentName,
+    agentClassName: "SlackAgent",
+    estateId,
+    braintrustParentSpanExportedId: braintrustSpanExportedId,
+  });
 
   // initialise slack state - right now we require channel and thread to be set independently of the webhook
   // (although this is in the onWebhookReceived method, we don't actually call that in the eval, we create events directly)
@@ -189,6 +236,7 @@ export async function createTestHelper(
     // getState,
     waitForEvent: waitForEvent as WaitForEvent,
     sendUserMessage,
+    braintrustSpanExportedId,
   };
 }
 export type WaitUntilOptions = {
