@@ -86,6 +86,7 @@ export const integrationsRouter = router({
 
     // Add estate-wide accounts
     estateAccounts.forEach(({ account: acc_item }) => {
+      // Skip if account is null (orphaned permission record)
       if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
@@ -105,7 +106,7 @@ export const integrationsRouter = router({
 
       // Check if this account is already in estate-wide connections
       const isAlreadyEstateWide = estateAccounts.some(
-        ({ account: estateAcc }) => estateAcc.id === acc_item.id,
+        ({ account: estateAcc }) => estateAcc?.id === acc_item.id,
       );
 
       if (!isAlreadyEstateWide) {
@@ -166,8 +167,8 @@ export const integrationsRouter = router({
       }
 
       const accounts = estateAccounts
-        .filter(({ account: acc }) => acc.providerId === input.providerId)
-        .map(({ account: acc }) => acc);
+        .filter(({ account: acc }) => acc && acc.providerId === input.providerId)
+        .map(({ account: acc }) => acc!);
 
       return {
         id: input.providerId,
@@ -444,12 +445,12 @@ export const integrationsRouter = router({
         });
 
         const estateAccountsToDisconnect = estateAccounts.filter(
-          ({ account: acc }) => acc.providerId === providerId,
+          ({ account: acc }) => acc && acc.providerId === providerId,
         );
 
         if (estateAccountsToDisconnect.length > 0) {
           // Delete estate permissions for these accounts
-          const accountIds = estateAccountsToDisconnect.map(({ account: acc }) => acc.id);
+          const accountIds = estateAccountsToDisconnect.map(({ account: acc }) => acc!.id);
           await ctx.db
             .delete(estateAccountsPermissions)
             .where(
@@ -474,7 +475,7 @@ export const integrationsRouter = router({
 
             // Always revoke the GitHub app installation
             for (const { account: acc } of estateAccountsToDisconnect) {
-              if (acc.providerId === "github-app" && acc.accountId) {
+              if (acc && acc.providerId === "github-app" && acc.accountId) {
                 try {
                   // Generate JWT for authentication
                   const jwt = await generateGithubJWT();
@@ -517,7 +518,7 @@ export const integrationsRouter = router({
 
             // If this account is not used by any other estate and belongs to the current user, delete it
             const acc = estateAccountsToDisconnect.find(
-              (ea) => ea.account.id === accountId,
+              (ea) => ea.account?.id === accountId,
             )?.account;
             if (!otherEstatePermissions && acc?.userId === ctx.user.id) {
               await ctx.db.delete(account).where(eq(account.id, accountId));
