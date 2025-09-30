@@ -295,13 +295,13 @@ export function IterateEval<TInput, TOutput, TExpected>(
   },
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
-  const braintrustSpans = new Promise<Record<string, Span>>(async (resolve) => {
+  const braintrustSpans = new Promise<Record<string, Span>>((resolve, reject) => {
     const spanMap: Record<string, Span> = {};
     initLogger({
       projectName: `boris-evals`,
       apiKey: process.env.BRAINTRUST_API_KEY,
     });
-    await Eval("boris-evals", {
+    Eval("boris-evals", {
       experimentName,
       data: opts.data(),
       scores: [],
@@ -312,8 +312,9 @@ export function IterateEval<TInput, TOutput, TExpected>(
         spanMap[hash(input)] = hooks.span;
         return null;
       },
-    });
-    resolve(spanMap);
+    })
+      .then(() => resolve(spanMap))
+      .catch((err) => reject(err));
   });
 
   const braintrustScorerWrapper: (
