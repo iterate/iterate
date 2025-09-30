@@ -1,11 +1,7 @@
-import type {
-  AnyRouter,
-  BuiltRouter,
-  MutationProcedure,
-  QueryProcedure,
-} from "@trpc/server/unstable-core-do-not-import";
-import type { AnyTRPCRootTypes, AnyTRPCRouter } from "@trpc/server";
+import type { MutationProcedure, QueryProcedure } from "@trpc/server/unstable-core-do-not-import";
 import { z } from "zod/v4";
+
+export type Branded<Brand extends string, Value = string> = Value & z.$brand<Brand>;
 
 // Create a proper recursive schema for JSONSerializable
 export const JSONSerializable: z.ZodType<JSONSerializable> = z.lazy(() =>
@@ -187,81 +183,6 @@ export type Prettify<Type> = Type extends (...args: any[]) => any
     >;
 
 /**
- * Converts a union type into a single intersection type.
- * @example
- * type A = { a: number};
- * type B = { b: string };
- * type C = A | B;
- * //   ^? { a: number } | { b: string }
- * type D = UnionToIntersection<C>;
- * //   ^? { a: number;} & { b: string }
- */
-export type UnionToIntersection<U> = (U extends any ? (k: U) => void : never) extends (
-  k: infer I,
-) => void
-  ? I
-  : never;
-
-/**
- * Flattens a object type into dot notation keys.
- * Useful for working with trpc routers
- * @example
- * type A = { a: { b: { c: number } } };
- * type B = FlattenObject<A>;
- * //   ^? { "a.b.c": number }
- */
-export type FlattenObject<T> = Prettify<UnionToIntersection<FlattenKeys<T, "">>>;
-
-type FlattenKeys<T, P extends string> = {
-  [K in keyof T]: K extends string
-    ? T[K] extends (...args: any[]) => any
-      ? { [Key in P extends "" ? K : `${P}.${K}`]: T[K] }
-      : T[K] extends Record<string, any>
-        ? FlattenKeys<T[K], P extends "" ? K : `${P}.${K}`>
-        : { [Key in P extends "" ? K : `${P}.${K}`]: T[K] }
-    : never;
-}[keyof T];
-
-/**
- * Extracts a definition from a trpc procedure.
- * @example
- * type A = QueryProcedure<{ input: { a: number }, .... }>;
- * type B = ProcedureToDef<A, "input">;
- * //   ^? { a: number }
- */
-export type ProcedureToDef<P, Key extends "input" | "output"> = P extends
-  | MutationProcedure<infer Def>
-  | QueryProcedure<infer Def>
-  ? Def[Key] extends void
-    ? Key extends "input"
-      ? null
-      : void
-    : Def[Key]
-  : never;
-
-/**
- * Helper type to get the input type by path from a trpc router.
- * @example
- * type Input = PathToInput<App1Router, "a.b.c">;
- * //   ^? { ... }
- */
-export type PathToInput<
-  Router extends AnyRouter,
-  Path extends keyof FlattenObject<Router["_def"]["procedures"]>,
-> = ProcedureToDef<FlattenObject<Router["_def"]["procedures"]>[Path], "input">;
-
-/**
- * Helper type to get the output type by path from a trpc router.
- * @example
- * type Output = PathToOutput<App1Router, "a.b.c">;
- * //   ^? { ... }
- */
-export type PathToOutput<
-  Router extends AnyRouter,
-  Path extends keyof FlattenObject<Router["_def"]["procedures"]>,
-> = ProcedureToDef<FlattenObject<Router["_def"]["procedures"]>[Path], "output">;
-
-/**
  * Throws an error if the input is not exhaustive. Used as default case in switch statements.
  * @example
  * switch (x) {
@@ -340,13 +261,6 @@ export function getOrigin(req: Request): string {
   const origin = `${protocol}${protocol.endsWith(":") ? "" : ":"}//${host}`;
   return origin;
 }
-
-export type MergeTrpcRouters<Routers extends Record<string, AnyTRPCRouter>> = BuiltRouter<
-  AnyTRPCRootTypes,
-  {
-    [K in keyof Routers]: Routers[K]["_def"]["procedures"];
-  }
->;
 
 /**
  * A way to backwards-compatibly deprecate a type. The `old` type will still be accepted at runtime, but at compile time
