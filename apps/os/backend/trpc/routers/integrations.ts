@@ -6,6 +6,7 @@ import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
+import { logger as console } from "../../tag-logger.ts";
 import {
   generateGithubJWT,
   getGithubInstallationForEstate,

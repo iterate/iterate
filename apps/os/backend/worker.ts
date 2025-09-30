@@ -18,6 +18,7 @@ import { OrganizationWebSocket } from "./durable-objects/organization-websocket.
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
+import { logger as console } from "./tag-logger.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {

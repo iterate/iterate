@@ -3,6 +3,7 @@ import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
 import jsonataLib from "jsonata/sync";
+import { logger as console } from "../tag-logger.ts";
 import type {
   ContextRule,
   ContextRuleMatcher,

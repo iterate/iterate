@@ -2,6 +2,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { typeid } from "typeid-js";
 import dedent from "dedent";
 import type { CloudflareEnv } from "../../env.ts";
+import { logger as console } from "../tag-logger.ts";
 
 export interface RunConfigOptions {
   githubRepoUrl: string;

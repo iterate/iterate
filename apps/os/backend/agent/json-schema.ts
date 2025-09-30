@@ -1,6 +1,7 @@
 import { prettifyError, z } from "zod/v4";
 import type { AnyProcedure, AnyTRPCRouter } from "@trpc/server";
 import { constructMergeSchema } from "../utils/schema-helpers.ts";
+import { logger as console } from "../tag-logger.ts";
 import type { RuntimeJsonSchema } from "./do-tools.ts";
 
 export type DurableObjectClass<T = any> = new (ctx: DurableObjectState, env: any) => T;

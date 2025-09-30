@@ -4,6 +4,7 @@ import { type Schema, Validator } from "@cfworker/json-schema";
 import type z from "zod/v4";
 import { toJSONSchema, type ZodType } from "zod/v4";
 import type { JSONSchema } from "zod/v4/core";
+import { logger as console } from "../tag-logger.ts";
 
 // Backward compatibility - alias BaseJSONSchema to JSONSchema.JSONSchema
 export type BaseJSONSchema = JSONSchema.JSONSchema;

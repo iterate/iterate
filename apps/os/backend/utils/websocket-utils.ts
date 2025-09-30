@@ -1,5 +1,6 @@
 import type { CloudflareEnv } from "../../env.ts";
 import type { PushControllerEvent } from "../durable-objects/organization-websocket.ts";
+import { logger as console } from "../tag-logger.ts";
 
 /**
  * Send an invalidation message to all connected WebSocket clients for an organization

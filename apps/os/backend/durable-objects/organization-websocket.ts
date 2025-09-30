@@ -4,6 +4,7 @@ import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
 import { getAuth } from "../auth/auth.ts";
 import { getUserEstateAccess } from "../trpc/trpc.ts";
+import { logger as console } from "../tag-logger.ts";
 
 // Event schemas for WebSocket communication
 export const InvalidateInfo = z.discriminatedUnion("type", [
