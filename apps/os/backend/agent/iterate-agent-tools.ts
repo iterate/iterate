@@ -12,25 +12,27 @@ export const iterateAgentTools = defineDOTools({
   flexibleTestTool: {
     description:
       "Flexible testing tool that can simulate slow responses, errors, or return secrets based on behaviour",
-    input: z.discriminatedUnion("behaviour", [
-      z.object({
-        behaviour: z.literal("slow-tool"),
-        recordStartTime: z
-          .boolean()
-          .default(false)
-          .describe("Whether to record the start time of the tool call"),
-        delay: z.number().describe("Delay in milliseconds before responding"),
-        response: z.string().describe("Response message to return after delay"),
-      }),
-      z.object({
-        behaviour: z.literal("raise-error"),
-        error: z.string().describe("Error message to throw"),
-      }),
-      z.object({
-        behaviour: z.literal("return-secret"),
-        secret: z.string().describe("Secret value to return"),
-      }),
-    ]),
+    input: z.object({
+      params: z.discriminatedUnion("behaviour", [
+        z.object({
+          behaviour: z.literal("slow-tool"),
+          recordStartTime: z
+            .boolean()
+            .default(false)
+            .describe("Whether to record the start time of the tool call"),
+          delay: z.number().describe("Delay in milliseconds before responding"),
+          response: z.string().describe("Response message to return after delay"),
+        }),
+        z.object({
+          behaviour: z.literal("raise-error"),
+          error: z.string().describe("Error message to throw"),
+        }),
+        z.object({
+          behaviour: z.literal("return-secret"),
+          secret: z.string().describe("Secret value to return"),
+        }),
+      ]),
+    }),
   },
   reverse: {
     description: "Reverse a string",

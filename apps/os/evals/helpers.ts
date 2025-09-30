@@ -9,6 +9,7 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
+import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 
 export * from "./scorer.ts";
 
@@ -93,6 +94,27 @@ export async function createTestHelper(
       >[0]["events"],
     });
   }
+
+  function toolSpecName(toolSpec: ToolSpec) {
+    if (toolSpec.type === "agent_durable_object_tool") return toolSpec.methodName;
+    return Date.now().toString();
+  }
+
+  async function addToolSpec(...toolSpecs: ToolSpec[]) {
+    return addEvents([
+      {
+        type: "CORE:ADD_CONTEXT_RULES",
+        data: {
+          rules: toolSpecs.map((toolSpec) => ({
+            key: `add-tool-${toolSpecName(toolSpec)}`,
+            tools: [toolSpec],
+          })),
+        },
+        triggerLLMRequest: false,
+      },
+    ]);
+  }
+
   const getEvents = async () => {
     const events = await trpcClient.agents.getEvents.query({
       estateId,
@@ -165,7 +187,7 @@ export async function createTestHelper(
       },
     ]);
 
-    const waitForReply = async () => {
+    const waitForReply = async (options?: WaitUntilOptions) => {
       const reply = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", added, {
         select: (e) => {
           if (e.data.call.status !== "completed" || e.data.call.name !== "sendSlackMessage") return;
@@ -175,11 +197,20 @@ export async function createTestHelper(
           };
           return endTurn ? text : undefined;
         },
+        ...(options as {}),
       });
       logger.info(`[${agentName}] Received reply: ${reply}`);
       return reply;
     };
     return { waitForReply };
+  };
+
+  const getAgentDebugURL = async () => {
+    return trpcClient.agents.getAgentDebugURL.query({
+      estateId,
+      agentInstanceName: agentName,
+      agentClassName: "SlackAgent",
+    });
   };
 
   return {
@@ -189,6 +220,8 @@ export async function createTestHelper(
     // getState,
     waitForEvent: waitForEvent as WaitForEvent,
     sendUserMessage,
+    getAgentDebugURL,
+    addToolSpec,
   };
 }
 export type WaitUntilOptions = {

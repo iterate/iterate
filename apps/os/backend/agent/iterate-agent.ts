@@ -895,7 +895,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   ping() {
     return { message: "pong back at you!" };
   }
-  async flexibleTestTool(input: Inputs["flexibleTestTool"]) {
+  async flexibleTestTool({ params: input }: Inputs["flexibleTestTool"]) {
     switch (input.behaviour) {
       case "slow-tool": {
         const start = input.recordStartTime ? new Date().toISOString() : undefined;
@@ -905,7 +905,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       case "raise-error":
         throw new Error(input.error);
       case "return-secret":
-        return { secret: input.secret, behaviour: "return-secret" };
+        return { ...input, serverSecret: "rumplestiltskin" };
       default:
         throw new Error("Unknown behaviour");
     }

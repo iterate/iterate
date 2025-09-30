@@ -38,6 +38,11 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     scoringError = err;
   });
 
+  const scoreManually = async (newMessages: string[], score: { score: number; reason: string }) => {
+    conversation.push(...newMessages);
+    scores.push({ ...score, messages: newMessages });
+  };
+
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
     const score: ScoreResult = { score: 0, reason: "pending", messages: newMessages };
@@ -82,6 +87,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
       if (scoringError) throw scoringError;
       scoringQueue.add(() => scoreTurn(...args));
     },
+    scoreManually,
     conversation,
   };
 }

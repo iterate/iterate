@@ -11,6 +11,7 @@
     "deploy": "doppler run -- pnpm run build && doppler run -- wrangler deploy",
     "dev": "./scripts/dev-wrapper.sh",
     "evals": "doppler run -- evalite run-once && tsx evals/evalite-exporter.ts",
+    "evals:serve": "pnpx serve ignoreme/evalite-ui",
     "evals:watch": "doppler run -- evalite watch",
     "iterate": "tsx sdk/cli/index.ts",
     "preview": "pnpm run build && vite preview",
