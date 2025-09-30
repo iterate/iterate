@@ -11,6 +11,7 @@
     "os": "pnpm run --filter ./apps/os",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
+    "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "cd apps/os && pnpm tsdown",
     "test": "pnpm -r --parallel test",
     "test:watch": "pnpm -r --parallel test:watch",
@@ -42,6 +43,7 @@
     "eslint-plugin-unicorn": "^61.0.2",
     "globals": "^16.4.0",
     "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },
   "dependencies": {

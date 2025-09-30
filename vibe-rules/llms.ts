@@ -9,7 +9,15 @@ function codeblock(lang: string, code: string) {
   `;
 }
 
-const rules: PackageRuleItem[] = [
+type RuleSeverity = "error" | "warn" | "off";
+type PackageRuleItemWithESLintEnforcement = Extract<PackageRuleItem, { name: string }> & {
+  eslint?: {
+    ignores?: string[];
+    rules: Record<string, RuleSeverity | [RuleSeverity, ...unknown[]]>;
+  };
+};
+
+const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
     name: "iterate-branding",
     description: "iterate branding",
@@ -313,6 +321,21 @@ const rules: PackageRuleItem[] = [
       Always test your schemas with the actual OpenAI API to ensure compatibility.
     `,
     globs: ["**/*.ts", "**/*.tsx"],
+  },
+  {
+    name: "logging",
+    description: "Logging guidelines",
+    rule: dedent`
+      - In general, logs in production are not looked at, so don't add them unless we specifically need them for debugging something.
+      - Do not use the \`console\` object, use the \`logger\` object from \`apps/os/backend/tag-logger.ts\`.
+    `,
+    globs: ["apps/os/backend/**/*.ts"],
+    eslint: {
+      ignores: ["**/*test*/**", "**/*test*"],
+      rules: {
+        "no-console": "error",
+      },
+    },
   },
 ];
 
