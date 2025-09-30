@@ -63,7 +63,7 @@ const setUserRole = testingProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const result = ctx.db
+    const result = await ctx.db
       .update(schema.user)
       .set({ role: input.role })
       .where(eq(schema.user.email, input.email))
