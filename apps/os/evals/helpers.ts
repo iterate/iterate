@@ -5,6 +5,9 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
 import type { StandardSchemaV1 } from "better-auth"; // standard schema v1 can come from anywhere really but better-auth is kind enough to export it
+import { Eval, initLogger, type Span } from "braintrust";
+import { evalite } from "evalite";
+import type { Evalite } from "evalite/types";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
@@ -12,9 +15,6 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import { Eval, initLogger, type Span } from "braintrust";
-import { evalite } from "evalite";
-import type { Evalite } from "evalite/types";
 
 export * from "./scorer.ts";
 
