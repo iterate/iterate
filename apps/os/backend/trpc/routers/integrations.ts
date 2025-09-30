@@ -346,6 +346,59 @@ export const integrationsRouter = router({
         })
         .where(eq(schemas.estate.id, estateId));
 
+      // Trigger an initial build after connecting the repository
+      try {
+        // Get the GitHub installation
+        const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+        if (githubInstallation) {
+          // Get installation token
+          const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+          // Fetch the latest commit on the branch
+          const branchResponse = await fetch(
+            `https://api.github.com/repositories/${repoId}/branches/${branch}`,
+            {
+              headers: {
+                Authorization: `Bearer ${installationToken}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "Iterate OS",
+              },
+            },
+          );
+
+          if (branchResponse.ok) {
+            const branchData = z
+              .object({
+                commit: z.object({
+                  sha: z.string(),
+                  commit: z.object({
+                    message: z.string(),
+                  }),
+                }),
+              })
+              .parse(await branchResponse.json());
+            const commitHash = branchData.commit.sha;
+            const commitMessage = branchData.commit.commit.message;
+
+            if (commitHash && commitMessage) {
+              // Import and use the helper function to trigger a build
+              const { triggerEstateRebuild } = await import("./estate.ts");
+              await triggerEstateRebuild({
+                db: ctx.db,
+                env: ctx.env,
+                estateId,
+                commitHash,
+                commitMessage,
+                isManual: false, // This is an automatic build
+              });
+            }
+          }
+        }
+      } catch (error) {
+        // Log the error but don't fail the connection
+        console.error("Failed to trigger initial build:", error);
+      }
+
       return {
         success: true,
       };

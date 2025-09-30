@@ -13,6 +13,7 @@ import {
   CheckCircle,
   XCircle,
   RefreshCw,
+  Hammer,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -143,6 +144,9 @@ function EstateContent() {
   const [expandedBuilds, setExpandedBuilds] = useState<Set<string>>(new Set());
   const [isTemplateDialogOpen, setIsTemplateDialogOpen] = useState(false);
   const [templateRepoName, setTemplateRepoName] = useState("iterate");
+  const [isRebuildDialogOpen, setIsRebuildDialogOpen] = useState(false);
+  const [rebuildTarget, setRebuildTarget] = useState("");
+  const [rebuildTargetType, setRebuildTargetType] = useState<"branch" | "commit">("branch");
 
   // Get estate ID from URL
   const estateId = useEstateId();
@@ -249,6 +253,8 @@ function EstateContent() {
   const createTemplateRepoMutation = useMutation(
     trpc.integrations.createTemplateRepo.mutationOptions({}),
   );
+
+  const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
 
   const handleConnectRepo = () => {
     if (!displaySelectedRepo) {
@@ -397,6 +403,58 @@ function EstateContent() {
         },
         onError: () => {
           toast.error("Failed to create template repository");
+        },
+      },
+    );
+  };
+
+  const handleTriggerRebuild = () => {
+    if (!rebuildTarget.trim()) {
+      toast.error(`Please enter a ${rebuildTargetType} to rebuild`);
+      return;
+    }
+
+    triggerRebuildMutation.mutate(
+      {
+        estateId: estateId!,
+        target: rebuildTarget.trim(),
+        targetType: rebuildTargetType,
+      },
+      {
+        onSuccess: (data) => {
+          toast.success(data.message || "Rebuild triggered successfully");
+          setIsRebuildDialogOpen(false);
+          setRebuildTarget(""); // Reset
+          setRebuildTargetType("branch"); // Reset to default
+          // Refresh the builds list
+          queryClient.invalidateQueries({
+            queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+          });
+        },
+        onError: (error) => {
+          toast.error(error.message || "Failed to trigger rebuild");
+        },
+      },
+    );
+  };
+
+  const handleRebuildCommit = (build: Build) => {
+    triggerRebuildMutation.mutate(
+      {
+        estateId: estateId!,
+        target: build.commitHash,
+        targetType: "commit" as const,
+      },
+      {
+        onSuccess: () => {
+          toast.success(`Rebuilding commit ${build.commitHash.substring(0, 7)}`);
+          // Refresh the builds list
+          queryClient.invalidateQueries({
+            queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+          });
+        },
+        onError: (error) => {
+          toast.error(error.message || "Failed to trigger rebuild");
         },
       },
     );
@@ -613,7 +671,22 @@ function EstateContent() {
       {/* Build History Section */}
       {connectedRepo && (
         <div className="mt-12">
-          <h3 className="text-2xl font-bold text-slate-900 dark:text-white mb-6">Build History</h3>
+          <div className="flex items-center justify-between mb-6">
+            <h3 className="text-2xl font-bold text-slate-900 dark:text-white">Build History</h3>
+            <Button
+              onClick={() => {
+                setIsRebuildDialogOpen(true);
+                // Default to the current connected branch
+                setRebuildTarget(connectedRepo.branch || "main");
+              }}
+              variant="outline"
+              size="sm"
+              className="flex items-center gap-2"
+            >
+              <Hammer className="h-4 w-4" />
+              Trigger Rebuild
+            </Button>
+          </div>
 
           {buildsLoading ? (
             <div className="flex items-center justify-center py-8">
@@ -679,6 +752,29 @@ function EstateContent() {
                               </span>
                             </div>
                           )}
+                          <div className="pt-2">
+                            <Button
+                              onClick={() => handleRebuildCommit(build)}
+                              disabled={
+                                triggerRebuildMutation.isPending || build.status === "in_progress"
+                              }
+                              variant="outline"
+                              size="sm"
+                              className="flex items-center gap-2"
+                            >
+                              {triggerRebuildMutation.isPending ? (
+                                <>
+                                  <Loader2 className="h-3 w-3 animate-spin" />
+                                  Triggering...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="h-3 w-3" />
+                                  Rebuild This Commit
+                                </>
+                              )}
+                            </Button>
+                          </div>
                         </div>
                       </div>
                     )}
@@ -745,6 +841,102 @@ function EstateContent() {
                 </>
               ) : (
                 "Create Repository"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Rebuild Dialog */}
+      <Dialog
+        open={isRebuildDialogOpen}
+        onOpenChange={(open) => {
+          setIsRebuildDialogOpen(open);
+          if (!open) {
+            // Reset when closing
+            setRebuildTarget("");
+            setRebuildTargetType("branch");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Trigger Manual Rebuild</DialogTitle>
+            <DialogDescription>
+              Specify a branch or commit hash to rebuild from your connected repository.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Target Type
+              </label>
+              <Select
+                value={rebuildTargetType}
+                onValueChange={(value: "branch" | "commit") => setRebuildTargetType(value)}
+                disabled={triggerRebuildMutation.isPending}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="branch">Branch</SelectItem>
+                  <SelectItem value="commit">Commit Hash</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                {rebuildTargetType === "branch" ? "Branch Name" : "Commit Hash"}
+              </label>
+              <Input
+                value={rebuildTarget}
+                onChange={(e) => setRebuildTarget(e.target.value)}
+                placeholder={
+                  rebuildTargetType === "branch" ? connectedRepo?.branch || "main" : "abc123def456"
+                }
+                disabled={triggerRebuildMutation.isPending}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && rebuildTarget.trim()) {
+                    handleTriggerRebuild();
+                  }
+                }}
+              />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {rebuildTargetType === "branch"
+                  ? connectedRepo?.branch
+                    ? `Currently connected to branch: ${connectedRepo.branch}`
+                    : "Enter the branch name to rebuild from"
+                  : "Enter the full or short commit hash"}
+              </p>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsRebuildDialogOpen(false);
+                setRebuildTarget(""); // Reset
+                setRebuildTargetType("branch"); // Reset to default
+              }}
+              disabled={triggerRebuildMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleTriggerRebuild}
+              disabled={triggerRebuildMutation.isPending || !rebuildTarget.trim()}
+            >
+              {triggerRebuildMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Triggering...
+                </>
+              ) : (
+                "Trigger Rebuild"
               )}
             </Button>
           </DialogFooter>

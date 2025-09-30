@@ -5,15 +5,13 @@ import { eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../../../env";
 import type { Variables } from "../../worker";
 import * as schema from "../../db/schema.ts";
-import { runConfigInSandbox } from "../../sandbox/run-config.ts";
-import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
-import { signUrl } from "../../utils/url-signing.ts";
 import { logger as console } from "../../tag-logger.ts";
 import {
   validateGithubWebhookSignature,
   getEstateByRepoId,
   getGithubInstallationForEstate,
   getGithubInstallationToken,
+  triggerGithubBuild,
 } from "./github-utils.ts";
 
 export const UserAccessTokenResponse = z.object({
@@ -218,110 +216,32 @@ githubApp.post("/webhook", async (c) => {
 
     // Get an installation access token
     const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-    // Create an in-progress build log
-    const [build] = await c.var.db
-      .insert(schema.builds)
-      .values({
-        status: "in_progress",
-        commitHash: commitHash!, // We've already checked this is defined above
-        commitMessage: commitMessage || "No commit message",
-        webhookIterateId: event.id || `webhook-${Date.now()}`,
-        estateId: estate.id,
-        iterateWorkflowRunId: event.workflow_run?.id?.toString(),
-      })
-      .returning();
-
-    // Get the organization ID from the estate for WebSocket invalidation
-    const estateWithOrg = await c.var.db.query.estate.findFirst({
-      where: eq(schema.estate.id, estate.id),
-      with: {
-        organization: true,
-      },
-    });
-
-    // Invalidate organization queries to show the new in-progress build
-    if (estateWithOrg?.organization) {
-      await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
-        type: "INVALIDATE",
-        invalidateInfo: {
-          type: "TRPC_QUERY",
-          paths: ["estate.getBuilds"],
-        },
-      });
-    }
 
     // Construct the repository URL
     const repoUrl = event.repository?.html_url || event.repository?.url;
     if (!repoUrl) {
-      await c.var.db
-        .update(schema.builds)
-        .set({
-          status: "failed",
-          completedAt: new Date(),
-          output: { stderr: "Repository URL not found in webhook payload" },
-        })
-        .where(eq(schema.builds.id, build.id));
-
-      return c.json({ error: "Repository URL not found" }, 400);
+      return c.json({ error: "Repository URL not found in webhook payload" }, 400);
     }
 
-    // Generate a signed callback URL
-    let baseUrl = new URL(c.req.url).origin.replace("os.iterate.com", "os.iterateproxy.com");
-    if (baseUrl.includes("localhost")) {
-      baseUrl = `https://${c.env.ITERATE_USER}.dev.iterate.com`;
-    }
-    const callbackUrl = await signUrl(
-      `${baseUrl}/api/build/callback`,
-      c.env.EXPIRING_URLS_SIGNING_KEY,
-      3600, // 1 hour expiration
-    );
-
-    // Run the configuration in the sandbox with callback
-    const result = await runConfigInSandbox(c.env, {
-      githubRepoUrl: repoUrl,
-      githubToken: installationToken,
-      branch: estate.connectedRepoRef || "main",
-      commitHash,
-      workingDirectory: estate.connectedRepoPath || undefined,
-      callbackUrl,
-      buildId: build.id,
+    // Use the common build trigger function
+    const build = await triggerGithubBuild({
+      db: c.var.db,
+      env: c.env,
       estateId: estate.id,
+      commitHash: commitHash!,
+      commitMessage: commitMessage || "No commit message",
+      repoUrl,
+      installationToken,
+      workingDirectory: estate.connectedRepoPath || undefined,
+      branch: estate.connectedRepoRef || "main",
+      webhookId: event.id || `webhook-${Date.now()}`,
+      workflowRunId: event.workflow_run?.id?.toString(),
+      isManual: false,
     });
 
-    // When using callback, the build is handled asynchronously
-    // The callback endpoint will handle updating the build status and iterate config
-    if ("error" in result) {
-      // If there was an immediate error (e.g., sandbox not available), update the build
-      await c.var.db
-        .update(schema.builds)
-        .set({
-          status: "failed",
-          completedAt: new Date(),
-          output: { stderr: result.details ? `${result.error}: ${result.details}` : result.error },
-        })
-        .where(eq(schema.builds.id, build.id));
-
-      // Invalidate organization queries to show the failed build
-      if (estateWithOrg?.organization) {
-        await invalidateOrganizationQueries(c.env, estateWithOrg.organization.id, {
-          type: "INVALIDATE",
-          invalidateInfo: {
-            type: "TRPC_QUERY",
-            paths: ["estate.getBuilds"],
-          },
-        });
-      }
-
-      return c.json({
-        message: "Build failed to start",
-        buildId: build.id,
-        status: "failed",
-      });
-    }
-
-    // Build started successfully, results will be sent to callback
+    // Build started successfully
     return c.json({
-      message: "Build started, results will be sent via callback",
+      message: "Build started",
       buildId: build.id,
       status: "in_progress",
     });
