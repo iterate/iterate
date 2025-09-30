@@ -35,6 +35,13 @@ jobs:
           command: pnpm db:migrate
       - name: get rid of ngrok # only needed for webhooks and not available in CI
         run: rm packages/ngrok/package.json
+      - name: simplify sandbox Dockerfile
+        run: |
+          # For some reason the nodejs v24 installation in the Dockerfile fails in CI, but the built-in version of nodejs works for these purposes
+          echo '
+          FROM docker.io/cloudflare/sandbox:0.3.2
+          EXPOSE 3000
+          ' > apps/os/backend/sandbox/Dockerfile
       - name: run server and test
         # run the server and test in one big step so logs are visible
         run: |

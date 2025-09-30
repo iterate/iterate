@@ -2,13 +2,15 @@ FROM docker.io/cloudflare/sandbox:0.3.2
 
 ENV COMMAND_TIMEOUT_MS=180000
 
-# Install Node.js 24 using NodeSource repository (supports multiple architectures)
-# RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash - && \
-#     apt-get install -y nodejs && \
-#     npm install -g pnpm tsx
+# Remove existing Node.js and install Node.js 24
+RUN apt-get remove -y nodejs npm && \
+    curl -fsSL https://nodejs.org/dist/v24.0.0/node-v24.0.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1 && \
+    ln -sf /usr/local/bin/node /usr/bin/node && \
+    ln -sf /usr/local/bin/npm /usr/bin/npm && \
+    ln -sf /usr/local/bin/npx /usr/bin/npx
 
-# seems like the base image has npm already? https://hub.docker.com/layers/cloudflare/sandbox/0.0.0-0dad837-beta/images/sha256-7e55790050f562049cdd2292a57e9404b480de1c5fcba50417b2836542a4e68b
-# RUN npm install -g pnpm tsx
+# Install pnpm and tsx using Node 24
+RUN npm install -g pnpm tsx
 
 # Expose the ports you want to expose
 EXPOSE 3000
