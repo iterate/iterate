@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "paths": {
+      "cloudflare:workers": ["./cloudflare-workers-shim.ts"]
+    }
+  }
+}
