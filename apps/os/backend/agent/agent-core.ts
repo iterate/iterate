@@ -30,6 +30,7 @@ import { z } from "zod/v4";
 import { mergeDeep } from "remeda";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
+import type { TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
@@ -175,7 +176,7 @@ export interface AgentCoreDeps {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
   /** Provided console instance */
-  console: Console;
+  console: Console | TagLogger;
 }
 
 export type AgentCoreState = CoreReducedState;
