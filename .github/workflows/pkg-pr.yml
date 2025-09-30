@@ -47,27 +47,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Check if estates/template changed
-        id: check_changes
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Manual trigger - proceeding with sync"
-            echo "should_sync=true" >> $GITHUB_OUTPUT
-          else
-            # Check if estates/template was modified in the commit
-            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
-            if echo "$CHANGED_FILES" | grep -q "^estates/template/"; then
-              echo "estates/template changed - proceeding with sync"
-              echo "should_sync=true" >> $GITHUB_OUTPUT
-            else
-              echo "estates/template not changed - skipping sync"
-              echo "should_sync=false" >> $GITHUB_OUTPUT
-            fi
-          fi
-
       - name: Checkout target repo
-        if: steps.check_changes.outputs.should_sync == 'true'
         uses: actions/checkout@v4
         with:
           repository: iterate-com/estate-template
@@ -75,7 +55,6 @@ jobs:
           path: target-repo
 
       - name: Sync files
-        if: steps.check_changes.outputs.should_sync == 'true'
         run: |
           # Remove all files from target repo except .git
           find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
@@ -85,7 +64,6 @@ jobs:
           cp -r estates/template/.gitignore target-repo/ 2>/dev/null || true
 
       - name: Update SDK dependency to pkg.pr.new
-        if: steps.check_changes.outputs.should_sync == 'true'
         run: |
           cd target-repo
 
@@ -100,7 +78,6 @@ jobs:
           cat package.json
 
       - name: Commit and push changes
-        if: steps.check_changes.outputs.should_sync == 'true'
         run: |
           cd target-repo
 
