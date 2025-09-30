@@ -1,0 +1,106 @@
+name: Sync estates/template to iterate-com/template-estate
+
+on:
+  workflow_run:
+    workflows: ["Publish to pkg.pr.new"]
+    types:
+      - completed
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    # Only run if the workflow_run was successful or if manually triggered
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Check if estates/template changed
+        id: check_changes
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Manual trigger - proceeding with sync"
+            echo "should_sync=true" >> $GITHUB_OUTPUT
+          else
+            # Check if estates/template was modified in the commit
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD)
+            if echo "$CHANGED_FILES" | grep -q "^estates/template/"; then
+              echo "estates/template changed - proceeding with sync"
+              echo "should_sync=true" >> $GITHUB_OUTPUT
+            else
+              echo "estates/template not changed - skipping sync"
+              echo "should_sync=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Checkout target repo
+        if: steps.check_changes.outputs.should_sync == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: iterate-com/template-estate
+          token: ${{ secrets.TEMPLATE_ESTATE_SYNC_TOKEN }}
+          path: target-repo
+
+      - name: Sync files
+        if: steps.check_changes.outputs.should_sync == 'true'
+        run: |
+          # Remove all files from target repo except .git
+          find target-repo -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+          # Copy all files from estates/template to target repo
+          cp -r estates/template/* target-repo/
+          cp -r estates/template/.gitignore target-repo/ 2>/dev/null || true
+
+      - name: Update SDK dependency to pkg.pr.new
+        if: steps.check_changes.outputs.should_sync == 'true'
+        run: |
+          cd target-repo
+
+          # Get the commit hash (from workflow_run event or current HEAD)
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            COMMIT_HASH="${{ github.event.workflow_run.head_sha }}"
+          else
+            COMMIT_HASH=$(git rev-parse HEAD)
+          fi
+
+          echo "Using commit hash: $COMMIT_HASH"
+
+          # Replace workspace:* with pkg.pr.new URL
+          sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate-com/iterate/@iterate-com/sdk@$COMMIT_HASH\"|g" package.json
+
+          # Show the change
+          echo "Updated package.json:"
+          cat package.json
+
+      - name: Commit and push changes
+        if: steps.check_changes.outputs.should_sync == 'true'
+        run: |
+          cd target-repo
+
+          # Get the commit hash (from workflow_run event or current HEAD)
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            COMMIT_HASH="${{ github.event.workflow_run.head_sha }}"
+          else
+            COMMIT_HASH=$(git rev-parse HEAD)
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add -A
+
+          # Only commit if there are changes
+          if git diff --staged --quiet; then
+            echo "No changes to sync"
+          else
+            git commit -m "Sync from iterate-com/iterate@$COMMIT_HASH"
+            git push
+          fi
