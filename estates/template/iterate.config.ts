@@ -20,6 +20,16 @@ const config = defineConfig({
       prompt: "When Jonas is on a thread, remind him to lock in",
       match: matchers.hasParticipant("jonas"),
     },
+
+    // Or when the bot is used in a certain slack channel
+    // Note that you need to use a slack channel ID for now
+    {
+      key: "standup-channel",
+      prompt:
+        "When mentioned in the standup channel, check what the users' tasks for the day are and ask them for a status update.",
+      match: matchers.slackChannel("C01234567"), // Use the actual Slack channel ID here
+    },
+
     // You can also use mathcers.and, matchers.or and matchers.not
     {
       key: "jonas-in-the-evening",
