@@ -1,6 +1,6 @@
-import { evalite } from "evalite";
 import { beforeAll } from "vitest";
 import { createTestHelper, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
+import { IterateEval } from "./helpers.ts";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
@@ -8,7 +8,7 @@ beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
 });
 
-evalite("agent knows when to end their turn", {
+IterateEval("agent knows when to end their turn", {
   data: async () => {
     return [
       {
@@ -42,9 +42,13 @@ evalite("agent knows when to end their turn", {
       },
     ];
   },
-  task: async (input) => {
-    const h = await createTestHelper(trpcClient, input.slug);
-    const scorer = multiTurnScorer({ braintrustSpanExportedId: h.braintrustSpanExportedId });
+  task: async ({ braintrustSpanExportedId, input }) => {
+    const h = await createTestHelper({
+      trpcClient,
+      inputSlug: input.slug,
+      braintrustSpanExportedId,
+    });
+    const scorer = multiTurnScorer({ braintrustSpanExportedId });
 
     for (const message of input.messages) {
       const userMessage = await h.sendUserMessage(message.message);
@@ -53,10 +57,7 @@ evalite("agent knows when to end their turn", {
       scorer.scoreTurn([`user: ${message.message}`, `assistant: ${reply}`], message.expected);
     }
 
-    return {
-      scores: await scorer.getScores(),
-      braintrustSpanExportedId: h.braintrustSpanExportedId,
-    };
+    return { scores: await scorer.getScores() };
   },
   scorers: [multiTurnScorer.mean, multiTurnScorer.median, multiTurnScorer.min],
   columns: multiTurnScorer.renderColumns,

@@ -13,6 +13,8 @@ import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 import { Eval, initLogger, type Span } from "braintrust";
+import { evalite } from "evalite";
+import type { Evalite } from "evalite/types";
 
 export * from "./scorer.ts";
 
@@ -23,31 +25,6 @@ export const authClient = createAuthClient({
   baseURL: `${baseURL}/api/auth`,
   plugins: [adminClient()],
 });
-
-async function makeEvalSpan({
-  projectName,
-  experimentName,
-  metadata,
-}: {
-  projectName: string;
-  experimentName: string;
-  metadata: Record<string, unknown>;
-}): Promise<Span> {
-  // this is a hack to get a span inside the 'experiments' tab
-  // instead of the 'logs' tab - it allows us to create better graphs
-  return new Promise((resolve, reject) => {
-    Eval(projectName, {
-      experimentName,
-      data: [{ input: null }],
-      scores: [],
-      metadata,
-      task: (_input, hooks) => {
-        resolve(hooks.span);
-        return null;
-      },
-    }).then(() => reject(new Error("Failed to create eval span")));
-  });
-}
 
 /** Gets an agent name based on the currently running test name and some (text) input */
 export function testAgentName(input: string) {
@@ -82,12 +59,18 @@ export async function getAuthedTrpcClient({
   });
 }
 
-export async function createTestHelper(
-  trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>,
-  input: string,
-  { logger = console as Pick<Console, "info" | "error"> } = {},
-) {
-  const agentName = testAgentName(input);
+export async function createTestHelper({
+  trpcClient,
+  inputSlug,
+  braintrustSpanExportedId,
+  logger = console,
+}: {
+  trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
+  inputSlug: string;
+  braintrustSpanExportedId: string;
+  logger?: Pick<Console, "info" | "error">;
+}) {
+  const agentName = testAgentName(inputSlug);
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();
@@ -100,24 +83,11 @@ export async function createTestHelper(
   fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
   fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
 
-  // inject braintrust span id into the agent
-  initLogger({
-    projectName: `boris-evals`,
-    apiKey: process.env.BRAINTRUST_API_KEY,
-  });
-  const evalSpan = await makeEvalSpan({
-    projectName: "boris-evals",
-    experimentName: input,
-    metadata: {
-      evalName: input,
-      batchId: Date.now().toString(),
-    },
-  });
-  const braintrustSpanExportedId = await evalSpan.export();
+  // set the braintrust span exported id into the state
   await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
+    estateId,
     agentInstanceName: agentName,
     agentClassName: "SlackAgent",
-    estateId,
     braintrustParentSpanExportedId: braintrustSpanExportedId,
   });
 
@@ -311,3 +281,76 @@ export type WaitForEvent = {
     },
   ): Promise<Selection>;
 };
+
+export function IterateEval<TInput, TOutput, TExpected>(
+  experimentName: string,
+  opts: {
+    data: Evalite.RunnerOpts<TInput, TOutput, TExpected>["data"];
+    task: (input: {
+      input: TInput;
+      braintrustSpanExportedId: string;
+    }) => Evalite.MaybePromise<TOutput>;
+    scorers: Evalite.ScorerOpts<TInput, TOutput, TExpected>[];
+    columns?: Evalite.RunnerOpts<TInput, TOutput, TExpected>["columns"];
+  },
+) {
+  const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
+  const braintrustSpans = new Promise<Record<string, Span>>(async (resolve) => {
+    const spanMap: Record<string, Span> = {};
+    initLogger({
+      projectName: `boris-evals`,
+      apiKey: process.env.BRAINTRUST_API_KEY,
+    });
+    await Eval("boris-evals", {
+      experimentName,
+      data: opts.data(),
+      scores: [],
+      metadata: {
+        experimentName,
+      },
+      task: (input, hooks) => {
+        spanMap[hash(input)] = hooks.span;
+        return null;
+      },
+    });
+    resolve(spanMap);
+  });
+
+  const braintrustScorerWrapper: (
+    scorerOpts: Evalite.ScorerOpts<TInput, TOutput, TExpected>,
+  ) => Evalite.ScorerOpts<TInput, TOutput, TExpected> = (scorerOpts) => {
+    const wrappedScorerFn: (
+      result: Evalite.ScoreInput<TInput, TOutput, TExpected>,
+    ) => Promise<number | Evalite.UserProvidedScoreWithMetadata> = async (result) => {
+      const score = await scorerOpts.scorer(result);
+
+      const braintrustSpan = (await braintrustSpans)[hash(result.input)];
+      braintrustSpan.log({
+        scores: {
+          [scorerOpts.name]: typeof score === "number" ? score : score.score,
+        },
+        metadata: {
+          [scorerOpts.name]: typeof score === "number" ? {} : score.metadata,
+        },
+      });
+      await braintrustSpan.flush();
+
+      return score;
+    };
+    return {
+      ...scorerOpts,
+      scorer: wrappedScorerFn,
+    };
+  };
+
+  return evalite<TInput, TOutput, TExpected>(experimentName, {
+    data: opts.data,
+    columns: opts.columns,
+    task: async (input) => {
+      const braintrustSpan = (await braintrustSpans)[hash(input)];
+      const braintrustSpanExportedId = await braintrustSpan.export();
+      return await opts.task({ input, braintrustSpanExportedId });
+    },
+    scorers: opts.scorers.map(braintrustScorerWrapper),
+  });
+}

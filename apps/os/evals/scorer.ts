@@ -118,53 +118,19 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
 }
 
 type ScoreResult = { score: number; reason: string; messages: string[] };
-type ScoreOutput = { scores: ScoreResult[]; braintrustSpanExportedId: string };
-
-type ScorerOutput = { score: number; metadata: Record<string, unknown> };
-type ScorerFunction = (result: { output: ScoreOutput }) => ScorerOutput | Promise<ScorerOutput>;
-type Scorer = {
-  name: string;
-  scorer: ScorerFunction;
-};
-
-const braintrustScorerWrapper = (scorer: Scorer): Scorer => {
-  return {
-    ...scorer,
-    scorer: async (result) => {
-      const score = await scorer.scorer(result);
-
-      // we can't reconstruct the span from its export,
-      // so we add a score span under the eval which will get propagated up
-      const scoreSpan = startSpan({
-        name: `${scorer.name}-final-score`,
-        parent: result.output.braintrustSpanExportedId,
-        type: "score",
-      });
-      scoreSpan.log({
-        scores: {
-          [scorer.name]: score.score,
-        },
-        metadata: score.metadata,
-      });
-      scoreSpan.end();
-      await scoreSpan.flush();
-
-      return score;
-    },
-  };
-};
+type ScoreOutput = { scores: ScoreResult[] };
 
 const resultScorers = {
-  mean: braintrustScorerWrapper({
+  mean: {
     name: "mean",
-    scorer: (result) => ({
+    scorer: (result: { output: ScoreOutput }) => ({
       score: 0.01 * R.meanBy(result.output.scores, (s) => s.score),
       metadata: { allScores: result.output.scores },
     }),
-  }),
-  median: braintrustScorerWrapper({
+  },
+  median: {
     name: "median",
-    scorer: (result) => ({
+    scorer: (result: { output: ScoreOutput }) => ({
       score:
         0.01 *
         R.pipe(
@@ -175,15 +141,15 @@ const resultScorers = {
         ),
       metadata: { allScores: result.output.scores },
     }),
-  }),
-  min: braintrustScorerWrapper({
+  },
+  min: {
     name: "min",
-    scorer: (result) => ({
+    scorer: (result: { output: ScoreOutput }) => ({
       score: 0.01 * (R.firstBy(result.output.scores, (s) => s.score)?.score ?? 0),
       metadata: { allScores: result.output.scores },
     }),
-  }),
-} satisfies Record<string, Scorer>;
+  },
+};
 
 const renderColumns = (result: { output: ScoreOutput }) =>
   [
