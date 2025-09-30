@@ -1,6 +1,7 @@
 import { toast } from "sonner";
 import { useSearchParams } from "react-router";
 import { authClient } from "../lib/auth-client.ts";
+import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 
 export function LoginProviders() {
@@ -45,10 +46,12 @@ export function LoginProviders() {
   };
 
   const handleTestAdminUserSignIn = async () => {
-    const [email, password] = prompt(
-      "Enter email and password (space separated)",
-      "admin@example.com password",
-    )!.split(" ")!;
+    const credentials = prompt(
+      "Enter email and password (colon separated)",
+      testAdminUser.credentials || "",
+    );
+    if (!credentials) return;
+    const { email, password } = parseCredentials(credentials);
     const result = await authClient.signIn.email({ email, password });
     window.location.href = result.data?.url ?? "/";
   };

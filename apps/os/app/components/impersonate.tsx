@@ -1,4 +1,3 @@
-"use client";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC, useTRPCClient } from "../lib/trpc.ts";

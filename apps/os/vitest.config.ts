@@ -5,5 +5,6 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["**/*.test.ts"],
+    testTimeout: 120_000, // unfortunately evalite reads from this config and isn't configurable. might be possible to run via vanilla vitest some day.
   },
 });

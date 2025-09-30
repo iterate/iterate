@@ -304,6 +304,7 @@ export default defineConfig([
       },
     },
   },
+  { name: "ad-hoc ignorables", ignores: ["**/*ignoreme*"] },
   {
     name: "iterate-config",
     rules: {

@@ -40,6 +40,7 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
+import { createSlackAPIMock } from "./slack-api-mock.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -108,6 +109,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
     await super.initAfterConstructorBeforeOnStart(params);
 
+    if (params.record.durableObjectName.includes("mock_slack")) {
+      this.slackAPI = createSlackAPIMock<WebClient>();
+      return;
+    }
+
     const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
     if (!slackAccessToken) {
       throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
@@ -175,7 +181,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           }
         }
 
-        this.syncTypingIndicator();
+        if (event.type !== "CORE:LOG") {
+          this.syncTypingIndicator();
+        }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();

@@ -11,6 +11,9 @@ export default defineConfig({
   server: {
     allowedHosts: [".dev.iterate.com"],
   },
+  preview: {
+    port: 5173,
+  },
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),
     tailwindcss(),

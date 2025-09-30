@@ -9,6 +9,7 @@
     "format:check": "prettier --check .",
     "iterate": "pnpm run --silent os iterate",
     "os": "pnpm run --filter ./apps/os",
+    "eval": "cd apps/os && doppler run -- pnpm evalite",
     "lint": "eslint . --fix",
     "lint:check": "eslint .",
     "lint:inspect": "pnpx @eslint/config-inspector",

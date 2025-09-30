@@ -35,6 +35,7 @@ export const SlackWebhookEventReceivedInput = z.object({
   ...agentCoreBaseEventInputFields,
   ...slackWebhookEventReceivedFields,
 });
+export type SlackWebhookEventReceivedInput = z.input<typeof SlackWebhookEventReceivedInput>;
 
 // SLACK:UPDATE_SLICE_STATE
 export const slackUpdateSliceStateFields = {
