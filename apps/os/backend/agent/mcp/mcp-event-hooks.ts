@@ -13,6 +13,7 @@ import * as schema from "../../db/schema.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { MCPParam } from "../tool-schemas.ts";
 import type { Branded } from "../callable.ts";
+import { env } from "../../../env.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
