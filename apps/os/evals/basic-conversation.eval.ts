@@ -15,7 +15,6 @@ evalite("agent knows when to end their turn", {
         input: {
           slug: "multi-turn conversation",
           messages: [
-            // broken tool call
             { message: "name a green fruit", expected: "a green fruit" },
             { message: "name another", expected: "a green fruit, not the same as the first" },
             { message: "name another", expected: "a green fruit, not the same as the 1st or 2nd" },

@@ -8,6 +8,7 @@ import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
+import { testAdminUser } from "../backend/auth/test-admin.ts";
 
 export * from "./scorer.ts";
 
@@ -27,13 +28,13 @@ export function testAgentName(input: string) {
 }
 
 export async function getAuthedTrpcClient({
-  email = "admin@example.com",
-  password = "password",
+  email = testAdminUser.email!,
+  password = testAdminUser.password!,
 } = {}) {
   const unauthedTrpc = createTRPCClient<AppRouter>({
     links: [httpLink({ url: `${baseURL}/api/trpc` })],
   });
-  await unauthedTrpc.testing.createAdminUser.mutate({});
+  await unauthedTrpc.testing.createAdminUser.mutate({ email, password });
   let cookie = "";
   await authClient.signIn.email(
     { email, password },

@@ -1,14 +1,29 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { publicProcedure, router } from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb, schema } from "../../db/client.ts";
+import { testAdminUser } from "../../auth/test-admin.ts";
 
-const createAdminUser = publicProcedure
+const testingProcedure = publicProcedure.use(({ next }) => {
+  if (!testAdminUser.enabled) {
+    // shouldn't ever hit, but if someone accidentally enables the whole router in production, throw an error
+    throw new TRPCError({
+      code: "UNAUTHORIZED",
+      cause: new Error(
+        `Test admin user is not enabled, is this procedure somehow being called in production? That's bad.`,
+      ),
+    });
+  }
+  return next();
+});
+
+const createAdminUser = testingProcedure
   .input(
     z.object({
-      email: z.string().default("admin@example.com"),
-      password: z.string().default("password"),
+      email: z.string().default(testAdminUser.email!),
+      password: z.string().default(testAdminUser.password!),
       name: z.string().optional(),
     }),
   )
@@ -38,7 +53,7 @@ const createAdminUser = publicProcedure
     return { created: true };
   });
 
-const setUserRole = publicProcedure
+const setUserRole = testingProcedure
   .input(
     z.object({
       email: z.string(),
@@ -55,9 +70,6 @@ const setUserRole = publicProcedure
   });
 
 /** At compile time, this router will be usable, but if you try to use it in production the procedures just won't exist (`as never`) */
-export const testingRouter = import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
-  ? router({
-      createAdminUser,
-      setUserRole,
-    })
+export const testingRouter = testAdminUser.enabled
+  ? router({ createAdminUser, setUserRole })
   : (router({}) as never);
