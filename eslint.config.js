@@ -161,14 +161,6 @@ export default defineConfig([
       "react-refresh/only-export-components": "off",
     },
   },
-  // Override for iterate files (mapping from biome overrides)
-  {
-    files: ["iterate/**"],
-    ignores: ["**/*.test.ts", "**/test-*.ts"],
-    rules: {
-      "no-console": "off",
-    },
-  },
   // custom iterate-internal rules
   {
     name: "iterate-plugin",
@@ -300,6 +292,7 @@ export default defineConfig([
       },
     },
   },
+  { name: "ad-hoc ignorables", ignores: ["**/*ignoreme*"] },
   {
     name: "iterate-config",
     rules: {
@@ -309,7 +302,12 @@ export default defineConfig([
     },
   },
   {
-    ignores: ["**/*ignoreme*"],
+    name: "iterate-os-backend", // backend-only rule config
+    files: ["apps/os/backend/**/*.ts"],
+    ignores: ["**/*test*/**", "**/*test*"],
+    rules: {
+      "no-console": "error",
+    },
   },
 ]);
 

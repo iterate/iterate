@@ -474,6 +474,12 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
+  estates/template:
+    devDependencies:
+      '@iterate-com/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
+
   packages/ngrok: {}
 
   packages/sdk:

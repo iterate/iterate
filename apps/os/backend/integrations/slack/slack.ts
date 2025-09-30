@@ -1,11 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
-import {
-  WebClient,
-  type UsersListResponse,
-  type ConversationsRepliesResponse,
-} from "@slack/web-api";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
 import { type CloudflareEnv } from "../../../env.ts";
@@ -13,6 +9,7 @@ import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
+import { logger as console } from "../../tag-logger.ts";
 import {
   extractBotUserIdFromAuthorizations,
   extractUserId,
@@ -233,88 +230,96 @@ export async function reactToSlackWebhook(
   }
 }
 
-export async function saveSlackUserMapping(
-  db: ReturnType<typeof getDb>,
-  member: NonNullable<UsersListResponse["members"]>[number],
-) {
-  await db.transaction(async (tx) => {
-    if (!member.id || !member.profile?.email || member.deleted) {
-      return;
-    }
-    const existingMapping = await tx.query.providerUserMapping.findFirst({
-      where: and(
-        eq(schema.providerUserMapping.providerId, "slack-bot"),
-        eq(schema.providerUserMapping.externalId, member.id),
-      ),
-    });
-
-    if (existingMapping) {
-      await tx
-        .update(schema.user)
-        .set({
-          name: member.real_name || member.name || undefined,
-          image: member.profile?.image_192,
-        })
-        .where(eq(schema.user.id, existingMapping.internalUserId));
-      await tx
-        .update(schema.providerUserMapping)
-        .set({
-          providerMetadata: member,
-        })
-        .where(eq(schema.providerUserMapping.id, existingMapping.id));
-      return;
-    }
-
-    const existingUser = await tx.query.user.findFirst({
-      where: eq(schema.user.email, member.profile.email),
-    });
-
-    if (existingUser) {
-      await tx
-        .update(schema.user)
-        .set({
-          name: member.real_name || member.name || "",
-          image: member.profile?.image_192,
-        })
-        .where(eq(schema.user.id, existingUser.id));
-
-      await tx.insert(schema.providerUserMapping).values({
-        providerId: "slack-bot",
-        internalUserId: existingUser.id,
-        externalId: member.id,
-        providerMetadata: member,
-      });
-
-      return;
-    }
-    const newUser = await tx
-      .insert(schema.user)
-      .values({
-        name: member.real_name || member.name || "",
-        email: member.profile.email,
-        image: member.profile?.image_192,
-        emailVerified: false,
-      })
-      .returning();
-
-    await tx.insert(schema.providerUserMapping).values({
-      providerId: "slack-bot",
-      internalUserId: newUser[0].id,
-      externalId: member.id,
-      providerMetadata: member,
-    });
-  });
-}
-
 export async function syncSlackUsersInBackground(db: DB, botToken: string) {
-  const authedWebClient = new WebClient(botToken);
-  const userListResponse = await authedWebClient.users.list({});
-  if (userListResponse.ok && userListResponse.members) {
-    await Promise.allSettled(
-      userListResponse.members.map(async (member) => {
-        await saveSlackUserMapping(db, member);
-      }),
+  try {
+    const authedWebClient = new WebClient(botToken);
+    const userListResponse = await authedWebClient.users.list({});
+
+    if (!userListResponse.ok || !userListResponse.members) {
+      console.error(
+        "Failed to fetch Slack users:",
+        userListResponse.error || "No members returned",
+      );
+      return;
+    }
+
+    // Filter out invalid members upfront
+    const validMembers = userListResponse.members.filter(
+      (member) => member.id && member.profile?.email && !member.deleted,
     );
+
+    if (validMembers.length === 0) {
+      console.log("No valid Slack members to sync");
+      return;
+    }
+
+    await db.transaction(async (tx) => {
+      const emails = validMembers.map((m) => m.profile!.email!);
+
+      // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
+      try {
+        await tx
+          .insert(schema.user)
+          .values(
+            validMembers.map((member) => ({
+              name: member.real_name || member.name || "",
+              email: member.profile!.email!,
+              image: member.profile?.image_192,
+              emailVerified: false,
+            })),
+          )
+          .onConflictDoNothing();
+      } catch (error) {
+        console.error("Error creating users (will continue with existing ones):", error);
+      }
+
+      // Step 2: Fetch ALL users (both existing and newly created)
+      const allUsers = await tx.query.user.findMany({
+        where: inArray(schema.user.email, emails),
+      });
+      const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
+
+      // Step 3: Upsert all provider mappings at once
+      const mappingsToUpsert = [];
+
+      for (const member of validMembers) {
+        const user = usersByEmail.get(member.profile!.email!);
+
+        if (!user) {
+          console.error(`User not found for email ${member.profile!.email!}`);
+          continue;
+        }
+
+        mappingsToUpsert.push({
+          providerId: "slack-bot" as const,
+          internalUserId: user.id,
+          externalId: member.id!,
+          providerMetadata: member,
+        });
+      }
+
+      console.log(`Upserting ${mappingsToUpsert.length} provider mappings`);
+
+      if (mappingsToUpsert.length > 0) {
+        await tx
+          .insert(schema.providerUserMapping)
+          .values(mappingsToUpsert)
+          .onConflictDoUpdate({
+            target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+            set: {
+              providerMetadata: sql`excluded.provider_metadata`,
+            },
+          });
+      }
+
+      // Log sync results
+      console.log(
+        `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted`,
+      );
+    });
+  } catch (error) {
+    console.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
+    throw error;
   }
 }
 

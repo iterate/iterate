@@ -20,7 +20,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 
   // If no session, redirect to login
   if (!session?.user?.id) {
-    throw redirect("/login");
+    throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
   // Validate params exist

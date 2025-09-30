@@ -3,6 +3,7 @@ import type { SlackEvent } from "@slack/types";
 import { eq, asc } from "drizzle-orm";
 import type { DB } from "../db/client.ts";
 import { slackWebhookEvent } from "../db/schema.ts";
+import { logger as console } from "../tag-logger.ts";
 import type { SlackWebhookPayload } from "./slack.types";
 
 export function getMentionedExternalUserIds(body: string) {

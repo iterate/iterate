@@ -32,6 +32,7 @@ import type {
 import { OpenAI } from "openai";
 
 import type { Prettify } from "ts-essentials";
+import { logger as console } from "../tag-logger.ts";
 
 // Create prettified type aliases for better hover experience
 export type ResponseCreateParamsPretty = Prettify<ResponseCreateParams>;

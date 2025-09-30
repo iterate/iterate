@@ -9,6 +9,7 @@ import {
   type ZodType,
   type ZodUnion,
 } from "zod/v4";
+import { logger as console } from "../tag-logger.ts";
 import type { BaseJSONSchema, SchemaBranded } from "./schema-utils.ts";
 
 const keysToStrip = ["workflowCallbackTarget"];

@@ -1,16 +1,20 @@
 import { toast } from "sonner";
+import { useSearchParams } from "react-router";
 import { authClient } from "../lib/auth-client.ts";
 import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 
 export function LoginProviders() {
+  const [searchParams] = useSearchParams();
+  const redirectUrl = searchParams.get("redirectUrl");
+
   const handleGoogleSignIn = async () => {
     try {
       console.log("🚀 Attempting Google sign-in...");
 
       const result = await authClient.signIn.social({
         provider: "google",
-        callbackURL: "/", // Redirect to home after login
+        callbackURL: redirectUrl || "/", // Redirect to home after login
       });
 
       if (result.error) {
@@ -26,7 +30,7 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
         query: {
-          callbackURL: "/",
+          callbackURL: redirectUrl || "/",
         },
       });
 

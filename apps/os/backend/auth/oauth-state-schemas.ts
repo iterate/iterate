@@ -24,6 +24,7 @@ export const MCPOAuthState = BaseOAuthState.extend({
   estateId: z.string(),
   userId: z.string(),
   clientId: z.string(),
+  fullUrl: z.string(),
   agentDurableObject: AgentDurableObjectInfo,
 });
 

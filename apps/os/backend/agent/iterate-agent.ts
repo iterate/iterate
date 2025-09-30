@@ -8,6 +8,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
+import { logger as console } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";

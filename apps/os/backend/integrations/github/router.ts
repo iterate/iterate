@@ -8,6 +8,7 @@ import * as schema from "../../db/schema.ts";
 import { runConfigInSandbox } from "../../sandbox/run-config.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 import { signUrl } from "../../utils/url-signing.ts";
+import { logger as console } from "../../tag-logger.ts";
 import {
   validateGithubWebhookSignature,
   getEstateByRepoId,
