@@ -6,7 +6,14 @@ import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
-import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
+import {
+  slackWebhookEvent,
+  providerUserMapping,
+  estate,
+  organizationUserMembership,
+  organization,
+  user,
+} from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import type {
   AgentCoreDeps,
@@ -22,10 +29,7 @@ import {
 } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import {
-  shouldIncludeEventInConversation,
-  shouldUnfurlSlackMessage,
-} from "./slack-agent-utils.ts";
+import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -358,25 +362,48 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return [];
     }
 
-    const userMapping = await this.db.query.providerUserMapping.findFirst({
-      where: and(
-        eq(providerUserMapping.providerId, "slack-bot"),
-        eq(providerUserMapping.externalId, slackUserId),
-      ),
-      with: {
-        internalUser: true,
-      },
-    });
+    const estateId = this.databaseRecord.estateId;
 
-    if (!userMapping?.internalUser) {
+    const result = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.externalId, slackUserId),
+          eq(estate.id, estateId),
+        ),
+      )
+      .limit(1);
+
+    // If no result, user either doesn't exist or doesn't have access to this estate
+    if (!result[0]) {
       return [];
     }
 
-    if (currentState.participants[userMapping.internalUser.id]) {
+    const userInfo = result[0];
+
+    if (currentState.participants[userInfo.userId]) {
       return [];
     }
 
-    const { internalUser, externalId, providerMetadata } = userMapping;
+    const internalUser = {
+      id: userInfo.userId,
+      email: userInfo.userEmail,
+      name: userInfo.userName,
+    };
+    const externalId = userInfo.slackUserId;
+    const providerMetadata = userInfo.providerMetadata;
 
     return [
       {
