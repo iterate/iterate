@@ -5,7 +5,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
 import type { StandardSchemaV1 } from "better-auth"; // standard schema v1 can come from anywhere really but better-auth is kind enough to export it
-import { Eval, initLogger, type Span } from "braintrust";
+import { Eval, init, initLogger, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
 import type { AppRouter } from "../backend/trpc/root.ts";
@@ -295,26 +295,10 @@ export function IterateEval<TInput, TOutput, TExpected>(
   },
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
-  const braintrustSpans = new Promise<Record<string, Span>>((resolve, reject) => {
-    const spanMap: Record<string, Span> = {};
-    initLogger({
-      projectName: `boris-evals`,
-      apiKey: process.env.BRAINTRUST_API_KEY,
-    });
-    Eval("boris-evals", {
-      experimentName,
-      data: opts.data(),
-      scores: [],
-      metadata: {
-        experimentName,
-      },
-      task: (input, hooks) => {
-        spanMap[hash(input)] = hooks.span;
-        return null;
-      },
-    })
-      .then(() => resolve(spanMap))
-      .catch((err) => reject(err));
+  const spanMap: Record<string, Span> = {};
+  const experiment = init("boris-evals", {
+    apiKey: process.env.BRAINTRUST_API_KEY,
+    experiment: experimentName,
   });
 
   const braintrustScorerWrapper: (
@@ -325,7 +309,7 @@ export function IterateEval<TInput, TOutput, TExpected>(
     ) => Promise<number | Evalite.UserProvidedScoreWithMetadata> = async (result) => {
       const score = await scorerOpts.scorer(result);
 
-      const braintrustSpan = (await braintrustSpans)[hash(result.input)];
+      const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan.log({
         scores: {
           [scorerOpts.name]: typeof score === "number" ? score : score.score,
@@ -348,7 +332,10 @@ export function IterateEval<TInput, TOutput, TExpected>(
     data: opts.data,
     columns: opts.columns,
     task: async (input) => {
-      const braintrustSpan = (await braintrustSpans)[hash(input)];
+      const braintrustSpan = experiment.startSpan({ name: "eval", type: "eval" });
+      spanMap[hash(input)] = braintrustSpan;
+      braintrustSpan.log({ input });
+      await braintrustSpan.flush();
       const braintrustSpanExportedId = await braintrustSpan.export();
       return await opts.task({ input, braintrustSpanExportedId });
     },
