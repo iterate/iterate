@@ -296,20 +296,22 @@ export function evaliterate<TInput, TOutput, TExpected>(
   },
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
-  const spanMap: Record<string, Span> = {};
+  const spanMap: Record<string, Span | undefined> = {};
   const environmentName = getEnvironmentName({
     STAGE__PR_ID: process.env.STAGE__PR_ID,
     ESTATE_NAME: process.env.ESTATE_NAME,
     ITERATE_USER: process.env.ITERATE_USER,
   });
-  const experiment = init(environmentName, {
-    apiKey: process.env.BRAINTRUST_API_KEY,
-    experiment: experimentName,
-    metadata: {
-      experimentName,
-      vitestBatchId: inject("vitestBatchId"),
-    },
-  });
+  const experiment = process.env.BRAINTRUST_API_KEY
+    ? init(environmentName, {
+        apiKey: process.env.BRAINTRUST_API_KEY,
+        experiment: experimentName,
+        metadata: {
+          experimentName,
+          vitestBatchId: inject("vitestBatchId"),
+        },
+      })
+    : null;
 
   const braintrustScorerWrapper: (
     scorerOpts: Evalite.ScorerOpts<TInput, TOutput, TExpected>,
@@ -320,7 +322,7 @@ export function evaliterate<TInput, TOutput, TExpected>(
       const score = await scorerOpts.scorer(result);
 
       const braintrustSpan = spanMap[hash(result.input)];
-      braintrustSpan.log({
+      braintrustSpan?.log({
         scores: {
           [scorerOpts.name]: typeof score === "number" ? score : score.score,
         },
@@ -328,7 +330,7 @@ export function evaliterate<TInput, TOutput, TExpected>(
           [scorerOpts.name]: typeof score === "number" ? {} : score.metadata,
         },
       });
-      await braintrustSpan.flush();
+      await braintrustSpan?.flush();
 
       return score;
     };
@@ -342,12 +344,12 @@ export function evaliterate<TInput, TOutput, TExpected>(
     data: opts.data,
     columns: opts.columns,
     task: async (input) => {
-      const braintrustSpan = experiment.startSpan({ name: "eval", type: "eval" });
+      const braintrustSpan = experiment?.startSpan({ name: "eval", type: "eval" });
       spanMap[hash(input)] = braintrustSpan;
-      braintrustSpan.log({ input });
-      await braintrustSpan.flush();
-      const braintrustSpanExportedId = await braintrustSpan.export();
-      return await opts.task({ input, braintrustSpanExportedId });
+      braintrustSpan?.log({ input });
+      await braintrustSpan?.flush();
+      const braintrustSpanExportedId = await braintrustSpan?.export();
+      return await opts.task({ input, braintrustSpanExportedId: braintrustSpanExportedId ?? "" });
     },
     scorers: opts.scorers.map(braintrustScorerWrapper),
   });
