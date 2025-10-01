@@ -83,7 +83,7 @@ async function runConfigInSandboxInternal(
 
   // Execute the script
   const result = await sandbox.exec(command, {
-    timeout: 90000, // 90 seconds total timeout
+    timeout: 360 * 1000, // 360 seconds total timeout
   });
 
   // If callback URL is provided, the script will handle the callback

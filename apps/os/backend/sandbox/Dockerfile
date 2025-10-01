@@ -1,6 +1,6 @@
 FROM docker.io/cloudflare/sandbox:0.3.2
 
-ENV COMMAND_TIMEOUT_MS=180000
+ENV COMMAND_TIMEOUT_MS=360000
 
 # Remove existing Node.js and install Node.js 24
 RUN apt-get remove -y nodejs npm && \
