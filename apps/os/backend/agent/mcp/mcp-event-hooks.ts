@@ -141,7 +141,6 @@ export async function handleMCPConnectRequest(
     allowedTools,
     allowedPrompts,
     allowedResources,
-    requiresOAuth,
     triggerLLMRequestOnEstablishedConnection,
     requiresParams,
     reconnect,
@@ -244,18 +243,16 @@ export async function handleMCPConnectRequest(
     );
   }
 
-  const oauthProvider = requiresOAuth
-    ? new MCPOAuthProvider({
-        auth,
-        db,
-        userId,
-        estateId: estateId,
-        integrationSlug: guaranteedIntegrationSlug,
-        serverUrl: modifiedServerUrl,
-        callbackUrl: finalRedirectUrl,
-        agentDurableObject,
-      })
-    : undefined;
+  const oauthProvider = new MCPOAuthProvider({
+    auth,
+    db,
+    userId,
+    estateId: estateId,
+    integrationSlug: guaranteedIntegrationSlug,
+    serverUrl: modifiedServerUrl,
+    callbackUrl: finalRedirectUrl,
+    agentDurableObject,
+  });
 
   const manager = new MCPClientManager("iterate-agent", "1.0.0");
 
@@ -290,37 +287,18 @@ export async function handleMCPConnectRequest(
       }),
     ]);
   } catch (error) {
-    if (requiresOAuth) {
-      oauthProvider?.resetClientAndTokens();
-    }
-
-    if (requiresOAuth && oauthProvider?.authUrl) {
-      events.push({
-        type: "MCP:OAUTH_REQUIRED",
-        data: {
-          connectionKey,
-          serverUrl,
-          mode,
-          userId: userId || undefined,
-          integrationSlug: guaranteedIntegrationSlug,
-          oauthUrl: oauthProvider.authUrl,
-        },
-        metadata: { error: String(error) },
-        triggerLLMRequest: false,
-      });
-    } else {
-      events.push({
-        type: "MCP:CONNECTION_ERROR",
-        data: {
-          connectionKey,
-          serverUrl,
-          userId: userId || undefined,
-          error: String(error),
-        },
-        metadata: { error: String(error) },
-        triggerLLMRequest: false,
-      });
-    }
+    oauthProvider?.resetClientAndTokens();
+    events.push({
+      type: "MCP:CONNECTION_ERROR",
+      data: {
+        connectionKey,
+        serverUrl,
+        userId: userId || undefined,
+        error: String(error),
+      },
+      metadata: { error: String(error) },
+      triggerLLMRequest: false,
+    });
     return events;
   }
 
@@ -377,7 +355,6 @@ export async function handleMCPConnectRequest(
       tools: filteredTools,
       prompts: filteredPrompts,
       resources: filteredResources,
-      requiresOAuth,
       requiresParams,
     },
     metadata: {},
@@ -592,7 +569,6 @@ export async function rehydrateExistingMCPConnection(params: {
         mode: params.connection.mode,
         userId: params.connection.userId,
         integrationSlug: params.connection.integrationSlug,
-        requiresOAuth: params.connection.requiresOAuth ?? true,
         allowedTools: params.connection.tools.map((t) => t.name),
         allowedPrompts: params.connection.prompts.map((p) => p.name),
         allowedResources: params.connection.resources.map((r) => r.uri),

@@ -8,7 +8,6 @@ import * as schemas from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { runConfigInSandbox } from "../../sandbox/run-config.ts";
 import { signUrl } from "../../utils/url-signing.ts";
-import { logger as console } from "../../tag-logger.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
 export const generateGithubJWT = async () => {
@@ -179,10 +178,9 @@ export async function triggerGithubBuild(params: {
   }
 
   // Generate a signed callback URL
-  let baseUrl: string;
-  if (env.STAGE__PR_ID) {
-    baseUrl = `https://os-v2-pr-${env.STAGE__PR_ID}.iterate.workers.dev`;
-  } else {
+  let baseUrl = env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+  // If it's localhost, use the ngrok dev URL instead
+  if (baseUrl.includes("localhost")) {
     baseUrl = `https://${env.ITERATE_USER}.dev.iterate.com`;
   }
   const callbackUrl = await signUrl(
@@ -190,78 +188,16 @@ export async function triggerGithubBuild(params: {
     env.EXPIRING_URLS_SIGNING_KEY,
     60 * 60, // 1 hour expiry
   );
-
-  // Run the build in the background
-  const buildPromise = (async () => {
-    try {
-      const result = await runConfigInSandbox(env, {
-        githubRepoUrl: repoUrl,
-        githubToken: installationToken,
-        commitHash,
-        branch,
-        workingDirectory: workingDirectory || "/",
-        callbackUrl,
-        buildId: build.id,
-        estateId,
-      });
-
-      // If the sandbox failed to start, update the build status
-      if ("error" in result) {
-        await db
-          .update(schemas.builds)
-          .set({
-            status: "failed",
-            completedAt: new Date(),
-            output: {
-              stdout: "",
-              stderr: result.details ? `${result.error}: ${result.details}` : result.error,
-              exitCode: 1,
-            },
-          })
-          .where(eq(schemas.builds.id, build.id));
-
-        // Invalidate organization queries to show the failed build
-        if (estateWithOrg?.organization) {
-          await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
-            type: "INVALIDATE",
-            invalidateInfo: {
-              type: "TRPC_QUERY",
-              paths: ["estate.getBuilds"],
-            },
-          });
-        }
-      }
-
-      return result;
-    } catch (error) {
-      console.error("Build execution failed:", error);
-      await db
-        .update(schemas.builds)
-        .set({
-          status: "failed",
-          completedAt: new Date(),
-          output: {
-            stdout: "",
-            stderr: error instanceof Error ? error.message : "Unknown error occurred",
-            exitCode: 1,
-          },
-        })
-        .where(eq(schemas.builds.id, build.id));
-
-      // Invalidate organization queries to show the failed build
-      if (estateWithOrg?.organization) {
-        await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
-          type: "INVALIDATE",
-          invalidateInfo: {
-            type: "TRPC_QUERY",
-            paths: ["estate.getBuilds"],
-          },
-        });
-      }
-
-      throw error;
-    }
-  })();
+  const buildPromise = runConfigInSandbox(env, {
+    githubRepoUrl: repoUrl,
+    githubToken: installationToken,
+    commitHash,
+    branch,
+    workingDirectory: workingDirectory || "/",
+    callbackUrl,
+    buildId: build.id,
+    estateId,
+  });
 
   // Use waitUntil to run in background (won't throw if not in request context)
   try {

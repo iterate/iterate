@@ -2,7 +2,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useWebSocket } from "partysocket/react";
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 // Re-export event types from backend
 const InvalidateInfo = z.discriminatedUnion("type", [
@@ -58,6 +58,7 @@ function matchPath(path: string, patterns: string[]): boolean {
 
 export function useOrganizationWebSocket(organizationId: string, estateId: string) {
   const queryClient = useQueryClient();
+  const [isConnected, setIsConnected] = useState(false);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${protocol}//${window.location.host}/api/ws/${organizationId}?estateId=${estateId}&organizationId=${organizationId}`;
@@ -138,11 +139,13 @@ export function useOrganizationWebSocket(organizationId: string, estateId: strin
       maxRetries: Infinity, // Keep trying to reconnect
       minUptime: 5000, // Consider connection stable after 5 seconds
       onMessage: handleWebSocketMessage,
+      onOpen: () => setIsConnected(true),
+      onClose: () => setIsConnected(false),
     }),
     [handleWebSocketMessage],
   );
 
   const ws = useWebSocket(wsUrl, [], websocketOptions);
 
-  return ws;
+  return { ...ws, isConnected };
 }

@@ -1788,6 +1788,16 @@ export default function AgentsPage() {
     }),
   );
 
+  // Get initial reduced state with suspense
+  const { data: initialReducedState } = useSuspenseQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+      eventIndex: initialEvents.length - 1,
+    }),
+  );
+
   const [events, setEvents] = useState<AgentEvent[]>(initialEvents as unknown as AgentEvent[]);
 
   // Connect to agent via WebSocket
@@ -1834,6 +1844,7 @@ export default function AgentsPage() {
       },
       {
         enabled: !!agentState,
+        initialData: initialReducedState,
       },
     ),
   );

@@ -243,7 +243,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const estateId = useEstateId();
   const organizationId = useOrganizationId();
   const ws = useOrganizationWebSocket(organizationId, estateId);
-
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
@@ -294,7 +293,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter>
-            {ws.readyState !== ws.OPEN && (
+            {!ws.isConnected && (
               <div className="flex items-center gap-2 mb-3 px-3">
                 <div className={`size-2 rounded-full bg-orange-500`}></div>
                 <span className="text-sm text-muted-foreground">Websocket connecting...</span>
