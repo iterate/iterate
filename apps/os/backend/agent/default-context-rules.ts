@@ -146,7 +146,6 @@ const defaultSlackAgentPrompt = dedent`
    connectMCPServer({
      serverUrl: "https://mcp.linear.app/mcp", // required. the URL of the MCP server
      mode: "personal", // optional, defaults to "personal". mode: "personal" or "company", i.e. should this connection be private to the user or shared with the entire company? Use "company" if the identity of the user is not important to how the tool works (e.g posthog - a company connection makes sense)
-     requiresOAuth: true // defaults to true. Only set to false if the MCP server does not require OAuth authentication.
      requiresHeadersAuth: null // optional. Only set when headers are known to be required to access the MCP server.
      requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.
    })
@@ -161,9 +160,9 @@ const defaultSlackAgentPrompt = dedent`
    - if you know MCP url because it has been explicitly shared in system prompt or via a context item, use that URL.
    - if the user has not shared url, explicitly ask them for the URL.
    - Known MCP urls:
-     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal, requiresOAuth: true.
-     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal, requiresOAuth: true.
-     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, requiresOAuth: false, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.
+     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal.
+     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal.
+     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.
 
    ### Generating and editing images
    - Use the generateImage tool for creating images and editing existing ones

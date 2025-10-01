@@ -90,12 +90,6 @@ export const iterateAgentTools = defineDOTools({
       mode: IntegrationMode.default("personal").describe(
         "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
       ),
-      requiresOAuth: z
-        .boolean()
-        .nullable()
-        .describe(
-          "Whether this MCP server requires OAuth authentication (use for OAuth servers that require authentication)",
-        ),
       requiresHeadersAuth: z
         .record(
           z.string(),

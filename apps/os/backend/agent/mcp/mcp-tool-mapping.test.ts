@@ -45,7 +45,7 @@ describe("mcp-tool-mapping", () => {
     tools,
     prompts: [],
     resources: [],
-    requiresOAuth: true,
+    requiresParams: [],
   });
 
   const createMockTool = (name: string, description?: string): MCPTool => ({
@@ -455,7 +455,7 @@ describe("mcp-tool-mapping", () => {
           tools: [createMockTool("search_repositories")],
           prompts: [],
           resources: [],
-          requiresOAuth: true,
+          requiresParams: [],
         },
       };
 
@@ -478,7 +478,7 @@ describe("mcp-tool-mapping", () => {
           tools: [], // no tools
           prompts: [],
           resources: [],
-          requiresOAuth: true,
+          requiresParams: [],
         },
       };
 

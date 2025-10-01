@@ -69,7 +69,6 @@ export const MCPServer = z.object({
   allowedPrompts: z.array(z.string()).optional(),
   allowedResources: z.array(z.string()).optional(),
   triggerLLMRequest: z.boolean().default(true).optional(),
-  requiresOAuth: z.boolean().default(true), // When false, skip OAuth provider setup
   requiresParams: z.array(MCPParam).optional(),
 });
 export type MCPServer = z.infer<typeof MCPServer>;
