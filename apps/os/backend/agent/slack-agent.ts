@@ -668,8 +668,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const { endTurn, ...sendInput } = input;
 
-    const numLinks = sendInput.text.match(/https?:\/\/[^\s|]+/g)?.length;
-    const doUnfurl = sendInput.unfurl === "all" || (sendInput.unfurl === "auto" && numLinks === 1);
+    const links = sendInput.text.match(/https?:\/\/[^\s|]+/g) ?? [];
+    const hasOsIterateLink = links.some((link) => {
+      try {
+        return new URL(link).hostname === "os.iterate.com";
+      } catch {
+        return false;
+      }
+    });
+    const doUnfurl =
+      !hasOsIterateLink &&
+      (sendInput.unfurl === "all" || (sendInput.unfurl === "auto" && links.length === 1));
 
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
