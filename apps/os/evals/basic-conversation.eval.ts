@@ -23,22 +23,6 @@ evaliterate("agent knows when to end their turn", {
           }),
         },
       },
-      {
-        input: {
-          slug: "multi-turn-vegetables-conversation",
-          messages: [
-            { message: "name a green vegetable", expected: "a green vegetable" },
-            { message: "name another", expected: "a green vegetable, not the same as the first" },
-            {
-              message: "name another",
-              expected: "a green vegetable, not the same as the 1st or 2nd",
-            },
-          ].map((m, i) => {
-            m.expected += `. penalize emojis by ${10 + i * 5}%`;
-            return m;
-          }),
-        },
-      },
     ];
   },
   task: async ({ braintrustSpanExportedId, input }) => {

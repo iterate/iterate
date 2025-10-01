@@ -25,19 +25,6 @@ export function ensureString(value: unknown): string {
 
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/**
- * Get the project name for posthog and braintrust.
- * To differentiate between different estates, we would add that as metadata to the logs.
- * For example, in Posthog, we identify ourselves under an estate, and in Braintrust, we add it to the span as metadata.
- */
-export function getProjectName(env: { PROJECT_NAME?: string; ITERATE_USER: string }) {
-  const { PROJECT_NAME, ITERATE_USER } = env;
-  if (PROJECT_NAME) {
-    return `${PROJECT_NAME}`;
-  }
-  return `local-${ITERATE_USER}`;
-}
-
 export function getBaseURL(
   params: { replaceLocalhostWithNgrok: boolean } = { replaceLocalhostWithNgrok: false },
 ) {

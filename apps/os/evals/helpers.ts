@@ -15,7 +15,6 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import { getProjectName } from "../backend/utils/utils.ts";
 
 export * from "./scorer.ts";
 
@@ -283,6 +282,17 @@ export type WaitForEvent = {
   ): Promise<Selection>;
 };
 
+/**
+ * @param experimentName - The name of the experiment
+ * @param opts - The options for the experiment, very similar to
+ * @returns Nothing; this is a vitest wrapper
+ * @throws If the experiment fails
+ * @description
+ * This function wraps evalite and adds braintrust logging:
+ * - It saves us having to manually create braintrust spans and log scores
+ * - It passes the span id to the task function, so we can inject it into the agent and get traces
+ * - It is needed because we need to add the scores to the braintrust span, which is done outside of the task function
+ */
 export function evaliterate<TInput, TOutput, TExpected>(
   experimentName: string,
   opts: {
@@ -297,12 +307,8 @@ export function evaliterate<TInput, TOutput, TExpected>(
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
   const spanMap: Record<string, Span | undefined> = {};
-  const environmentName = getProjectName({
-    PROJECT_NAME: process.env.PROJECT_NAME,
-    ITERATE_USER: process.env.ITERATE_USER ?? "unknown",
-  });
   const experiment = process.env.BRAINTRUST_API_KEY
-    ? init(environmentName, {
+    ? init(process.env.PROJECT_NAME!, {
         apiKey: process.env.BRAINTRUST_API_KEY,
         experiment: experimentName,
         metadata: {
@@ -325,9 +331,12 @@ export function evaliterate<TInput, TOutput, TExpected>(
         scores: {
           [scorerOpts.name]: typeof score === "number" ? score : score.score,
         },
-        metadata:  typeof score === "number" ? undefined : {
-          [scorerOpts.name]: score.metadata,
-        },
+        metadata:
+          typeof score === "number"
+            ? undefined
+            : {
+                [scorerOpts.name]: score.metadata,
+              },
       });
       await braintrustSpan?.flush();
 
@@ -339,7 +348,7 @@ export function evaliterate<TInput, TOutput, TExpected>(
     };
   };
 
-  return evalite<TInput, TOutput, TExpected>(experimentName, {
+  evalite<TInput, TOutput, TExpected>(experimentName, {
     data: opts.data,
     columns: opts.columns,
     task: async (input) => {

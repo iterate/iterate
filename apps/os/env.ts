@@ -18,7 +18,7 @@ export type CloudflareEnv = Env & {
   EXPIRING_URLS_SIGNING_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
   STAGE__PR_ID?: string;
-  PROJECT_NAME?: string;
+  PROJECT_NAME: string;
   EXA_API_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;

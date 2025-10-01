@@ -21,7 +21,6 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { getProjectName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
@@ -412,13 +411,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
     const posthogClient = pMemoize(async () => {
       const estate = await getEstate();
-      const projectName = getProjectName({
-        ITERATE_USER: this.env.ITERATE_USER,
-        PROJECT_NAME: this.env.PROJECT_NAME,
-      });
       return new PosthogCloudflare(this.ctx, {
         estateName: estate.name,
-        projectName: projectName,
+        projectName: this.env.PROJECT_NAME,
       });
     });
 
@@ -475,10 +470,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         return await openAIProvider({
           estateName: estate.name,
           posthog: {
-            projectName: getProjectName({
-              PROJECT_NAME: this.env.PROJECT_NAME,
-              ITERATE_USER: this.env.ITERATE_USER,
-            }),
+            projectName: this.env.PROJECT_NAME,
             traceId: `${this.constructor.name}-${this.name}`,
           },
           env: {
@@ -879,13 +871,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
-      const projectName = getProjectName({
-        ITERATE_USER: this.env.ITERATE_USER,
-        PROJECT_NAME: this.env.PROJECT_NAME,
-      });
       const spanExportedId = await makeBraintrustSpan({
         braintrustKey: this.env.BRAINTRUST_API_KEY,
-        projectName,
+        projectName: this.env.PROJECT_NAME,
         spanName: `${this.constructor.name}-${this.name}`,
         estateName,
       });
