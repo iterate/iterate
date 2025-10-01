@@ -348,6 +348,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    */
   protected async getParticipantJoinedEvents(
     slackUserId: string,
+    slackChannelId: string,
+    slackThreadId: string,
     botUserId?: string,
   ): Promise<ParticipantJoinedEventInput[]> {
     if (slackUserId === botUserId) {
@@ -388,6 +390,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, user either doesn't exist or doesn't have access to this estate
     if (!result[0]) {
+      waitUntil(
+        this.slackAPI.chat.postMessage({
+          channel: slackChannelId,
+          thread_ts: slackThreadId,
+          text: `Messaging iterate is not available for you now.`,
+        }),
+      );
       console.info(
         `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
       );
@@ -656,7 +665,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     // Parallelize participant management, file events, thread history, and mention extraction
     const eventsLists = await Promise.all([
       slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
-        ? this.getParticipantJoinedEvents(slackEvent.user, botUserId)
+        ? this.getParticipantJoinedEvents(
+            slackEvent.user,
+            messageMetadata.channel,
+            messageMetadata.threadTs,
+            botUserId,
+          )
         : Promise.resolve([]),
       slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
         ? this.getParticipantMentionedEvents(
