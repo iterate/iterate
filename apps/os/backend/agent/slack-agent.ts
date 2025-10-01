@@ -51,7 +51,7 @@ import { createSlackAPIMock } from "./slack-api-mock.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
-const slackAgentSlices = [...CORE_AGENT_SLICES, slackSlice] as const;
+const slackAgentSlices = [...CORE_AGENT_SLICES, slackSlice];
 export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
@@ -388,6 +388,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, user either doesn't exist or doesn't have access to this estate
     if (!result[0]) {
+      console.info(
+        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
+      );
       return [];
     }
 
@@ -407,14 +410,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     return [
       {
-        type: "CORE:PARTICIPANT_JOINED" as const,
+        type: "CORE:PARTICIPANT_JOINED",
         data: {
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
           externalUserMapping: {
             slack: {
-              integrationSlug: "slack" as const,
+              integrationSlug: "slack",
               externalUserId: externalId,
               internalUserId: internalUser.id,
               email: internalUser.email,
@@ -425,7 +428,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         triggerLLMRequest: false,
         metadata: {},
       },
-    ] as const;
+    ];
   }
 
   /**
@@ -477,14 +480,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       .map((userMapping): ParticipantMentionedEventInput => {
         const { internalUser, externalId, providerMetadata } = userMapping;
         return {
-          type: "CORE:PARTICIPANT_MENTIONED" as const,
+          type: "CORE:PARTICIPANT_MENTIONED",
           data: {
             internalUserId: internalUser!.id,
             email: internalUser!.email,
             displayName: internalUser!.name,
             externalUserMapping: {
               slack: {
-                integrationSlug: "slack" as const,
+                integrationSlug: "slack",
                 externalUserId: externalId,
                 internalUserId: internalUser.id,
                 email: internalUser.email,
@@ -501,7 +504,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   public async initSlack(channelId: string, threadTs: string) {
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
     events.push({
-      type: "SLACK:UPDATE_SLICE_STATE" as const,
+      type: "SLACK:UPDATE_SLICE_STATE",
       data: {
         slackChannelId: channelId,
         slackThreadId: threadTs,
@@ -672,7 +675,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     // Pass the webhook event to the reducer
     // The reducer will handle filtering and determine if LLM computation should be triggered
     events.push({
-      type: "SLACK:WEBHOOK_EVENT_RECEIVED" as const,
+      type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
         payload: slackWebhookPayload,
         updateThreadIds: true,
