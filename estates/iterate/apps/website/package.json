@@ -32,8 +32,8 @@
     "zod": "4.1.3"
   },
   "scripts": {
-    "dev": "doppler run -- vite dev",
-    "build": "doppler run -- vite build",
+    "dev:website": "doppler run -- vite dev",
+    "build:website": "doppler run -- vite build",
     "typecheck": "tsc -build",
     "deploy": "pnpm run build && doppler run -- wrangler deploy",
     "test:e2e:vitest": "VITEST_RUN_E2E=true pnpm vitest run --passWithNoTests"
