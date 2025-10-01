@@ -6,5 +6,14 @@ export default defineConfig({
     environment: "node",
     include: ["**/*.test.ts"],
     testTimeout: 120_000, // unfortunately evalite reads from this config and isn't configurable. might be possible to run via vanilla vitest some day.
+    provide: {
+      vitestBatchId: `batch-${Date.now()}`,
+    },
   },
 });
+
+declare module "vitest" {
+  export interface ProvidedContext {
+    vitestBatchId: string;
+  }
+}

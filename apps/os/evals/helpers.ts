@@ -1,6 +1,6 @@
 import { createHash } from "crypto";
 import { z } from "zod";
-import { expect, vi } from "vitest";
+import { expect, inject, vi } from "vitest";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
@@ -305,6 +305,10 @@ export function evaliterate<TInput, TOutput, TExpected>(
   const experiment = init(environmentName, {
     apiKey: process.env.BRAINTRUST_API_KEY,
     experiment: experimentName,
+    metadata: {
+      experimentName,
+      vitestBatchId: inject("vitestBatchId"),
+    },
   });
 
   const braintrustScorerWrapper: (
