@@ -178,10 +178,9 @@ export async function triggerGithubBuild(params: {
   }
 
   // Generate a signed callback URL
-  let baseUrl: string;
-  if (env.STAGE__PR_ID) {
-    baseUrl = `https://os-v2-pr-${env.STAGE__PR_ID}.iterate.workers.dev`;
-  } else {
+  let baseUrl = env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+  // If it's localhost, use the ngrok dev URL instead
+  if (baseUrl.includes("localhost")) {
     baseUrl = `https://${env.ITERATE_USER}.dev.iterate.com`;
   }
   const callbackUrl = await signUrl(
