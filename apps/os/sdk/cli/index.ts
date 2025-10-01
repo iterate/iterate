@@ -2,13 +2,16 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
+import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
+import { db } from "./cli-db.ts";
 
 const router = t.router({
   estate,
   gh,
+  testing: testingRouter,
 });
 
 if (process.argv.length === 2) {
@@ -22,5 +25,5 @@ if (process.argv.length === 2) {
   process.exit(result.status ?? 0);
 }
 
-const cli = createCli({ router });
+const cli = createCli({ router, context: { db } });
 cli.run({ prompts });

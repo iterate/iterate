@@ -2,7 +2,6 @@ import z from "zod/v4";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 import { JSONSerializable } from "../utils/type-helpers.ts";
 import { FunctionCall, OpenAIBuiltinTool } from "./openai-response-schemas.ts";
-import { SerializedCallable } from "./callable.ts";
 import type { AgentCoreEventInput } from "./agent-core-schemas.ts";
 export const IntegrationMode = z.enum(["personal", "company"]);
 export type IntegrationMode = z.infer<typeof IntegrationMode>;
@@ -10,14 +9,11 @@ export type IntegrationMode = z.infer<typeof IntegrationMode>;
 /*
  * Agents' serialized state contains events, which in turn contain SerializedToolSpec objects.
  *
- * There are three different types of SerializedToolSpec objects:
- *  - SerializedCallableToolSpec
- *    This could be a reference to a trpc procedure or method on a durable object (or simply any HTTP request!)
+ * There are different types of SerializedToolSpec objects:
  *  - OpenAIBuiltinToolSpec
  *    These are openai's built-in tools like file_search, web_search, etc.
  *  - AgentDurableObjectToolSpec
- *    This is a reference to a durable object method _on the agent instance_ that is running. This is basically
- *    a durable object callable, except it is not necessary to pass in the the agent instance ID
+ *    This is a reference to a durable object method _on the agent instance_ that is running.
  *
  *  RuntimeTool is identical to openai's internal Tool type, except if `type: "function"`, it gains an additional execute method. Other than that we have
  *  - type - "function", "file_search", "web_search", "computer_use_preview", "mcp", "code_interpreter", "image_generation", "local_shell"
@@ -26,19 +22,6 @@ export type IntegrationMode = z.infer<typeof IntegrationMode>;
  *  - inputJSONSchema (either as zod or JSON schema)
  *  - strict - When true (default), the SDK returns a model error if the arguments don't validate. Set to false for fuzzy matching.
  */
-
-export const SerializedCallableToolSpec = z.object({
-  type: z.literal("serialized_callable_tool"), // If this is not provided, we try to derive it at runtime from trpc or SafeDurableObject schemas. Otherwise use any object
-  inputJSONSchema: z.any().nullable().describe("OpenAI-compatible JSON schema").optional(),
-  callable: SerializedCallable,
-  overrideName: z.string().nullable().optional(),
-  overrideDescription: z.string().nullable().optional(),
-  overrideInputJSONSchema: z.any().nullable().optional(),
-  strict: z.boolean().default(false).optional(), // When true (default), OpenAI returns a model error if the arguments don't validate. Set to false for fuzzy matching.
-  triggerLLMRequest: z.boolean().default(true).optional(), // When true (default), the tool call triggers an LLM request after execution
-  hideOptionalInputs: z.boolean().default(false).optional(), // When true, filters out optional fields from the JSON schema before execution
-});
-export type SerializedCallableToolSpec = z.infer<typeof SerializedCallableToolSpec>;
 
 export const AgentDurableObjectToolSpec = z.object({
   type: z.literal("agent_durable_object_tool"),
@@ -62,7 +45,6 @@ export const OpenAIBuiltinToolSpec = z.object({
 export type OpenAIBuiltinToolSpec = z.infer<typeof OpenAIBuiltinToolSpec>;
 
 export const ToolSpec = z.discriminatedUnion("type", [
-  SerializedCallableToolSpec,
   OpenAIBuiltinToolSpec,
   AgentDurableObjectToolSpec,
 ]);

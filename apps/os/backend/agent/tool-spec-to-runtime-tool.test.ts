@@ -34,27 +34,6 @@ describe("toolSpecsToImplementations", () => {
       expect(results[0]).toEqual(spec.openAITool);
     });
 
-    it("throws error for serialized_callable_tool", async () => {
-      const spec: ToolSpec = {
-        type: "serialized_callable_tool",
-        inputJSONSchema: null,
-        callable: {
-          type: "NOOP",
-          passThroughArgs: null,
-          $infer: { Input: {}, Output: {} },
-        },
-      };
-
-      const theDO = createMockDO();
-
-      await expect(async () => {
-        await toolSpecsToImplementations({
-          toolSpecs: [spec],
-          theDO,
-        });
-      }).rejects.toThrow("SerializedCallableToolSpec not implemented");
-    });
-
     it("converts agent_durable_object_tool correctly", async () => {
       const pingToolDef = {
         description: "Ping a durable object",

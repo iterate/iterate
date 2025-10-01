@@ -3,8 +3,8 @@ import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { publicProcedure, router } from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
-import { getDb, schema } from "../../db/client.ts";
 import { testAdminUser } from "../../auth/test-admin.ts";
+import { schema } from "../../db/client.ts";
 
 const testingProcedure = publicProcedure.use(({ next }) => {
   if (!testAdminUser.enabled) {
@@ -28,11 +28,13 @@ const createAdminUser = testingProcedure
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    const existing = await ctx.db.query.user.findFirst({
-      where: eq(schema.user.email, input.email),
-    });
+    const getFromDb = () =>
+      ctx.db.query.user.findFirst({
+        where: eq(schema.user.email, input.email),
+      });
+    const existing = await getFromDb();
     if (existing) {
-      return { created: false }; // hope ur password is right, good luck
+      return { created: false, user: existing }; // hope ur password is right, good luck
     }
     const auth = getAuth(ctx.db);
     const _user = await auth.api
@@ -50,7 +52,7 @@ const createAdminUser = testingProcedure
         }
         throw e;
       });
-    return { created: true };
+    return { created: true, user: await getFromDb() };
   });
 
 const setUserRole = testingProcedure
@@ -60,8 +62,8 @@ const setUserRole = testingProcedure
       role: z.enum(["admin", "user"]),
     }),
   )
-  .mutation(async ({ input }) => {
-    const result = await getDb()
+  .mutation(async ({ ctx, input }) => {
+    const result = await ctx.db
       .update(schema.user)
       .set({ role: input.role })
       .where(eq(schema.user.email, input.email))

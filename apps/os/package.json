@@ -2,9 +2,6 @@
   "name": "@iterate-com/os",
   "type": "module",
   "version": "0.0.1",
-  "exports": {
-    "./sdk": "./sdk/index.ts"
-  },
   "scripts": {
     "build": "react-router build",
     "cf-typegen": "wrangler types --no-include-runtime",
@@ -13,7 +10,7 @@
     "evals": "doppler run -- evalite run-once && tsx evals/evalite-exporter.ts",
     "evals:serve": "pnpx serve ignoreme/evalite-ui",
     "evals:watch": "doppler run -- evalite watch",
-    "iterate": "tsx sdk/cli/index.ts",
+    "iterate": "doppler run -- tsx --import ./sdk/cli/cf-shim/loader.ts ./sdk/cli/index.ts",
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
     "test:watch": "doppler run -- vitest --watch",

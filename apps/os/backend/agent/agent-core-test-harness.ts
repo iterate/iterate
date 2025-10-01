@@ -235,8 +235,6 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
           let name: string;
           if (spec.type === "agent_durable_object_tool") {
             name = spec.methodName;
-          } else if (spec.type === "serialized_callable_tool") {
-            name = spec.overrideName ?? "callback_tool";
           } else {
             name = "unknown";
           }
