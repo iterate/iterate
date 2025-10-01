@@ -15,5 +15,6 @@ export default defineConfig({
 declare module "vitest" {
   export interface ProvidedContext {
     vitestBatchId: string;
+    cwd: string;
   }
 }
