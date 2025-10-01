@@ -1,6 +1,5 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { typeid } from "typeid-js";
-import dedent from "dedent";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
 
@@ -60,160 +59,29 @@ async function runConfigInSandboxInternal(
   const sandboxId = typeid("build").toString();
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
-  // Determine the checkout target and working directory
+  // Determine the checkout target and whether it's a commit hash
   const checkoutTarget = commitHash || branch || "main";
+  const isCommitHash = Boolean(commitHash);
 
-  // Create a single bash script that handles the entire build process
-  const buildScript = dedent(`
-    #!/bin/bash
-    set -e  # Exit on any error
-
-    # Read arguments passed to the script
-    GITHUB_REPO_URL="$1"
-    GITHUB_TOKEN="$2"
-    CHECKOUT_TARGET="$3"
-    WORKING_DIR="$4"
-    CALLBACK_URL="$5"
-    BUILD_ID="$6"
-    ESTATE_ID="$7"
-
-    # Function to send callback if URL is provided
-    send_callback() {
-      local success="$1"
-      local stdout="$2"
-      local stderr="$3"
-      local exit_code="$4"
-  
-      if [ -n "$CALLBACK_URL" ]; then
-        echo "=== Sending callback to: $CALLBACK_URL ===" >&2
-
-        # Prepare JSON payload safely using jq
-        local payload=$(jq -n \\
-          --arg buildId "$BUILD_ID" \\
-          --arg estateId "$ESTATE_ID" \\
-          --argjson success "$success" \\
-          --arg stdout "$stdout" \\
-          --arg stderr "$stderr" \\
-          --argjson exitCode "$exit_code" \\
-          '{buildId: $buildId, estateId: $estateId, success: $success, stdout: $stdout, stderr: $stderr, exitCode: $exitCode}')
-
-        # Send callback and wait for response
-        echo "=== Sending callback request ===" >&2
-        CURL_RESPONSE=$(curl -X POST "$CALLBACK_URL" \\
-          -H "Content-Type: application/json" \\
-          -d "$payload" \\
-          --max-time 10 \\
-          -w "\\n[HTTP_STATUS]: %{http_code}\\n[TIME]: %{time_total}s" \\
-          -s 2>&1) || CURL_EXIT=$?
-
-        # Log the response to stderr
-        echo "[CALLBACK_RESPONSE]: $CURL_RESPONSE" >&2
-        if [ -n "\${CURL_EXIT:-}" ]; then
-          echo "[CALLBACK_ERROR]: curl exited with code $CURL_EXIT" >&2
-        fi
-
-        echo "=== Callback completed ===" >&2
-      fi
-    }
-
-    # Determine the actual working directory
-    if [ -n "$WORKING_DIR" ]; then
-      REPO_PATH="/tmp/repo/$WORKING_DIR"
-    else
-      REPO_PATH="/tmp/repo"
-    fi
-
-    echo "=== Starting build process ===" >&2
-    echo "Repository: $GITHUB_REPO_URL" >&2
-    echo "Checkout target: $CHECKOUT_TARGET" >&2
-    echo "Working directory: \${WORKING_DIR:-root}" >&2
-    if [ -n "$CALLBACK_URL" ]; then
-      echo "Callback URL: $CALLBACK_URL" >&2
-    fi
-    echo "" >&2
-
-    # Clone the repository
-    echo "=== Cloning repository ===" >&2
-    # Extract the repo path from the URL safely
-    REPO_PATH_FROM_URL=$(echo "$GITHUB_REPO_URL" | sed 's|https://||')
-    if ! git clone "https://x-access-token:$GITHUB_TOKEN@$REPO_PATH_FROM_URL" /tmp/repo 2>&1 >&2; then
-      STDERR="Failed to clone repository"
-      send_callback "false" "" "$STDERR" 1
-      echo "ERROR: $STDERR" >&2
-      exit 1
-    fi
-
-    # Checkout specific commit or branch
-    if [ "$CHECKOUT_TARGET" != "main" ] && [ -n "$CHECKOUT_TARGET" ]; then
-      echo "=== Checking out $CHECKOUT_TARGET ===" >&2
-      cd /tmp/repo
-      if ! git checkout "$CHECKOUT_TARGET" 2>&1 >&2; then
-        STDERR="Failed to checkout $CHECKOUT_TARGET"
-        send_callback "false" "" "$STDERR" 1
-        echo "ERROR: $STDERR" >&2
-        exit 1
-      fi
-    fi
-
-    # Verify working directory exists
-    echo "=== Verifying working directory ===" >&2
-    if [ ! -d "$REPO_PATH" ]; then
-      STDERR="Working directory $WORKING_DIR does not exist in the repository"
-      send_callback "false" "" "$STDERR" 1
-      echo "ERROR: $STDERR" >&2
-      exit 1
-    fi
-
-    # Install dependencies (suppress output)
-    echo "=== Installing dependencies ===" >&2
-    cd "$REPO_PATH"
-    if ! pnpm i --silent 2>&1 >&2; then
-      STDERR="Failed to install dependencies"
-      send_callback "false" "" "$STDERR" 1
-      echo "ERROR: $STDERR" >&2
-      exit 1
-    fi
-
-    # Run pnpm iterate and capture ONLY its stdout
-    echo "=== Running pnpm iterate ===" >&2
-    if OUTPUT=$(pnpm iterate 2>/dev/null); then
-      # Success - output to stdout and send callback
-      echo "$OUTPUT"
-      send_callback "true" "$OUTPUT" "" 0
-      exit 0
-    else
-      EXIT_CODE=$?
-      # Failure - capture stderr this time
-      STDERR=$(pnpm iterate 2>&1 >/dev/null || true)
-      send_callback "false" "" "$STDERR" $EXIT_CODE
-      echo "ERROR: pnpm iterate failed with exit code $EXIT_CODE" >&2
-      echo "$STDERR" >&2
-      exit $EXIT_CODE
-    fi
-  `);
-
-  // Write the script to a file in the sandbox
-  await sandbox.writeFile("/tmp/build.sh", buildScript);
-
-  // Prepare arguments for the script (properly escaped)
-  const scriptArgs = [
+  // Prepare arguments as a JSON object
+  const buildArgs = {
     githubRepoUrl,
     githubToken,
     checkoutTarget,
-    workingDirectory || "",
-    callbackUrl || "",
-    options.buildId || "",
-    options.estateId || "",
-  ];
+    isCommitHash,
+    workingDir: workingDirectory || "",
+    callbackUrl: callbackUrl || "",
+    buildId: options.buildId || "",
+    estateId: options.estateId || "",
+  };
 
-  // Create the command with properly escaped arguments
-  const command = [
-    "chmod +x /tmp/build.sh &&",
-    "/tmp/build.sh",
-    ...scriptArgs.map((arg) => `'${arg.replace(/'/g, "'\\''")}'`),
-  ].join(" ");
+  // Escape the JSON string for shell
+  const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
 
-  // Make the script executable and run it with arguments
+  // Run the Node.js script with JSON arguments
+  const command = `node /tmp/build-script.ts '${jsonArgs}'`;
+
+  // Execute the script
   const result = await sandbox.exec(command, {
     timeout: 90000, // 90 seconds total timeout
   });
