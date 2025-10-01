@@ -127,10 +127,22 @@ const resultScorers = {
 };
 
 const renderColumns = (result: { output: ScoreOutput }) =>
-  result.output.scores.map((s, i) => ({
-    label: `turn ${i + 1}`,
-    value: [...s.messages, `[${s.score}%] ${s.reason}`].join("\n\n"),
-  }));
+  [
+    ...result.output.scores.map((s, i) => ({
+      label: `turn ${i + 1}`,
+      value: [...s.messages, `[${s.score}%] ${s.reason}`].join("\n\n"),
+    })),
+    {
+      label: "Links",
+      value: Object.entries(result.output)
+        .flatMap(([k, s]: [string, unknown]) => {
+          if (typeof s !== "string") return [];
+          if (s.startsWith("http")) return [`- [${k}](${s})`];
+          return [`- ${s}`];
+        })
+        .join("\n"),
+    },
+  ].filter((item) => item.value);
 
 export const multiTurnScorer = Object.assign(_multiTurnScorer, {
   ...resultScorers,

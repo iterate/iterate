@@ -934,7 +934,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
-      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
     };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
