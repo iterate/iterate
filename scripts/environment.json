@@ -1,0 +1,20 @@
+{
+  "build": {
+    "context": "./",
+    "dockerfile": "./Dockerfile"
+  },
+  "install": "whoami && echo $HOME && printenv && export PATH=$HOME/.local/share/pnpm:$PATH && export PNPM_HOME=$HOME/.local/share/pnpm && sudo apt-get install -y gh && echo \"$(git remote get-url origin | sed 's/.*://; s/@.*//')\" | gh auth login --with-token && pnpm install -g vibe-tools@latest && mkdir -p /home/ubuntu/.vibe-tools",
+  "start": "printenv",
+  "terminals": [
+    {
+      "name": "doppler",
+      "description": "Fetch secrets from Doppler",
+      "command": "doppler setup --project os --config dev_background_cursor && doppler secrets download --project os --config dev_background_cursor --no-file --format env > /home/ubuntu/.vibe-tools/.env"
+    },
+    {
+      "name": "vibe-tools",
+      "description": "Install vibe-tools",
+      "command": "CI=1 vibe-tools install"
+    }
+  ]
+}
