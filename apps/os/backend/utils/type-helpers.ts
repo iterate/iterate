@@ -1,4 +1,3 @@
-import type { MutationProcedure, QueryProcedure } from "@trpc/server/unstable-core-do-not-import";
 import { z } from "zod/v4";
 
 export type Branded<Brand extends string, Value = string> = Value & z.$brand<Brand>;
