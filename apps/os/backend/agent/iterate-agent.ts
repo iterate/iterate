@@ -905,7 +905,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       case "raise-error":
         throw new Error(input.error);
       case "return-secret":
-        return { ...input, serverSecret: "rumplestiltskin" };
+        return { secret: input.secret, behaviour: "return-secret" };
       default:
         throw new Error("Unknown behaviour");
     }

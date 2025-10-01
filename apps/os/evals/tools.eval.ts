@@ -1,10 +1,9 @@
 import { evalite } from "evalite";
 import { beforeAll } from "vitest";
+import z from "zod";
 import { iterateAgentTools } from "../backend/agent/iterate-agent-tools.ts";
 import { createDOToolFactory } from "../backend/agent/do-tools.ts";
-import type { AgentDurableObjectToolSpec } from "../backend/agent/tool-schemas.ts";
 import { createTestHelper, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
-import z from "zod";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
@@ -93,7 +92,6 @@ evalite("tool usage", {
         },
         { score: 0, reasons: [] as string[] },
       );
-      // const score = reply.includes(message.expected) ? 100 : 0;
       scorer.scoreManually([`user: ${message.message}`, `assistant: ${reply}`], {
         score,
         reason: reasons.join("\n"),
@@ -159,7 +157,7 @@ evalite("parallel tool calls", {
       const userMessage = await h.sendUserMessage(message.message);
       const reply = await userMessage.waitForReply();
 
-      let { score, reasons } = message.expected.reduce(
+      const scoreInfo = message.expected.reduce(
         (acc, expected) => {
           if (reply.includes(expected)) {
             acc.score += 100 / message.expected.length;
@@ -186,12 +184,12 @@ evalite("parallel tool calls", {
       const startTimeDiffSeconds =
         Math.abs(new Date(animalCall.start).getTime() - new Date(foodCall.start).getTime()) / 1000;
 
-      if (startTimeDiffSeconds > 0.5) score -= startTimeDiffSeconds * 20; // penalize per second - they should be called at the same time, +/- a short delay for chunk streaming latency
-      reasons.push(`Calls started ${startTimeDiffSeconds}s apart`);
+      if (startTimeDiffSeconds > 0.5) scoreInfo.score -= startTimeDiffSeconds * 20; // penalize per second - they should be called at the same time, +/- a short delay for chunk streaming latency
+      scoreInfo.reasons.push(`Calls started ${startTimeDiffSeconds}s apart`);
 
       scorer.scoreManually([`user: ${message.message}`, `assistant: ${reply}`], {
-        score,
-        reason: reasons.map((r) => `- ${r}`).join("\n"),
+        score: scoreInfo.score,
+        reason: scoreInfo.reasons.map((r) => `- ${r}`).join("\n"),
       });
     }
     return { scores: await scorer.getScores(), debugURL: await h.getAgentDebugURL() };
