@@ -41,8 +41,23 @@ export async function getMessageMetadata(
   switch (slackEvent.type) {
     case "app_mention":
     case "message": {
-      const threadTs =
-        "thread_ts" in slackEvent && slackEvent.thread_ts ? slackEvent.thread_ts : ts;
+      let threadTs: string | undefined;
+      // case 1: we are inside a thread, so thread_ts is specified
+      if ("thread_ts" in slackEvent && slackEvent.thread_ts) {
+        threadTs = slackEvent.thread_ts;
+      }
+      // case 2: an event happened to a message, and thread_ts is specified on that message
+      if (
+        "message" in slackEvent &&
+        "thread_ts" in slackEvent.message &&
+        slackEvent.message.thread_ts
+      ) {
+        threadTs = slackEvent.message.thread_ts;
+      }
+      // case 3: no thread_ts is specified, so it's a thread starter, and we use the ts of the message itself
+      if (!threadTs) {
+        threadTs = ts;
+      }
       return {
         channel: slackEvent.channel,
         threadTs: threadTs,
