@@ -282,7 +282,7 @@ export type WaitForEvent = {
   ): Promise<Selection>;
 };
 
-export function IterateEval<TInput, TOutput, TExpected>(
+export function evaliterate<TInput, TOutput, TExpected>(
   experimentName: string,
   opts: {
     data: Evalite.RunnerOpts<TInput, TOutput, TExpected>["data"];

@@ -1,6 +1,5 @@
 import { beforeAll } from "vitest";
-import { createTestHelper, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
-import { IterateEval } from "./helpers.ts";
+import { createTestHelper, getAuthedTrpcClient, multiTurnScorer, evaliterate } from "./helpers.ts";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
@@ -8,12 +7,12 @@ beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
 });
 
-IterateEval("agent knows when to end their turn", {
+evaliterate("agent knows when to end their turn", {
   data: async () => {
     return [
       {
         input: {
-          slug: "multi-turn fruits conversation",
+          slug: "multi-turn-fruits-conversation",
           messages: [
             { message: "name a green fruit", expected: "a green fruit" },
             { message: "name another", expected: "a green fruit, not the same as the first" },
@@ -26,7 +25,7 @@ IterateEval("agent knows when to end their turn", {
       },
       {
         input: {
-          slug: "multi-turn vegetables conversation",
+          slug: "multi-turn-vegetables-conversation",
           messages: [
             { message: "name a green vegetable", expected: "a green vegetable" },
             { message: "name another", expected: "a green vegetable, not the same as the first" },
