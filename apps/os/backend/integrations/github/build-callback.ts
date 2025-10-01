@@ -64,7 +64,6 @@ buildCallbackApp.post("/callback", zValidator("json", BuildCallbackPayload), asy
       try {
         // Parse the output to extract the configuration
         const configData = JSON.parse(stdout);
-
         // Upsert the config - always overwrite if it exists
         await c.var.db
           .insert(schema.iterateConfig)
