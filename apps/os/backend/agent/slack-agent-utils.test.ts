@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { getMessageMetadata, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import type { SlackEvent } from "@slack/types";
+import { getMessageMetadata, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 
 describe("shouldUnfurlSlackMessage", () => {
   const cases: Array<{
