@@ -319,8 +319,6 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
-  console.log(`[MCP] Connected to ${JSON.stringify(result)}`);
-
   mcpManagerCache.managers.set(cacheKey, manager);
 
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
