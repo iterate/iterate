@@ -5,7 +5,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
 import type { StandardSchemaV1 } from "better-auth"; // standard schema v1 can come from anywhere really but better-auth is kind enough to export it
-import { Eval, init, initLogger, type Span } from "braintrust";
+import { init, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
 import type { AppRouter } from "../backend/trpc/root.ts";
@@ -15,6 +15,7 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
+import { getEnvironmentName } from "../backend/utils/utils.ts";
 
 export * from "./scorer.ts";
 
@@ -296,7 +297,12 @@ export function evaliterate<TInput, TOutput, TExpected>(
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
   const spanMap: Record<string, Span> = {};
-  const experiment = init("boris-evals", {
+  const environmentName = getEnvironmentName({
+    STAGE__PR_ID: process.env.STAGE__PR_ID,
+    ESTATE_NAME: process.env.ESTATE_NAME,
+    ITERATE_USER: process.env.ITERATE_USER,
+  });
+  const experiment = init(environmentName, {
     apiKey: process.env.BRAINTRUST_API_KEY,
     experiment: experimentName,
   });

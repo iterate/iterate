@@ -881,11 +881,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
-      const projectName = `${getEnvironmentName({
+      const projectName = getEnvironmentName({
         ITERATE_USER: this.env.ITERATE_USER,
         STAGE__PR_ID: this.env.STAGE__PR_ID,
         ESTATE_NAME: estateName,
-      })}-platform`;
+      });
       const spanExportedId = await makeBraintrustSpan({
         braintrustKey: this.env.BRAINTRUST_API_KEY,
         projectName,
