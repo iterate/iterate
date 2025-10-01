@@ -1,8 +1,11 @@
-import { Outlet, redirect } from "react-router";
+import { Outlet, redirect, isRouteErrorResponse, useRouteError } from "react-router";
+import { AlertCircle, Home } from "lucide-react";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserEstateAccess } from "../../backend/trpc/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
+import { Button } from "../components/ui/button.tsx";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import type { Route } from "./+types/estate-layout";
 
 // Server-side loader that checks estate access
@@ -39,8 +42,12 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     );
 
-    // Redirect to root to find a valid estate
-    throw redirect("/", { headers });
+    // Throw a 403 error instead of redirecting
+    throw new Response("You don't have access to this estate", {
+      status: 403,
+      statusText: "Forbidden",
+      headers,
+    });
   }
 
   // User has access, set the estate cookie for future use
@@ -61,6 +68,51 @@ export default function EstateLayout() {
   return (
     <DashboardLayout>
       <Outlet />
+    </DashboardLayout>
+  );
+}
+
+// Error boundary to display access errors nicely
+export function ErrorBoundary() {
+  const error = useRouteError();
+
+  let title: string;
+  let message: string;
+
+  if (isRouteErrorResponse(error)) {
+    title = error.statusText;
+    message = error.data || "An unexpected error occurred";
+  } else if (error instanceof Error) {
+    title = "Error";
+    message = error.message;
+  } else {
+    title = "Error";
+    message = "Unknown error";
+  }
+
+  return (
+    <DashboardLayout>
+      <div className="flex items-center justify-center min-h-[calc(100vh-8rem)] p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <div className="flex justify-center mb-4">
+              <AlertCircle className="h-12 w-12 text-destructive" />
+            </div>
+            <CardTitle className="text-2xl">{title}</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground text-center">{message}</p>
+          </CardContent>
+          <CardFooter className="flex justify-center">
+            <Button asChild>
+              <a href="/">
+                <Home className="mr-2 h-4 w-4" />
+                Go to Home
+              </a>
+            </Button>
+          </CardFooter>
+        </Card>
+      </div>
     </DashboardLayout>
   );
 }
