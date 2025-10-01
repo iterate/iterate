@@ -21,7 +21,7 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { getEnvironmentName } from "../utils/utils.ts";
+import { getProjectName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
@@ -412,14 +412,13 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
     const posthogClient = pMemoize(async () => {
       const estate = await getEstate();
-      const environment = getEnvironmentName({
+      const projectName = getProjectName({
         ITERATE_USER: this.env.ITERATE_USER,
-        STAGE__PR_ID: this.env.STAGE__PR_ID,
-        ESTATE_NAME: estate.name,
+        PROJECT_NAME: this.env.PROJECT_NAME,
       });
       return new PosthogCloudflare(this.ctx, {
         estateName: estate.name,
-        environmentName: environment,
+        projectName: projectName,
       });
     });
 
@@ -474,12 +473,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       getOpenAIClient: async () => {
         const estate = await getEstate();
         return await openAIProvider({
+          estateName: estate.name,
           posthog: {
-            estateName: estate.name,
-            environmentName: getEnvironmentName({
-              STAGE__PR_ID: this.env.STAGE__PR_ID,
+            projectName: getProjectName({
+              PROJECT_NAME: this.env.PROJECT_NAME,
               ITERATE_USER: this.env.ITERATE_USER,
-              ESTATE_NAME: estate.name,
             }),
             traceId: `${this.constructor.name}-${this.name}`,
           },
@@ -881,15 +879,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
-      const projectName = getEnvironmentName({
+      const projectName = getProjectName({
         ITERATE_USER: this.env.ITERATE_USER,
-        STAGE__PR_ID: this.env.STAGE__PR_ID,
-        ESTATE_NAME: estateName,
+        PROJECT_NAME: this.env.PROJECT_NAME,
       });
       const spanExportedId = await makeBraintrustSpan({
         braintrustKey: this.env.BRAINTRUST_API_KEY,
         projectName,
         spanName: `${this.constructor.name}-${this.name}`,
+        estateName,
       });
       this.setState({
         ...this.state,

@@ -51,11 +51,11 @@ export class PosthogCloudflare<
 > {
   private readonly ctx: { waitUntil: (promise: Promise<void>) => void };
   readonly client: PostHog;
-  readonly estateMeta: { estateName: string; environmentName: string };
+  readonly estateMeta: { estateName: string; projectName: string };
 
   constructor(
     ctx: { waitUntil: (promise: Promise<void>) => void },
-    estateMeta: { estateName: string; environmentName: string },
+    estateMeta: { estateName: string; projectName: string },
     client = createRawPosthogCloudflareClient(),
   ) {
     this.ctx = ctx;
@@ -66,7 +66,7 @@ export class PosthogCloudflare<
       groupType: "estate",
       groupKey: estateMeta.estateName,
       properties: {
-        environment: estateMeta.environmentName,
+        project: estateMeta.projectName,
       },
     });
   }

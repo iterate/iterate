@@ -4,7 +4,7 @@ import type { Context } from "hono";
 import { typeid } from "typeid-js";
 import { env, type CloudflareEnv } from "../env.ts";
 import type { Variables } from "./worker.ts";
-import type { DB } from "./db/client.ts";
+import { schema, type DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
 import { getBaseURL } from "./utils/utils.ts";
@@ -295,6 +295,13 @@ export const uploadFile = async ({
   try {
     // Start the upload process
     await startUpload(db, fileId, estateId, filename);
+    // Get the estate name for tracking purposes
+    const estate = await db.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+    });
+    if (!estate) {
+      throw new Error(`Estate not found: ${estateId}`);
+    }
     // Upload the file
     const fileRecord = await doUpload({
       stream,
@@ -311,6 +318,7 @@ export const uploadFile = async ({
             POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY,
           }),
         },
+        estateName: estate.name,
       }),
     });
 

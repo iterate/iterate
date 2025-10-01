@@ -25,22 +25,17 @@ export function ensureString(value: unknown): string {
 
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-export function getEnvironmentName(env: {
-  STAGE__PR_ID?: string;
-  ESTATE_NAME?: string;
-  ITERATE_USER?: string;
-}) {
-  const { STAGE__PR_ID, ESTATE_NAME, ITERATE_USER } = env;
-  if (STAGE__PR_ID) {
-    return `pr-${STAGE__PR_ID}`;
+/**
+ * Get the project name for posthog and braintrust.
+ * To differentiate between different estates, we would add that as metadata to the logs.
+ * For example, in Posthog, we identify ourselves under an estate, and in Braintrust, we add it to the span as metadata.
+ */
+export function getProjectName(env: { PROJECT_NAME?: string; ITERATE_USER: string }) {
+  const { PROJECT_NAME, ITERATE_USER } = env;
+  if (PROJECT_NAME) {
+    return `${PROJECT_NAME}`;
   }
-  if (ESTATE_NAME) {
-    return `estate-${ESTATE_NAME}`;
-  }
-  if (ITERATE_USER) {
-    return `local-${ITERATE_USER}`;
-  }
-  return `unknown`;
+  return `local-${ITERATE_USER}`;
 }
 
 export function getBaseURL(

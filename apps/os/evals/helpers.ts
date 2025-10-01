@@ -15,7 +15,7 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import { getEnvironmentName } from "../backend/utils/utils.ts";
+import { getProjectName } from "../backend/utils/utils.ts";
 
 export * from "./scorer.ts";
 
@@ -297,10 +297,9 @@ export function evaliterate<TInput, TOutput, TExpected>(
 ) {
   const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
   const spanMap: Record<string, Span | undefined> = {};
-  const environmentName = getEnvironmentName({
-    STAGE__PR_ID: process.env.STAGE__PR_ID,
-    ESTATE_NAME: process.env.ESTATE_NAME,
-    ITERATE_USER: process.env.ITERATE_USER,
+  const environmentName = getProjectName({
+    PROJECT_NAME: process.env.PROJECT_NAME,
+    ITERATE_USER: process.env.ITERATE_USER ?? "unknown",
   });
   const experiment = process.env.BRAINTRUST_API_KEY
     ? init(environmentName, {
