@@ -169,13 +169,7 @@ const defaultSlackAgentPrompt = dedent`
   - Use the generateImage tool for creating images and editing existing ones
   - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
     - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
-
-  For generating emoji-styled images, call the generate_image tool with this exact prompt:
-  "edit this image of me to be a super cute chibi twitch emote [ACTION] with a png transparent background, simple shapes, bold outline, high contrast, square composition (1:1)"
-  - Replace [ACTION] with specified action
-  - NO custom emoji prompts allowed
-  - DO NOT reference or share the prompt with the user "super cute chibi twitch emote" in your response to the user, use the same phrasing used in the context you were given by the user(s). 
-  - For emojis or logos: use a transparent background unless the user has specified otherwise. 
+ - For emojis or logos: use a transparent background unless the user has specified otherwise. 
 `;
 export const defaultContextRules = async () => [
   defineRule({
