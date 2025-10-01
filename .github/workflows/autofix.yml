@@ -7,6 +7,8 @@ on:
 
 jobs:
   autofix:
+    # autofix is down rn https://github.com/autofix-ci/action/issues/32
+    if: false
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - name: Checkout code
