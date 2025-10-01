@@ -895,7 +895,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   ping() {
     return { message: "pong back at you!" };
   }
-  async flexibleTestTool(input: Inputs["flexibleTestTool"]) {
+  async flexibleTestTool({ params: input }: Inputs["flexibleTestTool"]) {
     switch (input.behaviour) {
       case "slow-tool": {
         const start = input.recordStartTime ? new Date().toISOString() : undefined;
@@ -934,7 +934,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
-      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
     };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
