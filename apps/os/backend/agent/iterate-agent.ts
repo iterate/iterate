@@ -1112,7 +1112,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const mcpServer = {
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
-      requiresOAuth: input.requiresOAuth || false,
       requiresParams,
     };
 

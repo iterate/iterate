@@ -64,7 +64,6 @@ export const MCPConnection = z.object({
   prompts: z.array(MCPPrompt),
   resources: z.array(MCPResource),
   connectedAt: z.string(),
-  requiresOAuth: z.boolean().default(true),
   requiresParams: z.array(MCPParam).optional(),
 });
 
@@ -93,7 +92,6 @@ const mcpConnectRequestFields = {
     allowedPrompts: z.array(z.string()).optional(),
     allowedResources: z.array(z.string()).optional(),
     triggerLLMRequestOnEstablishedConnection: z.boolean().default(false),
-    requiresOAuth: z.boolean().default(true),
     requiresParams: z.array(MCPParam).optional(),
     reconnect: z
       .object({
@@ -127,7 +125,6 @@ const mcpConnectionEstablishedFields = {
     tools: z.array(MCPTool),
     prompts: z.array(MCPPrompt),
     resources: z.array(MCPResource),
-    requiresOAuth: z.boolean().default(true),
     requiresParams: z.array(MCPParam).optional(),
   }),
 };

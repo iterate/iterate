@@ -685,19 +685,11 @@ export const integrationsRouter = router({
         serverUrl: z.string(),
         mode: z.enum(["personal", "company"]),
         integrationSlug: z.string(),
-        requiresOAuth: z.boolean().optional(),
         requiresParams: z.array(MCPParam).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const {
-        agentDurableObject,
-        serverUrl,
-        mode,
-        integrationSlug,
-        requiresOAuth,
-        requiresParams,
-      } = input;
+      const { agentDurableObject, serverUrl, mode, integrationSlug, requiresParams } = input;
       const params = {
         db: ctx.db,
         agentInstanceName: agentDurableObject.durableObjectName,
@@ -722,7 +714,6 @@ export const integrationsRouter = router({
             mode: mode,
             userId: ctx.user.id,
             integrationSlug,
-            requiresOAuth,
             requiresParams,
             triggerLLMRequestOnEstablishedConnection: false,
           },
