@@ -735,6 +735,31 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return dedupedRules;
   }
 
+  /**
+   * Check if a user is a guest in the organization that owns this estate.
+   * Returns true if the user is a guest, false otherwise.
+   */
+  private async isUserGuest(userId: string): Promise<boolean> {
+    const result = await this.db
+      .select({
+        role: schema.organizationUserMembership.role,
+      })
+      .from(schema.estate)
+      .innerJoin(
+        schema.organizationUserMembership,
+        eq(schema.estate.organizationId, schema.organizationUserMembership.organizationId),
+      )
+      .where(
+        and(
+          eq(schema.estate.id, this.databaseRecord.estateId),
+          eq(schema.organizationUserMembership.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    return result[0]?.role === "guest";
+  }
+
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
     return this.agentCore.addEvent(event);
   }
@@ -1078,6 +1103,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
+    const isGuest = await this.isUserGuest(input.onBehalfOfIterateUserId);
+    if (isGuest) {
+      return {
+        success: false,
+        error:
+          "Guest users do not have permission to connect MCP servers. Please contact an admin or member of your organization for assistance.",
+      };
+    }
+
     const formattedServerUrl = new URL(input.serverUrl);
 
     const requiresParams: MCPParam[] = [
