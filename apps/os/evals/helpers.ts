@@ -283,11 +283,6 @@ export type WaitForEvent = {
 };
 
 /**
- * @param experimentName - The name of the experiment
- * @param opts - The options for the experiment, very similar to
- * @returns Nothing; this is a vitest wrapper
- * @throws If the experiment fails
- * @description
  * This function wraps evalite and adds braintrust logging:
  * - It saves us having to manually create braintrust spans and log scores
  * - It passes the span id to the task function, so we can inject it into the agent and get traces
