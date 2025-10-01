@@ -11,21 +11,21 @@ describe("shouldUnfurlSlackMessage", () => {
     ).toMatchInlineSnapshot("true");
   });
 
-  it("returns false when the message includes an os.iterate.com link", () => {
+  it("returns false for auto when the message includes an os.iterate.com link", () => {
+    expect(
+      shouldUnfurlSlackMessage({
+        text: "Authorize here https://os.iterate.com/some-path",
+        unfurl: "auto",
+      }),
+    ).toMatchInlineSnapshot("false");
+  });
+
+  it("returns true for all when the message includes an os.iterate.com link", () => {
     expect(
       shouldUnfurlSlackMessage({
         text: "Authorize here https://os.iterate.com/some-path",
         unfurl: "all",
       }),
-    ).toMatchInlineSnapshot("false");
-  });
-
-  it("returns false for auto when there are multiple links", () => {
-    expect(
-      shouldUnfurlSlackMessage({
-        text: "First https://example.com and then https://iterate.com",
-        unfurl: "auto",
-      }),
-    ).toMatchInlineSnapshot("false");
+    ).toMatchInlineSnapshot("true");
   });
 });

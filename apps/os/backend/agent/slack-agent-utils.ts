@@ -139,6 +139,10 @@ export function shouldUnfurlSlackMessage(params: {
     return false;
   }
 
+  if (unfurl === "all") {
+    return true;
+  }
+
   const links = text.match(/https?:\/\/[^\s|]+/g) ?? [];
   const hasOsIterateLink = links.some((link) => {
     try {
@@ -150,10 +154,6 @@ export function shouldUnfurlSlackMessage(params: {
 
   if (hasOsIterateLink) {
     return false;
-  }
-
-  if (unfurl === "all") {
-    return true;
   }
 
   const preference = unfurl ?? "auto";
