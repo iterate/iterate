@@ -129,6 +129,37 @@ export function extractBotUserIdFromAuthorizations(
   return botAuthorization?.user_id;
 }
 
+export function shouldUnfurlSlackMessage(params: {
+  text: string;
+  unfurl: "never" | "auto" | "all" | undefined;
+}): boolean {
+  const { text, unfurl } = params;
+
+  if (unfurl === "never") {
+    return false;
+  }
+
+  const links = text.match(/https?:\/\/[^\s|]+/g) ?? [];
+  const hasOsIterateLink = links.some((link) => {
+    try {
+      return new URL(link).hostname === "os.iterate.com";
+    } catch {
+      return false;
+    }
+  });
+
+  if (hasOsIterateLink) {
+    return false;
+  }
+
+  if (unfurl === "all") {
+    return true;
+  }
+
+  const preference = unfurl ?? "auto";
+  return preference === "auto" && links.length === 1;
+}
+
 export async function handleChannelJoinedEvent(_params: { channelId: string; botUserId: string }) {
   throw new Error("Not implemented");
   // const { channelId, botUserId } = params;

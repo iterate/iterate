@@ -22,7 +22,10 @@ import {
 } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
+import {
+  shouldIncludeEventInConversation,
+  shouldUnfurlSlackMessage,
+} from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -668,17 +671,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const { endTurn, ...sendInput } = input;
 
-    const links = sendInput.text.match(/https?:\/\/[^\s|]+/g) ?? [];
-    const hasOsIterateLink = links.some((link) => {
-      try {
-        return new URL(link).hostname === "os.iterate.com";
-      } catch {
-        return false;
-      }
+    const doUnfurl = shouldUnfurlSlackMessage({
+      text: sendInput.text,
+      unfurl: sendInput.unfurl,
     });
-    const doUnfurl =
-      !hasOsIterateLink &&
-      (sendInput.unfurl === "all" || (sendInput.unfurl === "auto" && links.length === 1));
 
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
