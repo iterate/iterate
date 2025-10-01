@@ -186,12 +186,12 @@ evalite("parallel tool calls", {
       const startTimeDiffSeconds =
         Math.abs(new Date(animalCall.start).getTime() - new Date(foodCall.start).getTime()) / 1000;
 
-      score -= startTimeDiffSeconds * 20; // penalize per second - they should be called at the same time, +/- a short delay for chunk streaming latency
+      if (startTimeDiffSeconds > 0.5) score -= startTimeDiffSeconds * 20; // penalize per second - they should be called at the same time, +/- a short delay for chunk streaming latency
       reasons.push(`Calls started ${startTimeDiffSeconds}s apart`);
 
       scorer.scoreManually([`user: ${message.message}`, `assistant: ${reply}`], {
         score,
-        reason: reasons.join("\n"),
+        reason: reasons.map((r) => `- ${r}`).join("\n"),
       });
     }
     return { scores: await scorer.getScores(), debugURL: await h.getAgentDebugURL() };

@@ -130,7 +130,7 @@ const renderColumns = (result: { output: ScoreOutput }) =>
   [
     ...result.output.scores.map((s, i) => ({
       label: `turn ${i + 1}`,
-      value: [...s.messages, `[${s.score}%] ${s.reason}`].join("\n\n"),
+      value: [...s.messages, `[${s.score}%]\n${s.reason}`].join("\n\n"),
     })),
     {
       label: "Links",
