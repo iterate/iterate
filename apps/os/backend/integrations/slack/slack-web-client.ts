@@ -1,4 +1,4 @@
-import { ErrorCode, WebClient, type WebClientOptions } from "@slack/web-api";
+import { WebClient, type WebClientOptions } from "@slack/web-api";
 import type { WebAPICallResult } from "@slack/web-api/dist/WebClient";
 import dedent from "dedent";
 
