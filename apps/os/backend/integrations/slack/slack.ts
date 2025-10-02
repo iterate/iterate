@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { type ConversationsRepliesResponse } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
 import { type CloudflareEnv } from "../../../env.ts";
@@ -224,7 +225,7 @@ export async function reactToSlackWebhook(
           })
           .then(
             () => console.log("[SlackAgent] Added eyes reaction"),
-            (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
+            (error: unknown) => console.error("[SlackAgent] Failed to add eyes reaction", error),
           );
       }
     }
