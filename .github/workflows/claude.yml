@@ -13,10 +13,12 @@ on:
 jobs:
   claude:
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && (github.event.comment.author_association == 'OWNER' || github.event.comment.author_association == 'MEMBER' || github.event.comment.author_association == 'COLLABORATOR')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && (github.event.review.author_association == 'OWNER' || github.event.review.author_association == 'MEMBER' || github.event.review.author_association == 'COLLABORATOR')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && (github.event.issue.user.type == 'User'))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -52,6 +54,14 @@ jobs:
                 "DOPPLER_TOKEN": "${{ secrets.CLAUDE_DOPPLER_TOKEN }}"
               }
             }
-          # prompt: ""
+          prompt: "Review this PR for security issues, bugs, and code quality. Proactively fix unchecked type casts, or unfixable linter issues."
           claude_args: |
             --model claude-sonnet-4-5-20250929
+          allowed_tools: |
+            Bash(pnpm i) 
+            Bash(pnpm test:*)
+            Bash(pnpm eval:*)
+            Bash(pnpm lint)
+            Bash(pnpm typecheck)
+            Bash(pnpm clean)
+            Bash(pnpm dev)
