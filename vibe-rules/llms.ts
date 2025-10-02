@@ -368,22 +368,6 @@ import { env, type CloudflareEnv } from "../env.ts";
     rule: dedent`
       - In general, logs in production are not looked at, so don't add them unless we specifically need them for debugging something.
       - Do not use the \`console\` object, use the \`logger\` object from \`apps/os/backend/tag-logger.ts\`.
-
-      ## Using the logger
-
-      Import the logger like this:
-      ${codeblock(
-        "ts",
-        `
-import { logger } from "../tag-logger.ts";
-
-logger.info("Something happened", { data: "value" });
-logger.warn("Warning message");
-logger.error("Error occurred", { error });
-      `,
-      )}
-
-      Note: You may see \`import logger as console\` in some files, but we're trying to move away from that pattern.
     `,
     globs: ["apps/os/backend/**/*.ts"],
     eslint: {
