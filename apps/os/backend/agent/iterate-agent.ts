@@ -626,7 +626,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
     const rules = ContextRule.array().parse(await this.getContextRules());
-    console.info("rules", rules);
     return {
       type: "CORE:ADD_CONTEXT_RULES",
       data: { rules },
