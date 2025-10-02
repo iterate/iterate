@@ -338,35 +338,25 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
     name: "cloudflare-workerd-stuff",
     description: "Cloudflare Workers patterns and utilities",
     rule: dedent`
-      We are targeting Cloudflare Workers for our backend.
+      Our backend is deployed to cloudflare workers with nodejs-compat turned on.
 
-      ## Background Tasks with waitUntil
-
-      Use \`waitUntil\` to execute background tasks without blocking the response:
-
+      ### Use \`waitUntil()\` to run tasks in the background
       ${codeblock(
         "ts",
         `
-      import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "cloudflare:workers";
 
-      waitUntil(
-        (async () => {
-          await someAsyncTask();
-        })()
-      );
+waitUntil(async () => {
+  await someAsyncTask();
+})
       `,
       )}
 
-      ## Environment Variables
-
-      Import the typed environment from \`apps/os/env.ts\`:
-
+      ### Import cloudflare env from \`apps/os/env.ts\`
       ${codeblock(
         "ts",
         `
-      import type { CloudflareEnv } from "../env.ts";
-
-      const apiKey = env.SOME_API_KEY;
+import { env, type CloudflareEnv } from "../env.ts";
       `,
       )}
     `,
