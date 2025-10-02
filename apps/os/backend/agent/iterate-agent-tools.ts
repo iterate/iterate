@@ -160,11 +160,10 @@ export const iterateAgentTools = defineDOTools({
       overrideReplicateParams: z.record(z.string(), z.any()).optional(),
     }),
   },
-  modifyEstate: {
-    description: "Modify estate by updating its repo and rebuilding.",
-    input: z.object({
-      prompt: z.string(),
-      model: z.enum(SUPPORTED_MODELS).default(DEFAULT_MODEL),
-    }),
+  // NOTE: local_shell doesn't require any further parameters
+  // - https://platform.openai.com/docs/guides/tools-local-shell
+  // - https://github.com/vercel/ai/blob/main/packages/openai/src/responses/openai-responses-api-types.ts#L206-L208
+  local_shell: {
+    description: "Execute shell in a sandbox",
   },
 });

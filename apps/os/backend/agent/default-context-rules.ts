@@ -170,8 +170,8 @@ const defaultSlackAgentPrompt = dedent`
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
 
-  ### Modifying estate
-  - Use the modifyEstate tool for updating your own rules defined in the estate
+  ### Shell commands
+  - Use local_shell tool for running shell commands
 `;
 export const defaultContextRules = defineRules([
   {
@@ -200,7 +200,7 @@ export const defaultContextRules = defineRules([
         ),
       }),
       iterateAgentTool.generateImage(),
-      iterateAgentTool.modifyEstate(),
+      iterateAgentTool.local_shell(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({

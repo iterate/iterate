@@ -1306,29 +1306,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
-  async modifyEstate(input: Inputs["modifyEstate"]) {
+  async local_shell(input: Inputs["local_shell"]) {
     console.info("TODO-REMOVE-001", input);
-
-    // TODO-REMOVE
-    const estateId = "est_01k6cyfg4ze01td6fhhx15zebb";
-    const commitHash = "92985e927488470f770cef6b9cf78f41e966fd20";
-    const commitMessage = "Update rules";
-
-    // Use the helper function to trigger the rebuild
-    const build = await triggerEstateRebuild({
-      db: this.db,
-      env: this.env,
-      estateId,
-      commitHash,
-      commitMessage,
-      isManual: true,
-    });
 
     return {
       success: true,
-      buildId: build.id,
-      status: "in_progress",
-      message: "Build triggered successfully",
+      message: "Shell command executed",
     };
   }
 }
