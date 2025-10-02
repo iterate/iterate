@@ -86,7 +86,7 @@ app.all("/api/trpc/*", (c) => {
     router: appRouter,
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
-    onError: ({ path, error, type, input }) => {
+    onError: ({ path, error, type, input, ctx, req }) => {
       console.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
         type,
         code: error.code,
@@ -94,6 +94,12 @@ app.all("/api/trpc/*", (c) => {
         cause: error.cause,
         input,
         stack: error.stack,
+        // Additional context information
+        userId: ctx?.session?.user?.id,
+        sessionId: ctx?.session?.session?.id,
+        url: req?.url,
+        method: req?.method,
+        userAgent: req?.headers?.get("user-agent"),
       });
     },
   });
