@@ -75,7 +75,7 @@ evaliterate("tool usage", {
       braintrustSpanExportedId,
       inputSlug: input.slug,
     });
-    const scorer = multiTurnScorer();
+    const scorer = multiTurnScorer({ braintrustSpanExportedId });
 
     await h.addToolSpec(...input.tools);
 
@@ -156,7 +156,7 @@ evaliterate("parallel tool calls", {
       braintrustSpanExportedId,
       inputSlug: input.slug,
     });
-    const scorer = multiTurnScorer();
+    const scorer = multiTurnScorer({ braintrustSpanExportedId });
 
     await h.addToolSpec(...input.tools);
 
