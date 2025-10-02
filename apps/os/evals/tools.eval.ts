@@ -1,9 +1,8 @@
-import { evalite } from "evalite";
 import { beforeAll } from "vitest";
 import z from "zod";
 import { iterateAgentTools } from "../backend/agent/iterate-agent-tools.ts";
 import { createDOToolFactory } from "../backend/agent/do-tools.ts";
-import { createTestHelper, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
+import { createTestHelper, evaliterate, getAuthedTrpcClient, multiTurnScorer } from "./helpers.ts";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
@@ -11,7 +10,7 @@ beforeAll(async () => {
   trpcClient = await getAuthedTrpcClient();
 });
 
-evalite("tool usage", {
+evaliterate("tool usage", {
   data: async () => {
     return [
       {
@@ -70,8 +69,12 @@ evalite("tool usage", {
       },
     ];
   },
-  task: async (input) => {
-    const h = await createTestHelper(trpcClient, input.slug);
+  task: async ({ braintrustSpanExportedId, input }) => {
+    const h = await createTestHelper({
+      trpcClient,
+      braintrustSpanExportedId,
+      inputSlug: input.slug,
+    });
     const scorer = multiTurnScorer();
 
     await h.addToolSpec(...input.tools);
@@ -107,7 +110,7 @@ evalite("tool usage", {
   columns: multiTurnScorer.renderColumns,
 });
 
-evalite("parallel tool calls", {
+evaliterate("parallel tool calls", {
   data: async () => {
     return [
       {
@@ -147,8 +150,12 @@ evalite("parallel tool calls", {
       },
     ];
   },
-  task: async (input) => {
-    const h = await createTestHelper(trpcClient, input.slug);
+  task: async ({ braintrustSpanExportedId, input }) => {
+    const h = await createTestHelper({
+      trpcClient,
+      braintrustSpanExportedId,
+      inputSlug: input.slug,
+    });
     const scorer = multiTurnScorer();
 
     await h.addToolSpec(...input.tools);
