@@ -3,6 +3,10 @@
 ## get started
 
 ```bash
+# One-time bootstrap on Ubuntu/Debian
+./scripts/bootstrap-dev.sh
+
+# Manual steps (macOS or if you prefer to manage tools yourself)
 pnpm install
 brew install doppler
 doppler login
