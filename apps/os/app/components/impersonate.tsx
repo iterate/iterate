@@ -26,9 +26,8 @@ export const useImpersonation = () => {
       }
 
       if (!userId) return;
-      const impersonateResult = await authClient.admin.impersonateUser({
-        userId: input,
-      });
+      const impersonateResult = await authClient.admin.impersonateUser({ userId });
+
       if (impersonateResult.error) throw impersonateResult.error; // todo: have better auth throw errors by default
       return impersonateResult.data;
     },
