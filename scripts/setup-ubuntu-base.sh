@@ -35,6 +35,9 @@ pnpm setup
 nvm install "$NODE_VERSION" && nvm use "$NODE_VERSION"
 pnpm env use --global "$NODE_VERSION"
 
+# Install node-gyp globally for native module compilation
+pnpm add -g node-gyp
+
 # Install doppler CLI
 ## 1. Fetch the repo’s signing key and convert it to binary format
 curl -fsSL https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key \

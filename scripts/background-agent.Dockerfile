@@ -8,6 +8,8 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     unzip \
     sudo \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/* \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
 
