@@ -175,6 +175,7 @@ export const integrationsPlugin = () =>
           method: "GET",
           query: z.object({
             callbackURL: z.string().default("/"),
+            mode: z.enum(["redirect", "json"]).default("json"),
           }),
         },
         async (ctx) => {
@@ -207,6 +208,11 @@ export const integrationsPlugin = () =>
               user_scope: SLACK_USER_AUTH_SCOPES.join(","),
             },
           });
+
+          // If mode is redirect, redirect directly to OAuth URL
+          if (ctx.query.mode === "redirect") {
+            return ctx.redirect(url.toString());
+          }
 
           return ctx.json({ url });
         },

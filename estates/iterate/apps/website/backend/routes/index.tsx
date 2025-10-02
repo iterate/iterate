@@ -12,6 +12,7 @@ import francineImg from "../assets/francine.png?url";
 import nickImg from "../assets/nick.png?url";
 import rahulImg from "../assets/rahul.png?url";
 import mishaImg from "../assets/misha.png?url";
+import slackIcon from "../assets/slack.svg?url";
 //
 
 export default function Home() {
@@ -31,6 +32,14 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const handleAddToSlack = () => {
+    // Redirect to the OS app endpoint which will handle the OAuth flow
+    // window.location.href =
+    //   "http://localhost:5173/api/auth/integrations/direct-login-with-slack?callbackURL=/&mode=redirect";
+    window.location.href =
+      "https://os.iterate.com/api/auth/integrations/direct-login-with-slack?callbackURL=/&mode=redirect";
+  };
+
   return (
     <div className="min-h-screen bg-white">
       <SiteHeader />
@@ -41,34 +50,34 @@ export default function Home() {
         <div className="grid lg:grid-cols-2 gap-2 lg:gap-16 items-center">
           <div className="max-w-4xl">
             <h1 className="text-4xl sm:text-5xl mb-6 sm:mb-8 tracking-tight leading-tight font-bold headline-mark">
-              Hi 👋 I’m @iterate, your new co-worker
+              The world's most hackable AI agent
             </h1>
-            <h2 className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed">
-              I work like ChatGPT, but:
-            </h2>
-            <div className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed space-y-2">
-              <p>...live in Slack</p>
-              <p>...multiplayer</p>
-              <p>...connect with your stack using MCP servers</p>
-              <p>...based on your rules/*.md</p>
-            </div>
-            <div className="flex items-center gap-3 sm:gap-5 mb-6 sm:mb-24">
+            <ul className="text-lg sm:text-xl text-gray-600 mb-6 sm:mb-8 leading-relaxed space-y-2 list-disc pl-6">
+              <li>multiplayer slack agent</li>
+              <li>can use remote MCP servers</li>
+              <li>customisable via rules in a git repo</li>
+              <li>open source</li>
+            </ul>
+            <div className="mb-6 sm:mb-24 sm:flex sm:flex-col sm:items-end">
               <Button
                 ref={addToSlackRef}
-                className="w-64"
+                className="w-full sm:w-72 text-lg"
                 size="lg"
-                onClick={() => setIsCalendarOpen(true)}
+                variant="secondary"
+                onClick={handleAddToSlack}
               >
-                <span>Free installation</span>
-                <span className="hidden sm:flex items-center gap-2 ml-3">
-                  <kbd className="keycap keycap-invert" data-key="cmd">
-                    ⌘
-                  </kbd>
-                  <kbd className="keycap keycap-invert" data-key="k">
-                    K
-                  </kbd>
-                </span>
+                <img src={slackIcon} alt="Slack" className="w-6 h-6 mr-2" />
+                <span>Add to Slack</span>
               </Button>
+              <p className="text-sm text-gray-500 mt-3 sm:text-right">
+                or{" "}
+                <button
+                  onClick={() => setIsCalendarOpen(true)}
+                  className="underline hover:text-gray-700"
+                >
+                  book a call with our founder
+                </button>
+              </p>
             </div>
           </div>
           <div className="block lg:hidden mt-4 mb-8">

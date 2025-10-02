@@ -25,6 +25,29 @@ export function ensureString(value: unknown): string {
 
 export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
+export type Environment = "production" | "development" | "staging";
+
+/**
+ * Get the current environment type with smart handling of various formats.
+ * Supports full names (production, development, staging) and abbreviations (PRD, DEV, STG).
+ */
+export function getNodeEnvironment(): Environment {
+  const nodeEnv = process.env.NODE_ENV?.toLowerCase();
+  // Handle NODE_ENV variations
+  if (nodeEnv === "production" || nodeEnv === "prd") {
+    return "production";
+  }
+  if (nodeEnv === "development" || nodeEnv === "dev") {
+    return "development";
+  }
+  if (nodeEnv === "staging" || nodeEnv === "stg") {
+    return "staging";
+  }
+
+  // Default to production if not specified
+  return "production";
+}
+
 export function getEnvironmentName(env: {
   ITERATE_USER: string;
   STAGE__PR_ID?: string;

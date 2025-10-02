@@ -23,6 +23,7 @@ export type CloudflareEnv = Env & {
   CLOUDFLARE_ACCOUNT_ID: string;
   REPLICATE_API_TOKEN: string;
   ITERATE_USER: string;
+  ITERATE_NOTIFICATION_ESTATE_ID?: string;
 };
 
 export const env = _env as CloudflareEnv;
