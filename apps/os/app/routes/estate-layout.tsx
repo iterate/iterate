@@ -104,11 +104,7 @@ export function ErrorBoundary() {
       }
 
       const owner = await trpcClient.admin.getEstateOwner.query({ estateId });
-      const impersonateResult = await authClient.admin.impersonateUser({ userId: owner.userId });
-
-      if (impersonateResult.error) {
-        throw impersonateResult.error;
-      }
+      await authClient.admin.impersonateUser({ userId: owner.userId });
 
       return owner;
     },
