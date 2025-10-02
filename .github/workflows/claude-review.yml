@@ -80,4 +80,4 @@ jobs:
 
           claude_args: |
             --model claude-sonnet-4-5-20250929
-            --allowedTools "Edit,Write,Bash(pnpm i),Bash(pnpm test:*),Bash(pnpm eval:*),Bash(pnpm lint),Bash(pnpm typecheck),Bash(pnpm clean),Bash(pnpm dev)"
+            --allowedTools "Bash(pnpm i),Bash(pnpm test:*),Bash(pnpm eval:*),Bash(pnpm lint),Bash(pnpm typecheck),Bash(pnpm clean),Bash(pnpm dev)"
