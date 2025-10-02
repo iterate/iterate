@@ -113,7 +113,7 @@ export function ErrorBoundary() {
       return owner;
     },
     onSuccess: () => {
-      window.location.reload();
+      window.location.href = "/";
     },
   });
 
