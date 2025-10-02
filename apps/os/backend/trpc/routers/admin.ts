@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
@@ -207,6 +207,123 @@ export const adminRouter = router({
     return {
       user: ctx.user,
       session: ctx.session,
+    };
+  }),
+  listAllEstates: adminProcedure.query(async ({ ctx }) => {
+    const estates = await ctx.db.query.estate.findMany({
+      with: {
+        organization: {
+          with: {
+            members: {
+              where: eq(schema.organizationUserMembership.role, "owner"),
+              with: {
+                user: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: desc(schema.estate.updatedAt),
+    });
+
+    return estates.map((estate) => ({
+      id: estate.id,
+      name: estate.name,
+      organizationId: estate.organizationId,
+      organizationName: estate.organization.name,
+      ownerEmail: estate.organization.members[0]?.user.email,
+      ownerName: estate.organization.members[0]?.user.name,
+      ownerId: estate.organization.members[0]?.user.id,
+      connectedRepoId: estate.connectedRepoId,
+      connectedRepoPath: estate.connectedRepoPath,
+      connectedRepoRef: estate.connectedRepoRef,
+      createdAt: estate.createdAt,
+      updatedAt: estate.updatedAt,
+    }));
+  }),
+  rebuildEstate: adminProcedure
+    .input(z.object({ estateId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { triggerEstateRebuild } = await import("./estate.ts");
+
+      const estateData = await ctx.db.query.estate.findFirst({
+        where: eq(schema.estate.id, input.estateId),
+      });
+
+      if (!estateData) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Estate not found",
+        });
+      }
+
+      if (!estateData.connectedRepoId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Estate has no connected repository",
+        });
+      }
+
+      const result = await triggerEstateRebuild({
+        db: ctx.db,
+        env: ctx.env,
+        estateId: input.estateId,
+        commitHash: estateData.connectedRepoRef || "main",
+        commitMessage: "Manual rebuild triggered by admin",
+        isManual: true,
+      });
+
+      return { success: true, buildId: result.id };
+    }),
+  rebuildAllEstates: adminProcedure.mutation(async ({ ctx }) => {
+    const { triggerEstateRebuild } = await import("./estate.ts");
+
+    const estates = await ctx.db.query.estate.findMany({
+      where: eq(schema.estate.connectedRepoId, schema.estate.connectedRepoId),
+    });
+
+    const results = [];
+
+    for (const estate of estates) {
+      if (!estate.connectedRepoId) {
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: "No connected repository",
+        });
+        continue;
+      }
+
+      try {
+        const result = await triggerEstateRebuild({
+          db: ctx.db,
+          env: ctx.env,
+          estateId: estate.id,
+          commitHash: estate.connectedRepoRef || "main",
+          commitMessage: "Bulk rebuild triggered by admin",
+          isManual: true,
+        });
+
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: true,
+          buildId: result.id,
+        });
+      } catch (error) {
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+
+    return {
+      total: estates.length,
+      results,
     };
   }),
 });
