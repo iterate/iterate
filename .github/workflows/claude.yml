@@ -25,13 +25,22 @@ jobs:
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
     steps:
-      - name: Debug event context
+      - name: Check user permissions
+        id: check_permissions
         run: |
-          echo "Event name: ${{ github.event_name }}"
-          echo "Author association: ${{ github.event.comment.author_association || github.event.review.author_association }}"
-          echo "Actor: ${{ github.actor }}"
-          echo "Full event payload:"
-          echo '${{ toJSON(github.event) }}'
+          USER="${{ github.event.comment.user.login || github.event.review.user.login || github.event.issue.user.login }}"
+          PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/collaborators/$USER/permission" | jq -r '.permission')
+          echo "User: $USER"
+          echo "Permission level: $PERMISSION"
+          echo "permission=$PERMISSION" >> $GITHUB_OUTPUT
+          if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" || "$PERMISSION" == "maintain" ]]; then
+            echo "User has write access"
+            exit 0
+          else
+            echo "User does not have write access"
+            exit 1
+          fi
 
       - name: Checkout repository
         uses: actions/checkout@v4
