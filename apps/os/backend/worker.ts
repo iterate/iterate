@@ -105,28 +105,6 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
       return c.json({ error: "Agent not found" }, 404);
     }
     console.error("Failed to get agent stub:", error);
-
-    // Track error in PostHog (non-blocking)
-    waitUntil(
-      (async () => {
-        const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
-          host: "https://eu.i.posthog.com",
-        });
-
-        const userId = c.var.session?.user?.id || "anonymous";
-
-        posthog.captureException(error as Error, userId, {
-          agentClassName,
-          agentInstanceName,
-          path: c.req.path,
-          method: c.req.method,
-          url: c.req.url,
-        });
-
-        await posthog.shutdown();
-      })(),
-    );
-
     return c.json({ error: "Failed to connect to agent" }, 500);
   }
 });
