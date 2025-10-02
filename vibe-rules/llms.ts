@@ -19,6 +19,21 @@ type PackageRuleItemWithESLintEnforcement = Extract<PackageRuleItem, { name: str
 
 const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
+    name: "repo-setup",
+    description: "Basic commands to get the repo working",
+    rule: dedent`
+      To get the repo working, you can run the following commands:
+      - \`pnpm install\`
+      - \`pnpm typecheck\`
+      - \`pnpm lint\`
+      - \`pnpm format\`
+      - \`pnpm test\`
+
+      You must run lint, format, test before opening pull requests.
+    `,
+    alwaysApply: true,
+  },
+  {
     name: "iterate-branding",
     description: "iterate branding",
     rule: dedent`
