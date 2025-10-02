@@ -101,3 +101,11 @@ SLACK_SIGNING_SECRET
 ```
 
 You can get them from the slack app settings page.
+
+# Coding agents
+
+## Codex
+
+- Use `scripts/bootstrap-codex-env.sh` to provision the Codex VM tools.
+- Doppler config branch: `dev_codex`.
+- Available to members of the Iterate OpenAI workspace.
