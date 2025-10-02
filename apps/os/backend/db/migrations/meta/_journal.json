@@ -99,6 +99,13 @@
       "when": 1759160226068,
       "tag": "0013_white_tarantula",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1759420792283,
+      "tag": "0014_natural_ricochet",
+      "breakpoints": true
     }
   ]
 }
