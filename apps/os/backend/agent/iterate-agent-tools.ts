@@ -161,10 +161,9 @@ export const iterateAgentTools = defineDOTools({
     }),
   },
   exec: {
-    description: "Execute a shell in a sandbox",
+    description: "Execute a shell in a sandbox.",
     input: z.object({
       command: z.string(),
-      workingDirectory: z.string().optional(),
       env: z.record(z.string(), z.string()).optional(),
     }),
   },

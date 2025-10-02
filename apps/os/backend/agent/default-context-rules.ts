@@ -172,6 +172,8 @@ const defaultSlackAgentPrompt = dedent`
 
   ### Running commands
   - Use exec tool for running shell commands in sandbox
+  - exec tool runs in an isolated directory in the filesystem
+  - subdirectory \`repo\` contains useful persistent files (known as estate repo or context repo)
 `;
 export const defaultContextRules = defineRules([
   {

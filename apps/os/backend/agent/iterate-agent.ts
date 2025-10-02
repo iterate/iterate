@@ -21,6 +21,7 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
+import { hashStringToRange } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
@@ -52,6 +53,7 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { triggerEstateRebuild } from "../trpc/routers/estate.ts";
+import { getSandbox } from "@cloudflare/sandbox";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -562,6 +564,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
           // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
           waitUntil(this.refreshContextRules());
+
+          waitUntil(
+            (async () => {
+              console.log("DONE\nDONE\nDONE\n");
+              const [sandboxSession, jsonArgs] = (await this._getSandboxArgs()) as any;
+              const commandCommit = `node /tmp/sandbox-entry.ts commit-and-push '${jsonArgs}'`;
+              const _resultCommit = await sandboxSession.exec(commandCommit, {
+                timeout: 360 * 1000, // 360 seconds total timeout
+              });
+              // TODO: do something with _resultInit
+            })(),
+          );
         }
 
         this.ctx.waitUntil(
@@ -1306,12 +1320,85 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
+  async _getSandboxArgs() {
+    // TODO pass the actual durable object id / agent id
+    const agentId = "AGENT-ID-PLACEHOLDER";
+
+    // Consistently hash durable object ID to a container index, so a specific
+    // agent always gets routed to the same sandbox container.
+    const MAX_CONTAINERS = 10;
+    // Get sandbox instance
+    const sandboxIndex = hashStringToRange(agentId, MAX_CONTAINERS);
+    const sandboxId = `iterate-agent-sandbox-${sandboxIndex}`;
+    const workingDirectory = `/tmp/workspace-${agentId}`;
+
+    // Retrieve the sandbox
+    const sandbox = getSandbox((env as any).SANDBOX, sandboxId);
+
+    // Ensure that the session directory exists
+    await sandbox.mkdir(workingDirectory, { recursive: true });
+
+    // Create an isolated session
+    const sandboxSession = await sandbox.createSession({
+      id: agentId,
+      // TODO pass env vars
+      env: { ENV_KEY_0: "ENV_VAL_0" },
+      cwd: workingDirectory,
+      isolation: true,
+    });
+
+    // TODO remove
+    const githubRepoUrl = "https://github.com/plesiv/iterate-estate-template-1.git";
+    const commitHash = "92985e927488470f770cef6b9cf78f41e966fd20";
+    const branch = "main";
+    const buildId = `build-${Math.random()}`;
+    const callbackUrl = "";
+    const githubToken = "";
+    const estateId = "est_01k6cyfg4ze01td6fhhx15zebb";
+
+    // Determine the checkout target and whether it's a commit hash
+    const checkoutTarget = commitHash || branch || "main";
+    const isCommitHash = Boolean(commitHash);
+
+    // Prepare arguments as a JSON object
+    const buildArgs = {
+      githubRepoUrl,
+      githubToken,
+      checkoutTarget,
+      isCommitHash,
+      workingDir: workingDirectory,
+      callbackUrl: callbackUrl || "",
+      buildId,
+      estateId,
+    };
+
+    // Escape the JSON string for shell
+    const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
+
+    return [sandboxSession, jsonArgs];
+  }
+
   async exec(input: Inputs["exec"]) {
     console.info("TODO-REMOVE-001", input);
 
+    const [sandboxSession, jsonArgs] = (await this._getSandboxArgs()) as any;
+
+    // Init the container
+    const commandInit = `node /tmp/sandbox-entry.ts init '${jsonArgs}'`;
+    const _resultInit = await sandboxSession.exec(commandInit, {
+      timeout: 360 * 1000, // 360 seconds total timeout
+    });
+    // TODO: do something with _resultInit
+
+    // Run the exec command
+    const commandExec = input.command;
+    const resultExec = await sandboxSession.exec(commandExec, {
+      timeout: 360 * 1000, // 360 seconds total timeout
+    });
+
     return {
       success: true,
-      message: "Shell command executed",
+      message: resultExec.stdout,
     };
   }
 }

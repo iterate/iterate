@@ -48,3 +48,14 @@ export function replaceLocalhostWithNgrok(url: string): string {
   }
   return url;
 }
+
+// Hashes any string to a number in the range [0, max-1]
+export function hashStringToRange(str: string, max: number): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash; // Convert to 32-bit integer
+  }
+  return Math.abs(hash) % max;
+}

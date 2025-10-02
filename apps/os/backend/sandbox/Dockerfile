@@ -13,8 +13,8 @@ RUN apt-get remove -y nodejs npm && \
 # Install pnpm and tsx using Node 24
 RUN npm install -g pnpm tsx
 
-COPY build-script.ts /tmp/build-script.ts
-RUN chmod +x /tmp/build-script.ts
+COPY sandbox-entry.ts /tmp/sandbox-entry.ts
+RUN chmod +x /tmp/sandbox-entry.ts
 
 # Expose the ports you want to expose
 EXPOSE 3000

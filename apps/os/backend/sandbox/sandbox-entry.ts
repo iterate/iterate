@@ -33,10 +33,13 @@ interface CallbackPayload {
 }
 
 /**
- * Parse command line arguments (expects JSON string as first argument)
+ * Parse command line arguments, expects:
+ *   - subCommand as the first argument
+ *   - JSON string containing args as the second argument
  */
-function parseArgs(): BuildArgs {
-  const jsonArg = process.argv[2];
+function parseArgs(): [string, BuildArgs] {
+  const subCommand = process.argv[2];
+  const jsonArg = process.argv[3];
 
   if (!jsonArg) {
     throw new Error("Missing JSON arguments");
@@ -44,7 +47,7 @@ function parseArgs(): BuildArgs {
 
   try {
     const parsed = JSON.parse(jsonArg) as BuildArgs;
-    return {
+    const args = {
       githubRepoUrl: parsed.githubRepoUrl || "",
       githubToken: parsed.githubToken || "",
       checkoutTarget: parsed.checkoutTarget || "main",
@@ -54,6 +57,7 @@ function parseArgs(): BuildArgs {
       buildId: parsed.buildId || "",
       estateId: parsed.estateId || "",
     };
+    return [subCommand, args];
   } catch (error) {
     throw new Error(
       `Failed to parse JSON arguments: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -180,14 +184,33 @@ async function directoryExists(path: string): Promise<boolean> {
  * Main build process
  */
 async function main() {
-  const args = parseArgs();
+  const [subCommand, args] = parseArgs();
+  if (subCommand === "init") {
+    return subcommandInit(args);
+  }
+  if (subCommand === "build") {
+    return subcommandBuild(args);
+  }
+  if (subCommand === "commit-and-push") {
+    return subcommandCommitAndPush(args);
+  }
+}
 
-  const repoPath = args.workingDir ? `/tmp/repo/${args.workingDir}` : "/tmp/repo";
+async function subcommandInit(args: BuildArgs) {
+  if (!args.workingDir) {
+    const errorMsg = "workingDir is missing";
+    console.error(`ERROR: ${errorMsg}`);
+    await sendCallback(args, false, "", errorMsg, 1);
+    process.exit(1);
+  }
 
-  console.error("=== Starting build process ===");
+  const workingDir = args.workingDir;
+  const repoDir = `${workingDir}/repo`;
+
+  console.error("=== Starting sandbox init ===");
   console.error(`Repository: ${args.githubRepoUrl}`);
   console.error(`Checkout target: ${args.checkoutTarget}`);
-  console.error(`Working directory: ${args.workingDir || "root"}`);
+  console.error(`Working directory: ${workingDir}`);
   if (args.callbackUrl) {
     console.error(`Callback URL: ${args.callbackUrl}`);
   }
@@ -214,7 +237,7 @@ async function main() {
     }
     // For commit hashes, clone without depth restriction
 
-    cloneArgs.push(cloneUrl, "/tmp/repo");
+    cloneArgs.push(cloneUrl, repoDir);
 
     const cloneResult = await execCommand("git", cloneArgs);
 
@@ -230,7 +253,7 @@ async function main() {
     if (args.isCommitHash) {
       console.error(`=== Checking out commit ${args.checkoutTarget} ===`);
       const checkoutResult = await execCommand("git", ["checkout", args.checkoutTarget], {
-        cwd: "/tmp/repo",
+        cwd: repoDir,
       });
 
       if (checkoutResult.exitCode !== 0) {
@@ -241,10 +264,39 @@ async function main() {
         process.exit(1);
       }
     }
+  } catch (error) {
+    // Catch any unexpected errors
+    const errorMsg = error instanceof Error ? error.message : "Unknown error occurred";
+    console.error(`ERROR: ${errorMsg}`);
+    await sendCallback(args, false, "", errorMsg, 1);
+    process.exit(1);
+  }
+}
 
+async function subcommandBuild(args: BuildArgs) {
+  if (!args.workingDir) {
+    const errorMsg = "workingDir is missing";
+    console.error(`ERROR: ${errorMsg}`);
+    await sendCallback(args, false, "", errorMsg, 1);
+    process.exit(1);
+  }
+
+  const workingDir = args.workingDir;
+  const repoDir = `${workingDir}/repo`;
+
+  console.error("=== Starting build process ===");
+  console.error(`Repository: ${args.githubRepoUrl}`);
+  console.error(`Checkout target: ${args.checkoutTarget}`);
+  console.error(`Working directory: ${workingDir}`);
+  if (args.callbackUrl) {
+    console.error(`Callback URL: ${args.callbackUrl}`);
+  }
+  console.error("");
+
+  try {
     // Verify working directory exists (provides better error messages)
-    if (args.workingDir && !(await directoryExists(repoPath))) {
-      const errorMsg = `Working directory ${args.workingDir} does not exist in the repository`;
+    if (!(await directoryExists(repoDir))) {
+      const errorMsg = `Repo directory ${repoDir} does not exist`;
       console.error(`ERROR: ${errorMsg}`);
       await sendCallback(args, false, "", errorMsg, 1);
       process.exit(1);
@@ -252,7 +304,9 @@ async function main() {
 
     // Install dependencies (optimized: prefer offline cache for speed)
     console.error("=== Installing dependencies ===");
-    const installResult = await execCommand("pnpm", ["i", "--prefer-offline"], { cwd: repoPath });
+    const installResult = await execCommand("pnpm", ["i", "--prefer-offline"], {
+      cwd: repoDir,
+    });
 
     if (installResult.exitCode !== 0) {
       const errorMsg = "Failed to install dependencies";
@@ -265,7 +319,7 @@ async function main() {
 
     // Run pnpm iterate
     console.error("=== Running pnpm iterate ===");
-    const iterateResult = await execCommand("pnpm", ["iterate"], { cwd: repoPath });
+    const iterateResult = await execCommand("pnpm", ["iterate"], { cwd: repoDir });
 
     if (iterateResult.exitCode === 0) {
       // Success
@@ -289,27 +343,150 @@ async function main() {
   }
 }
 
+async function subcommandCommitAndPush(args: BuildArgs) {
+  if (!args.workingDir) {
+    const errorMsg = "workingDir is missing";
+    console.error(`ERROR: ${errorMsg}`);
+    await sendCallback(args, false, "", errorMsg, 1);
+    process.exit(1);
+  }
+
+  const workingDir = args.workingDir;
+  const repoDir = `${workingDir}/repo`;
+
+  console.error("=== Starting commit and push process ===");
+  console.error(`Working directory: ${workingDir}`);
+  console.error("");
+
+  try {
+    // Verify working directory exists
+    if (!(await directoryExists(repoDir))) {
+      const errorMsg = `Repo directory ${repoDir} does not exist`;
+      console.error(`ERROR: ${errorMsg}`);
+      await sendCallback(args, false, "", errorMsg, 1);
+      process.exit(1);
+    }
+
+    // Check for changes using git status
+    console.error("=== Checking for changes ===");
+    const statusResult = await execCommand("git", ["status", "--porcelain"], {
+      cwd: repoDir,
+    });
+
+    if (statusResult.exitCode !== 0) {
+      const errorMsg = "Failed to check git status";
+      console.error(`ERROR: ${errorMsg}`);
+      console.error(statusResult.stderr);
+      await sendCallback(
+        args,
+        false,
+        "",
+        errorMsg + "\n" + statusResult.stderr,
+        statusResult.exitCode,
+      );
+      process.exit(statusResult.exitCode);
+    }
+
+    // If no changes, exit successfully
+    if (!statusResult.stdout.trim()) {
+      const msg = "No changes to commit";
+      console.error(msg);
+      console.log(msg);
+      await sendCallback(args, true, msg, "", 0);
+      process.exit(0);
+    }
+
+    console.error("Changes detected:");
+    console.error(statusResult.stdout);
+
+    // Add all changes
+    console.error("=== Adding changes ===");
+    const addResult = await execCommand("git", ["add", "."], {
+      cwd: repoDir,
+    });
+
+    if (addResult.exitCode !== 0) {
+      const errorMsg = "Failed to add changes";
+      console.error(`ERROR: ${errorMsg}`);
+      console.error(addResult.stderr);
+      await sendCallback(args, false, "", errorMsg + "\n" + addResult.stderr, addResult.exitCode);
+      process.exit(addResult.exitCode);
+    }
+
+    // Commit changes
+    console.error("=== Committing changes ===");
+    const commitResult = await execCommand(
+      "git",
+      ["commit", "-m", "Automated commit from sandbox"],
+      {
+        cwd: repoDir,
+      },
+    );
+
+    if (commitResult.exitCode !== 0) {
+      const errorMsg = "Failed to commit changes";
+      console.error(`ERROR: ${errorMsg}`);
+      console.error(commitResult.stderr);
+      await sendCallback(
+        args,
+        false,
+        "",
+        errorMsg + "\n" + commitResult.stderr,
+        commitResult.exitCode,
+      );
+      process.exit(commitResult.exitCode);
+    }
+
+    console.error("Commit successful");
+
+    // Push changes
+    console.error("=== Pushing changes ===");
+    const pushResult = await execCommand("git", ["push"], {
+      cwd: repoDir,
+    });
+
+    if (pushResult.exitCode === 0) {
+      const successMsg = "Successfully committed and pushed changes";
+      console.error(successMsg);
+      console.log(successMsg);
+      await sendCallback(args, true, successMsg, "", 0);
+      process.exit(0);
+    } else {
+      const errorMsg = "Failed to push changes";
+      console.error(`ERROR: ${errorMsg}`);
+      console.error(pushResult.stderr);
+      await sendCallback(args, false, "", errorMsg + "\n" + pushResult.stderr, pushResult.exitCode);
+      process.exit(pushResult.exitCode);
+    }
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : "Unknown error occurred";
+    console.error(`ERROR: ${errorMsg}`);
+    await sendCallback(args, false, "", errorMsg, 1);
+    process.exit(1);
+  }
+}
+
 // Ensure callback is sent even if the process is killed
 process.on("SIGINT", async () => {
-  const args = parseArgs();
+  const [_subCommand, args] = parseArgs();
   await sendCallback(args, false, "", "Process interrupted (SIGINT)", 130);
   process.exit(130);
 });
 
 process.on("SIGTERM", async () => {
-  const args = parseArgs();
+  const [_subCommand, args] = parseArgs();
   await sendCallback(args, false, "", "Process terminated (SIGTERM)", 143);
   process.exit(143);
 });
 
 process.on("uncaughtException", async (error) => {
-  const args = parseArgs();
+  const [_subCommand, args] = parseArgs();
   await sendCallback(args, false, "", `Uncaught exception: ${error.message}`, 1);
   process.exit(1);
 });
 
 process.on("unhandledRejection", async (reason) => {
-  const args = parseArgs();
+  const [_subCommand, args] = parseArgs();
   const errorMsg = reason instanceof Error ? reason.message : String(reason);
   await sendCallback(args, false, "", `Unhandled rejection: ${errorMsg}`, 1);
   process.exit(1);
@@ -317,7 +494,7 @@ process.on("unhandledRejection", async (reason) => {
 
 // Run the main function
 main().catch(async (error) => {
-  const args = parseArgs();
+  const [_subCommand, args] = parseArgs();
   const errorMsg = error instanceof Error ? error.message : "Unknown error";
   console.error(`FATAL ERROR: ${errorMsg}`);
   await sendCallback(args, false, "", errorMsg, 1);

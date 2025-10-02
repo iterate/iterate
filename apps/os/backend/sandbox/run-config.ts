@@ -2,6 +2,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
+import { hashStringToRange } from "../utils/utils.ts";
 
 export interface RunConfigOptions {
   githubRepoUrl: string;
@@ -53,11 +54,39 @@ async function runConfigInSandboxInternal(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory, callbackUrl } = options;
+  const {
+    githubRepoUrl,
+    githubToken,
+    commitHash,
+    branch,
+    workingDirectory: _workingDirectory, // TODO remove
+    callbackUrl,
+    // TODO ensure it exists
+    estateId = "",
+  } = options;
 
+  // Consistently hash durable object ID to a container index, so a specific
+  // agent always gets routed to the same sandbox container.
+  const MAX_CONTAINERS = 10;
   // Get sandbox instance
-  const sandboxId = typeid("build").toString();
-  const sandbox = getSandbox(env.SANDBOX, sandboxId);
+  const sandboxIndex = hashStringToRange(estateId, MAX_CONTAINERS);
+  const sandboxId = `iterate-agent-sandbox-${sandboxIndex}`;
+  const workingDirectory = `/tmp/workspace-${estateId}`;
+
+  // Retrieve the sandbox
+  const sandbox = getSandbox((env as any).SANDBOX, sandboxId);
+
+  // Ensure that the session directory exists
+  await sandbox.mkdir(workingDirectory, { recursive: true });
+
+  // Create an isolated session
+  const sandboxSession = await sandbox.createSession({
+    id: estateId,
+    // TODO pass env vars
+    env: { ENV_KEY_0: "ENV_VAL_0" },
+    cwd: workingDirectory,
+    isolation: true,
+  });
 
   // Determine the checkout target and whether it's a commit hash
   const checkoutTarget = commitHash || branch || "main";
@@ -69,20 +98,25 @@ async function runConfigInSandboxInternal(
     githubToken,
     checkoutTarget,
     isCommitHash,
-    workingDir: workingDirectory || "",
+    workingDir: workingDirectory,
     callbackUrl: callbackUrl || "",
     buildId: options.buildId || "",
-    estateId: options.estateId || "",
+    estateId,
   };
 
   // Escape the JSON string for shell
   const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
 
-  // Run the Node.js script with JSON arguments
-  const command = `node /tmp/build-script.ts '${jsonArgs}'`;
+  // Init the container
+  const commandInit = `node /tmp/sandbox-entry.ts init '${jsonArgs}'`;
+  const _resultInit = await sandboxSession.exec(commandInit, {
+    timeout: 360 * 1000, // 360 seconds total timeout
+  });
+  // TODO: do something with _resultInit
 
-  // Execute the script
-  const result = await sandbox.exec(command, {
+  // Run the Node.js script with JSON arguments
+  const commandBuild = `node /tmp/sandbox-entry.ts build '${jsonArgs}'`;
+  const resultBuild = await sandboxSession.exec(commandBuild, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
 
@@ -103,12 +137,12 @@ async function runConfigInSandboxInternal(
 
   // Return the result directly if no callback
   return {
-    success: result.exitCode === 0,
-    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
+    success: resultBuild.exitCode === 0,
+    message: resultBuild.exitCode === 0 ? "Build completed successfully" : "Build failed",
     output: {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
+      stdout: resultBuild.stdout,
+      stderr: resultBuild.stderr,
+      exitCode: resultBuild.exitCode,
     },
   };
 }
