@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq, inArray, sql } from "drizzle-orm";
-import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
+import { type ConversationsRepliesResponse } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
 import { type CloudflareEnv } from "../../../env.ts";
@@ -20,6 +20,7 @@ import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
 import type { AgentCoreEventInput } from "../../agent/agent-core.ts";
+import { createSlackWebClient } from "./slack-web-client.ts";
 
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
@@ -123,7 +124,7 @@ slackApp.post("/webhook", async (c) => {
     // deterministically react to the webhook as early as possible (eyes emoji)
     getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
       if (slackToken) {
-        await reactToSlackWebhook(body, new WebClient(slackToken), messageMetadata);
+        await reactToSlackWebhook(body, createSlackWebClient(slackToken), messageMetadata);
       }
     }),
   );
@@ -232,7 +233,7 @@ export async function reactToSlackWebhook(
 
 export async function syncSlackUsersInBackground(db: DB, botToken: string) {
   try {
-    const authedWebClient = new WebClient(botToken);
+    const authedWebClient = createSlackWebClient(botToken);
     const userListResponse = await authedWebClient.users.list({});
 
     if (!userListResponse.ok || !userListResponse.members) {
@@ -337,7 +338,7 @@ async function handleBotChannelJoin(params: {
     return;
   }
 
-  const slackAPI = new WebClient(slackToken);
+  const slackAPI = createSlackWebClient(slackToken);
 
   const history = await slackAPI.conversations.history({
     channel: channelId,

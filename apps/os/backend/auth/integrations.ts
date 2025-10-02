@@ -7,7 +7,6 @@ import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
-import { WebClient } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import { logger as console } from "../tag-logger.ts";
 import type { Variables } from "../worker";
@@ -16,6 +15,7 @@ import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
 import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
+import { createSlackWebClient } from "../integrations/slack/slack-web-client.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
@@ -335,7 +335,7 @@ export const integrationsPlugin = () =>
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
 
-          const unauthedSlackClient = new WebClient();
+          const unauthedSlackClient = createSlackWebClient();
 
           const tokens = await unauthedSlackClient.oauth.v2.access({
             client_id: env.SLACK_CLIENT_ID,
@@ -358,7 +358,7 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get tokens" });
           }
 
-          const userSlackClient = new WebClient(tokens.authed_user.access_token);
+          const userSlackClient = createSlackWebClient(tokens.authed_user.access_token);
 
           const userInfo = await userSlackClient.users.identity({});
 

@@ -2,7 +2,6 @@ import { z } from "zod";
 import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
-import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
@@ -21,6 +20,7 @@ import {
   getSlackAccessTokenForEstate,
 } from "../../auth/token-utils.ts";
 import { getRoutingKey } from "../../integrations/slack/slack.ts";
+import { createSlackWebClient } from "../../integrations/slack/slack-web-client.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -832,7 +832,7 @@ export const integrationsRouter = router({
         });
       }
 
-      const slackAPI = new WebClient(accessToken);
+      const slackAPI = createSlackWebClient(accessToken);
 
       const chatResult = await slackAPI.chat.postMessage({
         channel: channel,
@@ -884,7 +884,7 @@ export const integrationsRouter = router({
         });
       }
 
-      const slackAPI = new WebClient(accessToken);
+      const slackAPI = createSlackWebClient(accessToken);
       const result = await slackAPI.conversations.list({
         types: types,
         exclude_archived: excludeArchived,

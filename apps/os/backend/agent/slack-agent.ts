@@ -1,5 +1,5 @@
 import type { SlackEvent } from "@slack/types";
-import { WebClient } from "@slack/web-api";
+import type { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import { waitUntil } from "cloudflare:workers";
@@ -8,6 +8,7 @@ import { logger as console } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
+import { createSlackWebClient } from "../integrations/slack/slack-web-client.ts";
 import type {
   AgentCoreDeps,
   AgentCoreEventInput,
@@ -119,7 +120,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
     }
     // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccessToken, {
+    this.slackAPI = createSlackWebClient(slackAccessToken, {
       rejectRateLimitedCalls: true,
       retryConfig: { retries: 0 },
     });
