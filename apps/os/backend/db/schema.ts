@@ -50,7 +50,7 @@ export const session = pgTable("session", (t) => ({
     .notNull()
     .references(() => user.id, { onDelete: "cascade" }),
   // https://www.better-auth.com/docs/plugins/admin#schema
-  impersonatedBy: t.text().references(() => user.id, { onDelete: "set null" }),
+  impersonatedBy: t.text().references(() => user.id, { onDelete: "cascade" }),
   ...withTimestamps,
 }));
 export const sessionRelations = relations(session, ({ one }) => ({
