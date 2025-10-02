@@ -1,6 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { tsImport } from "tsx/esm/api";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -18,11 +18,29 @@ async function runBootstrap(configPath?: string) {
 
   try {
     // Path resolution strategy:
-    // 1) First try resolving relative to the current working directory (cwd)
-    // 2) If not found, interpret the path as relative to the repository root (../../ from apps/os)
-    const cwdPath = resolve(process.cwd(), configPath);
-    const repoRootPath = resolve(process.cwd(), "../..", configPath);
-    const resolvedPath = existsSync(cwdPath) ? cwdPath : repoRootPath;
+    // Try multiple possible locations for the config file
+    const repoRoot = resolve(process.cwd(), "../..");
+    const possiblePaths = [
+      resolve(process.cwd(), configPath),
+      resolve(process.cwd(), configPath, "iterate.config.ts"),
+      resolve(repoRoot, configPath),
+      resolve(repoRoot, configPath, "iterate.config.ts"),
+    ];
+
+    const resolvedPath = possiblePaths.find((path) => {
+      try {
+        return existsSync(path) && statSync(path).isFile();
+      } catch {
+        return false;
+      }
+    });
+
+    if (!resolvedPath) {
+      throw new Error(
+        `Could not find iterate config at any of these paths:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}`,
+      );
+    }
+
     console.log(`Resolved config path: ${resolvedPath}`);
 
     const configModule = (await tsImport(resolvedPath, {
