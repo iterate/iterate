@@ -12,11 +12,24 @@ export const useImpersonation = () => {
   });
   const impersonate = useMutation({
     mutationFn: async () => {
-      const userIdOrEmail = prompt("user id or email to impersonate");
-      if (!userIdOrEmail) return;
-      const user = userIdOrEmail.includes("@")
-        ? await trpcClient.admin.findUserByEmail.query({ email: userIdOrEmail })
-        : { id: userIdOrEmail };
+      let input: string | null | undefined = prompt(
+        "Enter an email, user id, or estate id to impersonate another user.",
+      );
+
+      if (input?.startsWith("est_")) {
+        const users = await trpcClient.admin.findUsersByEstate.query({ estateId: input });
+        const selection = prompt(
+          `Select a user to impersonate:\n${users.map((u, i) => `${i + 1}. ${u.email} (${u.role})`).join("\n")}`,
+        );
+        input = users.find((u, i) => u.email === selection || i + 1 === Number(selection))?.userId;
+      }
+
+      if (!input) return;
+
+      const user = input.includes("@")
+        ? await trpcClient.admin.findUserByEmail.query({ email: input })
+        : { id: input };
+
       if (!user) return;
       const impersonateResult = await authClient.admin.impersonateUser({
         userId: user.id,

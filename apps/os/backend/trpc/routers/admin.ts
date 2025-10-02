@@ -23,8 +23,28 @@ const findUserByEmail = adminProcedure
     return user;
   });
 
+const findUsersByEstate = adminProcedure
+  .input(z.object({ estateId: z.string() }))
+  .query(async ({ ctx, input }) => {
+    const results = await ctx.db
+      .select()
+      .from(schema.estate)
+      .leftJoin(schema.organization, eq(schema.estate.organizationId, schema.organization.id))
+      .leftJoin(
+        schema.organizationUserMembership,
+        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
+      )
+      .leftJoin(schema.user, eq(schema.organizationUserMembership.userId, schema.user.id))
+      .where(eq(schema.estate.id, input.estateId));
+    return results.flatMap((y) =>
+      y.user ? [{ userId: y.user.id, email: y.user.email, role: y.user.role }] : [],
+    );
+    // misha estate est_01k6grn3fefqesendxf4hmbj8a
+  });
+
 export const adminRouter = router({
   findUserByEmail,
+  findUsersByEstate,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
     // important because it's available to anyone signed in
