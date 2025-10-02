@@ -17,11 +17,8 @@ export const useImpersonation = () => {
       );
 
       if (input?.startsWith("est_")) {
-        const users = await trpcClient.admin.findUsersByEstate.query({ estateId: input });
-        const selection = prompt(
-          `Select a user to impersonate:\n${users.map((u, i) => `${i + 1}. ${u.email} (${u.role})`).join("\n")}`,
-        );
-        input = users.find((u, i) => u.email === selection || i + 1 === Number(selection))?.userId;
+        const owner = await trpcClient.admin.getEstateOwner.query({ estateId: input });
+        input = owner.userId;
       }
 
       if (!input) return;
