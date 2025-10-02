@@ -115,12 +115,12 @@ const start = t.procedure
   )
   .mutation(async ({ input }) => {
     // Support both command-line flag and environment variable
-    const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
+    // Default to template estate config if nothing is provided
+    const providedConfigPath =
+      input.config || process.env.ITERATE_CONFIG_PATH || "../../estates/template/iterate.config.ts";
 
-    if (providedConfigPath) {
-      process.env.ITERATE_CONFIG_PATH = providedConfigPath;
-      console.log(`Using iterate config: ${providedConfigPath}`);
-    }
+    process.env.ITERATE_CONFIG_PATH = providedConfigPath;
+    console.log(`Using iterate config: ${providedConfigPath}`);
 
     console.log("Running estate bootstrap...");
     const bootstrapResult = await runBootstrap(providedConfigPath);

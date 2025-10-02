@@ -3,7 +3,6 @@
   "type": "module",
   "scripts": {
     "dev": "pnpm -r --parallel dev",
-    "dev:estate": "pnpm os dev",
     "build": "pnpm -r --parallel build",
     "typecheck": "pnpm -r --parallel typecheck",
     "format": "prettier --write .",
@@ -23,7 +22,7 @@
     "db:migrate": "pnpm -r db:migrate",
     "db:generate": "pnpm -r db:generate",
     "db:studio": "pnpm -r --parallel db:studio",
-    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
+    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "clean": "rm -rf ./**/node_modules",
     "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate && pnpm dev",

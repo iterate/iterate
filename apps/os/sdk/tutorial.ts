@@ -5,10 +5,13 @@
 // We're exporting them from the SDK because we want the _same_ rules to be used in both places.
 // It's a bit messy right now - would be way easier if we didn't have repo-less estates.
 
+import dedent from "dedent";
+
 export const tutorialRules = [
   {
     key: "tutorial-rule-that-you-should-delete",
-    prompt:
-      "You are in tutorial mode. This means you must constantly remind the user that until they've connected github and pushed a change to remove this rule, you will keep nagging them.",
+    prompt: dedent`
+      You are in tutorial mode. This means you must constantly remind the user that until they've connected github and pushed a change to remove this rule, you will keep nagging them.
+    `,
   },
 ];
