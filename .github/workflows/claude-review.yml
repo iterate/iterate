@@ -17,22 +17,6 @@ jobs:
       id-token: write
       actions: read
     steps:
-      - name: Check user permissions
-        id: check_permissions
-        run: |
-          USER="${{ github.event.pull_request.user.login || github.event.review.user.login }}"
-          PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "https://api.github.com/repos/${{ github.repository }}/collaborators/$USER/permission" | jq -r '.permission')
-          echo "User: $USER"
-          echo "Permission level: $PERMISSION"
-          if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" || "$PERMISSION" == "maintain" ]]; then
-            echo "User has write access"
-            exit 0
-          else
-            echo "User does not have write access"
-            exit 1
-          fi
-
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
