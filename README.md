@@ -106,6 +106,6 @@ You can get them from the slack app settings page.
 
 ## Codex
 
-- Use `scripts/bootstrap-codex-env.sh` to provision the Codex VM tools.
+- `scripts/bootstrap-codex-env.sh` installs repo-specified Node.js/pnpm, runs `pnpm install`, executes `pnpm typecheck`, `pnpm lint`, `pnpm format`, and runs `pnpm test` once Doppler auth is available.
 - Doppler config branch: `dev_codex`.
 - Available to members of the Iterate OpenAI workspace.
