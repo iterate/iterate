@@ -1,3 +1,4 @@
+# Setup file for the background agent in cursor
 FROM ubuntu:25.04
 
 # Do all root operations first
@@ -8,13 +9,14 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     unzip \
     sudo \
+    python3 \
     && rm -rf /var/lib/apt/lists/* \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
 
 # Copy setup scripts
 COPY ./setup-ubuntu-base.sh /tmp/setup-ubuntu-base.sh
-COPY ./docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-RUN chmod +x /tmp/setup-ubuntu-base.sh && chmod +x /usr/local/bin/docker-entrypoint.sh
+COPY ./wait-for-docker.sh /usr/local/bin/wait-for-docker.sh
+RUN chmod +x /tmp/setup-ubuntu-base.sh && chmod +x /usr/local/bin/wait-for-docker.sh
 
 # Set up non-root user and switch to it
 RUN useradd -m -s /bin/bash agent
@@ -43,9 +45,6 @@ RUN echo '#!/bin/bash' > /home/agent/.bash_env && \
     echo 'export PATH="$PNPM_HOME:$PATH"' >> /home/agent/.bash_env && \
     chmod +x /home/agent/.bash_env && \
     echo 'source ~/.bash_env' >> /home/agent/.bashrc
-
-# Verify installations
-RUN bash -c "source ${NVM_DIR}/nvm.sh && node --version && pnpm --version"
 
 # Set bash as the default shell and ensure it sources the environment
 ENV BASH_ENV=/home/agent/.bash_env

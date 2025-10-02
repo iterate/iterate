@@ -1,9 +1,9 @@
 {
   "agentCanUpdateSnapshot": true,
-  "install": "/usr/local/bin/docker-entrypoint.sh && pnpm docker:up && pnpm install",
+  "install": "/usr/local/bin/wait-for-docker.sh && pnpm docker:up && pnpm install",
   "build": {
-    "dockerfile": "../scripts/background-agent.Dockerfile",
-    "context": "../scripts"
+    "dockerfile": "../scripts/setup-background-agent/Dockerfile",
+    "context": "../scripts/setup-background-agent"
   },
   "terminals": []
 }
