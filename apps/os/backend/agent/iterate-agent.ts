@@ -1304,6 +1304,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       __addAgentCoreEvents: fileSharedEvents,
     };
   }
+
+  async modifyEstate(input: Inputs["modifyEstate"]) {
+    console.info("TODO-REMOVE-001", input);
+    return {
+      success: true,
+      message: `Modified estate.`,
+    };
+  }
 }
 
 // -----------------------------------------------------------------------------

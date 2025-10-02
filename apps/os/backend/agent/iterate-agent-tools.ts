@@ -2,6 +2,7 @@ import dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 import { IntegrationMode, MCPParam } from "./tool-schemas.ts";
+import { DEFAULT_MODEL, SUPPORTED_MODELS } from "./agent-core-schemas.ts";
 
 export type IterateAgentToolInterface = typeof iterateAgentTools.$infer.interface;
 export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;
@@ -157,6 +158,13 @@ export const iterateAgentTools = defineDOTools({
       quality: z.enum(["low", "medium", "high"]).default("high"),
       background: z.enum(["auto", "transparent", "opaque"]).default("auto"),
       overrideReplicateParams: z.record(z.string(), z.any()).optional(),
+    }),
+  },
+  modifyEstate: {
+    description: "Modify estate by updating its repo and rebuilding.",
+    input: z.object({
+      prompt: z.string(),
+      model: z.enum(SUPPORTED_MODELS).default(DEFAULT_MODEL),
     }),
   },
 });

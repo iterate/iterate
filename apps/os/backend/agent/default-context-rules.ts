@@ -169,6 +169,9 @@ const defaultSlackAgentPrompt = dedent`
    - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
+
+  ### Modifying estate
+  - Use the modifyEstate tool for updating your own rules defined in the estate
 `;
 export const defaultContextRules = defineRules([
   {
@@ -197,6 +200,7 @@ export const defaultContextRules = defineRules([
         ),
       }),
       iterateAgentTool.generateImage(),
+      iterateAgentTool.modifyEstate(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
