@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This script bootstraps the Iterate monorepo for local development on Ubuntu/Debian systems.
-# It installs Docker (for Postgres and Wrangler containers), Doppler, NVM/Node.js, pnpm,
-# and prepares the workspace dependencies. Re-run the script whenever you need to pick up
-# toolchain updates; it is safe to execute multiple times.
+# This script bootstraps the Iterate monorepo for local development on Codex-provided
+# Ubuntu/Debian systems. It installs Docker (for Postgres and Wrangler containers),
+# Doppler, NVM/Node.js, pnpm, and prepares the workspace dependencies. Re-run the script
+# whenever you need to pick up toolchain updates; it is safe to execute multiple times.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")"/.. && pwd)"
 

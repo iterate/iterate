@@ -3,8 +3,8 @@
 ## get started
 
 ```bash
-# One-time bootstrap on Ubuntu/Debian
-./scripts/bootstrap-dev.sh
+# One-time bootstrap on Ubuntu/Debian (Codex VM environment)
+./scripts/bootstrap-codex-env.sh
 
 # Manual steps (macOS or if you prefer to manage tools yourself)
 pnpm install
