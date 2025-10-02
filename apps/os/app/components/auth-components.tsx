@@ -12,14 +12,10 @@ export function LoginProviders() {
     try {
       console.log("🚀 Attempting Google sign-in...");
 
-      const result = await authClient.signIn.social({
+      await authClient.signIn.social({
         provider: "google",
         callbackURL: redirectUrl || "/", // Redirect to home after login
       });
-
-      if (result.error) {
-        toast.error("Failed to sign in with Google");
-      }
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }
@@ -34,12 +30,12 @@ export function LoginProviders() {
         },
       });
 
-      if (result.error || !result.data?.url) {
+      if (!result?.url) {
         toast.error("Failed to sign in with Slack");
         return;
       }
 
-      window.location.href = result.data.url.toString();
+      window.location.href = result.url.toString();
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }
@@ -53,7 +49,7 @@ export function LoginProviders() {
     if (!credentials) return;
     const { email, password } = parseCredentials(credentials);
     const result = await authClient.signIn.email({ email, password });
-    window.location.href = result.data?.url ?? "/";
+    window.location.href = result?.url ?? "/";
   };
 
   return (

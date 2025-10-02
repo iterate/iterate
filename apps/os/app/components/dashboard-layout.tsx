@@ -86,7 +86,7 @@ function UserSwitcher() {
   const handleLogout = async () => {
     try {
       console.log("🚪 Logging out...");
-      const result = await authClient.signOut({
+      await authClient.signOut({
         fetchOptions: {
           onSuccess: () => {
             // Redirect to login page after successful logout
@@ -95,11 +95,7 @@ function UserSwitcher() {
         },
       });
 
-      if (result.error) {
-        console.error("❌ Logout failed:", result.error);
-      } else {
-        console.log("✅ Logout successful!");
-      }
+      console.log("✅ Logout successful!");
     } catch (error) {
       console.error("❌ Logout error:", error);
     }
