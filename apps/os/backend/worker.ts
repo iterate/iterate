@@ -4,7 +4,7 @@ import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
 import { PostHog } from "posthog-node";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
@@ -46,7 +46,7 @@ app.onError((err, c) => {
   console.error("Unhandled error:", err);
 
   // Track error in PostHog (non-blocking)
-  c.executionCtx.waitUntil(
+  waitUntil(
     (async () => {
       const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
         host: "https://eu.i.posthog.com",
@@ -107,7 +107,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
     console.error("Failed to get agent stub:", error);
 
     // Track error in PostHog (non-blocking)
-    c.executionCtx.waitUntil(
+    waitUntil(
       (async () => {
         const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
           host: "https://eu.i.posthog.com",
@@ -150,7 +150,7 @@ app.all("/api/trpc/*", (c) => {
       });
 
       // Track error in PostHog (non-blocking)
-      c.executionCtx.waitUntil(
+      waitUntil(
         (async () => {
           const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
             host: "https://eu.i.posthog.com",
