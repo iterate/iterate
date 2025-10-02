@@ -1,0 +1,83 @@
+name: Claude Auto Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Check user permissions
+        id: check_permissions
+        run: |
+          USER="${{ github.event.pull_request.user.login || github.event.review.user.login }}"
+          PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/collaborators/$USER/permission" | jq -r '.permission')
+          echo "User: $USER"
+          echo "Permission level: $PERMISSION"
+          if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" || "$PERMISSION" == "maintain" ]]; then
+            echo "User has write access"
+            exit 0
+          else
+            echo "User does not have write access"
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v3
+
+      - name: Fetch secrets from Doppler
+        id: doppler
+        run: |
+          echo "ANTHROPIC_API_KEY=$(doppler secrets get ANTHROPIC_API_KEY --plain)" >> $GITHUB_OUTPUT
+        env:
+          DOPPLER_TOKEN: ${{ secrets.CLAUDE_DOPPLER_TOKEN }}
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ steps.doppler.outputs.ANTHROPIC_API_KEY }}
+          settings: |
+            {
+              "env": {
+                "DOPPLER_TOKEN": "${{ secrets.CLAUDE_DOPPLER_TOKEN }}"
+              }
+            }
+          prompt: |
+            Review this PR for security issues, bugs, and code quality. 
+            Proactively fix unchecked type casts, or unfixable linter issues.
+
+            ## Code Quality
+            - Follow our coding standards
+            - No unchecked type casts, unless unavoidable
+
+            ## Testing
+            - Unit tests for new functions
+            - Regression tests for bug fixes
+            - Edge cases covered
+
+            ## Security
+            - No hardcoded credentials
+            - Input validation implemented
+            - Proper error handling
+            - No sensitive data in logs
+
+          claude_args: |
+            --model claude-sonnet-4-5-20250929
+            --allowedTools "Edit,Write,Bash(pnpm i),Bash(pnpm test:*),Bash(pnpm eval:*),Bash(pnpm lint),Bash(pnpm typecheck),Bash(pnpm clean),Bash(pnpm dev)"

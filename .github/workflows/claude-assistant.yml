@@ -1,4 +1,4 @@
-name: Claude Code
+name: Claude Assistant
 
 on:
   issue_comment:
@@ -7,15 +7,12 @@ on:
     types: [created]
   issues:
     types: [opened, assigned]
-  pull_request_review:
-    types: [submitted]
 
 jobs:
-  claude:
+  claude-assistant:
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
@@ -23,24 +20,23 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: read
     steps:
-      # - name: Check user permissions
-      #   id: check_permissions
-      #   run: |
-      #     USER="${{ github.event.comment.user.login || github.event.review.user.login || github.event.issue.user.login }}"
-      #     PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-      #       "https://api.github.com/repos/${{ github.repository }}/collaborators/$USER/permission" | jq -r '.permission')
-      #     echo "User: $USER"
-      #     echo "Permission level: $PERMISSION"
-      #     echo "permission=$PERMISSION" >> $GITHUB_OUTPUT
-      #     if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" || "$PERMISSION" == "maintain" ]]; then
-      #       echo "User has write access"
-      #       exit 0
-      #     else
-      #       echo "User does not have write access"
-      #       exit 1
-      #     fi
+      - name: Check user permissions
+        id: check_permissions
+        run: |
+          USER="${{ github.event.comment.user.login || github.event.issue.user.login }}"
+          PERMISSION=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/collaborators/$USER/permission" | jq -r '.permission')
+          echo "User: $USER"
+          echo "Permission level: $PERMISSION"
+          if [[ "$PERMISSION" == "admin" || "$PERMISSION" == "write" || "$PERMISSION" == "maintain" ]]; then
+            echo "User has write access"
+            exit 0
+          else
+            echo "User does not have write access"
+            exit 1
+          fi
 
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -69,14 +65,9 @@ jobs:
                 "DOPPLER_TOKEN": "${{ secrets.CLAUDE_DOPPLER_TOKEN }}"
               }
             }
-          prompt: "Review this PR for security issues, bugs, and code quality. Proactively fix unchecked type casts, or linter/trivial issues which fail autofix."
+          prompt: |
+            You are a helpful coding assistant. Follow the user's instructions and help them with their request.
+
           claude_args: |
             --model claude-sonnet-4-5-20250929
-          allowed_tools: |
-            Bash(pnpm i) 
-            Bash(pnpm test:*)
-            Bash(pnpm eval:*)
-            Bash(pnpm lint)
-            Bash(pnpm typecheck)
-            Bash(pnpm clean)
-            Bash(pnpm dev)
+            --allowedTools "Edit,Write,Bash(pnpm i),Bash(pnpm test:*),Bash(pnpm eval:*),Bash(pnpm lint),Bash(pnpm typecheck),Bash(pnpm clean),Bash(pnpm dev)"
