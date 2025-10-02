@@ -22,10 +22,7 @@ import {
 } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import {
-  shouldIncludeEventInConversation,
-  shouldUnfurlSlackMessage,
-} from "./slack-agent-utils.ts";
+import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
