@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     build-essential \
     unzip \
     sudo \
+    python3 \
     && rm -rf /var/lib/apt/lists/* \
     && echo "agent ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/agent
 
@@ -43,9 +44,6 @@ RUN echo '#!/bin/bash' > /home/agent/.bash_env && \
     echo 'export PATH="$PNPM_HOME:$PATH"' >> /home/agent/.bash_env && \
     chmod +x /home/agent/.bash_env && \
     echo 'source ~/.bash_env' >> /home/agent/.bashrc
-
-# Verify installations
-RUN bash -c "source ${NVM_DIR}/nvm.sh && node --version && pnpm --version"
 
 # Set bash as the default shell and ensure it sources the environment
 ENV BASH_ENV=/home/agent/.bash_env

@@ -35,56 +35,32 @@ pnpm setup
 nvm install "$NODE_VERSION" && nvm use "$NODE_VERSION"
 pnpm env use --global "$NODE_VERSION"
 
-# Install doppler CLI
-## 1. Fetch the repo’s signing key and convert it to binary format
-curl -fsSL https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key \
- | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
-## 2. Add the repository, pointing APT at that specific key
-echo "deb [arch=$(dpkg --print-architecture) \
-  signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] \
-  https://packages.doppler.com/public/cli/deb/debian any-version main" \
-  | sudo tee /etc/apt/sources.list.d/doppler-cli.list
-## 3. Install / upgrade
+# Install node-gyp globally for native module compilation
+pnpm add -g node-gyp
+
+# Install Doppler CLI
+curl -fsSL https://packages.doppler.com/public/cli/gpg.DE2A7741A397C129.key | sudo gpg --dearmor -o /usr/share/keyrings/doppler-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/doppler-archive-keyring.gpg] https://packages.doppler.com/public/cli/deb/debian any-version main" | sudo tee /etc/apt/sources.list.d/doppler-cli.list
 sudo apt-get update
-sudo apt-get install doppler -y
+sudo apt-get install -y doppler
 
-# install gh cli
-## 1. Fetch the repo’s signing key and convert it to binary format
-curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
-  | sudo gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg
-## 2. Add the repository, pointing APT at that specific key
-echo "deb [arch=$(dpkg --print-architecture) \
-  signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] \
-  https://cli.github.com/packages stable main" \
-  | sudo tee /etc/apt/sources.list.d/github-cli.list
-## 3. Install / upgrade
+# Install GitHub CLI
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo gpg --dearmor -o /usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list
 sudo apt-get update
-sudo apt-get install gh -y
+sudo apt-get install -y gh
 
-# Add environment variables to bashrc for future sessions (already set above for current session)
-echo 'export PNPM_HOME="$HOME/.local/share/pnpm"' >> ~/.bashrc
-echo 'export PATH="$PNPM_HOME:$PATH"' >> ~/.bashrc
-echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
-echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
-echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.bashrc
-
-for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove $pkg; done
-
-# Add Docker's official GPG key:
-sudo apt-get update
-sudo apt-get install ca-certificates curl -y
+# Install Docker
 sudo install -m 0755 -d /etc/apt/keyrings
 sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
 sudo chmod a+r /etc/apt/keyrings/docker.asc
 
-# Add the repository to Apt sources:
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
   $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
   sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
 sudo apt-get update
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
 
- sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
-
-# add current user to the docker group (use whoami to get current username)
+# Add current user to the docker group
 sudo usermod -aG docker "$(whoami)"
