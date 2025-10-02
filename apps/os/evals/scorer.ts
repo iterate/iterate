@@ -45,6 +45,22 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   const scoreManually = async (newMessages: string[], score: { score: number; reason: string }) => {
     conversation.push(...newMessages);
     scores.push({ ...score, messages: newMessages });
+    const intermediateScoreSpan = startSpan({
+      name: "intermediate-score",
+      parent: params.braintrustSpanExportedId,
+      type: "score",
+    });
+    intermediateScoreSpan.log({
+      input: {
+        conversation,
+      },
+      output: {
+        score: score.score,
+        reason: score.reason,
+      },
+    });
+    intermediateScoreSpan.end();
+    await intermediateScoreSpan.flush();
   };
 
   const scoreTurn = async (newMessages: string[], expectation: string) => {
