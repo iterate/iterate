@@ -14,6 +14,7 @@ export default [
     route("session-info", "./routes/admin-session-info.tsx"),
     route("slack-notification", "./routes/admin-slack-notification.tsx"),
     route("db-tools", "./routes/admin-db-tools.tsx"),
+    route("estates", "./routes/admin-estates.tsx"),
   ]),
 
   // Protected routes with org/estate prefix

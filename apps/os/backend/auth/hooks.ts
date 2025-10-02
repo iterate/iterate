@@ -1,4 +1,5 @@
 import { waitUntil } from "cloudflare:workers";
+import dedent from "dedent";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
@@ -70,15 +71,14 @@ async function sendEstateCreatedNotificationToSlack(
   // Construct the impersonation link
   const impersonationUrl = `${env.VITE_PUBLIC_URL}/${organization.id}/${estate.id}`;
 
-  const message = `🎉 New user signed up!
-
-• Estate: ${estate.name}
-• Estate ID: \`${estate.id}\`
-• Organization: ${organization.name}
-• Organization ID: \`${organization.id}\`
-
-Visit estate: <${impersonationUrl}|Open Estate>
-`;
+  const message = dedent`
+    🎉 New user signed up!
+    • Estate: ${estate.name}
+    • Estate ID: \`${estate.id}\`
+    • Organization: ${organization.name}
+    • Organization ID: \`${organization.id}\`
+    Visit estate: <${impersonationUrl}|Open Estate>
+  `;
 
   await sendNotificationToIterateSlack(message, "#general");
 }

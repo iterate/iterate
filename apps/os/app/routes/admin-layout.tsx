@@ -1,6 +1,14 @@
 import { Link, Outlet, useLocation } from "react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Shield, MessageSquare, Info, ArrowLeft, AlertCircle, Database } from "lucide-react";
+import {
+  Shield,
+  MessageSquare,
+  Info,
+  ArrowLeft,
+  AlertCircle,
+  Database,
+  Building2,
+} from "lucide-react";
 import { useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { authClient } from "../lib/auth-client.ts";
@@ -22,6 +30,7 @@ import {
 
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
+  { title: "Estates", icon: Building2, path: "/admin/estates" },
   { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
   { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
 ];
