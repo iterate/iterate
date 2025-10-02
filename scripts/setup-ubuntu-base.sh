@@ -23,6 +23,11 @@ export NVM_DIR="$HOME/.nvm"
 echo "Installing pnpm"
 # Install pnpm
 curl -fsSL https://get.pnpm.io/install.sh | sh -
+
+# Set up pnpm in PATH immediately after installation
+export PNPM_HOME="$HOME/.local/share/pnpm"
+export PATH="$PNPM_HOME:$PATH"
+
 pnpm -v
 pnpm setup
 
@@ -56,15 +61,12 @@ echo "deb [arch=$(dpkg --print-architecture) \
 sudo apt-get update
 sudo apt-get install gh -y
 
-# Set up environment variables and PATH
-export PNPM_HOME=~/.local/share/pnpm
-export PATH="$PNPM_HOME:$PATH"
-echo 'export PNPM_HOME=~/.local/share/pnpm' >> ~/.bashrc
+# Add environment variables to bashrc for future sessions (already set above for current session)
+echo 'export PNPM_HOME="$HOME/.local/share/pnpm"' >> ~/.bashrc
 echo 'export PATH="$PNPM_HOME:$PATH"' >> ~/.bashrc
 echo 'export NVM_DIR="$HOME/.nvm"' >> ~/.bashrc
 echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> ~/.bashrc
 echo '[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"' >> ~/.bashrc
-mkdir -p $PNPM_HOME
 
 for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove $pkg; done
 
@@ -84,13 +86,5 @@ sudo apt-get update
 
  sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin -y
 
-
-
-
-# add current user to the docker group
-sudo usermod -aG docker "$USER"
-
-# refresh your session's groups without logging out
-newgrp docker
-
-workspace $ sudo dockerd --iptables=false --bridge=none > /dev/null 2>&1 &
+# add current user to the docker group (use whoami to get current username)
+sudo usermod -aG docker "$(whoami)"

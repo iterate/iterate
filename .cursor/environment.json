@@ -1,6 +1,6 @@
 {
   "agentCanUpdateSnapshot": true,
-  "install": "pnpm docker:up && pnpm install",
+  "install": "/usr/local/bin/docker-entrypoint.sh && pnpm docker:up && pnpm install",
   "build": {
     "dockerfile": "../scripts/background-agent.Dockerfile",
     "context": "../scripts"
