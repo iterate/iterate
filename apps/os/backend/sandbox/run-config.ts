@@ -1,15 +1,13 @@
 import { getSandbox } from "@cloudflare/sandbox";
-import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
-import { hashStringToRange } from "../utils/utils.ts";
 
 export interface RunConfigOptions {
   githubRepoUrl: string;
   githubToken: string;
   commitHash?: string;
   branch?: string;
-  workingDirectory?: string;
+  connectedRepoPath?: string;
   callbackUrl?: string;
   buildId?: string;
   estateId?: string;
@@ -59,32 +57,26 @@ async function runConfigInSandboxInternal(
     githubToken,
     commitHash,
     branch,
-    workingDirectory: _workingDirectory, // TODO remove
+    connectedRepoPath,
     callbackUrl,
-    // TODO ensure it exists
-    estateId = "",
+    estateId,
   } = options;
 
-  // Consistently hash durable object ID to a container index, so a specific
-  // agent always gets routed to the same sandbox container.
-  const MAX_CONTAINERS = 10;
-  // Get sandbox instance
-  const sandboxIndex = hashStringToRange(estateId, MAX_CONTAINERS);
-  const sandboxId = `iterate-agent-sandbox-${sandboxIndex}`;
-  const workingDirectory = `/tmp/workspace-${estateId}`;
+  // Compute IDs
+  const sandboxId = `agent-sandbox-${estateId}`;
+  const sessionId = estateId;
+  const sessionDir = `/tmp/session-${estateId}`;
 
   // Retrieve the sandbox
-  const sandbox = getSandbox((env as any).SANDBOX, sandboxId);
+  const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
   // Ensure that the session directory exists
-  await sandbox.mkdir(workingDirectory, { recursive: true });
+  await sandbox.mkdir(sessionDir, { recursive: true });
 
   // Create an isolated session
   const sandboxSession = await sandbox.createSession({
-    id: estateId,
-    // TODO pass env vars
-    env: { ENV_KEY_0: "ENV_VAL_0" },
-    cwd: workingDirectory,
+    id: sessionId,
+    cwd: sessionDir,
     isolation: true,
   });
 
@@ -93,29 +85,33 @@ async function runConfigInSandboxInternal(
   const isCommitHash = Boolean(commitHash);
 
   // Prepare arguments as a JSON object
-  const buildArgs = {
+  const initArgs = {
+    sessionDir,
     githubRepoUrl,
     githubToken,
     checkoutTarget,
     isCommitHash,
-    workingDir: workingDirectory,
+  };
+  // Escape the JSON string for shell
+  const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+  // Init the sandbox (ignore any errors)
+  const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+  await sandboxSession.exec(commandInit, {
+    timeout: 360 * 1000, // 360 seconds total timeout
+  });
+
+  // Prepare arguments as a JSON object
+  const buildArgs = {
+    sessionDir,
+    connectedRepoPath,
     callbackUrl: callbackUrl || "",
     buildId: options.buildId || "",
     estateId,
   };
-
   // Escape the JSON string for shell
-  const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
-
-  // Init the container
-  const commandInit = `node /tmp/sandbox-entry.ts init '${jsonArgs}'`;
-  const _resultInit = await sandboxSession.exec(commandInit, {
-    timeout: 360 * 1000, // 360 seconds total timeout
-  });
-  // TODO: do something with _resultInit
-
-  // Run the Node.js script with JSON arguments
-  const commandBuild = `node /tmp/sandbox-entry.ts build '${jsonArgs}'`;
+  const buildJsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
+  // Run the build in sandbox
+  const commandBuild = `node /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
   const resultBuild = await sandboxSession.exec(commandBuild, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });

@@ -2,7 +2,6 @@ import dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 import { IntegrationMode, MCPParam } from "./tool-schemas.ts";
-import { DEFAULT_MODEL, SUPPORTED_MODELS } from "./agent-core-schemas.ts";
 
 export type IterateAgentToolInterface = typeof iterateAgentTools.$infer.interface;
 export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;

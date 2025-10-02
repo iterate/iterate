@@ -6,6 +6,7 @@ import { z } from "zod/v4";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
+import { getSandbox } from "@cloudflare/sandbox";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
 import { logger as console } from "../tag-logger.ts";
@@ -21,7 +22,6 @@ export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { hashStringToRange } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
@@ -52,8 +52,6 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
-import { triggerEstateRebuild } from "../trpc/routers/estate.ts";
-import { getSandbox } from "@cloudflare/sandbox";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -564,18 +562,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
           // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
           waitUntil(this.refreshContextRules());
-
-          waitUntil(
-            (async () => {
-              console.log("DONE\nDONE\nDONE\n");
-              const [sandboxSession, jsonArgs] = (await this._getSandboxArgs()) as any;
-              const commandCommit = `node /tmp/sandbox-entry.ts commit-and-push '${jsonArgs}'`;
-              const _resultCommit = await sandboxSession.exec(commandCommit, {
-                timeout: 360 * 1000, // 360 seconds total timeout
-              });
-              // TODO: do something with _resultInit
-            })(),
-          );
         }
 
         this.ctx.waitUntil(
@@ -1320,75 +1306,116 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
-  async _getSandboxArgs() {
-    // TODO pass the actual durable object id / agent id
-    const agentId = "AGENT-ID-PLACEHOLDER";
+  async exec(input: Inputs["exec"]) {
+    // ------------------------------------------------------------------------
+    // Get config
+    // ------------------------------------------------------------------------
 
-    // Consistently hash durable object ID to a container index, so a specific
-    // agent always gets routed to the same sandbox container.
-    const MAX_CONTAINERS = 10;
-    // Get sandbox instance
-    const sandboxIndex = hashStringToRange(agentId, MAX_CONTAINERS);
-    const sandboxId = `iterate-agent-sandbox-${sandboxIndex}`;
-    const workingDirectory = `/tmp/workspace-${agentId}`;
+    const estateId = this.databaseRecord.estateId;
+
+    // Get estate and repo information
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+    });
+
+    if (!estate) {
+      throw new Error(`Estate ${estateId} not found`);
+    }
+
+    if (!estate.connectedRepoId) {
+      throw new Error("No repository connected to this estate");
+    }
+
+    // Get GitHub installation and token
+    const githubInstallation = await this.db
+      .select({
+        accountId: schema.account.accountId,
+        accessToken: schema.account.accessToken,
+      })
+      .from(schema.estateAccountsPermissions)
+      .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+      .where(
+        and(
+          eq(schema.estateAccountsPermissions.estateId, estateId),
+          eq(schema.account.providerId, "github-app"),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    if (!githubInstallation) {
+      throw new Error("No GitHub installation found for this estate");
+    }
+
+    // Get installation token
+    const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
+    const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // Fetch repository details from GitHub API
+    const repoResponse = await fetch(
+      `https://api.github.com/repositories/${estate.connectedRepoId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${githubToken}`,
+          "User-Agent": "Iterate OS",
+        },
+      },
+    );
+
+    if (!repoResponse.ok) {
+      throw new Error(`Failed to fetch repository details: ${repoResponse.statusText}`);
+    }
+
+    const repoData = (await repoResponse.json()) as { html_url: string };
+    const githubRepoUrl = repoData.html_url;
+    const branch = estate.connectedRepoRef || "main";
+    const commitHash = undefined; // Use the latest commit on the branch
+
+    // ------------------------------------------------------------------------
+    // Init sandbox
+    // ------------------------------------------------------------------------
+
+    // Compute IDs
+    const sandboxId = `agent-sandbox-${estateId}`;
+    const sessionId = estateId;
+    const sessionDir = `/tmp/session-${estateId}`;
 
     // Retrieve the sandbox
-    const sandbox = getSandbox((env as any).SANDBOX, sandboxId);
+    const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     // Ensure that the session directory exists
-    await sandbox.mkdir(workingDirectory, { recursive: true });
+    await sandbox.mkdir(sessionDir, { recursive: true });
 
     // Create an isolated session
     const sandboxSession = await sandbox.createSession({
-      id: agentId,
-      // TODO pass env vars
-      env: { ENV_KEY_0: "ENV_VAL_0" },
-      cwd: workingDirectory,
+      id: sessionId,
+      cwd: sessionDir,
       isolation: true,
     });
-
-    // TODO remove
-    const githubRepoUrl = "https://github.com/plesiv/iterate-estate-template-1.git";
-    const commitHash = "92985e927488470f770cef6b9cf78f41e966fd20";
-    const branch = "main";
-    const buildId = `build-${Math.random()}`;
-    const callbackUrl = "";
-    const githubToken = "";
-    const estateId = "est_01k6cyfg4ze01td6fhhx15zebb";
 
     // Determine the checkout target and whether it's a commit hash
     const checkoutTarget = commitHash || branch || "main";
     const isCommitHash = Boolean(commitHash);
 
     // Prepare arguments as a JSON object
-    const buildArgs = {
+    const initArgs = {
+      sessionDir,
       githubRepoUrl,
       githubToken,
       checkoutTarget,
       isCommitHash,
-      workingDir: workingDirectory,
-      callbackUrl: callbackUrl || "",
-      buildId,
-      estateId,
     };
-
     // Escape the JSON string for shell
-    const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
-
-    return [sandboxSession, jsonArgs];
-  }
-
-  async exec(input: Inputs["exec"]) {
-    console.info("TODO-REMOVE-001", input);
-
-    const [sandboxSession, jsonArgs] = (await this._getSandboxArgs()) as any;
-
-    // Init the container
-    const commandInit = `node /tmp/sandbox-entry.ts init '${jsonArgs}'`;
-    const _resultInit = await sandboxSession.exec(commandInit, {
+    const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+    // Init the sandbox (ignore any errors)
+    const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+    await sandboxSession.exec(commandInit, {
       timeout: 360 * 1000, // 360 seconds total timeout
     });
-    // TODO: do something with _resultInit
+
+    // ------------------------------------------------------------------------
+    // Run exec
+    // ------------------------------------------------------------------------
 
     // Run the exec command
     const commandExec = input.command;
