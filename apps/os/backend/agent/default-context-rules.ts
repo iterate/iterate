@@ -170,8 +170,8 @@ const defaultSlackAgentPrompt = dedent`
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
 
-  ### Shell commands
-  - Use local_shell tool for running shell commands
+  ### Running commands
+  - Use exec tool for running shell commands in sandbox
 `;
 export const defaultContextRules = defineRules([
   {
@@ -200,7 +200,7 @@ export const defaultContextRules = defineRules([
         ),
       }),
       iterateAgentTool.generateImage(),
-      iterateAgentTool.local_shell(),
+      iterateAgentTool.exec(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({

@@ -1306,7 +1306,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
-  async local_shell(input: Inputs["local_shell"]) {
+  async exec(input: Inputs["exec"]) {
     console.info("TODO-REMOVE-001", input);
 
     return {
