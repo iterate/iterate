@@ -61,7 +61,7 @@ export default function Home() {
             <div className="mb-6 sm:mb-24 sm:flex sm:flex-col sm:items-end">
               <Button
                 ref={addToSlackRef}
-                className="w-full sm:w-72 text-lg"
+                className="w-full text-lg"
                 size="lg"
                 variant="secondary"
                 onClick={handleAddToSlack}

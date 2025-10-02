@@ -13,7 +13,7 @@ import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
  */
 export async function sendNotificationToIterateSlack(
   message: string,
-  channel: string = "#building",
+  channel = "#building",
 ): Promise<void> {
   const notificationEstateId = env.ITERATE_NOTIFICATION_ESTATE_ID;
 

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { useTRPCClient } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
@@ -12,7 +13,6 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
-import { toast } from "sonner";
 
 export default function SlackNotificationPage() {
   const trpcClient = useTRPCClient();

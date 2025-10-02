@@ -1,4 +1,4 @@
-import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";
+import { contextRulesFromFiles, defineConfig, matchers, tutorialRules } from "@iterate-com/sdk";
 
 const config = defineConfig({
   contextRules: [
@@ -44,6 +44,7 @@ const config = defineConfig({
     // This file is "just typescript", so you can do whatever you want
     // e.g. structure your rules in markdown, too, and use a helper to load them
     ...contextRulesFromFiles("rules/**/*.md"),
+    ...tutorialRules,
   ],
 });
 export default config;

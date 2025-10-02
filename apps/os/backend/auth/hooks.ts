@@ -3,7 +3,6 @@ import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
-import { getNodeEnvironment } from "../utils/utils.ts";
 import { sendNotificationToIterateSlack } from "../integrations/slack/slack-utils.ts";
 
 // Function to create organization and estate for new users
@@ -56,18 +55,15 @@ export const createUserOrganizationAndEstate = async (db: DB, userId: string, us
     // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id
     if (env.ITERATE_NOTIFICATION_ESTATE_ID) {
       waitUntil(
-        sendEstateCreatedNotificationToSlack(db, result.organization, result.estate).catch(
-          (error) => {
-            console.error("Failed to send Slack notification for new estate", error);
-          },
-        ),
+        sendEstateCreatedNotificationToSlack(result.organization, result.estate).catch((error) => {
+          console.error("Failed to send Slack notification for new estate", error);
+        }),
       );
     }
   }
 };
 
 async function sendEstateCreatedNotificationToSlack(
-  db: DB,
   organization: typeof schema.organization.$inferSelect,
   estate: typeof schema.estate.$inferSelect,
 ) {
@@ -84,5 +80,5 @@ async function sendEstateCreatedNotificationToSlack(
 Visit estate: <${impersonationUrl}|Open Estate>
 `;
 
-  await sendNotificationToIterateSlack(message, "#test-blank");
+  await sendNotificationToIterateSlack(message, "#general");
 }
