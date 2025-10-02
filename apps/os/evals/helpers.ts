@@ -1,14 +1,17 @@
 import { createHash } from "crypto";
+import { z } from "zod";
 import { expect, vi } from "vitest";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
+import type { StandardSchemaV1 } from "better-auth"; // standard schema v1 can come from anywhere really but better-auth is kind enough to export it
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
+import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 
 export * from "./scorer.ts";
 
@@ -93,6 +96,18 @@ export async function createTestHelper(
       >[0]["events"],
     });
   }
+
+  async function addToolSpec(...toolSpecs: ToolSpec[]) {
+    const ruleKey = `eval-dynamically-added-tools-${Date.now()}${Math.random()}`.replace("0.", ".");
+    return addEvents([
+      {
+        type: "CORE:ADD_CONTEXT_RULES",
+        data: { rules: [{ key: ruleKey, tools: toolSpecs }] },
+        triggerLLMRequest: false,
+      },
+    ]);
+  }
+
   const getEvents = async () => {
     const events = await trpcClient.agents.getEvents.query({
       estateId,
@@ -165,7 +180,7 @@ export async function createTestHelper(
       },
     ]);
 
-    const waitForReply = async () => {
+    const waitForReply = async (options?: WaitUntilOptions) => {
       const reply = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", added, {
         select: (e) => {
           if (e.data.call.status !== "completed" || e.data.call.name !== "sendSlackMessage") return;
@@ -175,11 +190,43 @@ export async function createTestHelper(
           };
           return endTurn ? text : undefined;
         },
+        ...(options as {}),
       });
       logger.info(`[${agentName}] Received reply: ${reply}`);
       return reply;
     };
-    return { waitForReply };
+
+    return { events: added, waitForReply };
+  };
+
+  const waitForCompletedToolCall = async <T>(
+    schema: StandardSchemaV1<unknown, T>,
+    name: string,
+    since: { eventIndex: number }[],
+  ) => {
+    const output = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", since, {
+      select: (e) =>
+        e.data.call.status === "completed" && e.data.call.name === name && e.data.result.success
+          ? (e.data.result.output as T)
+          : null,
+    });
+    const validated = await schema["~standard"].validate(output);
+    if (validated.issues) {
+      throw new Error(
+        `Tool call ${name} was successful but result didn't match schema provided:\n${z.prettifyError(validated)}`,
+        { cause: output },
+      );
+    }
+    return validated.value;
+  };
+
+  const getAgentDebugURL = async () => {
+    const result = await trpcClient.agents.getAgentDebugURL.query({
+      estateId,
+      agentInstanceName: agentName,
+      agentClassName: "SlackAgent",
+    });
+    return result.debugURL;
   };
 
   return {
@@ -187,8 +234,11 @@ export async function createTestHelper(
     addEvents,
     getEvents,
     // getState,
+    waitForCompletedToolCall,
     waitForEvent: waitForEvent as WaitForEvent,
     sendUserMessage,
+    getAgentDebugURL,
+    addToolSpec,
   };
 }
 export type WaitUntilOptions = {

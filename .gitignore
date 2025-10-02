@@ -16,9 +16,12 @@ dist
 !.dev.vars.example
 .env*
 !.env.example
+
 .cursor/rules
 .rules
 .clinerules/
+AGENTS.md
+CLAUDE.md
 
 .cache
 

@@ -11,7 +11,7 @@
     "os": "pnpm run --filter ./apps/os",
     "eval": "cd apps/os && doppler run -- pnpm evalite",
     "lint": "eslint . --fix",
-    "lint:check": "eslint .",
+    "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "cd apps/os && pnpm tsdown",
     "test": "pnpm -r --parallel test",
@@ -24,10 +24,8 @@
     "db:studio": "pnpm -r --parallel db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "clean": "rm -rf ./**/node_modules",
-    "rules": "vibe-rules install ${VIBE_RULES_EDITOR:-cursor}",
-    "rules:cursor": "pnpm rules",
-    "rules:claudecode": "VIBE_RULES_EDITOR=claude-code pnpm rules",
-    "rules:codex": "VIBE_RULES_EDITOR=codex pnpm rules"
+    "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
+    "postinstall": "pnpm vibe-rules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
@@ -50,5 +48,5 @@
   "dependencies": {
     "vibe-rules": "^0.3.91"
   },
-  "packageManager": "pnpm@10.17.0"
+  "packageManager": "pnpm@10.17.1"
 }

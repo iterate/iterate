@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
@@ -23,28 +23,47 @@ const findUserByEmail = adminProcedure
     return user;
   });
 
-const findUsersByEstate = adminProcedure
+const getEstateOwner = adminProcedure
   .input(z.object({ estateId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const results = await ctx.db
-      .select()
-      .from(schema.estate)
-      .leftJoin(schema.organization, eq(schema.estate.organizationId, schema.organization.id))
-      .leftJoin(
-        schema.organizationUserMembership,
-        eq(schema.organizationUserMembership.organizationId, schema.organization.id),
-      )
-      .leftJoin(schema.user, eq(schema.organizationUserMembership.userId, schema.user.id))
-      .where(eq(schema.estate.id, input.estateId));
-    return results.flatMap((y) =>
-      y.user ? [{ userId: y.user.id, email: y.user.email, role: y.user.role }] : [],
-    );
-    // misha estate est_01k6grn3fefqesendxf4hmbj8a
+    const estate = await ctx.db.query.estate.findFirst({
+      where: eq(schema.estate.id, input.estateId),
+    });
+
+    if (!estate) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Estate not found",
+      });
+    }
+
+    const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
+      where: and(
+        eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+        eq(schema.organizationUserMembership.role, "owner"),
+      ),
+      with: {
+        user: true,
+      },
+    });
+
+    if (!ownerMembership?.user) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Estate owner not found",
+      });
+    }
+
+    return {
+      userId: ownerMembership.user.id,
+      email: ownerMembership.user.email,
+      name: ownerMembership.user.name,
+    };
   });
 
 export const adminRouter = router({
   findUserByEmail,
-  findUsersByEstate,
+  getEstateOwner,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
     // important because it's available to anyone signed in

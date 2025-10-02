@@ -40,10 +40,7 @@ function processMagic(rawResult: unknown, toolSpec: ToolSpec) {
   let triggerLLMRequest = true;
   if (typeof magic.__triggerLLMRequest === "boolean") {
     triggerLLMRequest = magic.__triggerLLMRequest;
-  } else if (
-    toolSpec.type === "serialized_callable_tool" ||
-    toolSpec.type === "agent_durable_object_tool"
-  ) {
+  } else if (toolSpec.type === "agent_durable_object_tool") {
     triggerLLMRequest = toolSpec.triggerLLMRequest !== false;
   }
 
@@ -95,7 +92,7 @@ export type DOWithToolDefinitions = {
 /**
  * Batch convert tool specifications to their runtime implementations
  *
- * @param params - Object containing specs, env, and agentCallableOpts
+ * @param params - Object containing specs and the DO instance
  * @returns A promise that resolves to an array of runtime tool implementations
  */
 // todo: move this to agent.ts - it's only used there
@@ -106,9 +103,6 @@ export function toolSpecsToImplementations(params: {
   return params.toolSpecs.reduce((acc, spec) => {
     if (spec.type === "openai_builtin") {
       return [...acc, spec.openAITool];
-    }
-    if (spec.type === "serialized_callable_tool") {
-      throw new Error("SerializedCallableToolSpec not implemented");
     }
     if (spec.type === "agent_durable_object_tool") {
       const { methodName, passThroughArgs } = spec;
@@ -128,8 +122,8 @@ export function toolSpecsToImplementations(params: {
         spec,
       );
       const tool: RuntimeTool = {
-        type: "function",
         name: spec.overrideName || sanitizeToolName(spec.methodName),
+        type: "function",
         metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
         // we default strict mode to false because then we can allow the LLM to call us with "any object"

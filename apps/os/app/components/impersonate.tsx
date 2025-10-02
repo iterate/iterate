@@ -38,7 +38,7 @@ export const useImpersonation = () => {
       return impersonateResult.data;
     },
     onSuccess: (data) => {
-      if (data?.user?.email) window.location.reload();
+      if (data?.user?.email) window.location.href = "/";
     },
   });
 

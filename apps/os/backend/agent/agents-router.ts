@@ -144,6 +144,10 @@ export const agentsRouter = router({
       return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
     }),
 
+  getAgentDebugURL: agentStubProcedure.query(async ({ ctx }) => {
+    return ctx.agent.getAgentDebugURL();
+  }),
+
   setBraintrustParentSpanExportedId: agentStubProcedure
     .meta({ description: "Set the braintrust span exported id for an agent instance" })
     .input(
@@ -192,7 +196,8 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return (await ctx.agent.getReducedStateAtEventIndex(
+      // cast to avoid "type instantiation is excessively deep and possibly infinite" error
+      return (await (ctx.agent.getReducedStateAtEventIndex as Function)(
         input.eventIndex,
       )) as AugmentedCoreReducedState;
     }),

@@ -65,7 +65,6 @@ describe("mcp-slice", () => {
     prompts: [],
     resources: [],
     connectedAt: "2024-01-01T00:00:00.000Z",
-    requiresOAuth: true,
     ...overrides,
   });
 
@@ -120,7 +119,6 @@ describe("mcp-slice", () => {
             mode: "personal",
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
           metadata: {},
@@ -152,7 +150,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
           metadata: {},
           triggerLLMRequest: false,
@@ -292,7 +289,6 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -304,7 +300,6 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -350,7 +345,6 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -376,7 +370,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -421,7 +414,6 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -438,7 +430,6 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
           triggerLLMRequest: false, // Event doesn't trigger, but reducer should
         });
@@ -494,7 +485,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -582,7 +572,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -703,7 +692,6 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -745,7 +733,6 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -786,7 +773,6 @@ describe("mcp-slice", () => {
             mode: "personal" as const,
             userId: "user123",
             integrationSlug: "github",
-            requiresOAuth: true,
             triggerLLMRequestOnEstablishedConnection: false,
           },
         });
@@ -863,7 +849,6 @@ describe("mcp-slice", () => {
             tools: [],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -944,7 +929,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -997,7 +981,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -1059,7 +1042,6 @@ describe("mcp-slice", () => {
               mode: "company" as const,
               userId: "user123",
               integrationSlug: "github",
-              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1078,7 +1060,6 @@ describe("mcp-slice", () => {
               mode: "company" as const,
               userId: "user123",
               integrationSlug: "github",
-              requiresOAuth: true,
               triggerLLMRequestOnEstablishedConnection: false,
             },
           },
@@ -1094,7 +1075,6 @@ describe("mcp-slice", () => {
               tools: [],
               prompts: [],
               resources: [],
-              requiresOAuth: true,
             },
           },
         ];
@@ -1158,7 +1138,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -1207,7 +1186,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -1265,7 +1243,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 
@@ -1322,7 +1299,6 @@ describe("mcp-slice", () => {
             ],
             prompts: [],
             resources: [],
-            requiresOAuth: true,
           },
         });
 

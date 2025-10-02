@@ -19,6 +19,21 @@ type PackageRuleItemWithESLintEnforcement = Extract<PackageRuleItem, { name: str
 
 const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
+    name: "repo-setup",
+    description: "Basic commands to get the repo working",
+    rule: dedent`
+      To get the repo working, you can run the following commands:
+      - \`pnpm install\`
+      - \`pnpm typecheck\`
+      - \`pnpm lint\`
+      - \`pnpm format\`
+      - \`pnpm test\`
+
+      You must run lint, format, test before opening pull requests.
+    `,
+    alwaysApply: true,
+  },
+  {
     name: "iterate-branding",
     description: "iterate branding",
     rule: dedent`
@@ -39,7 +54,6 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
     name: "trpc-and-tanstack-query-usage",
     description: "Usage of trpc and tanstack react query in apps",
-    alwaysApply: true,
     rule: dedent`
       ## Prefer the useSuspenseQuery hook when making trpc queries 
 
@@ -61,7 +75,6 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
     name: "use-effect-sucks",
     description: "Use of useEffect",
-    alwaysApply: true,
     rule: dedent`
       - Strongly prefer not to use the react useEffect hook unless there is NO other choice. It is error prone and hard to reason about.
       - If you need to calculate something during render, just do it in the render function.
@@ -77,7 +90,6 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
   {
     name: "typescript",
     description: "How to write good typescript",
-    alwaysApply: true,
     rule: dedent`
       - Use inferred types where possible. If you're creating super complex generic type expressions you're probably doing it wrong
       - Use strict typescript
