@@ -12,6 +12,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  Shield,
 } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -239,6 +240,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const estateId = useEstateId();
   const organizationId = useOrganizationId();
   const ws = useOrganizationWebSocket(organizationId, estateId);
+  const trpc = useTRPC();
+  const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
@@ -286,6 +290,24 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 </SidebarGroupContent>
               </SidebarGroup>
             ))}
+
+            {impersonationInfo?.isAdmin && (
+              <SidebarGroup>
+                <SidebarGroupLabel>Admin</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    <SidebarMenuItem>
+                      <SidebarMenuButton asChild isActive={location.pathname.startsWith("/admin")}>
+                        <Link to="/admin">
+                          <Shield className="size-4" />
+                          <span>Admin Tools</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
           </SidebarContent>
 
           <SidebarFooter>

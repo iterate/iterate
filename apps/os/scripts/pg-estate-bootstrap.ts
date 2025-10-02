@@ -12,10 +12,31 @@ async function bootstrap() {
   // Check for config path from environment variable
   const iterateConfigPath = process.env.ITERATE_CONFIG_PATH;
 
+  // Connect to the database - use same connection as drizzle config
+  const connectionString = "postgres://postgres:postgres@localhost:5432/iterate";
+
+  const pg = postgres(connectionString, {
+    max: 1,
+    fetch_types: false,
+  });
+
+  const db = drizzle(pg, { schema, casing: "snake_case" });
+
   if (!iterateConfigPath) {
-    console.log("No iterate config path provided, skipping bootstrap");
-    // Silently exit if no config is provided - this is normal in most dev scenarios
-    return;
+    console.log("No iterate config path provided, clearing all configs");
+
+    try {
+      // Delete all iterate configs
+      await db.delete(schema.iterateConfig);
+      console.log("✓ Cleared all iterate configs");
+
+      await pg.end();
+      return;
+    } catch (error) {
+      console.error("Failed to clear configs:", error);
+      await pg.end();
+      process.exit(1);
+    }
   }
 
   try {
@@ -36,16 +57,6 @@ async function bootstrap() {
     }
 
     console.log("Loaded iterate config from: ", resolvedPath, config);
-
-    // Connect to the database - use same connection as drizzle config
-    const connectionString = "postgres://postgres:postgres@localhost:5432/iterate";
-
-    const pg = postgres(connectionString, {
-      max: 1,
-      fetch_types: false,
-    });
-
-    const db = drizzle(pg, { schema, casing: "snake_case" });
 
     // Load all existing estates
     const estates = await db.select().from(schema.estate);

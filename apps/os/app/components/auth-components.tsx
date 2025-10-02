@@ -26,11 +26,13 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
         query: {
-          callbackURL: redirectUrl || "/",
+          // /onboarding-after-slack-login will either redirect the user to a nice page with onboarding tasks,
+          // or it will redirect the user to the home page (if they already set up a github repo)
+          callbackURL: redirectUrl || "/onboarding-after-slack-login",
         },
       });
 
-      if (!result?.url) {
+      if (!result || !("url" in result)) {
         toast.error("Failed to sign in with Slack");
         return;
       }

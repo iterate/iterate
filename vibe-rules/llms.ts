@@ -29,7 +29,7 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
       - \`pnpm format\`
       - \`pnpm test\`
 
-      You must run lint, format, test before opening pull requests.
+      You must run lint, format, typecheck, and test before opening pull requests.
     `,
     alwaysApply: true,
   },
