@@ -12,9 +12,7 @@ export const useImpersonation = () => {
   });
   const impersonate = useMutation({
     mutationFn: async () => {
-      let input: string | null | undefined = prompt(
-        "Enter an email, user id, or estate id to impersonate another user.",
-      );
+      let input = prompt("Enter an email, user id, or estate id to impersonate another user.");
 
       if (input?.startsWith("est_")) {
         const owner = await trpcClient.admin.getEstateOwner.query({ estateId: input });
