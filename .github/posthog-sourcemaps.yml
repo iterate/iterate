@@ -23,4 +23,4 @@ jobs:
           env-id: ${{ secrets.POSTHOG_ENV_ID }}
           cli-token: ${{ secrets.POSTHOG_CLI_TOKEN }}
           host: https://eu.posthog.com
-          project: iterate-com  
+          project: iterate-com

@@ -42,24 +42,29 @@ app.use(contextStorage());
 
 // Error tracking with PostHog
 app.onError((err, c) => {
-  const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
-    host: "https://eu.i.posthog.com",
-  });
-
-  // Get user ID if available
-  const userId = c.get("session")?.user?.id || "anonymous";
-
-  posthog.captureException(err, userId, {
-    path: c.req.path,
-    method: c.req.method,
-    url: c.req.url,
-    errorName: err.name,
-  });
-
-  posthog.shutdown();
-
   // Log the error
   console.error("Unhandled error:", err);
+
+  // Track error in PostHog (non-blocking)
+  c.executionCtx.waitUntil(
+    (async () => {
+      const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+        host: "https://eu.i.posthog.com",
+      });
+
+      // Get user ID if available
+      const userId = c.get("session")?.user?.id || "anonymous";
+
+      posthog.captureException(err, userId, {
+        path: c.req.path,
+        method: c.req.method,
+        url: c.req.url,
+        errorName: err.name,
+      });
+
+      await posthog.shutdown();
+    })(),
+  );
 
   // Return error response
   return c.json({ error: "Internal Server Error" }, 500);
@@ -100,6 +105,28 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
       return c.json({ error: "Agent not found" }, 404);
     }
     console.error("Failed to get agent stub:", error);
+
+    // Track error in PostHog (non-blocking)
+    c.executionCtx.waitUntil(
+      (async () => {
+        const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+          host: "https://eu.i.posthog.com",
+        });
+
+        const userId = c.var.session?.user?.id || "anonymous";
+
+        posthog.captureException(error as Error, userId, {
+          agentClassName,
+          agentInstanceName,
+          path: c.req.path,
+          method: c.req.method,
+          url: c.req.url,
+        });
+
+        await posthog.shutdown();
+      })(),
+    );
+
     return c.json({ error: "Failed to connect to agent" }, 500);
   }
 });
@@ -122,23 +149,27 @@ app.all("/api/trpc/*", (c) => {
         stack: error.stack,
       });
 
-      // Track error in PostHog
-      const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
-        host: "https://eu.i.posthog.com",
-      });
+      // Track error in PostHog (non-blocking)
+      c.executionCtx.waitUntil(
+        (async () => {
+          const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+            host: "https://eu.i.posthog.com",
+          });
 
-      const userId = c.var.session?.user?.id || "anonymous";
+          const userId = c.var.session?.user?.id || "anonymous";
 
-      posthog.captureException(error, userId, {
-        trpcPath: path,
-        trpcType: type,
-        trpcCode: error.code,
-        trpcInput: input,
-        method: c.req.method,
-        url: c.req.url,
-      });
+          posthog.captureException(error, userId, {
+            trpcPath: path,
+            trpcType: type,
+            trpcCode: error.code,
+            trpcInput: input,
+            method: c.req.method,
+            url: c.req.url,
+          });
 
-      posthog.shutdown();
+          await posthog.shutdown();
+        })(),
+      );
     },
   });
 });
