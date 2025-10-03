@@ -297,7 +297,7 @@ export type MultiTrialScorerOutput = {
  * - When trialCount > 1, each input is run multiple times with individual trial spans under a parent input span
  */
 export function evaliterate<TInput, TExpected>(
-  experimentName: string,
+  name: string,
   opts: {
     data: () => Promise<{ input: TInput }[]>;
     task: (input: {
@@ -309,6 +309,7 @@ export function evaliterate<TInput, TExpected>(
     trialCount?: number; // Number of times to run each input (default: 1)
   },
 ) {
+  const experimentName = `${name}-${inject("vitestBatchId")}`;
   const hash = (data: unknown) =>
     match(data)
       .with({ slug: P.string }, (d) => d.slug)
