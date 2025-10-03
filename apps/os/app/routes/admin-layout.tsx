@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Database,
   Building2,
+  Server,
 } from "lucide-react";
 import { useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
@@ -33,6 +34,7 @@ const adminLinks = [
   { title: "Estates", icon: Building2, path: "/admin/estates" },
   { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
   { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
+  { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
 ];
 
 export default function AdminLayout() {

@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { createCli } from "trpc-cli";
+import { createCli, parseRouter } from "trpc-cli";
 import * as prompts from "@clack/prompts";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { t } from "./config.ts";
@@ -23,6 +23,8 @@ const router = t.router({
   dev,
   testing: testingRouter,
 });
+
+console.dir(parseRouter({ router }), { depth: 4 });
 
 if (process.argv.length === 2) {
   console.error("No command provided, assuming you want to run `iterate` sdk cli");
