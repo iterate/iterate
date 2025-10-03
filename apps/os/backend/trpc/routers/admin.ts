@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
@@ -94,83 +94,16 @@ const deleteUserByEmail = adminProcedure
     const deletedOrganizations: string[] = [];
     const deletedEstates: string[] = [];
 
-    // Delete all organizations where the user is owner (and their estates)
+    // Delete organizations the user owns; estates and related records will cascade
     for (const membership of ownerOrganizations) {
       const org = membership.organization;
-      const estates = org.estates;
-
-      // Delete all estates in the organization
-      for (const estate of estates) {
-        // Delete all related data for each estate
-        await ctx.db
-          .delete(schema.agentInstanceRoute)
-          .where(
-            inArray(
-              schema.agentInstanceRoute.agentInstanceId,
-              ctx.db
-                .select({ id: schema.agentInstance.id })
-                .from(schema.agentInstance)
-                .where(eq(schema.agentInstance.estateId, estate.id)),
-            ),
-          );
-        await ctx.db
-          .delete(schema.agentInstance)
-          .where(eq(schema.agentInstance.estateId, estate.id));
-        await ctx.db.delete(schema.files).where(eq(schema.files.estateId, estate.id));
-        await ctx.db
-          .delete(schema.estateAccountsPermissions)
-          .where(eq(schema.estateAccountsPermissions.estateId, estate.id));
-        await ctx.db
-          .delete(schema.providerEstateMapping)
-          .where(eq(schema.providerEstateMapping.internalEstateId, estate.id));
-        await ctx.db
-          .delete(schema.slackWebhookEvent)
-          .where(eq(schema.slackWebhookEvent.estateId, estate.id));
-        await ctx.db
-          .delete(schema.iterateConfig)
-          .where(eq(schema.iterateConfig.estateId, estate.id));
-        await ctx.db
-          .delete(schema.mcpConnectionParam)
-          .where(eq(schema.mcpConnectionParam.estateId, estate.id));
-        await ctx.db.delete(schema.builds).where(eq(schema.builds.estateId, estate.id));
-
-        // Delete the estate itself
-        await ctx.db.delete(schema.estate).where(eq(schema.estate.id, estate.id));
-        deletedEstates.push(estate.id);
-      }
-
-      // Delete all organization memberships
-      await ctx.db
-        .delete(schema.organizationUserMembership)
-        .where(eq(schema.organizationUserMembership.organizationId, org.id));
-
-      // Delete the organization itself
+      // Collect estate ids for return value before deletion cascades
+      for (const e of org.estates) deletedEstates.push(e.id);
       await ctx.db.delete(schema.organization).where(eq(schema.organization.id, org.id));
       deletedOrganizations.push(org.id);
     }
 
-    // Delete user's accounts
-    await ctx.db.delete(schema.account).where(eq(schema.account.userId, user.id));
-
-    // Delete user's sessions
-    await ctx.db.delete(schema.session).where(eq(schema.session.userId, user.id));
-
-    // Delete user's provider mappings
-    await ctx.db
-      .delete(schema.providerUserMapping)
-      .where(eq(schema.providerUserMapping.internalUserId, user.id));
-
-    // Delete remaining organization memberships (where user is not owner)
-    await ctx.db
-      .delete(schema.organizationUserMembership)
-      .where(eq(schema.organizationUserMembership.userId, user.id));
-
-    // Delete user's dynamic client info
-    await ctx.db
-      .delete(schema.dynamicClientInfo)
-      .where(eq(schema.dynamicClientInfo.userId, user.id));
-
-    // Finally, delete the user
+    // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
     await ctx.db.delete(schema.user).where(eq(schema.user.id, user.id));
 
     return {
@@ -207,6 +140,123 @@ export const adminRouter = router({
     return {
       user: ctx.user,
       session: ctx.session,
+    };
+  }),
+  listAllEstates: adminProcedure.query(async ({ ctx }) => {
+    const estates = await ctx.db.query.estate.findMany({
+      with: {
+        organization: {
+          with: {
+            members: {
+              where: eq(schema.organizationUserMembership.role, "owner"),
+              with: {
+                user: true,
+              },
+            },
+          },
+        },
+      },
+      orderBy: desc(schema.estate.updatedAt),
+    });
+
+    return estates.map((estate) => ({
+      id: estate.id,
+      name: estate.name,
+      organizationId: estate.organizationId,
+      organizationName: estate.organization.name,
+      ownerEmail: estate.organization.members[0]?.user.email,
+      ownerName: estate.organization.members[0]?.user.name,
+      ownerId: estate.organization.members[0]?.user.id,
+      connectedRepoId: estate.connectedRepoId,
+      connectedRepoPath: estate.connectedRepoPath,
+      connectedRepoRef: estate.connectedRepoRef,
+      createdAt: estate.createdAt,
+      updatedAt: estate.updatedAt,
+    }));
+  }),
+  rebuildEstate: adminProcedure
+    .input(z.object({ estateId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { triggerEstateRebuild } = await import("./estate.ts");
+
+      const estateData = await ctx.db.query.estate.findFirst({
+        where: eq(schema.estate.id, input.estateId),
+      });
+
+      if (!estateData) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Estate not found",
+        });
+      }
+
+      if (!estateData.connectedRepoId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Estate has no connected repository",
+        });
+      }
+
+      const result = await triggerEstateRebuild({
+        db: ctx.db,
+        env: ctx.env,
+        estateId: input.estateId,
+        commitHash: estateData.connectedRepoRef || "main",
+        commitMessage: "Manual rebuild triggered by admin",
+        isManual: true,
+      });
+
+      return { success: true, buildId: result.id };
+    }),
+  rebuildAllEstates: adminProcedure.mutation(async ({ ctx }) => {
+    const { triggerEstateRebuild } = await import("./estate.ts");
+
+    const estates = await ctx.db.query.estate.findMany({
+      where: eq(schema.estate.connectedRepoId, schema.estate.connectedRepoId),
+    });
+
+    const results = [];
+
+    for (const estate of estates) {
+      if (!estate.connectedRepoId) {
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: "No connected repository",
+        });
+        continue;
+      }
+
+      try {
+        const result = await triggerEstateRebuild({
+          db: ctx.db,
+          env: ctx.env,
+          estateId: estate.id,
+          commitHash: estate.connectedRepoRef || "main",
+          commitMessage: "Bulk rebuild triggered by admin",
+          isManual: true,
+        });
+
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: true,
+          buildId: result.id,
+        });
+      } catch (error) {
+        results.push({
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        });
+      }
+    }
+
+    return {
+      total: estates.length,
+      results,
     };
   }),
 });

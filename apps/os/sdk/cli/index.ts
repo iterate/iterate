@@ -6,11 +6,21 @@ import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
+import { dev } from "./commands/dev.ts";
 import { db } from "./cli-db.ts";
+
+// Normalize forwarded args when invoked via pnpm recursion.
+// pnpm adds a standalone "--" before forwarded args, which stops option parsing.
+// Remove it so flags like "-c" are recognized by the CLI.
+const dashdashIndex = process.argv.indexOf("--");
+if (dashdashIndex !== -1) {
+  process.argv.splice(dashdashIndex, 1);
+}
 
 const router = t.router({
   estate,
   gh,
+  dev,
   testing: testingRouter,
 });
 

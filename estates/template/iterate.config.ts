@@ -2,10 +2,6 @@ import { contextRulesFromFiles, defineConfig, matchers, tutorialRules } from "@i
 
 const config = defineConfig({
   contextRules: [
-    {
-      key: "tutorial-rule-that-you-should-delete",
-      prompt: "In your first message, always mention pirates or some nautical thing.",
-    },
     // You can use "matchers" to conditionally apply rules
     // For example to only be active when certain MCP connections are present
     {
