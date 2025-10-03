@@ -253,8 +253,8 @@ importers:
         specifier: ^1.2.1
         version: 1.2.1
       trpc-cli:
-        specifier: ^0.11.0
-        version: 0.11.0(@trpc/server@11.5.1(typescript@5.9.2))(zod@4.1.8)
+        specifier: https://pkg.pr.new/mmkal/trpc-cli@0fa1f4877bc9c7a62be3fa8150f4d17a4dfbdeb3
+        version: https://pkg.pr.new/mmkal/trpc-cli@0fa1f4877bc9c7a62be3fa8150f4d17a4dfbdeb3(@trpc/server@11.5.1(typescript@5.9.2))(zod@4.1.8)
       ts-essentials:
         specifier: ^10.1.1
         version: 10.1.1(typescript@5.9.2)
@@ -7633,8 +7633,9 @@ packages:
   trough@2.2.0:
     resolution: {integrity: sha512-tmMpK00BjZiUyVyvrBK7knerNgmgvcV/KLVyuma/SC+TQN167GrMRciANTz09+k3zW8L8t60jWO1GpfkZdjTaw==}
 
-  trpc-cli@0.11.0:
-    resolution: {integrity: sha512-cFt5LVl1EzwmhZtWa6xPBWr6rgLXGgEOqmcTMIYcI6fLQE1REgu6tS55LmqUJs5kVSXrOd1z5/aufJS71xUUyA==}
+  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@0fa1f4877bc9c7a62be3fa8150f4d17a4dfbdeb3:
+    resolution: {tarball: https://pkg.pr.new/mmkal/trpc-cli@0fa1f4877bc9c7a62be3fa8150f4d17a4dfbdeb3}
+    version: 0.0.0-dev-20251001202700
     engines: {node: '>=18'}
     hasBin: true
     peerDependencies:
@@ -16401,7 +16402,7 @@ snapshots:
 
   trough@2.2.0: {}
 
-  trpc-cli@0.11.0(@trpc/server@11.5.1(typescript@5.9.2))(zod@4.1.8):
+  trpc-cli@https://pkg.pr.new/mmkal/trpc-cli@0fa1f4877bc9c7a62be3fa8150f4d17a4dfbdeb3(@trpc/server@11.5.1(typescript@5.9.2))(zod@4.1.8):
     dependencies:
       commander: 14.0.1
     optionalDependencies:
