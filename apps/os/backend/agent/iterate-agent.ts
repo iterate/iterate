@@ -1383,6 +1383,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Retrieve the sandbox
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
+    // Check current state
+    // NOTE: according to the exposed API this should be the correct way to
+    // check if the sandbox is running and start it up if it isnt'. But the logs
+    // are confusing:
+    // ... Sandbox successfully shut down
+    // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
+    // ... Error checking if container is ready: The operation was aborted
+    // ... Port 3000 is ready
+    if ((await sandbox.getState()).status !== "healthy") {
+      await sandbox.startAndWaitForPorts(3000); // default sandbox port
+    }
+
     // Ensure that the session directory exists
     await sandbox.mkdir(sessionDir, { recursive: true });
 
