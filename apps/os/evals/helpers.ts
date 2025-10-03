@@ -296,7 +296,7 @@ export type MultiTrialScorerOutput = {
  * - It is needed because we need to add the scores to the braintrust span, which is done outside of the task function
  * - When trialCount > 1, each input is run multiple times with individual trial spans under a parent input span
  */
-export function evaliterate<TInput, TExpected>(
+export function evaliterate<TInput extends { slug: string }, TExpected>(
   name: string,
   opts: {
     data: () => Promise<{ input: TInput }[]>;
@@ -328,6 +328,7 @@ export function evaliterate<TInput, TExpected>(
         apiKey: process.env.BRAINTRUST_API_KEY,
         experiment: experimentName,
         metadata: {
+          testName: name,
           experimentName,
           vitestBatchId: inject("vitestBatchId"),
           trialCount: resolvedTrialCount,
@@ -363,11 +364,7 @@ export function evaliterate<TInput, TExpected>(
     data: opts.data,
     columns: opts.columns,
     task: async (input) => {
-      // Create parent span for this input
-      const parentSpan = experiment?.startSpan({
-        name: `eval-${hash(input)}`,
-        type: "eval",
-      });
+      const parentSpan = experiment?.startSpan({ name: `eval-${input.slug}`, type: "eval" });
       spanMap[hash(input)] = parentSpan;
       parentSpan?.log({ input });
       await parentSpan?.flush();
@@ -375,19 +372,20 @@ export function evaliterate<TInput, TExpected>(
       const trials = await Promise.all(
         Array.from({ length: resolvedTrialCount }, async (_, trialIndex) => {
           const trialName = `trial_${trialIndex + 1}`;
-          const trialSpan = parentSpan?.startSpan({
-            name: trialName,
-            type: "task",
-          });
+          const trialSpan = parentSpan?.startSpan({ type: "task", name: trialName });
           trialSpan?.log({ input });
           await trialSpan?.flush();
-          const braintrustSpanExportedId = (await trialSpan?.export()) || "";
+          const braintrustSpanExportedId = await trialSpan?.export();
 
-          input = { ...input, slug: `${(input as { slug: string }).slug}-${trialName}` };
-          const output = await opts.task({ input, braintrustSpanExportedId });
+          const output = await opts.task({
+            input: { ...input, slug: `${input.slug}-${trialName}` },
+            braintrustSpanExportedId: braintrustSpanExportedId || "",
+          });
+
           trialSpan?.log({ output });
           trialSpan?.end();
           await trialSpan?.flush();
+
           return { trialIndex, trialName, result: output };
         }),
       );
