@@ -346,7 +346,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Adds a participant to the conversation when they send a message.
    * This is crucial for MCP personal connections to work properly.
    */
-  protected async getParticipantJoinedEvents(
+  public async getParticipantJoinedEvents(
     slackUserId: string,
     botUserId?: string,
   ): Promise<ParticipantJoinedEventInput[]> {
