@@ -76,42 +76,45 @@ const deleteUserByEmail = adminProcedure
       });
     }
 
-    // Find all organizations where the user is the owner
-    const ownedOrganizations = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(schema.organizationUserMembership.userId, user.id),
-      with: {
-        organization: {
-          with: {
-            estates: true,
+    // Use a transaction to ensure all deletions are atomic
+    return await ctx.db.transaction(async (tx) => {
+      // Find all organizations where the user is the owner
+      const ownedOrganizations = await tx.query.organizationUserMembership.findMany({
+        where: eq(schema.organizationUserMembership.userId, user.id),
+        with: {
+          organization: {
+            with: {
+              estates: true,
+            },
           },
         },
-      },
+      });
+
+      const ownerOrganizations = ownedOrganizations.filter(
+        (membership) => membership.role === "owner",
+      );
+      const deletedOrganizations: string[] = [];
+      const deletedEstates: string[] = [];
+
+      // Delete organizations the user owns; estates and related records will cascade
+      for (const membership of ownerOrganizations) {
+        const org = membership.organization;
+        // Collect estate ids for return value before deletion cascades
+        for (const e of org.estates) deletedEstates.push(e.id);
+        await tx.delete(schema.organization).where(eq(schema.organization.id, org.id));
+        deletedOrganizations.push(org.id);
+      }
+
+      // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
+      await tx.delete(schema.user).where(eq(schema.user.id, user.id));
+
+      return {
+        success: true,
+        deletedUser: user.id,
+        deletedOrganizations,
+        deletedEstates,
+      };
     });
-
-    const ownerOrganizations = ownedOrganizations.filter(
-      (membership) => membership.role === "owner",
-    );
-    const deletedOrganizations: string[] = [];
-    const deletedEstates: string[] = [];
-
-    // Delete organizations the user owns; estates and related records will cascade
-    for (const membership of ownerOrganizations) {
-      const org = membership.organization;
-      // Collect estate ids for return value before deletion cascades
-      for (const e of org.estates) deletedEstates.push(e.id);
-      await ctx.db.delete(schema.organization).where(eq(schema.organization.id, org.id));
-      deletedOrganizations.push(org.id);
-    }
-
-    // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
-    await ctx.db.delete(schema.user).where(eq(schema.user.id, user.id));
-
-    return {
-      success: true,
-      deletedUser: user.id,
-      deletedOrganizations,
-      deletedEstates,
-    };
   });
 
 export const adminRouter = router({
