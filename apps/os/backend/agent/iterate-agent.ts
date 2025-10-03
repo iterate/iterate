@@ -2,6 +2,7 @@ import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
+import dedent from "dedent";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
@@ -1477,9 +1478,29 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
+
+    if (!resultExec.success) {
+      return {
+        success: false,
+        error: dedent`
+          Command failed with exit code ${resultExec.exitCode}
+
+          stdout:
+          ${resultExec.stdout || "(empty)"}
+
+          stderr:
+          ${resultExec.stderr || "(empty)"}
+        `,
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
+      };
+    }
+
     return {
-      success: resultExec.success,
-      message: resultExec.stdout,
+      success: true,
+      output: {
+        message: resultExec.stdout,
+        stderr: resultExec.stderr,
+      },
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
     };
   }
