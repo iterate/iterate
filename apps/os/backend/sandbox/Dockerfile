@@ -9,7 +9,6 @@ RUN apt-get remove -y nodejs npm && \
     ln -sf /usr/local/bin/npm /usr/bin/npm && \
     ln -sf /usr/local/bin/npx /usr/bin/npx
 
-
 # Install pnpm and tsx using Node 24
 RUN npm install -g pnpm tsx
 

@@ -255,6 +255,9 @@ async function subcommandInit(args: InitArgs) {
       process.exit(1);
     }
 
+    // Configure git with the credential from gh
+    await execCommand("gh", ["auth", "setup-git"]);
+
     // Clone the repository using gh (optimized: combine clone + checkout when possible)
     console.error("=== Cloning repository ===");
 
