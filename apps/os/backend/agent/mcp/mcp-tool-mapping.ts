@@ -6,7 +6,7 @@ import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   rehydrateExistingMCPConnection,
   mcpManagerCache,
@@ -197,7 +197,7 @@ export async function processMCPContent(
           filename,
         });
       } catch (error) {
-        console.error(`[MCP] Failed to upload ${contentItem.type} content:`, error);
+        logger.error(`[MCP] Failed to upload ${contentItem.type} content:`, error);
         // Add to processed content without data field as fallback
         const { data: _data, ...itemWithoutData } = contentItem;
         processedContent.push({
@@ -291,7 +291,7 @@ function hasToolSchemaConflicts(
   );
 
   if (hasConflict) {
-    console.error(`[MCP] Schema conflict detected for tool ${toolName}. Skipping tool creation.`);
+    logger.error(`[MCP] Schema conflict detected for tool ${toolName}. Skipping tool creation.`);
   }
 
   return hasConflict;
@@ -453,9 +453,7 @@ export function createRuntimeToolFromMCPTool(params: {
           );
         }
 
-        console.log(
-          `[MCP] Tool ${toolName} triggering lazy connection to ${selectedConnectionKey}`,
-        );
+        logger.log(`[MCP] Tool ${toolName} triggering lazy connection to ${selectedConnectionKey}`);
 
         const result = await rehydrateExistingMCPConnection({
           connectionKey: selectedConnectionKey,
@@ -505,7 +503,7 @@ export function createRuntimeToolFromMCPTool(params: {
           arguments: toolArgs,
         })
         .catch((error) => {
-          console.error(
+          logger.error(
             `[MCP] Tool execution failed for ${tool.name}:`,
             (error as Error)?.stack || error,
           );
@@ -546,7 +544,7 @@ export function createRuntimeToolFromMCPTool(params: {
             addEvents: [...additionalMCPEvents, ...fileEvents],
           };
         } catch (error) {
-          console.warn(`Failed to fetch resource ${mcpResult.resource_link}:`, error);
+          logger.warn(`Failed to fetch resource ${mcpResult.resource_link}:`, error);
         }
       }
 

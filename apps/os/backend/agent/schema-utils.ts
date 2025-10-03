@@ -4,7 +4,7 @@ import { type Schema, Validator } from "@cfworker/json-schema";
 import type z from "zod/v4";
 import { toJSONSchema, type ZodType } from "zod/v4";
 import type { JSONSchema } from "zod/v4/core";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 
 // Backward compatibility - alias BaseJSONSchema to JSONSchema.JSONSchema
 export type BaseJSONSchema = JSONSchema.JSONSchema;
@@ -115,7 +115,7 @@ function mapZodJsonToCFWorkerSchema(
   }
 
   // Log a warning or throw an error for unexpected result types.
-  console.warn(
+  logger.warn(
     "mapZodJsonToCFWorkerSchema encountered an unexpected result type after recursion:",
     typeof mappedSchema,
   );

@@ -32,7 +32,7 @@ import type {
 import { OpenAI } from "openai";
 
 import type { Prettify } from "ts-essentials";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 
 // Create prettified type aliases for better hover experience
 export type ResponseCreateParamsPretty = Prettify<ResponseCreateParams>;
@@ -71,7 +71,7 @@ async function _consumeStream() {
       outputItems[ev.output_index] = ev.item; // collect finalized item
     }
     if (ev.type === "response.completed") {
-      console.log("All items final:", outputItems);
+      logger.log("All items final:", outputItems);
     }
   }
 }
@@ -391,7 +391,7 @@ const _functionResultFromYou: ResponseInputItem.FunctionCallOutput = {
      ],
      tools: [{ type: "function", name: "myCalculator", parameters:{ type: "object" } }]
    });
-   console.log(res.output); // If not streaming
+   logger.log(res.output); // If not streaming
 ------------------------------------------------------------------------------------------------- */
 
 /*

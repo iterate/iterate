@@ -3,7 +3,7 @@ import PQueue from "p-queue";
 import { eq, and } from "drizzle-orm";
 import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Branded, type Result } from "../../utils/type-helpers.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
@@ -330,7 +330,7 @@ export async function handleMCPConnectRequest(
   const prompts = manager.listPrompts().filter((p) => p.serverId === result.id);
   const resources = manager.listResources().filter((r) => r.serverId === result.id);
 
-  console.log(
+  logger.log(
     `[MCP] Server ${result.id} provides ${tools.length} tools, ${prompts.length} prompts, ${resources.length} resources`,
   );
 
@@ -406,12 +406,12 @@ async function handleMCPDisconnectRequest(
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
             connectionQueues.delete(cacheKey);
           }
-          console.log(`[MCP] Disconnected and removed manager for ${key}`);
+          logger.log(`[MCP] Disconnected and removed manager for ${key}`);
         } else {
-          console.warn(`[MCP] No manager found for connection ${key}`);
+          logger.warn(`[MCP] No manager found for connection ${key}`);
         }
       } catch (error) {
-        console.warn(`[MCP] Failed to disconnect ${key}:`, error);
+        logger.warn(`[MCP] Failed to disconnect ${key}:`, error);
       }
     }
   }
