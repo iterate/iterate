@@ -3,7 +3,7 @@ import dedent from "dedent";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import { sendNotificationToIterateSlack } from "../integrations/slack/slack-utils.ts";
 
 // Function to create organization and estate for new users
@@ -57,7 +57,7 @@ export const createUserOrganizationAndEstate = async (db: DB, userId: string, us
     if (env.ITERATE_NOTIFICATION_ESTATE_ID) {
       waitUntil(
         sendEstateCreatedNotificationToSlack(result.organization, result.estate).catch((error) => {
-          console.error("Failed to send Slack notification for new estate", error);
+          logger.error("Failed to send Slack notification for new estate", error);
         }),
       );
     }

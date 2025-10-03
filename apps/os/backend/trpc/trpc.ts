@@ -4,7 +4,7 @@ import { eq } from "drizzle-orm";
 import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -57,7 +57,7 @@ const t = initTRPC.context<Context>().create({
       };
     }
 
-    console.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
+    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
       code: error.code,
       message: formattedError,
       zodFormatted,
@@ -119,7 +119,7 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
         },
       }).catch((error) => {
         // Log but don't fail the mutation if invalidation fails
-        console.error("Failed to invalidate queries:", error);
+        logger.error("Failed to invalidate queries:", error);
       });
     }
   }
@@ -171,7 +171,7 @@ export async function notifyOrganizationFromContext(
   if (membership?.organizationId) {
     await notifyOrganization(ctx.env, membership.organizationId, type, message, extraArgs).catch(
       (error) => {
-        console.error("Failed to send notification:", error);
+        logger.error("Failed to send notification:", error);
       },
     );
   }

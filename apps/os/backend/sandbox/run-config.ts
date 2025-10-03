@@ -1,7 +1,7 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../../env.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 
 export interface RunConfigOptions {
   githubRepoUrl: string;
@@ -41,7 +41,7 @@ export async function runConfigInSandbox(
   try {
     return await runConfigInSandboxInternal(env, options);
   } catch (error) {
-    console.error("Error running config in sandbox:", error);
+    logger.error("Error running config in sandbox:", error);
     return {
       error: "Internal server error during build",
       details: error instanceof Error ? error.message : "Unknown error",

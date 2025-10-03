@@ -4,7 +4,7 @@ import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
 import { getAuth } from "../auth/auth.ts";
 import { getUserEstateAccess } from "../trpc/trpc.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 
 // Event schemas for WebSocket communication
 export const InvalidateInfo = z.discriminatedUnion("type", [
@@ -135,7 +135,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
         }),
       );
     } catch (error) {
-      console.error("Error handling message:", error);
+      logger.error("Error handling message:", error);
       ws.send(
         JSON.stringify({
           type: "ERROR",
@@ -168,7 +168,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
           ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session ${ws}:`, error);
+          logger.error(`Failed to send to session ${ws}:`, error);
           errorCount++;
           ws.close();
         }
@@ -186,7 +186,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
         },
       );
     } catch (error) {
-      console.error("Error handling invalidate:", error);
+      logger.error("Error handling invalidate:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -207,7 +207,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
           ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session ${ws}:`, error);
+          logger.error(`Failed to send to session ${ws}:`, error);
           errorCount++;
           // Remove dead sessions
           ws.close();
@@ -226,7 +226,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
         },
       );
     } catch (error) {
-      console.error("Error handling broadcast:", error);
+      logger.error("Error handling broadcast:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },

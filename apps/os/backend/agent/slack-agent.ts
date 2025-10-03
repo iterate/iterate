@@ -4,7 +4,7 @@ import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
@@ -167,7 +167,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             ]);
             break;
           case "CORE:INTERNAL_ERROR": {
-            console.error("[SlackAgent] Internal Error:", payload.event);
+            logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
             waitUntil(
@@ -210,7 +210,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           try {
             const downloadUrl = slackFile.url_private_download || slackFile.url_private;
             if (!downloadUrl) {
-              console.error(`No download URL for Slack file ${slackFile.id}`);
+              logger.error(`No download URL for Slack file ${slackFile.id}`);
               return null;
             }
             const fileRecord = await uploadFileFromURL({
@@ -222,7 +222,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 Authorization: `Bearer ${this.slackAPI.token}`,
               },
             });
-            console.log("File record", fileRecord);
+            logger.log("File record", fileRecord);
             return {
               iterateFileId: fileRecord.id,
               originalFilename: fileRecord.filename ?? undefined,
@@ -232,7 +232,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               slackFileId: slackFile.id,
             };
           } catch (error) {
-            console.error(`Failed to upload Slack file ${slackFile.id}:`, error);
+            logger.error(`Failed to upload Slack file ${slackFile.id}:`, error);
             return null;
           }
         });
@@ -526,7 +526,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return result.permalink;
         }
       } catch (error) {
-        console.error("Failed to get Slack permalink:", error);
+        logger.error("Failed to get Slack permalink:", error);
       }
     } else {
       // if we can't find any message, get link to the thread
@@ -534,7 +534,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       const threadTs = state.reducedState?.slackThreadId;
 
       if (!channelId || !threadTs) {
-        console.error("Channel ID and thread TS are required to get a Slack permalink", {
+        logger.error("Channel ID and thread TS are required to get a Slack permalink", {
           channelId,
           threadTs,
         });
@@ -549,7 +549,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return result.permalink;
         }
       } catch (error) {
-        console.error("Failed to get Slack permalink:", error);
+        logger.error("Failed to get Slack permalink:", error);
       }
     }
     return undefined;
@@ -787,8 +787,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
       return completeResponse;
     } catch (error) {
-      console.warn("[SlackAgent] Failed uploading file:", error);
-      console.log("Full error details:", JSON.stringify(error, null, 2));
+      logger.warn("[SlackAgent] Failed uploading file:", error);
+      logger.log("Full error details:", JSON.stringify(error, null, 2));
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
@@ -816,7 +816,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         });
       }
     } catch (error) {
-      console.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
+      logger.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
     }
     return {
       __pauseAgentUntilMentioned: true,

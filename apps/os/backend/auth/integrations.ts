@@ -9,7 +9,7 @@ import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
@@ -125,7 +125,7 @@ export const integrationsPlugin = () =>
           const estateWithMembership = result[0]?.estate;
 
           if (!estateWithMembership) {
-            console.error("Estate not found or user not authorized", {
+            logger.error("Estate not found or user not authorized", {
               estateId: state.estateId,
               userId: state.userId,
             });

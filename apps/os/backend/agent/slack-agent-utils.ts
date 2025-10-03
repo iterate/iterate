@@ -3,7 +3,7 @@ import type { SlackEvent } from "@slack/types";
 import { eq, asc } from "drizzle-orm";
 import type { DB } from "../db/client.ts";
 import { slackWebhookEvent } from "../db/schema.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import type { SlackWebhookPayload } from "./slack.types";
 
 export function getMentionedExternalUserIds(body: string) {
@@ -409,7 +409,7 @@ export function shouldIncludeEventInConversation(
       // TypeScript's exhaustive check - if this line has an error, it means
       // there are unhandled event types that should be explicitly handled above
       const unhandledEvent: SlackEvent = slackEvent;
-      console.warn(`Unhandled Slack event type: ${unhandledEvent.type}`);
+      logger.warn(`Unhandled Slack event type: ${unhandledEvent.type}`);
 
       // For now, ignore any unhandled event types
       // When new event types are added to @slack/types, they'll appear here

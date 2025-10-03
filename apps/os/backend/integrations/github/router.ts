@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../../../env";
 import type { Variables } from "../../worker";
 import * as schema from "../../db/schema.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   validateGithubWebhookSignature,
   getEstateByRepoId,
@@ -85,7 +85,7 @@ githubApp.get(
     try {
       userAccessTokenData = UserAccessTokenResponse.parse(data);
     } catch (error) {
-      console.log("Failed to parse user access token", data, error);
+      logger.log("Failed to parse user access token", data, error);
       return c.json({ error: "Failed to get user access token" }, 400);
     }
 
@@ -97,7 +97,7 @@ githubApp.get(
     });
 
     if (!installationInfoRes.ok) {
-      console.log(await installationInfoRes.text());
+      logger.log(await installationInfoRes.text());
       return c.json({ error: "Failed to get installation info" }, 400);
     }
 
@@ -148,7 +148,7 @@ githubApp.post("/webhook", async (c) => {
 
     // Validate the webhook signature
     if (!c.env.GITHUB_WEBHOOK_SECRET) {
-      console.error("GITHUB_WEBHOOK_SECRET not configured");
+      logger.error("GITHUB_WEBHOOK_SECRET not configured");
       return c.json({ error: "Webhook secret not configured" }, 500);
     }
 
@@ -159,7 +159,7 @@ githubApp.post("/webhook", async (c) => {
     );
 
     if (!isValid) {
-      console.error("Invalid webhook signature");
+      logger.error("Invalid webhook signature");
       return c.json({ error: "Invalid signature" }, 401);
     }
 
@@ -176,7 +176,7 @@ githubApp.post("/webhook", async (c) => {
     // Extract repository information
     const repoId = event.repository?.id;
     if (!repoId) {
-      console.error("Missing repository information");
+      logger.error("Missing repository information");
       return c.json({ error: "Invalid webhook payload - no repository" }, 400);
     }
 
@@ -186,22 +186,22 @@ githubApp.post("/webhook", async (c) => {
     const branch = event.ref?.replace("refs/heads/", "");
 
     if (!commitHash) {
-      console.error("Missing commit information in push event");
+      logger.error("Missing commit information in push event");
       return c.json({ error: "Invalid webhook payload - no commit hash" }, 400);
     }
 
-    console.log(`Processing push: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
+    logger.log(`Processing push: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
 
     // Find the estate connected to this repository
     const estate = await getEstateByRepoId(c.var.db, repoId);
     if (!estate) {
-      console.log(`No estate found for repository ${repoId}`);
+      logger.log(`No estate found for repository ${repoId}`);
       return c.json({ message: "Repository not connected to any estate" }, 200);
     }
 
     // Only process if the push is to the configured branch
     if (branch && branch !== estate.connectedRepoRef) {
-      console.log(
+      logger.log(
         `Ignoring event on branch ${branch}, estate configured for ${estate.connectedRepoRef}`,
       );
       return c.json({ message: "Event not on configured branch" }, 200);
@@ -210,7 +210,7 @@ githubApp.post("/webhook", async (c) => {
     // Get the GitHub installation for this estate
     const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
     if (!githubInstallation) {
-      console.error(`No GitHub installation found for estate ${estate.id}`);
+      logger.error(`No GitHub installation found for estate ${estate.id}`);
       return c.json({ error: "GitHub installation not found" }, 500);
     }
 
@@ -246,7 +246,7 @@ githubApp.post("/webhook", async (c) => {
       status: "in_progress",
     });
   } catch (error) {
-    console.error("GitHub webhook error:", error);
+    logger.error("GitHub webhook error:", error);
     return c.json(
       {
         error: "Internal server error",

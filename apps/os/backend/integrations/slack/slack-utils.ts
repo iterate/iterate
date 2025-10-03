@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { getDb } from "../../db/client.ts";
 import { env } from "../../../env.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 /**
@@ -18,7 +18,7 @@ export async function sendNotificationToIterateSlack(
   const notificationEstateId = env.ITERATE_NOTIFICATION_ESTATE_ID;
 
   if (!notificationEstateId) {
-    console.warn("ITERATE_NOTIFICATION_ESTATE_ID not configured, skipping notification");
+    logger.warn("ITERATE_NOTIFICATION_ESTATE_ID not configured, skipping notification");
     return;
   }
 
@@ -28,7 +28,7 @@ export async function sendNotificationToIterateSlack(
   const slackToken = await getSlackAccessTokenForEstate(db, notificationEstateId);
 
   if (!slackToken) {
-    console.error("Slack access token not found for notification estate", {
+    logger.error("Slack access token not found for notification estate", {
       estateId: notificationEstateId,
     });
     return;

@@ -3,7 +3,7 @@ import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
 import jsonataLib from "jsonata/sync";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import type {
   ContextRule,
   ContextRuleMatcher,
@@ -362,7 +362,7 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       });
     });
   } catch (error) {
-    console.error(`Error reading files with pattern ${pattern}:`, error);
+    logger.error(`Error reading files with pattern ${pattern}:`, error);
     return [];
   }
 }
