@@ -284,8 +284,10 @@ export type WaitForEvent = {
   ): Promise<Selection>;
 };
 
-type TrialOutput = { scores: ExplainedScoreResult[] };
-type MultiTrialScorerOutput = { trials: { trialIndex: number; result: TrialOutput }[] };
+export type TrialOutput = { scores: ExplainedScoreResult[] };
+export type MultiTrialScorerOutput = {
+  trials: { trialIndex: number; trialName: string; result: TrialOutput }[];
+};
 
 /**
  * This function wraps evalite and adds braintrust logging:
@@ -302,7 +304,7 @@ export function evaliterate<TInput, TExpected>(
       input: TInput;
       braintrustSpanExportedId: string;
     }) => Promise<{ scores: ExplainedScoreResult[] }>;
-    scorers: Evalite.RunnerOpts<TInput, MultiTrialScorerOutput, TExpected>["scorers"];
+    scorers: Evalite.ScorerOpts<TInput, MultiTrialScorerOutput, TExpected>[];
     columns?: Evalite.RunnerOpts<TInput, MultiTrialScorerOutput, TExpected>["columns"];
     trialCount?: number; // Number of times to run each input (default: 1)
   },
@@ -337,10 +339,9 @@ export function evaliterate<TInput, TExpected>(
   ) => {
     const wrappedScorerFn: (
       result: Evalite.ScoreInput<TInput, TOutput, TExpected>,
-    ) => Promise<number | Evalite.UserProvidedScoreWithMetadata> = async (result) => {
+    ) => Promise<Evalite.UserProvidedScoreWithMetadata> = async (result) => {
       const _score = await scorerOpts.scorer(result);
-      const { score, metadata } =
-        typeof _score === "number" ? { score: _score, metadata: undefined } : _score;
+      const { score, metadata } = typeof _score === "number" ? { score: _score } : _score;
 
       const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan?.log({
@@ -349,7 +350,7 @@ export function evaliterate<TInput, TExpected>(
       });
       await braintrustSpan?.flush();
 
-      return score;
+      return { score, metadata };
     };
     return {
       ...scorerOpts,
@@ -370,31 +371,31 @@ export function evaliterate<TInput, TExpected>(
       parentSpan?.log({ input });
       await parentSpan?.flush();
 
-      const results = await Promise.all(
+      const trials = await Promise.all(
         Array.from({ length: resolvedTrialCount }, async (_, trialIndex) => {
+          const trialName = `trial_${trialIndex + 1}`;
           const trialSpan = parentSpan?.startSpan({
-            name: `trial-${trialIndex + 1}`,
+            name: trialName,
             type: "task",
           });
           trialSpan?.log({ input });
           await trialSpan?.flush();
           const braintrustSpanExportedId = (await trialSpan?.export()) || "";
 
-          input = { ...input, slug: `t${trialIndex + 1}-${(input as { slug: string }).slug}` };
+          input = { ...input, slug: `${(input as { slug: string }).slug}-${trialName}` };
           const output = await opts.task({ input, braintrustSpanExportedId });
           trialSpan?.log({ output });
           trialSpan?.end();
           await trialSpan?.flush();
-          return output;
+          return { trialIndex, trialName, result: output };
         }),
       );
 
-      const trials = results.map((t, i) => ({ trialIndex: i, result: t }));
       parentSpan?.log({ output: trials });
       await parentSpan?.flush();
 
       return { trials };
     },
-    scorers: opts.scorers, // .map(braintrustScorerWrapper) as typeof opts.scorers,
+    scorers: opts.scorers.map(braintrustScorerWrapper),
   });
 }

@@ -73,9 +73,9 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
     const score: ScoreResult & { messages: string[] } = {
+      messages: newMessages,
       score: 0,
       reason: "pending",
-      messages: newMessages,
     };
     // push score immediately so the scores array is in the right order, we'll overwrite the pending props later
     scores.push(score);

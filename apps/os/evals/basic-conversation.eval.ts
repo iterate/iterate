@@ -3,7 +3,13 @@ import { beforeAll } from "vitest";
 import { evalite } from "evalite";
 import dedent from "dedent";
 import * as YAML from "yaml";
-import { createTestHelper, getAuthedTrpcClient, multiTurnScorer, evaliterate } from "./helpers.ts";
+import {
+  createTestHelper,
+  getAuthedTrpcClient,
+  multiTurnScorer,
+  evaliterate,
+  type MultiTrialScorerOutput,
+} from "./helpers.ts";
 
 let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
 
@@ -65,7 +71,7 @@ if (false)
           value: dedent`
             \`\`\`
             - mean: ${R.meanBy(resultsAcrossTrials, (s) => s.score)}
-            - min: ${minBy(resultsAcrossTrials, (s) => s.score).score}
+            - min: ${minBy(resultsAcrossTrials, (s) => s.score)}
             - median: ${medianBy(resultsAcrossTrials, (s) => s.score)}
             - resultsAcrossTrials: ${JSON.stringify(resultsAcrossTrials)}
             \`\`\`
@@ -77,16 +83,12 @@ if (false)
 
 const multiTrialTask = async <T>(count: number, runTrial: (index: number) => Promise<T>) => {
   const results = await Promise.all(Array.from({ length: count }).map((_, i) => runTrial(i)));
-  const trials = results.map((r, i) => ({ trialIndex: i, result: r }));
+  const trials = results.map((r, i) => ({ trialIndex: i, trialName: `trial_${i + 1}`, result: r }));
   return { trials };
 };
 
-const minBy = <T>(arr: T[], fn: (t: T) => number) => R.sortBy(arr, fn)[0];
-const medianBy = <T>(arr: T[], fn: (t: T) => number) =>
-  R.meanBy(
-    R.sortBy(arr, fn).filter((_, i, { length }) => Math.abs(length / 2 - i) < 1),
-    fn,
-  );
+const minBy = <T>(arr: T[], fn: (t: T) => number) => arr.map(fn).sort().at(0);
+const medianBy = <T>(arr: T[], fn: (t: T) => number) => R.median(arr.map(fn));
 
 evaliterate("agent knows when to end their turn", {
   trialCount: 2 || Number(process.env.EVAL_TRIAL_COUNT) || undefined,
@@ -129,69 +131,69 @@ evaliterate("agent knows when to end their turn", {
   },
   scorers: [
     {
-      name: "one",
-      scorer: ({ output }) => ({
-        score: 1,
-        metadata: {
-          output,
-          reason: "uno",
-        },
-      }),
-    },
-    {
       name: "meanMean",
       scorer: ({ output }) => {
-        const turns = [
-          ...new Set(
-            output.trials.flatMap((t) =>
-              t.result.scores.map((_s, i) => ({ index: i, name: `turn ${i + 1}` })),
-            ),
-          ),
-        ];
+        const a = analyseTrials(output);
         return {
-          score: R.meanBy(output.trials, (t) => R.meanBy(t.result.scores, (s) => s.score)),
+          score: a.aggregates.meanOfMeans,
           metadata: fmt({
-            trialCount: output.trials.length,
-            turnMeans: Object.fromEntries(
-              turns.map(({ index, name }) => [
-                name,
-                R.meanBy(output.trials, (t) => t.result.scores[index]?.score ?? 0),
-              ]),
-            ),
-            trialMeans: Object.fromEntries(
-              output.trials.map((t) => [
-                `trial ${t.trialIndex}`,
-                R.meanBy(t.result.scores, (s) => s.score),
-              ]),
-            ),
+            aggregates: a.aggregates,
+            trials: a.trials,
           }),
         };
       },
     },
   ],
   columns: (x) => {
-    const turns = R.uniqueBy(
-      x.output.trials.flatMap((t) =>
-        t.result.scores.map((_s, i) => ({ index: i, name: `turn ${i + 1}` })),
-      ),
-      (t) => t.name,
-    );
-    return turns.map((turn) => {
-      const resultsAcrossTrials = x.output.trials.map((t) => t.result.scores[turn.index]);
-      return {
-        label: turn.name,
-        value: dedent`
-          \`\`\`
-          - mean: ${R.meanBy(resultsAcrossTrials, (s) => s.score)}
-          - min: ${minBy(resultsAcrossTrials, (s) => s.score).score}
-          - median: ${medianBy(resultsAcrossTrials, (s) => s.score)}
-          - resultsAcrossTrials: ${JSON.stringify(resultsAcrossTrials)}
-          \`\`\`
-        `,
-      };
-    });
+    const a = analyseTrials(x.output);
+    return a.turns.map((turn) => ({
+      label: turn.name,
+      value: fmt(turn),
+    }));
   },
-  // columns: multiTurnScorer.renderColumns,
 });
 
-const fmt = (x: any) => "```yaml\n" + YAML.stringify(x) + "\n```";
+const analyseTrials = (output: MultiTrialScorerOutput) => {
+  const turns = R.uniqueBy(
+    output.trials.flatMap((t) =>
+      t.result.scores.map((_s, i) => ({ index: i, name: `turn ${i + 1}` })),
+    ),
+    (t) => t.name,
+  ).map((turn) => {
+    const resultsAcrossTrials = output.trials.map((t) => t.result.scores[turn.index]);
+    return {
+      name: turn.name,
+      index: turn.index,
+      resultsAcrossTrials: Object.fromEntries(
+        resultsAcrossTrials.map((s, i) => [output.trials[i].trialName, s]),
+      ),
+      mean: R.meanBy(resultsAcrossTrials, (s) => s.score) || 0,
+      min: minBy(resultsAcrossTrials, (s) => s.score) || 0,
+      median: R.median(resultsAcrossTrials.map((s) => s.score)) || 0,
+    };
+  });
+
+  const trials = output.trials.map((trial) => {
+    return {
+      name: trial.trialName,
+      scores: trial.result.scores,
+      mean: R.meanBy(trial.result.scores, (s) => s.score) || 0,
+      min: minBy(trial.result.scores, (s) => s.score) || 0,
+      median: R.median(trial.result.scores.map((s) => s.score)) || 0,
+    };
+  });
+
+  const aggregates = {
+    meanOfMeans: R.meanBy(turns, (t) => t.mean) || 0,
+    medianOfMedians: R.median(trials.map((t) => t.median)) || 0,
+    minOfMins: minBy(trials, (t) => t.min) || 0,
+  };
+
+  return {
+    turns,
+    trials,
+    aggregates,
+  };
+};
+
+const fmt = (x: any) => "```yaml\n" + YAML.stringify(JSON.parse(JSON.stringify(x))) + "\n```";
