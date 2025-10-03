@@ -342,15 +342,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
         await tx
           .insert(schema.organizationUserMembership)
           .values(organizationMembershipsToUpsert)
-          .onConflictDoUpdate({
-            target: [
-              schema.organizationUserMembership.userId,
-              schema.organizationUserMembership.organizationId,
-            ],
-            set: {
-              role: sql`excluded.role`,
-            },
-          });
+          .onConflictDoNothing();
       }
 
       // Log sync results

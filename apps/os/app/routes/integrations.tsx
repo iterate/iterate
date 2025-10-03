@@ -2,13 +2,6 @@ import { ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "../components/ui/card.tsx";
 import { Badge } from "../components/ui/badge.tsx";
 import {
   Collapsible,
@@ -153,20 +146,16 @@ export default function Integrations() {
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[...Array(2)].map((_, i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader>
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
-                  <div>
-                    <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
-                    <div className="h-3 bg-gray-200 rounded w-32"></div>
-                  </div>
+            <div key={i} className="animate-pulse border rounded-lg p-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
+                <div>
+                  <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
+                  <div className="h-3 bg-gray-200 rounded w-32"></div>
                 </div>
-              </CardHeader>
-              <CardContent>
-                <div className="h-8 bg-gray-200 rounded w-full"></div>
-              </CardContent>
-            </Card>
+              </div>
+              <div className="h-8 bg-gray-200 rounded w-full"></div>
+            </div>
           ))}
         </div>
       </div>
@@ -201,8 +190,8 @@ export default function Integrations() {
       {!isLoading && !error && integrations && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {integrations.map((integration: any) => (
-            <Card key={integration.id} className="relative">
-              <CardHeader className="pb-4">
+            <div key={integration.id} className="relative border rounded-lg">
+              <div className="p-6 pb-4">
                 <div className="flex items-start justify-between">
                   <div className="flex items-center gap-3">
                     {integration.icon === "github" ? (
@@ -210,11 +199,9 @@ export default function Integrations() {
                         <Github className="w-6 h-6 text-white" />
                       </div>
                     ) : integration.icon === "slack" ? (
-                      <img
-                        src="/slack.png"
-                        alt={integration.name}
-                        className="w-12 h-12 object-contain"
-                      />
+                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
+                        <img src="/slack.svg" alt={integration.name} className="w-6 h-6" />
+                      </div>
                     ) : integration.icon === "google" ? (
                       <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
                         <svg className="w-6 h-6" viewBox="0 0 24 24">
@@ -242,16 +229,14 @@ export default function Integrations() {
                       </div>
                     )}
                     <div>
-                      <CardTitle className="text-lg">{integration.name}</CardTitle>
-                      <CardDescription className="text-sm">
-                        {integration.description}
-                      </CardDescription>
+                      <div className="text-lg font-semibold">{integration.name}</div>
+                      <div className="text-sm text-muted-foreground">{integration.description}</div>
                     </div>
                   </div>
                 </div>
-              </CardHeader>
+              </div>
 
-              <CardContent className="pt-0">
+              <div className="px-6 pb-6">
                 {integration.isConnected && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
                     {integration.isEstateWide && (
@@ -330,8 +315,8 @@ export default function Integrations() {
                     Connected on {new Date(integration.connectedAt).toLocaleDateString()}
                   </p>
                 )}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))}
         </div>
       )}

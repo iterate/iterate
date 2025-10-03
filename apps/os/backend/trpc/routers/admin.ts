@@ -1,9 +1,12 @@
 import { z } from "zod/v4";
 import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { waitUntil } from "cloudflare:workers";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
+import { syncSlackUsersInBackground } from "../../integrations/slack/slack.ts";
+import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -257,6 +260,39 @@ export const adminRouter = router({
     return {
       total: estates.length,
       results,
+    };
+  }),
+  syncSlackUsersForEstate: adminProcedure
+    .input(z.object({ estateId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const slackToken = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
+
+      if (!slackToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack token found for this estate",
+        });
+      }
+
+      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, input.estateId));
+
+      return { success: true };
+    }),
+  syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
+    const estates = await ctx.db.query.estate.findMany();
+
+    for (const estate of estates) {
+      const slackToken = await getSlackAccessTokenForEstate(ctx.db, estate.id);
+
+      if (!slackToken) {
+        continue;
+      }
+
+      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, estate.id));
+    }
+
+    return {
+      total: estates.length,
     };
   }),
 });

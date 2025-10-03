@@ -15,7 +15,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
@@ -744,7 +744,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Check if a user is a guest in the organization that owns this estate.
    * Returns true if the user is a guest, false otherwise.
    */
-  private async isUserGuest(userId: string): Promise<boolean> {
+  private async getUserRole(userId: string): Promise<UserRole | undefined> {
     const result = await this.db
       .select({
         role: schema.organizationUserMembership.role,
@@ -762,7 +762,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       )
       .limit(1);
 
-    return result[0]?.role === "guest";
+    return result[0]?.role;
   }
 
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
@@ -1108,12 +1108,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
-    const isGuest = await this.isUserGuest(input.onBehalfOfIterateUserId);
-    if (isGuest) {
+    const userRole = await this.getUserRole(input.onBehalfOfIterateUserId);
+    if (!userRole || userRole === "guest") {
       return {
         success: false,
         error:
-          "Guest users do not have permission to connect MCP servers. Please contact an admin or member of your organization for assistance.",
+          "Unknown or guest users do not have permission to connect MCP servers. Please contact an admin or member of your organization for assistance.",
       };
     }
 

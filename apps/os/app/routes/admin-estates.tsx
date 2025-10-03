@@ -1,13 +1,7 @@
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { MoreVertical } from "lucide-react";
 import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
 import { authClient } from "../lib/auth-client.ts";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card.tsx";
 import { Button } from "../components/ui/button.tsx";
 import {
   Table,
@@ -17,6 +11,12 @@ import {
   TableHeader,
   TableRow,
 } from "../components/ui/table.tsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "../components/ui/dropdown-menu.tsx";
 
 export default function AdminEstatesPage() {
   const trpc = useTRPC();
@@ -41,6 +41,18 @@ export default function AdminEstatesPage() {
   const rebuildAllMutation = useMutation({
     mutationFn: async () => {
       return trpcClient.admin.rebuildAllEstates.mutate();
+    },
+  });
+
+  const syncSlackUsersMutation = useMutation({
+    mutationFn: async (estateId: string) => {
+      return trpcClient.admin.syncSlackUsersForEstate.mutate({ estateId });
+    },
+  });
+
+  const syncAllSlackUsersMutation = useMutation({
+    mutationFn: async () => {
+      return trpcClient.admin.syncSlackUsersForAllEstates.mutate();
     },
   });
 
@@ -70,6 +82,18 @@ export default function AdminEstatesPage() {
     }
   };
 
+  const handleSyncSlackUsers = (estateId: string, estateName: string) => {
+    if (confirm(`Sync Slack users for estate "${estateName}"?`)) {
+      syncSlackUsersMutation.mutate(estateId);
+    }
+  };
+
+  const handleSyncAllSlackUsers = () => {
+    if (confirm(`Sync Slack users for ALL ${estates.length} estates? This may take a while.`)) {
+      syncAllSlackUsersMutation.mutate();
+    }
+  };
+
   return (
     <div className="container mx-auto p-6 space-y-6">
       <div className="flex items-center justify-between">
@@ -79,114 +103,135 @@ export default function AdminEstatesPage() {
             Manage all estates in the system ({estates.length} total)
           </p>
         </div>
-        <Button
-          onClick={handleRebuildAll}
-          variant="outline"
-          disabled={rebuildAllMutation.isPending}
-        >
-          {rebuildAllMutation.isPending ? "Rebuilding..." : "Rebuild All"}
-        </Button>
+        <div className="flex gap-2">
+          <Button
+            onClick={handleSyncAllSlackUsers}
+            variant="outline"
+            disabled={syncAllSlackUsersMutation.isPending}
+          >
+            {syncAllSlackUsersMutation.isPending ? "Syncing..." : "Sync All Slack Users"}
+          </Button>
+          <Button
+            onClick={handleRebuildAll}
+            variant="outline"
+            disabled={rebuildAllMutation.isPending}
+          >
+            {rebuildAllMutation.isPending ? "Rebuilding..." : "Rebuild All"}
+          </Button>
+        </div>
       </div>
 
-      {rebuildAllMutation.isSuccess && (
-        <Card className="bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
-          <CardHeader>
-            <CardTitle className="text-green-900 dark:text-green-100">
-              Rebuild All Complete
-            </CardTitle>
-            <CardDescription className="text-green-800 dark:text-green-200">
-              {rebuildAllMutation.data.total} estates processed
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-1 text-sm">
-              {rebuildAllMutation.data.results.map((result) => (
-                <div
-                  key={result.estateId}
-                  className={
-                    result.success
-                      ? "text-green-700 dark:text-green-300"
-                      : "text-red-700 dark:text-red-300"
-                  }
-                >
-                  {result.estateName}:{" "}
-                  {result.success
-                    ? "✓ Success"
-                    : `✗ ${"error" in result ? result.error : "Unknown error"}`}
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
+      {syncAllSlackUsersMutation.isSuccess && (
+        <div className="p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
+          <div className="font-semibold text-green-900 dark:text-green-100">
+            Sync All Slack Users Started
+          </div>
+          <div className="text-sm text-green-800 dark:text-green-200 mt-1">
+            {syncAllSlackUsersMutation.data.total} estates queued for syncing in background
+          </div>
+        </div>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>All Estates</CardTitle>
-          <CardDescription>List of all estates with their owners</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Estate Name</TableHead>
-                <TableHead>Estate ID</TableHead>
-                <TableHead>Organization</TableHead>
-                <TableHead>Owner</TableHead>
-                <TableHead>Repository</TableHead>
-                <TableHead>Updated</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
+      {rebuildAllMutation.isSuccess && (
+        <div className="p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
+          <div className="font-semibold text-green-900 dark:text-green-100">
+            Rebuild All Complete
+          </div>
+          <div className="text-sm text-green-800 dark:text-green-200 mt-1">
+            {rebuildAllMutation.data.total} estates processed
+          </div>
+          <div className="space-y-1 text-sm mt-3">
+            {rebuildAllMutation.data.results.map((result) => (
+              <div
+                key={result.estateId}
+                className={
+                  result.success
+                    ? "text-green-700 dark:text-green-300"
+                    : "text-red-700 dark:text-red-300"
+                }
+              >
+                {result.estateName}:{" "}
+                {result.success
+                  ? "✓ Success"
+                  : `✗ ${"error" in result ? result.error : "Unknown error"}`}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="border rounded-md">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Estate Name</TableHead>
+              <TableHead>Estate ID</TableHead>
+              <TableHead>Organization</TableHead>
+              <TableHead>Owner</TableHead>
+              <TableHead>Repository</TableHead>
+              <TableHead>Updated</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {estates.map((estate) => (
+              <TableRow key={estate.id}>
+                <TableCell className="font-medium">{estate.name}</TableCell>
+                <TableCell className="text-xs text-muted-foreground font-mono">
+                  {estate.id}
+                </TableCell>
+                <TableCell>{estate.organizationName}</TableCell>
+                <TableCell>{estate.ownerName || estate.ownerEmail || "No owner"}</TableCell>
+                <TableCell>
+                  {estate.connectedRepoId ? (
+                    <span className="text-xs text-muted-foreground">
+                      {estate.connectedRepoPath || "/"} @ {estate.connectedRepoRef || "main"}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">No repo</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {new Date(estate.updatedAt).toLocaleDateString()}
+                </TableCell>
+                <TableCell className="text-right">
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" size="sm">
+                        <MoreVertical className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={() => handleImpersonate(estate.ownerId)}
+                        disabled={!estate.ownerId || impersonateMutation.isPending}
+                      >
+                        Impersonate Owner
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => handleRebuild(estate.id, estate.name)}
+                        disabled={
+                          !estate.connectedRepoId ||
+                          rebuildMutation.isPending ||
+                          rebuildAllMutation.isPending
+                        }
+                      >
+                        Rebuild
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => handleSyncSlackUsers(estate.id, estate.name)}
+                        disabled={syncSlackUsersMutation.isPending}
+                      >
+                        Sync Slack Users
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {estates.map((estate) => (
-                <TableRow key={estate.id}>
-                  <TableCell className="font-medium">{estate.name}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground font-mono">
-                    {estate.id}
-                  </TableCell>
-                  <TableCell>{estate.organizationName}</TableCell>
-                  <TableCell>{estate.ownerName || estate.ownerEmail || "No owner"}</TableCell>
-                  <TableCell>
-                    {estate.connectedRepoId ? (
-                      <span className="text-xs text-muted-foreground">
-                        {estate.connectedRepoPath || "/"} @ {estate.connectedRepoRef || "main"}
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">No repo</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">
-                    {new Date(estate.updatedAt).toLocaleDateString()}
-                  </TableCell>
-                  <TableCell className="text-right space-x-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleImpersonate(estate.ownerId)}
-                      disabled={!estate.ownerId || impersonateMutation.isPending}
-                    >
-                      Impersonate Owner
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleRebuild(estate.id, estate.name)}
-                      disabled={
-                        !estate.connectedRepoId ||
-                        rebuildMutation.isPending ||
-                        rebuildAllMutation.isPending
-                      }
-                    >
-                      {rebuildMutation.isPending ? "..." : "Rebuild"}
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
     </div>
   );
 }

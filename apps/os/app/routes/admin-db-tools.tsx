@@ -2,13 +2,6 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
 import { useTRPC, trpcClient } from "../lib/trpc.ts";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Label } from "../components/ui/label.tsx";
@@ -57,48 +50,46 @@ export default function AdminDBToolsPage() {
         <p className="text-sm text-muted-foreground">Destructive operations</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Delete User</CardTitle>
-          <CardDescription>
+      <div className="space-y-4 border rounded-md p-6">
+        <div>
+          <div className="font-semibold mb-1">Delete User</div>
+          <div className="text-sm text-muted-foreground">
             Permanently delete a user and all associated organizations and estates.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <div className="flex gap-2">
-              <Input
-                id="email"
-                type="email"
-                placeholder="user@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && email && handleDelete()}
-              />
-              <Button variant="destructive" onClick={handleDelete} disabled={!email}>
-                Delete
-              </Button>
-            </div>
           </div>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="email">Email</Label>
+          <div className="flex gap-2">
+            <Input
+              id="email"
+              type="email"
+              placeholder="user@example.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && email && handleDelete()}
+            />
+            <Button variant="destructive" onClick={handleDelete} disabled={!email}>
+              Delete
+            </Button>
+          </div>
+        </div>
 
-          {error && (
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
+        {error && (
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
 
-          {result && (
-            <Alert>
-              <AlertDescription>
-                Deleted user {result.deletedUser} with {result.deletedOrganizations.length}{" "}
-                organizations and {result.deletedEstates.length} estates
-              </AlertDescription>
-            </Alert>
-          )}
-        </CardContent>
-      </Card>
+        {result && (
+          <Alert>
+            <AlertDescription>
+              Deleted user {result.deletedUser} with {result.deletedOrganizations.length}{" "}
+              organizations and {result.deletedEstates.length} estates
+            </AlertDescription>
+          </Alert>
+        )}
+      </div>
     </div>
   );
 }
