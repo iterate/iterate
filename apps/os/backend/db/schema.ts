@@ -4,6 +4,9 @@ import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
+export const UserRole = ["member", "admin", "owner", "guest"] as const;
+export type UserRole = (typeof UserRole)[number];
+
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
   updatedAt: timestamp()
@@ -45,9 +48,12 @@ export const session = pgTable("session", (t) => ({
   token: t.text().notNull().unique(),
   ipAddress: t.text(),
   userAgent: t.text(),
-  userId: t.text().notNull(),
+  userId: t
+    .text()
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
   // https://www.better-auth.com/docs/plugins/admin#schema
-  impersonatedBy: t.text(),
+  impersonatedBy: t.text().references(() => user.id, { onDelete: "cascade" }),
   ...withTimestamps,
 }));
 export const sessionRelations = relations(session, ({ one }) => ({
@@ -61,7 +67,10 @@ export const account = pgTable("account", (t) => ({
   id: iterateId("acc"),
   accountId: t.text().notNull(),
   providerId: t.text().notNull(),
-  userId: t.text().notNull(),
+  userId: t
+    .text()
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
   accessToken: t.text(),
   refreshToken: t.text(),
   idToken: t.text(),
@@ -94,7 +103,10 @@ export const dynamicClientInfo = pgTable(
   (t) => ({
     id: iterateId("dci"),
     providerId: t.text().notNull(),
-    userId: t.text().notNull(),
+    userId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
     clientId: t.text().notNull(),
     clientInfo: t.jsonb().$type<DynamicClientInfo>().notNull(),
     ...withTimestamps,
@@ -112,7 +124,7 @@ export const files = pgTable("files", (t) => ({
   fileSize: t.integer(), // Size in bytes
   mimeType: t.text(),
   openAIFileId: t.text(),
-  estateId: t.text(),
+  estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
   ...withTimestamps,
 }));
 export const filesRelations = relations(files, ({ one }) => ({
@@ -125,7 +137,10 @@ export const filesRelations = relations(files, ({ one }) => ({
 export const estate = pgTable("estate", (t) => ({
   id: iterateId("est"),
   name: t.text().notNull(),
-  organizationId: t.text().notNull(),
+  organizationId: t
+    .text()
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
   connectedRepoId: t.integer(),
   connectedRepoRef: t.text(),
   connectedRepoPath: t.text(),
@@ -160,8 +175,14 @@ export const estateAccountsPermissions = pgTable(
   "estate_accounts_permissions",
   (t) => ({
     id: iterateId("eap"),
-    estateId: t.text().notNull(),
-    accountId: t.text().notNull(),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    accountId: t
+      .text()
+      .notNull()
+      .references(() => account.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.estateId, t.accountId)],
@@ -185,7 +206,10 @@ export const providerUserMapping = pgTable(
   (t) => ({
     id: iterateId("pum"),
     providerId: t.text().notNull(),
-    internalUserId: t.text().notNull(),
+    internalUserId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
     externalId: t.text().notNull(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
@@ -204,7 +228,10 @@ export const providerEstateMapping = pgTable(
   (t) => ({
     id: iterateId("pem"),
     providerId: t.text().notNull(),
-    internalEstateId: t.text().notNull(),
+    internalEstateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
     externalId: t.text().notNull(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
@@ -222,10 +249,16 @@ export const organizationUserMembership = pgTable(
   "organization_user_membership",
   (t) => ({
     id: iterateId("member"),
-    organizationId: t.text().notNull(),
-    userId: t.text().notNull(),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    userId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
     role: t
-      .text({ enum: ["member", "admin", "owner", "guest"] })
+      .text({ enum: [...UserRole] })
       .notNull()
       .default("member"),
     ...withTimestamps,
@@ -250,7 +283,10 @@ export const agentInstance = pgTable(
   "agent_instance",
   (t) => ({
     id: iterateId("agnt"),
-    estateId: t.text().notNull(),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
     className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
@@ -280,7 +316,10 @@ export const agentInstanceRoute = pgTable(
   (t) => ({
     id: iterateId("ador"),
     routingKey: t.text().notNull(), // e.g. "slack:{threadTs}"
-    agentInstanceId: t.text().notNull(), // This is actually the `id` column
+    agentInstanceId: t
+      .text()
+      .notNull()
+      .references(() => agentInstance.id, { onDelete: "cascade" }), // This is actually the `id` column
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.routingKey, t.agentInstanceId)],
@@ -304,7 +343,10 @@ export const slackWebhookEvent = pgTable(
     type: t.text("type"),
     subtype: t.text("subtype"),
     user: t.text("user"),
-    estateId: t.text().notNull(),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
   (table) => [
@@ -327,7 +369,10 @@ export const iterateConfig = pgTable(
   (t) => ({
     id: iterateId("icfg"),
     config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
-    estateId: t.text().notNull(),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.estateId)],
@@ -347,7 +392,10 @@ export const builds = pgTable("builds", (t) => ({
   commitMessage: t.text().notNull(),
   iterateWorkflowRunId: t.text(),
   webhookIterateId: t.text().notNull(),
-  estateId: t.text().notNull(),
+  estateId: t
+    .text()
+    .notNull()
+    .references(() => estate.id, { onDelete: "cascade" }),
   completedAt: t.timestamp(),
   output: t.jsonb().$type<{ stdout?: string; stderr?: string; exitCode?: number }>(),
   ...withTimestamps,
@@ -365,7 +413,10 @@ export const mcpConnectionParam = pgTable(
   (t) => ({
     id: iterateId("mcp"),
     connectionKey: t.text().notNull(),
-    estateId: t.text().notNull(),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
     paramKey: t.text().notNull(),
     paramValue: t.text().notNull(),
     paramType: t.text({ enum: ["header", "query_param"] }).notNull(),

@@ -1,11 +1,7 @@
-import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";
+import { contextRulesFromFiles, defineConfig, matchers, tutorialRules } from "@iterate-com/sdk";
 
 const config = defineConfig({
   contextRules: [
-    {
-      key: "tutorial-rule-that-you-should-delete",
-      prompt: "In your first message, always mention pirates or some nautical thing.",
-    },
     // You can use "matchers" to conditionally apply rules
     // For example to only be active when certain MCP connections are present
     {
@@ -44,6 +40,7 @@ const config = defineConfig({
     // This file is "just typescript", so you can do whatever you want
     // e.g. structure your rules in markdown, too, and use a helper to load them
     ...contextRulesFromFiles("rules/**/*.md"),
+    ...tutorialRules,
   ],
 });
 export default config;

@@ -1,5 +1,4 @@
 import { getSandbox } from "@cloudflare/sandbox";
-import { typeid } from "typeid-js";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger as console } from "../tag-logger.ts";
 
@@ -8,7 +7,7 @@ export interface RunConfigOptions {
   githubToken: string;
   commitHash?: string;
   branch?: string;
-  workingDirectory?: string;
+  connectedRepoPath?: string;
   callbackUrl?: string;
   buildId?: string;
   estateId?: string;
@@ -53,38 +52,82 @@ async function runConfigInSandboxInternal(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const { githubRepoUrl, githubToken, commitHash, branch, workingDirectory, callbackUrl } = options;
+  const {
+    githubRepoUrl,
+    githubToken,
+    commitHash,
+    branch,
+    connectedRepoPath,
+    callbackUrl,
+    estateId,
+  } = options;
 
-  // Get sandbox instance
-  const sandboxId = typeid("build").toString();
+  // Retrieve the sandbox
+  const sandboxId = `agent-sandbox-${estateId}`;
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
+
+  // Ensure that the session directory exists
+  const sessionId = estateId;
+  // IMPORTANT: Randomize the session dir so build always works with the clean repo
+  const sessionDir = `/tmp/session-${estateId}-${Math.random().toString().slice(2)}`;
+  await sandbox.mkdir(sessionDir, { recursive: true });
+
+  // Create an isolated session
+  const sandboxSession = await sandbox.createSession({
+    id: sessionId,
+    cwd: sessionDir,
+    isolation: true,
+  });
 
   // Determine the checkout target and whether it's a commit hash
   const checkoutTarget = commitHash || branch || "main";
   const isCommitHash = Boolean(commitHash);
 
   // Prepare arguments as a JSON object
-  const buildArgs = {
+  const initArgs = {
+    sessionDir,
     githubRepoUrl,
     githubToken,
     checkoutTarget,
     isCommitHash,
-    workingDir: workingDirectory || "",
-    callbackUrl: callbackUrl || "",
-    buildId: options.buildId || "",
-    estateId: options.estateId || "",
   };
-
   // Escape the JSON string for shell
-  const jsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
-
-  // Run the Node.js script with JSON arguments
-  const command = `node /tmp/build-script.ts '${jsonArgs}'`;
-
-  // Execute the script
-  const result = await sandbox.exec(command, {
+  const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+  // Init the sandbox (ignore any errors)
+  const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+  const resultInit = await sandboxSession.exec(commandInit, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
+  if (!resultInit.success) {
+    console.error({
+      message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+      result: resultInit,
+    });
+  }
+
+  // Prepare arguments as a JSON object
+  const buildArgs = {
+    // Ensure we use a clean clone
+    sessionDir,
+    connectedRepoPath,
+    callbackUrl: callbackUrl || "",
+    buildId: options.buildId || "",
+    estateId,
+  };
+  // Escape the JSON string for shell
+  const buildJsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
+  // Run the build in sandbox
+  const commandBuild = `node /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
+  const resultBuild = await sandboxSession.exec(commandBuild, {
+    timeout: 360 * 1000, // 360 seconds total timeout
+  });
+
+  if (!resultBuild.success) {
+    console.error({
+      message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
+      result: resultInit,
+    });
+  }
 
   // If callback URL is provided, the script will handle the callback
   // Otherwise, return the result directly
@@ -103,12 +146,12 @@ async function runConfigInSandboxInternal(
 
   // Return the result directly if no callback
   return {
-    success: result.exitCode === 0,
-    message: result.exitCode === 0 ? "Build completed successfully" : "Build failed",
+    success: resultBuild.success,
+    message: resultBuild.success ? "Build completed successfully" : "Build failed",
     output: {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
+      stdout: resultBuild.stdout,
+      stderr: resultBuild.stderr,
+      exitCode: resultBuild.exitCode,
     },
   };
 }

@@ -12,14 +12,10 @@ export function LoginProviders() {
     try {
       console.log("🚀 Attempting Google sign-in...");
 
-      const result = await authClient.signIn.social({
+      await authClient.signIn.social({
         provider: "google",
         callbackURL: redirectUrl || "/", // Redirect to home after login
       });
-
-      if (result.error) {
-        toast.error("Failed to sign in with Google");
-      }
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }
@@ -30,16 +26,18 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
         query: {
-          callbackURL: redirectUrl || "/",
+          // /onboarding-after-slack-login will either redirect the user to a nice page with onboarding tasks,
+          // or it will redirect the user to the home page (if they already set up a github repo)
+          callbackURL: redirectUrl || "/onboarding-after-slack-login",
         },
       });
 
-      if (result.error || !result.data?.url) {
+      if (!result || !("url" in result)) {
         toast.error("Failed to sign in with Slack");
         return;
       }
 
-      window.location.href = result.data.url.toString();
+      window.location.href = result.url.toString();
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }
@@ -53,7 +51,7 @@ export function LoginProviders() {
     if (!credentials) return;
     const { email, password } = parseCredentials(credentials);
     const result = await authClient.signIn.email({ email, password });
-    window.location.href = result.data?.url ?? "/";
+    window.location.href = result?.url ?? "/";
   };
 
   return (

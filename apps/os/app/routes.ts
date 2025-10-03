@@ -8,6 +8,15 @@ export default [
   // Root index - will handle redirect logic to org/estate routes
   index("./routes/root-redirect.tsx"),
 
+  // Admin routes (admin only, no estate context required)
+  route("/admin", "./routes/admin-layout.tsx", [
+    index("./routes/admin-redirect.tsx"),
+    route("session-info", "./routes/admin-session-info.tsx"),
+    route("slack-notification", "./routes/admin-slack-notification.tsx"),
+    route("db-tools", "./routes/admin-db-tools.tsx"),
+    route("estates", "./routes/admin-estates.tsx"),
+  ]),
+
   // Protected routes with org/estate prefix
   route(":organizationId/:estateId", "./routes/estate-layout.tsx", [
     index("./routes/home.tsx"),

@@ -1,5 +1,6 @@
 import Logo from "./Logo.tsx";
 import Navigation from "./Navigation.tsx";
+import { GitHubIcon } from "./Icons.tsx";
 
 export default function SiteHeader() {
   return (
@@ -9,8 +10,17 @@ export default function SiteHeader() {
           <div className="flex items-center gap-8">
             <Logo />
           </div>
-          <div className="flex items-center">
+          <div className="flex items-center gap-4">
             <Navigation />
+            <a
+              href="https://github.com/iterate-com/iterate"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-gray-600 hover:text-gray-900 transition-colors"
+              aria-label="View source on GitHub"
+            >
+              <GitHubIcon size={20} />
+            </a>
           </div>
         </nav>
       </div>

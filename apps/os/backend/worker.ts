@@ -2,9 +2,11 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
+import { PostHog } from "posthog-node";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromURLHandler, getFileHandler } from "./file-handlers.ts";
@@ -38,6 +40,36 @@ export type Variables = {
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+// Error tracking with PostHog
+app.onError((err, c) => {
+  // Log the error
+  console.error("Unhandled error:", err);
+
+  // Track error in PostHog (non-blocking)
+  waitUntil(
+    (async () => {
+      const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+        host: "https://eu.i.posthog.com",
+      });
+
+      // Get user ID if available
+      const userId = c.get("session")?.user?.id || "anonymous";
+
+      posthog.captureException(err, userId, {
+        path: c.req.path,
+        method: c.req.method,
+        url: c.req.url,
+        errorName: err.name,
+      });
+
+      await posthog.shutdown();
+    })(),
+  );
+
+  // Return error response
+  return c.json({ error: "Internal Server Error" }, 500);
+});
 
 app.use("*", async (c, next) => {
   const db = getDb();
@@ -95,6 +127,31 @@ app.all("/api/trpc/*", (c) => {
         input,
         stack: error.stack,
       });
+
+      // Track error in PostHog (non-blocking)
+      waitUntil(
+        (async () => {
+          const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+            host: "https://eu.i.posthog.com",
+          });
+
+          const userId = c.var.session?.user?.id || "anonymous";
+          const httpCode = getHTTPStatusCodeFromError(error);
+          if (httpCode < 500) {
+            return;
+          }
+          posthog.captureException(error, userId, {
+            trpcPath: path,
+            trpcType: type,
+            trpcCode: error.code,
+            trpcInput: input,
+            method: c.req.method,
+            url: c.req.url,
+          });
+
+          await posthog.shutdown();
+        })(),
+      );
     },
   });
 });
@@ -157,11 +214,11 @@ app.post(
         .string()
         .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
         .optional(),
-      workingDirectory: z
+      connectedRepoPath: z
         .string()
         .refine(
           (val) => !val || !val.startsWith("/"),
-          "Working directory should be a relative path within the repository",
+          "Directory to use within the connected repository",
         )
         .optional(),
     }),

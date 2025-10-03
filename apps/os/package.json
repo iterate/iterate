@@ -6,7 +6,7 @@
     "build": "react-router build",
     "cf-typegen": "wrangler types --no-include-runtime",
     "deploy": "doppler run -- pnpm run build && doppler run -- wrangler deploy",
-    "dev": "./scripts/dev-wrapper.sh",
+    "dev": "pnpm iterate dev start",
     "eval": "doppler run -- evalite run-once && tsx evals/evalite-exporter.ts",
     "eval:serve": "pnpx serve ignoreme/evalite-ui",
     "eval:watch": "doppler run -- evalite watch",
@@ -58,6 +58,7 @@
     "jsonata": "github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337",
     "lucide-react": "^0.544.0",
     "next-themes": "^0.4.6",
+    "octokit": "^5.0.3",
     "openai": "^5.20.3",
     "p-queue": "^8.1.1",
     "p-suite": "^0.3.0",
@@ -113,6 +114,6 @@
     "vite": "^7.1.5",
     "vite-tsconfig-paths": "^5.1.4",
     "vitest": "^3.2.4",
-    "wrangler": "^4.37.0"
+    "wrangler": "^4.41.0"
   }
 }

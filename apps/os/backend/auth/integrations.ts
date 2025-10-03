@@ -175,6 +175,7 @@ export const integrationsPlugin = () =>
           method: "GET",
           query: z.object({
             callbackURL: z.string().default("/"),
+            mode: z.enum(["redirect", "json"]).default("json"),
           }),
         },
         async (ctx) => {
@@ -207,6 +208,11 @@ export const integrationsPlugin = () =>
               user_scope: SLACK_USER_AUTH_SCOPES.join(","),
             },
           });
+
+          // If mode is redirect, redirect directly to OAuth URL
+          if (ctx.query.mode === "redirect") {
+            return ctx.redirect(url.toString());
+          }
 
           return ctx.json({ url });
         },
@@ -414,8 +420,6 @@ export const integrationsPlugin = () =>
               });
             }
 
-            waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
-
             // When a user is created, an estate and organization is created automatically via hooks
             // SO we can be sure that the user has only that estate
             const memberships = await db.query.organizationUserMembership.findFirst({
@@ -458,7 +462,6 @@ export const integrationsPlugin = () =>
               return ctx.json({ error: "Can't find the existing user to link to" });
             }
             user = linkedUser.user;
-            waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
           }
 
           if (!user) {
@@ -489,6 +492,9 @@ export const integrationsPlugin = () =>
           if (!estateId) {
             return ctx.json({ error: "Failed to get estate id" });
           }
+
+          // Sync Slack users to the organization in the background
+          waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
 
           await db
             .insert(schema.estateAccountsPermissions)

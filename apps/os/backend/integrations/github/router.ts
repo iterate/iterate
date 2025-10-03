@@ -232,7 +232,7 @@ githubApp.post("/webhook", async (c) => {
       commitMessage: commitMessage || "No commit message",
       repoUrl,
       installationToken,
-      workingDirectory: estate.connectedRepoPath || undefined,
+      connectedRepoPath: estate.connectedRepoPath || undefined,
       branch: estate.connectedRepoRef || "main",
       webhookId: event.id || `webhook-${Date.now()}`,
       workflowRunId: event.workflow_run?.id?.toString(),

@@ -3,7 +3,7 @@
 import dedent from "dedent";
 import { z } from "zod/v4";
 import { SearchRequest } from "../default-tools.ts";
-import { defineRule, matchers } from "./context.ts";
+import { defineRules, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { createDOToolFactory } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -170,8 +170,8 @@ const defaultSlackAgentPrompt = dedent`
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
 `;
-export const defaultContextRules = async () => [
-  defineRule({
+export const defaultContextRules = defineRules([
+  {
     key: "@iterate-com/slack-default-context-rules",
     prompt: defaultSlackAgentPrompt,
     match: matchers.forAgentClass("SlackAgent"),
@@ -209,7 +209,7 @@ export const defaultContextRules = async () => [
         ),
       }),
     ],
-  }),
+  },
   {
     key: "using-linear",
     prompt: dedent`
@@ -245,4 +245,20 @@ export const defaultContextRules = async () => [
     `,
     match: matchers.hasMCPConnection("mcp.notion.com"),
   },
-];
+  {
+    key: "sandbox-starting",
+    prompt: dedent`
+      The sandbox is currently starting up. This takes approximately 10 seconds.
+      When you run exec commands, the sandbox will automatically be initialized if it's not already running.
+    `,
+    match: matchers.sandboxStatus("starting"),
+  },
+  {
+    key: "sandbox-attached",
+    prompt: dedent`
+      The sandbox is currently running and attached.
+      You can execute commands immediately using the exec tool.
+    `,
+    match: matchers.sandboxStatus("attached"),
+  },
+]);
