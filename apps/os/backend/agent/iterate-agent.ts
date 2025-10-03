@@ -1415,8 +1415,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return _resultExec;
     };
 
-    console.log("TO-REMOVE-LATER: checking if sandbox is running");
-
     // If sandbox is not ready, start it, and schedule exec after it boots up.
     // NOTE: according to the exposed API this should be the correct way to
     //       check if the sandbox is running and start it up if it isnt'. But
@@ -1432,8 +1430,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           .startAndWaitForPorts(3000) // default sandbox port
           .then(execInSandbox)
           .then((resultExec) => {
-            console.log("TO-REMOVE-LATER: received exec result in callback");
-
             // Inject a tool call event that will be processed by the agent
             // TODO: this doesn't work
             (this as any).addEvent({
@@ -1458,8 +1454,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             });
           }),
       );
-
-      console.log("TO-REMOVE-LATER: sandbox is not yet running, so we wait for it to boot up");
 
       // TODO: this doesn't work
       return {
