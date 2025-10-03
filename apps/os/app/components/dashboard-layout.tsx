@@ -13,13 +13,14 @@ import {
   Moon,
   Monitor,
   Shield,
+  CreditCard,
 } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { setSelectedEstate } from "../lib/estate-cookie.ts";
-import { useEstateId, useEstateUrl, useOrganizationId } from "../hooks/use-estate.ts";
+import { useEstateUrl, useOrganizationId, useOrganizationUrl } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
   Sidebar,
@@ -47,7 +48,7 @@ import {
 } from "../components/ui/dropdown-menu.tsx";
 import { useImpersonation } from "./impersonate.tsx";
 
-const navigation = [
+const estateNavigation = [
   {
     title: "Platform",
     items: [
@@ -63,7 +64,7 @@ const navigation = [
       { title: "Start Slack Agent", icon: MessageSquarePlus, path: "agents/start-slack" },
     ],
   },
-];
+] as const;
 
 interface Estate {
   id: string;
@@ -236,12 +237,58 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-  const getEstateUrl = useEstateUrl();
-  const estateId = useEstateId();
+  const params = useParams();
   const organizationId = useOrganizationId();
+  const orgUrl = useOrganizationUrl();
+  const getEstateUrl = useEstateUrl();
+  const estateId = params.estateId || "";
+  const isEstateContext = Boolean(estateId);
   const ws = useOrganizationWebSocket(organizationId, estateId);
   const trpc = useTRPC();
   const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
+
+  const estatesInOrg = (estates || []).filter((e: any) => e.organizationId === organizationId);
+  const organizations = Array.from(
+    new Map((estates || []).map((e: any) => [e.organizationId, { id: e.organizationId, name: e.organizationName }])).values(),
+  );
+
+  function OrganizationSwitcher() {
+    const navigate = useNavigate();
+    return (
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
+                <Building2 className="size-4" />
+                <span className="truncate">Organization</span>
+                <ChevronsUpDown className="ml-auto size-4" />
+              </SidebarMenuButton>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent className="w-56" side="bottom" align="start">
+              <DropdownMenuLabel>Switch organization</DropdownMenuLabel>
+              {organizations.map((org) => (
+                <DropdownMenuItem
+                  key={org.id}
+                  onClick={() => {
+                    const firstEstate = (estates || []).find((e: any) => e.organizationId === org.id);
+                    if (firstEstate) {
+                      navigate(`/${org.id}/${firstEstate.id}`);
+                    } else {
+                      navigate(`/${org.id}/settings`);
+                    }
+                  }}
+                >
+                  <span>{org.name}</span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    );
+  }
 
   return (
     <SidebarProvider defaultOpen={true}>
@@ -263,9 +310,65 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
+              <OrganizationSwitcher />
             </SidebarHeader>
 
-            {navigation.map((section) => (
+            {/* Organization-level navigation */}
+            <SidebarGroup>
+              <SidebarGroupLabel>Organization</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith("/settings")}> 
+                      <Link to={orgUrl("settings")}>
+                        <Settings className="size-4" />
+                        <span>Settings</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith("/members")}>
+                      <Link to={orgUrl("members")}>
+                        <Users className="size-4" />
+                        <span>Members</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith("/billing")}>
+                      <Link to={orgUrl("billing")}>
+                        <CreditCard className="size-4" />
+                        <span>Billing</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {/* Estates list */}
+            {estatesInOrg.length > 0 && (
+              <SidebarGroup>
+                <SidebarGroupLabel>Estates</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {estatesInOrg.map((estate: any) => (
+                      <SidebarMenuItem key={estate.id}>
+                        <SidebarMenuButton asChild isActive={location.pathname.includes(`/${estate.id}/`)}>
+                          <Link to={`/${organizationId}/${estate.id}`}>
+                            <Building2 className="size-4" />
+                            <span>{estate.name}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            )}
+
+            {/* Estate-level navigation only when in an estate context */}
+            {isEstateContext && estateNavigation.map((section) => (
               <SidebarGroup key={section.title}>
                 <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
                 <SidebarGroupContent>

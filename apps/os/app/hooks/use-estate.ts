@@ -43,7 +43,7 @@ export function useOrganizationId(): string {
 
   if (!organizationId) {
     throw new Error(
-      "useOrganizationId() can only be used on pages with organization ID in the URL path (/:organizationId/:estateId/*)",
+      "useOrganizationId() can only be used on pages with organization ID in the URL path (/:organizationId/*)",
     );
   }
 
@@ -68,5 +68,22 @@ export function useEstateUrl() {
 
     // Return the full path with org and estate
     return `/${organizationId}/${estateId}${cleanPath ? `/${cleanPath}` : ""}`;
+  };
+}
+
+// Hook to format navigation URLs within an organization context (no estate required)
+export function useOrganizationUrl() {
+  const params = useParams();
+  const organizationId = params.organizationId;
+
+  return (path: string) => {
+    if (!organizationId) {
+      throw new Error(
+        "useOrganizationUrl() can only be used on pages with organization ID in the URL path (/:organizationId/*)",
+      );
+    }
+
+    const cleanPath = path.startsWith("/") ? path.slice(1) : path;
+    return `/${organizationId}${cleanPath ? `/${cleanPath}` : ""}`;
   };
 }
