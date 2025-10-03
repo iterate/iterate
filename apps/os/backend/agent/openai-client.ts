@@ -16,14 +16,14 @@ export async function openAIProvider(opts: {
     POSTHOG_PUBLIC_KEY?: string;
   };
   posthog?: {
-    estateName: string;
-    environmentName: string;
+    projectName: string;
     traceId: string;
   };
   braintrust?: {
     projectName?: string;
     getBraintrustParentSpanExportedId: () => Promise<string>;
   };
+  estateName: string;
 }): Promise<OpenAI> {
   const { env } = opts;
 
@@ -38,7 +38,7 @@ export async function openAIProvider(opts: {
     invariant(env.POSTHOG_PUBLIC_KEY, "POSTHOG_PUBLIC_KEY is missing from environment");
     const posthogClient = new PosthogCloudflare(
       { waitUntil },
-      { estateName: opts.posthog.estateName, environmentName: opts.posthog.environmentName },
+      { estateName: opts.estateName, projectName: opts.posthog.projectName },
     );
     openai = posthogOpenAIWrapper(openai, posthogClient, opts.posthog);
   }
