@@ -1351,22 +1351,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
     const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
 
-    // Fetch repository details from GitHub API
-    const repoResponse = await fetch(
-      `https://api.github.com/repositories/${estate.connectedRepoId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${githubToken}`,
-          "User-Agent": "Iterate OS",
-        },
-      },
-    );
-
-    if (!repoResponse.ok) {
-      throw new Error(`Failed to fetch repository details: ${repoResponse.statusText}`);
-    }
-
-    const repoData = (await repoResponse.json()) as { html_url: string };
+    // Fetch repository details using Octokit
+    const { Octokit } = await import("octokit");
+    const octokit = new Octokit({ auth: githubToken });
+    const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
+      repository_id: estate.connectedRepoId,
+    });
     const githubRepoUrl = repoData.html_url;
     const branch = estate.connectedRepoRef || "main";
     const commitHash = undefined; // Use the latest commit on the branch
