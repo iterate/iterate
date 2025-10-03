@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
@@ -135,7 +136,10 @@ app.all("/api/trpc/*", (c) => {
           });
 
           const userId = c.var.session?.user?.id || "anonymous";
-
+          const httpCode = getHTTPStatusCodeFromError(error);
+          if (httpCode < 500) {
+            return;
+          }
           posthog.captureException(error, userId, {
             trpcPath: path,
             trpcType: type,
