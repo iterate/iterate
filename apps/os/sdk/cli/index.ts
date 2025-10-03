@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
-import { createCli, parseRouter } from "trpc-cli";
+import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { t } from "./config.ts";
