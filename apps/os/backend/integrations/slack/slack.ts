@@ -260,7 +260,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       });
 
       if (!estate) {
-        console.error(`Estate ${estateId} not found`);
+        logger.error(`Estate ${estateId} not found`);
         return;
       }
 
@@ -333,7 +333,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       }
 
       // Step 4: Upsert organization memberships
-      console.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
+      logger.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
 
       if (organizationMembershipsToUpsert.length > 0) {
         await tx

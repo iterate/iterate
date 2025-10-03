@@ -388,7 +388,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, user either doesn't exist or doesn't have access to this estate
     if (!result[0]) {
-      console.info(
+      logger.info(
         `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
       );
       return [];

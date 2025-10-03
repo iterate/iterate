@@ -1404,7 +1404,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
-        console.error({
+        logger.error({
           message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
           result: resultInit,
         });
@@ -1420,7 +1420,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!_resultExec.success) {
-        console.error({
+        logger.error({
           message: `Error running \`${commandExec}\` in sandbox`,
           result: _resultExec,
         });
