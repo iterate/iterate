@@ -38,6 +38,11 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     scoringError = err;
   });
 
+  const scoreManually = async (newMessages: string[], score: { score: number; reason: string }) => {
+    conversation.push(...newMessages);
+    scores.push({ ...score, messages: newMessages });
+  };
+
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
     const score: ScoreResult = { score: 0, reason: "pending", messages: newMessages };
@@ -82,6 +87,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
       if (scoringError) throw scoringError;
       scoringQueue.add(() => scoreTurn(...args));
     },
+    scoreManually,
     conversation,
   };
 }
@@ -121,10 +127,22 @@ const resultScorers = {
 };
 
 const renderColumns = (result: { output: ScoreOutput }) =>
-  result.output.scores.map((s, i) => ({
-    label: `turn ${i + 1}`,
-    value: [...s.messages, `[${s.score}%] ${s.reason}`].join("\n\n"),
-  }));
+  [
+    ...result.output.scores.map((s, i) => ({
+      label: `turn ${i + 1}`,
+      value: [...s.messages, `[${s.score}%]\n${s.reason}`].join("\n\n"),
+    })),
+    {
+      label: "Links",
+      value: Object.entries(result.output)
+        .flatMap(([k, s]: [string, unknown]) => {
+          if (typeof s !== "string") return [];
+          if (s.startsWith("http")) return [`- [${k}](${s})`];
+          return [`- ${s}`];
+        })
+        .join("\n"),
+    },
+  ].filter((item) => item.value);
 
 export const multiTurnScorer = Object.assign(_multiTurnScorer, {
   ...resultScorers,

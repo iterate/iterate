@@ -16,13 +16,15 @@ import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
 import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
-  contextRules: ContextRule[];
+  iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import { tutorialRules } from "../../sdk/tutorial.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -190,9 +192,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (!record) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
-    const contextRules = await this.getRulesFromDB(db, record.estateId);
+    const iterateConfig = await this.getIterateConfigFromDB(db, record.estateId);
 
-    return this.getStubFromDatabaseRecord({ ...record, contextRules });
+    return this.getStubFromDatabaseRecord({ ...record, iterateConfig });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -217,7 +219,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       matchingAgents.map((record) =>
         this.getStubFromDatabaseRecord({
           ...record,
-          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
+          iterateConfig: record.estate.iterateConfigs[0].config ?? {},
         }),
       ),
     );
@@ -267,9 +269,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
     }
-    const contextRules = await this.getRulesFromDB(db, estateId);
+    const iterateConfig = await this.getIterateConfigFromDB(db, estateId);
 
-    return this.getStubFromDatabaseRecord({ ...record, contextRules });
+    return this.getStubFromDatabaseRecord({ ...record, iterateConfig });
   }
 
   // Get or create stub by route
@@ -286,14 +288,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: eq(agentInstanceRoute.routingKey, route),
       with: { agentInstance: true },
     });
-    const contextRules = await this.getRulesFromDB(db, estateId);
+    const iterateConfig = await this.getIterateConfigFromDB(db, estateId);
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
+      return this.getStubFromDatabaseRecord({ ...existingAgent, iterateConfig });
     }
 
     // No existing agent for this route, create one with route
@@ -324,15 +326,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     return this.getStubFromDatabaseRecord({
       ...record,
-      contextRules,
+      iterateConfig,
     });
   }
 
-  static async getRulesFromDB(db: DB, estateId: string): Promise<ContextRule[]> {
+  static async getIterateConfigFromDB(db: DB, estateId: string): Promise<IterateConfig> {
     const config = await db.query.iterateConfig.findFirst({
       where: eq(schema.iterateConfig.estateId, estateId),
     });
-    return config?.config?.contextRules ?? [];
+    return config?.config ?? {};
   }
 
   protected db: DB;
@@ -715,15 +717,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    const defaultRules = await defaultContextRules();
     // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
     // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
     //   milliseconds: 250,
     //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
-    const rulesFromDb = [] as ContextRule[];
-    const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
+    const rules = [
+      ...defaultContextRules,
+      // If this.databaseRecord.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
+      // That means we want to pull in the tutorial rules
+      ...(this.databaseRecord.iterateConfig.contextRules || tutorialRules),
+    ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
       if (seenIds.has(rule.key)) {
@@ -817,7 +822,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Generic handler for scheduled reminders. This method will be called by the scheduler.
    */
   async handleReminder(data: { iterateReminderId: string }) {
-    console.log(`Executing reminder: ${data.iterateReminderId}`);
+    console.info(`Executing reminder: ${data.iterateReminderId}`);
 
     const reminder = this.state.reminders?.[data.iterateReminderId];
     if (!reminder) {
@@ -920,7 +925,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   ping() {
     return { message: "pong back at you!" };
   }
-  async flexibleTestTool(input: Inputs["flexibleTestTool"]) {
+  async flexibleTestTool({ params: input }: Inputs["flexibleTestTool"]) {
     switch (input.behaviour) {
       case "slow-tool": {
         const start = input.recordStartTime ? new Date().toISOString() : undefined;
@@ -959,7 +964,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
-      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
     };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {

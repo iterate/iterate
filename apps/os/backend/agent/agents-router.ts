@@ -110,7 +110,7 @@ export const agentsRouter = router({
       // const rulesFromDb = dbRules.map((r) => r.serializedRule);
       const rulesFromDb: z.infer<typeof ContextRule>[] = [];
       // Merge and dedupe rules by slug, preferring the first occurrence (defaultContextRules first)
-      const allRules = [...(await defaultContextRules()), ...rulesFromDb];
+      const allRules = [...defaultContextRules, ...rulesFromDb];
       const seenKeys = new Set<string>();
       const dedupedRules = allRules.filter((rule) => {
         if (typeof rule.key !== "string") {
@@ -143,6 +143,10 @@ export const agentsRouter = router({
     .query(async ({ ctx }) => {
       return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
     }),
+
+  getAgentDebugURL: agentStubProcedure.query(async ({ ctx }) => {
+    return ctx.agent.getAgentDebugURL();
+  }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
     .meta({ description: "Set the braintrust span exported id for an agent instance" })

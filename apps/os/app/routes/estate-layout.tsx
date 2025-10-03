@@ -1,11 +1,14 @@
-import { Outlet, redirect, isRouteErrorResponse, useRouteError } from "react-router";
+import { Outlet, redirect, isRouteErrorResponse, useRouteError, useParams } from "react-router";
 import { AlertCircle, Home } from "lucide-react";
+import { useMutation } from "@tanstack/react-query";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserEstateAccess } from "../../backend/trpc/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx";
+import { authClient } from "../lib/auth-client.ts";
+import { useTRPCClient } from "../lib/trpc.ts";
 import type { Route } from "./+types/estate-layout";
 
 // Server-side loader that checks estate access
@@ -75,6 +78,10 @@ export default function EstateLayout() {
 // Error boundary to display access errors nicely
 export function ErrorBoundary() {
   const error = useRouteError();
+  const params = useParams();
+  const { data: session } = authClient.useSession();
+  const trpcClient = useTRPCClient();
+  const estateId = params.estateId;
 
   let title: string;
   let message: string;
@@ -90,6 +97,24 @@ export function ErrorBoundary() {
     message = "Unknown error";
   }
 
+  const impersonateOwner = useMutation({
+    mutationFn: async () => {
+      if (!estateId) {
+        throw new Error("Missing estate identifier");
+      }
+
+      const owner = await trpcClient.admin.getEstateOwner.query({ estateId });
+      await authClient.admin.impersonateUser({ userId: owner.userId });
+
+      return owner;
+    },
+    onSuccess: () => {
+      window.location.href = "/";
+    },
+  });
+
+  const isAdmin = session?.user?.role === "admin";
+
   return (
     <DashboardLayout>
       <div className="flex items-center justify-center min-h-[calc(100vh-8rem)] p-4">
@@ -103,13 +128,22 @@ export function ErrorBoundary() {
           <CardContent>
             <p className="text-sm text-muted-foreground text-center">{message}</p>
           </CardContent>
-          <CardFooter className="flex justify-center">
+          <CardFooter className="flex flex-wrap justify-center gap-2">
             <Button asChild>
               <a href="/">
                 <Home className="mr-2 h-4 w-4" />
                 Go to Home
               </a>
             </Button>
+            {isAdmin && estateId && (
+              <Button
+                variant="outline"
+                onClick={() => impersonateOwner.mutate()}
+                disabled={impersonateOwner.isPending}
+              >
+                {impersonateOwner.isPending ? "Impersonating..." : "Impersonate Estate Owner"}
+              </Button>
+            )}
           </CardFooter>
         </Card>
       </div>
