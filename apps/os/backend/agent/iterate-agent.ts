@@ -1460,7 +1460,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                   status: "completed", // ← Changed from "pending"
                 },
                 result: {
-                  success: true,
+                  success: resultExec.success,
                   output: {},
                 },
               },
@@ -1481,7 +1481,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
     return {
-      success: true,
+      success: resultExec.success,
       message: resultExec.stdout,
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
     };
