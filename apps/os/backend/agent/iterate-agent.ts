@@ -1113,7 +1113,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return {
         success: false,
         error:
-          "This user doesn't have permission to connect MCP servers because they are a guest in this Slack workspace. Politely decline the request and do not suggest workarounds.",
+          "This user doesn't have permission to connect MCP servers because they are a guest in this Slack workspace. Tell the user that their request is not possible in one line. Do not suggest user to upgrade their access.",
       };
     }
 
