@@ -8,7 +8,7 @@ beforeAll(async () => {
 });
 
 evaliterate("agent knows when to end their turn", {
-  trialCount: 2 || Number(process.env.EVAL_TRIAL_COUNT) || undefined,
+  trialCount: Number(process.env.EVAL_TRIAL_COUNT) || undefined,
   data: async () => {
     return [
       {
