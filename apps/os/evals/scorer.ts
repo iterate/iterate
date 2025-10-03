@@ -3,6 +3,7 @@ import * as R from "remeda";
 import OpenAI from "openai";
 import { z } from "zod";
 import dedent from "dedent";
+import { startSpan } from "braintrust";
 import { zodTextFormat } from "./zod-openai.ts";
 
 const ScoreResult = z.object({
@@ -24,9 +25,12 @@ const multiTurnScorerParamsDefaults = {
     format: zodTextFormat(ScoreResult, "ScoreResult"),
   },
 } satisfies Omit<ResponsesCreateParams, "input">;
-type MultiTurnScorerParams = Omit<ResponsesCreateParams, "input" | "text">;
+type MultiTurnScorerParams = Omit<ResponsesCreateParams, "input" | "text"> & {
+  braintrustSpanExportedId?: string;
+};
 
 function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
+  const { braintrustSpanExportedId, ...openaiParams } = params;
   const scores: (ScoreResult & { messages: string[] })[] = [];
 
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
@@ -41,6 +45,22 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   const scoreManually = async (newMessages: string[], score: { score: number; reason: string }) => {
     conversation.push(...newMessages);
     scores.push({ ...score, messages: newMessages });
+    const intermediateScoreSpan = startSpan({
+      name: "intermediate-score",
+      parent: params.braintrustSpanExportedId,
+      type: "score",
+    });
+    intermediateScoreSpan.log({
+      input: {
+        conversation,
+      },
+      output: {
+        score: score.score,
+        reason: score.reason,
+      },
+    });
+    intermediateScoreSpan.end();
+    await intermediateScoreSpan.flush();
   };
 
   const scoreTurn = async (newMessages: string[], expectation: string) => {
@@ -48,6 +68,18 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     const score: ScoreResult = { score: 0, reason: "pending", messages: newMessages };
     // push score immediately so the scores array is in the right order, we'll overwrite the pending props later
     scores.push(score);
+    // start span immediately so it's in the right order
+    const intermediateScoreSpan = startSpan({
+      name: "intermediate-score",
+      parent: params.braintrustSpanExportedId,
+      type: "score",
+    });
+    intermediateScoreSpan.log({
+      input: {
+        conversation,
+        expectation,
+      },
+    });
 
     const input = dedent`
       <conversation>
@@ -59,15 +91,24 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
       </expectation>
     `;
 
-    const openaResponse = await openai.responses.parse({
+    const openaiResponse = await openai.responses.parse({
       ...multiTurnScorerParamsDefaults,
-      ...params,
+      ...openaiParams,
       input,
     });
-    if (!openaResponse.output_parsed) {
+    if (!openaiResponse.output_parsed) {
       throw new Error(`Didn't get a valid output for input:\n${input}`);
     }
-    Object.assign(score, openaResponse.output_parsed);
+    Object.assign(score, openaiResponse.output_parsed);
+
+    intermediateScoreSpan.log({
+      output: {
+        score: score.score,
+        reason: score.reason,
+      },
+    });
+    intermediateScoreSpan.end();
+    await intermediateScoreSpan.flush();
   };
 
   return {
