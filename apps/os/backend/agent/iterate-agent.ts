@@ -723,13 +723,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     //   milliseconds: 250,
     //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
-    const rulesFromDb = [] as ContextRule[];
-
     const rules = [
       ...defaultContextRules,
       // If this.databaseRecord.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
       // That means we want to pull in the tutorial rules
-      ...(rulesFromDb || this.databaseRecord.iterateConfig.contextRules || tutorialRules),
+      ...(this.databaseRecord.iterateConfig.contextRules || tutorialRules),
     ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
@@ -799,7 +797,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Generic handler for scheduled reminders. This method will be called by the scheduler.
    */
   async handleReminder(data: { iterateReminderId: string }) {
-    console.log(`Executing reminder: ${data.iterateReminderId}`);
+    console.info(`Executing reminder: ${data.iterateReminderId}`);
 
     const reminder = this.state.reminders?.[data.iterateReminderId];
     if (!reminder) {
