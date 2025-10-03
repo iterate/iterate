@@ -1375,66 +1375,113 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Init sandbox
     // ------------------------------------------------------------------------
 
-    // Compute IDs
-    const sandboxId = `agent-sandbox-${estateId}`;
-    const sessionId = estateId;
-    const sessionDir = `/tmp/session-${estateId}`;
-
     // Retrieve the sandbox
+    const sandboxId = `agent-sandbox-${estateId}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
-    // Check current state
+    const execInSandbox = async () => {
+      // Ensure that the session directory exists
+      const sessionId = estateId;
+      const sessionDir = `/tmp/session-${estateId}`;
+      await sandbox.mkdir(sessionDir, { recursive: true });
+
+      // Create an isolated session
+      const sandboxSession = await sandbox.createSession({
+        id: sessionId,
+        cwd: sessionDir,
+        isolation: true,
+      });
+
+      // Determine the checkout target and whether it's a commit hash
+      const checkoutTarget = commitHash || branch || "main";
+      const isCommitHash = Boolean(commitHash);
+
+      // Prepare arguments as a JSON object
+      const initArgs = {
+        sessionDir,
+        githubRepoUrl,
+        githubToken,
+        checkoutTarget,
+        isCommitHash,
+      };
+      // Escape the JSON string for shell
+      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+      // Init the sandbox (ignore any errors)
+      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+      await sandboxSession.exec(commandInit, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+
+      // ------------------------------------------------------------------------
+      // Run exec
+      // ------------------------------------------------------------------------
+
+      // Run the exec command
+      const commandExec = input.command;
+      const _resultExec = await sandboxSession.exec(commandExec, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+
+      return _resultExec;
+    };
+
+    console.log("REMOVE: checking if sandbox is running");
+    // If sandbox is not ready, start it, and schedule exec after it boots up.
     // NOTE: according to the exposed API this should be the correct way to
-    // check if the sandbox is running and start it up if it isnt'. But the logs
-    // are confusing:
+    //       check if the sandbox is running and start it up if it isnt'. But
+    //       the logs are confusing:
     // ... Sandbox successfully shut down
     // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     if ((await sandbox.getState()).status !== "healthy") {
-      await sandbox.startAndWaitForPorts(3000); // default sandbox port
+      waitUntil(
+        sandbox
+          .startAndWaitForPorts(3000) // default sandbox port
+          .then(execInSandbox)
+          .then((resultExec) => {
+            console.log("REMOVE: received exec result in callback");
+
+            // Inject a tool call event that will be processed by the agent
+            // TODO: this doesn't work
+            (this as any).addEvent({
+              type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+              data: {
+                call: {
+                  type: "function_call",
+                  call_id: `exec-result-${Date.now()}`,
+                  name: "sendSlackMessage",
+                  arguments: JSON.stringify({
+                    text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
+                    endTurn: true,
+                  }),
+                  status: "completed", // ← Changed from "pending"
+                },
+                result: {
+                  success: true,
+                  output: {},
+                },
+              },
+              triggerLLMRequest: false,
+            });
+          }),
+      );
+
+      console.log("REMOVE: sandbox is not yet running, so we wait for it to boot up");
+
+      // TODO: this doesn't work
+      return {
+        // success: true,
+        // message:
+        //   "Sandbox is starting (takes ~10 seconds). The command result will appear in a follow-up message. You don't need to call this tool again.",
+        // status:
+        //   "Sandbox is starting (takes ~10 seconds). The command result will appear in a follow-up message. You don't need to call this tool again.",
+        __triggerLLMRequest: false,
+      };
     }
 
-    // Ensure that the session directory exists
-    await sandbox.mkdir(sessionDir, { recursive: true });
-
-    // Create an isolated session
-    const sandboxSession = await sandbox.createSession({
-      id: sessionId,
-      cwd: sessionDir,
-      isolation: true,
-    });
-
-    // Determine the checkout target and whether it's a commit hash
-    const checkoutTarget = commitHash || branch || "main";
-    const isCommitHash = Boolean(commitHash);
-
-    // Prepare arguments as a JSON object
-    const initArgs = {
-      sessionDir,
-      githubRepoUrl,
-      githubToken,
-      checkoutTarget,
-      isCommitHash,
-    };
-    // Escape the JSON string for shell
-    const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-    // Init the sandbox (ignore any errors)
-    const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-    await sandboxSession.exec(commandInit, {
-      timeout: 360 * 1000, // 360 seconds total timeout
-    });
-
-    // ------------------------------------------------------------------------
-    // Run exec
-    // ------------------------------------------------------------------------
-
-    // Run the exec command
-    const commandExec = input.command;
-    const resultExec = await sandboxSession.exec(commandExec, {
-      timeout: 360 * 1000, // 360 seconds total timeout
-    });
-
+    // If sandbox is already running, just run the command
+    const resultExec = await execInSandbox();
     return {
       success: true,
       message: resultExec.stdout,
