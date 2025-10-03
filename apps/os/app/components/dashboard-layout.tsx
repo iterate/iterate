@@ -13,13 +13,14 @@ import {
   Moon,
   Monitor,
   Shield,
+  CreditCard,
 } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { setSelectedEstate } from "../lib/estate-cookie.ts";
-import { useEstateId, useEstateUrl, useOrganizationId } from "../hooks/use-estate.ts";
+import { useOrganizationId } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
   Sidebar,
@@ -70,6 +71,11 @@ interface Estate {
   name: string;
   organizationName: string;
   organizationId: string;
+}
+
+interface OrganizationItem {
+  id: string;
+  name: string;
 }
 
 function UserSwitcher() {
@@ -236,12 +242,33 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-  const getEstateUrl = useEstateUrl();
-  const estateId = useEstateId();
+  const params = useParams();
   const organizationId = useOrganizationId();
-  const ws = useOrganizationWebSocket(organizationId, estateId);
+  const estateId = params.estateId || null;
+  const ws = useOrganizationWebSocket(organizationId, estateId ?? "");
   const trpc = useTRPC();
   const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
+
+  const organizations: OrganizationItem[] = Array.from(
+    new Map(
+      (estates || []).map((e: Estate) => [e.organizationId, { id: e.organizationId, name: e.organizationName }]),
+    ).values(),
+  );
+
+  const currentOrganization = organizations.find((o) => o.id === organizationId) || null;
+
+  const currentOrgEstates: Estate[] = (estates || []).filter(
+    (e: Estate) => e.organizationId === organizationId,
+  );
+
+  const getEstateUrl = (path: string) => {
+    const cleanPath = path.startsWith("/") ? path.slice(1) : path;
+    if (estateId) {
+      return `/${organizationId}/${estateId}${cleanPath ? `/${cleanPath}` : ""}`;
+    }
+    return `/${organizationId}`;
+  };
 
   return (
     <SidebarProvider defaultOpen={true}>
@@ -252,12 +279,15 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton size="lg" asChild>
-                    <Link to="/">
+                    <Link to={`/${organizationId}`}>
                       <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
                         <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
                       </div>
                       <div className="grid flex-1 text-left leading-tight">
-                        <span className="truncate font-medium">iterate</span>
+                        <span className="truncate font-medium">
+                          {currentOrganization ? currentOrganization.name : "Organization"}
+                        </span>
+                        <span className="truncate text-xs">Switch via estates below</span>
                       </div>
                     </Link>
                   </SidebarMenuButton>
@@ -265,23 +295,54 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
               </SidebarMenu>
             </SidebarHeader>
 
-            {navigation.map((section) => (
-              <SidebarGroup key={section.title}>
-                <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+            {/* Organization-level navigation */}
+            <SidebarGroup>
+              <SidebarGroupLabel>Organization</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith(`/settings`)}>
+                      <Link to={`/${organizationId}/settings`}>
+                        <Settings className="size-4" />
+                        <span>Settings</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith(`/members`)}>
+                      <Link to={`/${organizationId}/members`}>
+                        <Users className="size-4" />
+                        <span>Members</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={location.pathname.endsWith(`/billing`)}>
+                      <Link to={`/${organizationId}/billing`}>
+                        <CreditCard className="size-4" />
+                        <span>Billing</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {/* Estates list within the selected organization */}
+            {currentOrgEstates.length > 0 && (
+              <SidebarGroup>
+                <SidebarGroupLabel>Estates</SidebarGroupLabel>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {section.items.map((item) => (
-                      <SidebarMenuItem key={item.title}>
+                    {currentOrgEstates.map((estate) => (
+                      <SidebarMenuItem key={estate.id}>
                         <SidebarMenuButton
                           asChild
-                          isActive={
-                            (item.path && location.pathname.endsWith(item.path)) ||
-                            (item.path === "" && location.pathname.endsWith(`/${estateId}/`))
-                          }
+                          isActive={location.pathname.startsWith(`/${organizationId}/${estate.id}`)}
                         >
-                          <Link to={getEstateUrl(item.path)}>
-                            <item.icon className="size-4" />
-                            <span>{item.title}</span>
+                          <Link to={`/${organizationId}/${estate.id}/`}>
+                            <Building2 className="size-4" />
+                            <span>{estate.name}</span>
                           </Link>
                         </SidebarMenuButton>
                       </SidebarMenuItem>
@@ -289,7 +350,35 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
-            ))}
+            )}
+
+            {/* Estate-specific navigation (only when an estate is selected) */}
+            {estateId &&
+              navigation.map((section) => (
+                <SidebarGroup key={section.title}>
+                  <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+                  <SidebarGroupContent>
+                    <SidebarMenu>
+                      {section.items.map((item) => (
+                        <SidebarMenuItem key={item.title}>
+                          <SidebarMenuButton
+                            asChild
+                            isActive={
+                              (item.path && location.pathname.endsWith(item.path)) ||
+                              (item.path === "" && location.pathname.endsWith(`/${estateId}/`))
+                            }
+                          >
+                            <Link to={getEstateUrl(item.path)}>
+                              <item.icon className="size-4" />
+                              <span>{item.title}</span>
+                            </Link>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      ))}
+                    </SidebarMenu>
+                  </SidebarGroupContent>
+                </SidebarGroup>
+              ))}
 
             {impersonationInfo?.isAdmin && (
               <SidebarGroup>

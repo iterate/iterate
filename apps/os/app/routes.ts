@@ -8,6 +8,14 @@ export default [
   // Root index - will handle redirect logic to org/estate routes
   index("./routes/root-redirect.tsx"),
 
+  // Organization-scoped routes (no estate context required)
+  route(":organizationId", "./routes/org-layout.tsx", [
+    index("./routes/org-redirect.tsx"),
+    route("settings", "./routes/org-settings.tsx"),
+    route("members", "./routes/org-members.tsx"),
+    route("billing", "./routes/org-billing.tsx"),
+  ]),
+
   // Admin routes (admin only, no estate context required)
   route("/admin", "./routes/admin-layout.tsx", [
     index("./routes/admin-redirect.tsx"),
@@ -23,6 +31,7 @@ export default [
     route("integrations", "./routes/integrations.tsx"),
     route("integrations/mcp-params", "./routes/integrations.mcp-params.tsx"),
     route("integrations/redirect", "./routes/integrations.redirect.tsx"),
+    route("repo", "./routes/estate.tsx"),
     route("estate", "./routes/estate.tsx"),
     route("agents", "./routes/agents-index.tsx"),
     route("agents/start-slack", "./routes/agents.start-slack.tsx"),
