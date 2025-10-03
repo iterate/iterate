@@ -11,12 +11,35 @@ import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
 
 async function runBootstrap(configPath?: string) {
-  if (!configPath) {
-    console.log("No iterate config path provided, skipping bootstrap");
-    return { success: true, message: "Skipped bootstrap (no config provided)", skipped: true };
-  }
-
   try {
+    if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
+      throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
+    }
+
+    const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
+      max: 1,
+      fetch_types: false,
+    });
+
+    const db = drizzle(pg, { schema, casing: "snake_case" });
+
+    // If no config path provided, delete all iterate configs
+    if (!configPath) {
+      console.log("No iterate config path provided, deleting all iterate configs");
+
+      await db.delete(schema.iterateConfig);
+
+      console.log("All iterate configs deleted!");
+
+      await pg.end();
+
+      return {
+        success: true,
+        message: "Successfully deleted all iterate configs",
+        deleted: true,
+      };
+    }
+
     // Path resolution strategy:
     // Try multiple possible locations for the config file
     const repoRoot = resolve(process.cwd(), "../..");
@@ -32,6 +55,7 @@ async function runBootstrap(configPath?: string) {
     });
 
     if (!resolvedPath) {
+      await pg.end();
       throw new Error(
         `Could not find iterate config at any of these paths:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}`,
       );
@@ -46,21 +70,11 @@ async function runBootstrap(configPath?: string) {
     const config = configModule.default || configModule;
 
     if (!config) {
+      await pg.end();
       throw new Error("No default export found in iterate config");
     }
 
     console.log("Loaded iterate config from: ", resolvedPath, config);
-
-    if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
-      throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
-    }
-
-    const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
-      max: 1,
-      fetch_types: false,
-    });
-
-    const db = drizzle(pg, { schema, casing: "snake_case" });
 
     const estates = await db.select().from(schema.estate);
 
@@ -129,12 +143,14 @@ const start = t.procedure
   )
   .mutation(async ({ input }) => {
     // Support both command-line flag and environment variable
-    // Default to template estate config if nothing is provided
-    const providedConfigPath =
-      input.config || process.env.ITERATE_CONFIG_PATH || "../../estates/template/iterate.config.ts";
+    const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
 
-    process.env.ITERATE_CONFIG_PATH = providedConfigPath;
-    console.log(`Using iterate config: ${providedConfigPath}`);
+    if (providedConfigPath) {
+      process.env.ITERATE_CONFIG_PATH = providedConfigPath;
+      console.log(`Using iterate config: ${providedConfigPath}`);
+    } else {
+      console.log("No iterate config provided - will delete all configs");
+    }
 
     console.log("Running estate bootstrap...");
     const bootstrapResult = await runBootstrap(providedConfigPath);
