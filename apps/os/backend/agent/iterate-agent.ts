@@ -15,7 +15,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
   iterateConfig: IterateConfig;
@@ -730,6 +730,31 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return dedupedRules;
   }
 
+  /**
+   * Check if a user is a guest in the organization that owns this estate.
+   * Returns true if the user is a guest, false otherwise.
+   */
+  private async getUserRole(userId: string): Promise<UserRole | undefined> {
+    const result = await this.db
+      .select({
+        role: schema.organizationUserMembership.role,
+      })
+      .from(schema.estate)
+      .innerJoin(
+        schema.organizationUserMembership,
+        eq(schema.estate.organizationId, schema.organizationUserMembership.organizationId),
+      )
+      .where(
+        and(
+          eq(schema.estate.id, this.databaseRecord.estateId),
+          eq(schema.organizationUserMembership.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    return result[0]?.role;
+  }
+
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
     return this.agentCore.addEvent(event);
   }
@@ -1069,6 +1094,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
+    const userRole = await this.getUserRole(input.onBehalfOfIterateUserId);
+    if (!userRole || userRole === "guest") {
+      return {
+        success: false,
+        error:
+          "This user doesn't have permission to connect MCP servers because they are a guest in this Slack workspace. Tell the user that their request is not possible in one line. Do not suggest user to upgrade their access.",
+      };
+    }
+
     const formattedServerUrl = new URL(input.serverUrl);
 
     const requiresParams: MCPParam[] = [

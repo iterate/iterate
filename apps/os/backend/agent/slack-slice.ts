@@ -171,7 +171,18 @@ export const slackSlice = defineAgentCoreSlice<{
           };
           next.inputItems = [...next.inputItems, message];
         }
-        next.triggerLLMRequest = shouldTriggerLLM && !next.paused;
+
+        // Check if the user who sent the message is in participants.
+        // This filters out messages from users who are not participants and the agent would be in read-only mode for them.
+        let userIsJoinedParticipant = false;
+        if (payload.event?.type === "message" && "user" in payload.event && payload.event.user) {
+          const slackUserId = payload.event.user;
+          userIsJoinedParticipant = Object.values(next.participants || {}).some(
+            (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+          );
+        }
+
+        next.triggerLLMRequest = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
         break;
       }
     }

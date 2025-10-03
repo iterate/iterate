@@ -230,7 +230,7 @@ export async function reactToSlackWebhook(
   }
 }
 
-export async function syncSlackUsersInBackground(db: DB, botToken: string) {
+export async function syncSlackUsersInBackground(db: DB, botToken: string, estateId: string) {
   try {
     const authedWebClient = new WebClient(botToken);
     const userListResponse = await authedWebClient.users.list({});
@@ -254,6 +254,19 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string) {
     }
 
     await db.transaction(async (tx) => {
+      // Get the organization ID from the estate
+      const estate = await tx.query.estate.findFirst({
+        where: eq(schema.estate.id, estateId),
+        columns: {
+          organizationId: true,
+        },
+      });
+
+      if (!estate) {
+        console.error(`Estate ${estateId} not found`);
+        return;
+      }
+
       const emails = validMembers.map((m) => m.profile!.email!);
 
       // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
@@ -281,6 +294,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string) {
 
       // Step 3: Upsert all provider mappings at once
       const mappingsToUpsert = [];
+      const organizationMembershipsToUpsert = [];
 
       for (const member of validMembers) {
         const user = usersByEmail.get(member.profile!.email!);
@@ -295,6 +309,15 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string) {
           internalUserId: user.id,
           externalId: member.id!,
           providerMetadata: member,
+        });
+
+        // Determine role based on Slack restrictions
+        const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
+
+        organizationMembershipsToUpsert.push({
+          organizationId: estate.organizationId,
+          userId: user.id,
+          role: role as "guest" | "member",
         });
       }
 
@@ -312,9 +335,19 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string) {
           });
       }
 
+      // Step 4: Upsert organization memberships
+      console.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
+
+      if (organizationMembershipsToUpsert.length > 0) {
+        await tx
+          .insert(schema.organizationUserMembership)
+          .values(organizationMembershipsToUpsert)
+          .onConflictDoNothing();
+      }
+
       // Log sync results
       console.log(
-        `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted`,
+        `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
       );
     });
   } catch (error) {

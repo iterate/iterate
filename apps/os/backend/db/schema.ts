@@ -4,6 +4,9 @@ import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
+export const UserRole = ["member", "admin", "owner", "guest"] as const;
+export type UserRole = (typeof UserRole)[number];
+
 export const withTimestamps = {
   createdAt: timestamp().defaultNow().notNull(),
   updatedAt: timestamp()
@@ -255,7 +258,7 @@ export const organizationUserMembership = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     role: t
-      .text({ enum: ["member", "admin", "owner", "guest"] })
+      .text({ enum: [...UserRole] })
       .notNull()
       .default("member"),
     ...withTimestamps,
