@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { waitUntil } from "cloudflare:workers";
+import { parseRouter, type AnyRouter } from "trpc-cli";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
@@ -120,10 +121,22 @@ const deleteUserByEmail = adminProcedure
     });
   });
 
+const allProcedureInputs = adminProcedure.query(async () => {
+  const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
+  const parsed = parseRouter({ router });
+  return JSON.parse(
+    JSON.stringify(parsed, (_key, value) => {
+      if (value?._def?.procedure) return { _def: value._def };
+      return value;
+    }),
+  ) as typeof parsed;
+});
+
 export const adminRouter = router({
   findUserByEmail,
   getEstateOwner,
   deleteUserByEmail,
+  allProcedureInputs,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
     // important because it's available to anyone signed in

@@ -8,6 +8,7 @@ import {
   AlertCircle,
   Database,
   Building2,
+  Server,
 } from "lucide-react";
 import { useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
@@ -33,6 +34,7 @@ const adminLinks = [
   { title: "Estates", icon: Building2, path: "/admin/estates" },
   { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
   { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
+  { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
 ];
 
 export default function AdminLayout() {
@@ -95,6 +97,18 @@ export default function AdminLayout() {
         <Sidebar className="border-r">
           <SidebarHeader>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton size="lg" asChild>
+                  <Link to="/">
+                    <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
+                      <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
+                    </div>
+                    <div className="grid flex-1 text-left leading-tight">
+                      <span className="truncate font-medium">iterate</span>
+                    </div>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton size="lg" asChild>
                   <Link to="/admin">
