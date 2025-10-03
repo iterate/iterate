@@ -39,7 +39,7 @@
     {
       "class_name": "Sandbox",
       "image": "./backend/sandbox/Dockerfile",
-      "instance_type": "standard",
+      "instance_type": "standard-4",
       "max_instances": 10,
       "rollout_active_grace_period": 900,
     },

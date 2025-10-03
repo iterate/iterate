@@ -8,6 +8,8 @@ packages:
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
+  - miniflare
+  - wrangler
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
