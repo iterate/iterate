@@ -1425,7 +1425,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return _resultExec;
     };
 
-    console.log("REMOVE: checking if sandbox is running");
+    console.log("TO-REMOVE-LATER: checking if sandbox is running");
+
     // If sandbox is not ready, start it, and schedule exec after it boots up.
     // NOTE: according to the exposed API this should be the correct way to
     //       check if the sandbox is running and start it up if it isnt'. But
@@ -1434,13 +1435,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
-    if ((await sandbox.getState()).status !== "healthy") {
+    const sandboxState = await sandbox.getState();
+    if (sandboxState.status !== "healthy") {
       waitUntil(
         sandbox
           .startAndWaitForPorts(3000) // default sandbox port
           .then(execInSandbox)
           .then((resultExec) => {
-            console.log("REMOVE: received exec result in callback");
+            console.log("TO-REMOVE-LATER: received exec result in callback");
 
             // Inject a tool call event that will be processed by the agent
             // TODO: this doesn't work
@@ -1467,15 +1469,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           }),
       );
 
-      console.log("REMOVE: sandbox is not yet running, so we wait for it to boot up");
+      console.log("TO-REMOVE-LATER: sandbox is not yet running, so we wait for it to boot up");
 
       // TODO: this doesn't work
       return {
-        // success: true,
-        // message:
-        //   "Sandbox is starting (takes ~10 seconds). The command result will appear in a follow-up message. You don't need to call this tool again.",
-        // status:
-        //   "Sandbox is starting (takes ~10 seconds). The command result will appear in a follow-up message. You don't need to call this tool again.",
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
         __triggerLLMRequest: false,
       };
     }
@@ -1485,6 +1483,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {
       success: true,
       message: resultExec.stdout,
+      __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
     };
   }
 }

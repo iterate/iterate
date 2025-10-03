@@ -217,6 +217,22 @@ export const defaultContextRules = defineRules([
     ],
   },
   {
+    key: "sandbox-starting",
+    prompt: dedent`
+      The sandbox is currently starting up. This takes approximately 10 seconds.
+      When you run exec commands, the sandbox will automatically be initialized if it's not already running.
+    `,
+    match: matchers.sandboxStatus("starting"),
+  },
+  {
+    key: "sandbox-attached",
+    prompt: dedent`
+      The sandbox is currently running and attached.
+      You can execute commands immediately using the exec tool.
+    `,
+    match: matchers.sandboxStatus("attached"),
+  },
+  {
     key: "using-linear",
     prompt: dedent`
       When using Linear tools:
