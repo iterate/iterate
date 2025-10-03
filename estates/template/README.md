@@ -8,7 +8,7 @@ For example, we've deliberately designed this to make it easy to install rules f
 
 # Context rules are all you need!
 
-The primary concept you need to know about is called a `ContexRule`. It combines some prompt fragments and tools
+The primary concept you need to know about is called a `ContextRule`. It combines some prompt fragments and tools
 
 ```typescript
 const someRule = defineRule({
