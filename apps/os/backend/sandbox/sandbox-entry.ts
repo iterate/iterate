@@ -155,7 +155,7 @@ async function sendBuildCallback(
 function execCommand(
   command: string,
   args: string[],
-  options: { cwd?: string } = {},
+  options: { cwd?: string; stdin?: string } = {},
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   return new Promise((resolve) => {
     let stdout = "";
@@ -164,8 +164,13 @@ function execCommand(
     const proc = spawn(command, args, {
       cwd: options.cwd || process.cwd(),
       shell: false, // Don't use shell to avoid deprecation warning
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [options.stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
+
+    if (options.stdin !== undefined && proc.stdin) {
+      proc.stdin.write(options.stdin);
+      proc.stdin.end();
+    }
 
     proc.stdout?.on("data", (data) => {
       stdout += data.toString();
@@ -237,29 +242,37 @@ async function subcommandInit(args: InitArgs) {
   console.error("");
 
   try {
-    // Clone the repository (optimized: combine clone + checkout when possible)
+    // Configure GitHub CLI authentication
+    console.error("=== Configuring GitHub CLI ===");
+    const authResult = await execCommand("gh", ["auth", "login", "--with-token"], {
+      stdin: args.githubToken,
+    });
+
+    if (authResult.exitCode !== 0) {
+      const errorMsg = "Failed to authenticate GitHub CLI";
+      console.error(`ERROR: ${errorMsg}`);
+      console.error(authResult.stderr);
+      process.exit(1);
+    }
+
+    // Clone the repository using gh (optimized: combine clone + checkout when possible)
     console.error("=== Cloning repository ===");
-    const repoPathFromUrl = args.githubRepoUrl.replace(/^https:\/\//, "");
-    const cloneUrl = `https://x-access-token:${args.githubToken}@${repoPathFromUrl}`;
 
     // Build clone arguments with optimizations
-    const cloneArgs = ["clone"];
+    const cloneArgs = ["repo", "clone", args.githubRepoUrl, repoDir];
 
     // For branches/tags, use shallow clone and combine with checkout
     // For commit hashes, we need full history (or at least more depth)
     if (!args.isCommitHash && args.checkoutTarget && args.checkoutTarget !== "main") {
-      cloneArgs.push("--depth", "1");
-      cloneArgs.push("--branch", args.checkoutTarget);
+      cloneArgs.push("--", "--depth", "1", "--branch", args.checkoutTarget);
       console.error(`Cloning and checking out ${args.checkoutTarget} in single operation`);
     } else if (!args.isCommitHash) {
       // Default branch with shallow clone
-      cloneArgs.push("--depth", "1");
+      cloneArgs.push("--", "--depth", "1");
     }
     // For commit hashes, clone without depth restriction
 
-    cloneArgs.push(cloneUrl, repoDir);
-
-    const cloneResult = await execCommand("git", cloneArgs);
+    const cloneResult = await execCommand("gh", cloneArgs);
 
     if (cloneResult.exitCode !== 0) {
       const errorMsg = "Failed to clone repository";
