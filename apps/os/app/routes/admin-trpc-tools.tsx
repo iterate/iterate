@@ -1,4 +1,3 @@
-import { useLocalStorageValue } from "@react-hookz/web";
 import Form from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
@@ -88,7 +87,12 @@ const ProcedureForm = (props: { path: string; inputs: AllProcedureInputs[number]
 // todo: other output renderering options. codemirror?
 export default function AdminForm() {
   const inputs = useAllProcedureInputs();
-  const [search, setSearch] = React.useState("");
+  const [search, setSearch] = React.useState("admin.");
+  const filteredInputs = React.useMemo(() => {
+    return inputs.filter(([procedurePath]) =>
+      procedurePath.toLowerCase().includes(search.toLowerCase()),
+    );
+  }, [inputs, search]);
   return (
     <div className="flex flex-col flex-wrap gap-3 p-2">
       <style>
@@ -117,28 +121,21 @@ export default function AdminForm() {
         onChange={(e) => setSearch(e.target.value)}
         placeholder="filter procedures"
       />
-      {inputs
-        .slice(0, 1000)
-        .filter(
-          ([procedurePath]) =>
-            procedurePath.includes("admin.") &&
-            procedurePath.toLowerCase().includes(search.toLowerCase()),
-        )
-        .map(([procedurePath, procedureInputs]) => {
-          return (
-            <div key={procedurePath}>
-              <details>
-                <summary className="text-white">{procedurePath}</summary>
-                <Card key={procedurePath} className="p-2">
-                  <h5 className="break-words">{procedurePath}</h5>
-                  <ErrorBoundary>
-                    <ProcedureForm path={procedurePath} inputs={procedureInputs} />
-                  </ErrorBoundary>
-                </Card>
-              </details>
-            </div>
-          );
-        })}
+      {filteredInputs.map(([procedurePath, procedureInputs]) => {
+        return (
+          <div key={procedurePath}>
+            <details>
+              <summary className="text-white">{procedurePath}</summary>
+              <Card key={procedurePath} className="p-2">
+                <h5 className="break-words">{procedurePath}</h5>
+                <ErrorBoundary>
+                  <ProcedureForm path={procedurePath} inputs={procedureInputs} />
+                </ErrorBoundary>
+              </Card>
+            </details>
+          </div>
+        );
+      })}
     </div>
   );
 }
