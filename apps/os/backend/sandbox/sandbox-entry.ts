@@ -257,44 +257,58 @@ async function subcommandInit(args: InitArgs) {
     // Configure git with the credential from gh
     await execCommand("gh", ["auth", "setup-git"]);
 
-    // Clone the repository using gh (optimized: combine clone + checkout when possible)
-    console.error("=== Cloning repository ===");
-
-    // Build clone arguments with optimizations
-    const cloneArgs = ["clone", args.githubRepoUrl, repoDir];
-
-    // For branches/tags, use shallow clone and combine with checkout
-    // For commit hashes, we need full history (or at least more depth)
-    if (!args.isCommitHash && args.checkoutTarget && args.checkoutTarget !== "main") {
-      cloneArgs.push("--", "--depth", "1", "--branch", args.checkoutTarget);
-      console.error(`Cloning and checking out ${args.checkoutTarget} in single operation`);
-    } else if (!args.isCommitHash) {
-      // Default branch with shallow clone
-      cloneArgs.push("--", "--depth", "1");
-    }
-    // For commit hashes, clone without depth restriction
-
-    const cloneResult = await execCommand("gh", cloneArgs);
-
-    if (cloneResult.exitCode !== 0) {
-      const errorMsg = "Failed to clone repository";
-      console.error(`ERROR: ${errorMsg}`);
-      console.error(cloneResult.stderr);
-      process.exit(1);
+    // Check if repo directory already exists and is not empty
+    let shouldClone = true;
+    if (await directoryExists(repoDir)) {
+      const lsResult = await execCommand("ls", ["-A", repoDir]);
+      if (lsResult.stdout.trim()) {
+        shouldClone = false;
+      }
     }
 
-    // If checkout target is a commit hash, checkout after cloning
-    if (args.isCommitHash) {
-      console.error(`=== Checking out commit ${args.checkoutTarget} ===`);
-      const checkoutResult = await execCommand("git", ["checkout", args.checkoutTarget], {
-        cwd: repoDir,
-      });
+    if (!shouldClone) {
+      // Clone the repository using gh (optimized: combine clone + checkout when possible)
+      console.error("=== Repository already present ===");
+    } else {
+      // Clone the repository using gh (optimized: combine clone + checkout when possible)
+      console.error("=== Cloning repository ===");
 
-      if (checkoutResult.exitCode !== 0) {
-        const errorMsg = `Failed to checkout commit ${args.checkoutTarget}`;
+      // Build clone arguments with optimizations
+      const cloneArgs = ["clone", args.githubRepoUrl, repoDir];
+
+      // For branches/tags, use shallow clone and combine with checkout
+      // For commit hashes, we need full history (or at least more depth)
+      if (!args.isCommitHash && args.checkoutTarget && args.checkoutTarget !== "main") {
+        cloneArgs.push("--", "--depth", "1", "--branch", args.checkoutTarget);
+        console.error(`Cloning and checking out ${args.checkoutTarget} in single operation`);
+      } else if (!args.isCommitHash) {
+        // Default branch with shallow clone
+        cloneArgs.push("--", "--depth", "1");
+      }
+      // For commit hashes, clone without depth restriction
+
+      const cloneResult = await execCommand("gh", cloneArgs);
+
+      if (cloneResult.exitCode !== 0) {
+        const errorMsg = "Failed to clone repository";
         console.error(`ERROR: ${errorMsg}`);
-        console.error(checkoutResult.stderr);
+        console.error(cloneResult.stderr);
         process.exit(1);
+      }
+
+      // If checkout target is a commit hash, checkout after cloning
+      if (args.isCommitHash) {
+        console.error(`=== Checking out commit ${args.checkoutTarget} ===`);
+        const checkoutResult = await execCommand("git", ["checkout", args.checkoutTarget], {
+          cwd: repoDir,
+        });
+
+        if (checkoutResult.exitCode !== 0) {
+          const errorMsg = `Failed to checkout commit ${args.checkoutTarget}`;
+          console.error(`ERROR: ${errorMsg}`);
+          console.error(checkoutResult.stderr);
+          process.exit(1);
+        }
       }
     }
   } catch (error) {
