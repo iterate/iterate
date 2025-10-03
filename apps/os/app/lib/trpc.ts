@@ -15,9 +15,7 @@ export const queryClient = new QueryClient({
       retry: false,
     },
     mutations: {
-      onError: (error) => {
-        toast.error(error.message || "An error occurred");
-      },
+      onError: (error) => toast.error(error.message || "An error occurred"),
     },
   },
 });
