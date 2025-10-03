@@ -169,11 +169,6 @@ const defaultSlackAgentPrompt = dedent`
    - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
-
-  ### Running commands
-  - Use exec tool for running shell commands in sandbox
-  - exec tool runs in an isolated directory in the filesystem
-  - subdirectory \`repo\` contains useful persistent files (known as estate repo or context repo)
 `;
 export const defaultContextRules = defineRules([
   {
@@ -202,7 +197,6 @@ export const defaultContextRules = defineRules([
         ),
       }),
       iterateAgentTool.generateImage(),
-      iterateAgentTool.exec(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
@@ -215,22 +209,6 @@ export const defaultContextRules = defineRules([
         ),
       }),
     ],
-  },
-  {
-    key: "sandbox-starting",
-    prompt: dedent`
-      The sandbox is currently starting up. This takes approximately 10 seconds.
-      When you run exec commands, the sandbox will automatically be initialized if it's not already running.
-    `,
-    match: matchers.sandboxStatus("starting"),
-  },
-  {
-    key: "sandbox-attached",
-    prompt: dedent`
-      The sandbox is currently running and attached.
-      You can execute commands immediately using the exec tool.
-    `,
-    match: matchers.sandboxStatus("attached"),
   },
   {
     key: "using-linear",
@@ -266,5 +244,21 @@ export const defaultContextRules = defineRules([
       - Never show raw Notion URLs in results - always wrap them in Slack link format
     `,
     match: matchers.hasMCPConnection("mcp.notion.com"),
+  },
+  {
+    key: "sandbox-starting",
+    prompt: dedent`
+      The sandbox is currently starting up. This takes approximately 10 seconds.
+      When you run exec commands, the sandbox will automatically be initialized if it's not already running.
+    `,
+    match: matchers.sandboxStatus("starting"),
+  },
+  {
+    key: "sandbox-attached",
+    prompt: dedent`
+      The sandbox is currently running and attached.
+      You can execute commands immediately using the exec tool.
+    `,
+    match: matchers.sandboxStatus("attached"),
   },
 ]);
