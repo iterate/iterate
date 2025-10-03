@@ -28,11 +28,7 @@ async function runBootstrap(configPath?: string) {
     ];
 
     const resolvedPath = possiblePaths.find((path) => {
-      try {
-        return existsSync(path) && statSync(path).isFile();
-      } catch {
-        return false;
-      }
+      return existsSync(path) && statSync(path).isFile();
     });
 
     if (!resolvedPath) {
