@@ -1,4 +1,4 @@
-import { type RouteConfig, index, route } from "@react-router/dev/routes";
+import { type RouteConfig, index, prefix, route } from "@react-router/dev/routes";
 
 export default [
   // Public routes (no auth required)
@@ -7,6 +7,9 @@ export default [
 
   // Root index - will handle redirect logic to org/estate routes
   index("./routes/root-redirect.tsx"),
+
+  // New organization creation
+  route("/new-organization", "./routes/new-organization.tsx"),
 
   // Admin routes (admin only, no estate context required)
   route("/admin", "./routes/admin-layout.tsx", [
@@ -18,16 +21,25 @@ export default [
     route("estates", "./routes/admin-estates.tsx"),
   ]),
 
-  // Protected routes with org/estate prefix
-  route(":organizationId/:estateId", "./routes/estate-layout.tsx", [
-    index("./routes/home.tsx"),
-    route("integrations", "./routes/integrations.tsx"),
-    route("integrations/mcp-params", "./routes/integrations.mcp-params.tsx"),
-    route("integrations/redirect", "./routes/integrations.redirect.tsx"),
-    route("estate", "./routes/estate.tsx"),
-    route("agents", "./routes/agents-index.tsx"),
-    route("agents/start-slack", "./routes/agents.start-slack.tsx"),
-    route("agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
+  // All organization routes (with or without estate context)
+  route(":organizationId", "./routes/org-layout.tsx", [
+    // Organization-level routes
+    index("./routes/org-redirect.tsx"),
+    route("settings", "./routes/org-settings.tsx"),
+    route("team", "./routes/org-team.tsx"),
+
+    // Estate-specific routes
+    ...prefix(":estateId", [
+      // Estate-specific routes
+      index("./routes/home.tsx"),
+      route("integrations", "./routes/integrations.tsx"),
+      route("integrations/mcp-params", "./routes/integrations.mcp-params.tsx"),
+      route("integrations/redirect", "./routes/integrations.redirect.tsx"),
+      route("estate", "./routes/estate.tsx"),
+      route("agents", "./routes/agents-index.tsx"),
+      route("agents/start-slack", "./routes/agents.start-slack.tsx"),
+      route("agents/:agentClassName/:durableObjectName", "./routes/agents.tsx"),
+    ]),
   ]),
 
   // Catch-all route for 404

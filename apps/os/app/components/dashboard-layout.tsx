@@ -1,25 +1,25 @@
-import { Link, useLocation, useNavigate, useParams } from "react-router";
+import { Link, useLocation, useParams } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
   Users,
-  FileText,
+  Github,
   LogOut,
   Building2,
   Check,
   ChevronsUpDown,
-  MessageSquarePlus,
   Sun,
   Moon,
   Monitor,
   Shield,
+  UserCog,
+  CreditCard,
 } from "lucide-react";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
-import { setSelectedEstate } from "../lib/estate-cookie.ts";
-import { useEstateId, useEstateUrl, useOrganizationId } from "../hooks/use-estate.ts";
+import { useOrganizationId } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
   Sidebar,
@@ -45,24 +45,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip.tsx";
 import { useImpersonation } from "./impersonate.tsx";
+import { OrganizationSwitcher } from "./organization-switcher.tsx";
 
-const navigation = [
-  {
-    title: "Platform",
-    items: [
-      { title: "Home", icon: HomeIcon, path: "" },
-      { title: "Integrations", icon: Settings, path: "integrations" },
-      { title: "Manage estate", icon: FileText, path: "estate" },
-    ],
-  },
-  {
-    title: "Agents",
-    items: [
-      { title: "Manage agents", icon: Users, path: "agents" },
-      { title: "Start Slack Agent", icon: MessageSquarePlus, path: "agents/start-slack" },
-    ],
-  },
+const estateNavigation: NavigationItem[] = [
+  { title: "Home", icon: HomeIcon, path: "" },
+  { title: "Git repository", icon: Github, path: "estate" },
+  { title: "Integrations", icon: Settings, path: "integrations" },
+  { title: "Manage Agents", icon: Users, path: "agents" },
+];
+
+const organizationNavigation: NavigationItem[] = [
+  { title: "Settings", icon: Settings, path: "settings" },
+  { title: "Members", icon: UserCog, path: "team" },
+  { title: "Billing", icon: CreditCard, path: "billing-portal", external: true },
 ];
 
 interface Estate {
@@ -72,17 +69,41 @@ interface Estate {
   organizationId: string;
 }
 
+interface NavigationItem {
+  title: string;
+  icon: React.ElementType;
+  path: string;
+  external?: boolean;
+}
+
+function BillingPortalLink({ item }: { item: NavigationItem }) {
+  const organizationId = useOrganizationId();
+  const trpc = useTRPC();
+
+  const createBillingSession = useMutation(
+    trpc.stripe.createBillingPortalSession.mutationOptions({
+      onSuccess: (data) => {
+        window.location.href = data.url;
+      },
+    }),
+  );
+
+  const handleClick = () => {
+    createBillingSession.mutate({ organizationId });
+  };
+
+  return (
+    <SidebarMenuButton onClick={handleClick} disabled={createBillingSession.isPending}>
+      <item.icon className="size-4" />
+      <span>{item.title}</span>
+    </SidebarMenuButton>
+  );
+}
+
 function UserSwitcher() {
   const trpc = useTRPC();
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
-  const navigate = useNavigate();
-  const params = useParams();
-  const currentEstateId = params.estateId;
-
   const impersonation = useImpersonation();
-
-  const currentEstate = estates?.find((e: Estate) => e.id === currentEstateId) || null;
 
   const handleLogout = async () => {
     try {
@@ -102,19 +123,6 @@ function UserSwitcher() {
     }
   };
 
-  const handleEstateSwitch = (estate: Estate) => {
-    // Save the new selection to cookie
-    setSelectedEstate(estate.organizationId, estate.id);
-
-    // Get the current path within the estate
-    const currentPath = window.location.pathname;
-    const pathParts = currentPath.split("/").slice(3); // Remove org/estate parts
-    const subPath = pathParts.join("/");
-
-    // Navigate to the same page in the new estate
-    navigate(`/${estate.organizationId}/${estate.id}${subPath ? `/${subPath}` : ""}`);
-  };
-
   // Generate initials from name
   const getInitials = (name: string) => {
     return name
@@ -125,46 +133,36 @@ function UserSwitcher() {
       .slice(0, 2);
   };
 
+  const tooltipContent = impersonation.impersonatedBy ? `Impersonating ${user.email}` : undefined;
+
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <SidebarMenuButton
-              size="lg"
-              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-            >
-              <Avatar className="h-8 w-8 rounded-lg">
-                <AvatarImage src={user.image || ""} alt={user.name} />
-                <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
-              </Avatar>
-              <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{user.name}</span>
-                <span className="truncate text-xs">{user.email}</span>
-              </div>
-              <ChevronsUpDown className="ml-auto size-4" />
-            </SidebarMenuButton>
-          </DropdownMenuTrigger>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <DropdownMenuTrigger asChild>
+                <SidebarMenuButton
+                  size="lg"
+                  className={`data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground ${
+                    impersonation.impersonatedBy ? "border-2 border-destructive" : ""
+                  }`}
+                >
+                  <Avatar className="h-8 w-8 rounded-lg">
+                    <AvatarImage src={user.image || ""} alt={user.name} />
+                    <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{user.name}</span>
+                    <span className="truncate text-xs">{user.email}</span>
+                  </div>
+                  <ChevronsUpDown className="ml-auto size-4" />
+                </SidebarMenuButton>
+              </DropdownMenuTrigger>
+            </TooltipTrigger>
+            {tooltipContent && <TooltipContent side="right">{tooltipContent}</TooltipContent>}
+          </Tooltip>
           <DropdownMenuContent className="w-56" side="top" align="start">
-            {currentEstate && (
-              <>
-                <DropdownMenuLabel>Switch Estate</DropdownMenuLabel>
-                {estates?.map((estate: Estate) => (
-                  <DropdownMenuItem
-                    key={estate.id}
-                    onClick={() => handleEstateSwitch(estate)}
-                    className="flex items-center justify-between"
-                    disabled={currentEstateId === estate.id}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Building2 className="size-4" />
-                      <span>{estate.name}</span>
-                    </div>
-                    {currentEstateId === estate.id && <Check className="size-4" />}
-                  </DropdownMenuItem>
-                ))}
-              </>
-            )}
             {impersonation.isAdmin && (
               <DropdownMenuItem onClick={() => impersonation.impersonate.mutate()}>
                 Impersonate another user
@@ -175,7 +173,7 @@ function UserSwitcher() {
                 Stop impersonating
               </DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
+            {(impersonation.isAdmin || impersonation.impersonatedBy) && <DropdownMenuSeparator />}
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>
@@ -236,61 +234,96 @@ interface DashboardLayoutProps {
 
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-  const getEstateUrl = useEstateUrl();
-  const estateId = useEstateId();
+  const params = useParams();
   const organizationId = useOrganizationId();
-  const ws = useOrganizationWebSocket(organizationId, estateId);
+  const currentEstateId = params.estateId;
   const trpc = useTRPC();
+  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions({ organizationId }));
   const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+
+  // Only connect websocket if we're in an estate context
+  const ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
+
+  const getEstateUrl = (estateId: string, path: string) => {
+    return `/${organizationId}/${estateId}${path ? `/${path}` : ""}`;
+  };
+
+  const getOrgUrl = (path: string) => {
+    return `/${organizationId}/${path}`;
+  };
+
+  const isPathActive = (url: string) => {
+    // Exact match for paths
+    if (location.pathname === url) return true;
+    // For home paths (ending with estateId), check if pathname ends with the estateId followed by optional slash
+    if (url.endsWith(`/${currentEstateId}`) || url.endsWith(`/${currentEstateId}/`)) {
+      return location.pathname === url || location.pathname === `${url}/`;
+    }
+    return false;
+  };
 
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
         <Sidebar className="border-r">
+          <SidebarHeader>
+            <OrganizationSwitcher />
+          </SidebarHeader>
           <SidebarContent>
-            <SidebarHeader>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton size="lg" asChild>
-                    <Link to="/">
-                      <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
-                        <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
-                      </div>
-                      <div className="grid flex-1 text-left leading-tight">
-                        <span className="truncate font-medium">iterate</span>
-                      </div>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarHeader>
-
-            {navigation.map((section) => (
-              <SidebarGroup key={section.title}>
-                <SidebarGroupLabel>{section.title}</SidebarGroupLabel>
+            {/* Estate Navigation - One section per estate */}
+            {estates?.map((estate: Estate) => (
+              <SidebarGroup key={estate.id}>
+                {/* Only show estate label if there are multiple estates */}
+                {estates.length > 1 && (
+                  <SidebarGroupLabel className="flex items-center gap-2">
+                    <Building2 className="size-3" />
+                    {estate.name}
+                  </SidebarGroupLabel>
+                )}
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {section.items.map((item) => (
-                      <SidebarMenuItem key={item.title}>
-                        <SidebarMenuButton
-                          asChild
-                          isActive={
-                            (item.path && location.pathname.endsWith(item.path)) ||
-                            (item.path === "" && location.pathname.endsWith(`/${estateId}/`))
-                          }
-                        >
-                          <Link to={getEstateUrl(item.path)}>
-                            <item.icon className="size-4" />
-                            <span>{item.title}</span>
-                          </Link>
-                        </SidebarMenuButton>
-                      </SidebarMenuItem>
-                    ))}
+                    {estateNavigation.map((item) => {
+                      const url = getEstateUrl(estate.id, item.path);
+                      return (
+                        <SidebarMenuItem key={item.title}>
+                          <SidebarMenuButton asChild isActive={isPathActive(url)}>
+                            <Link to={url}>
+                              <item.icon className="size-4" />
+                              <span>{item.title}</span>
+                            </Link>
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      );
+                    })}
                   </SidebarMenu>
                 </SidebarGroupContent>
               </SidebarGroup>
             ))}
 
+            {/* Organization Navigation */}
+            <SidebarGroup>
+              <SidebarGroupLabel>Organization</SidebarGroupLabel>
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {organizationNavigation.map((item) => (
+                    <SidebarMenuItem key={item.title}>
+                      {item.external ? (
+                        <BillingPortalLink item={item} />
+                      ) : (
+                        <SidebarMenuButton asChild isActive={isPathActive(getOrgUrl(item.path))}>
+                          <Link to={getOrgUrl(item.path)}>
+                            <item.icon className="size-4" />
+                            <span>{item.title}</span>
+                          </Link>
+                        </SidebarMenuButton>
+                      )}
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+
+            {/* Admin Navigation */}
             {impersonationInfo?.isAdmin && (
               <SidebarGroup>
                 <SidebarGroupLabel>Admin</SidebarGroupLabel>

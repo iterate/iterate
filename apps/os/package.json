@@ -20,6 +20,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@better-auth/stripe": "^1.3.25",
     "@cfworker/json-schema": "^4.1.1",
     "@clack/prompts": "^0.11.0",
     "@cloudflare/sandbox": "^0.3.2",
@@ -80,6 +81,7 @@
     "replicate": "^1.2.0",
     "sonner": "^2.0.7",
     "streamdown": "^1.3.0",
+    "stripe": "^19.0.0",
     "superjson": "^2.2.2",
     "tailwind-merge": "^3.3.1",
     "tiny-invariant": "^1.3.3",

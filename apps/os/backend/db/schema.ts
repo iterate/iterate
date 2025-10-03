@@ -164,6 +164,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
 export const organization = pgTable("organization", (t) => ({
   id: iterateId("org"),
   name: t.text().notNull(),
+  stripeCustomerId: t.text(),
   ...withTimestamps,
 }));
 export const organizationRelations = relations(organization, ({ many }) => ({

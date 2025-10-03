@@ -461,9 +461,9 @@ function EstateContent() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-8 pt-16 pb-8">
+    <div className="p-6">
       {/* Editable Title */}
-      <div className="mb-12">
+      <div className="mb-8">
         <EditableTitle
           value={estate.name}
           isEditing={isEditing}

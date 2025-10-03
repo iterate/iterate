@@ -44,7 +44,7 @@ export default function AdminDBToolsPage() {
   };
 
   return (
-    <div className="container max-w-2xl p-6 space-y-6">
+    <div className="p-6 space-y-6">
       <div>
         <h2 className="text-2xl font-semibold">Database Tools</h2>
         <p className="text-sm text-muted-foreground">Destructive operations</p>

@@ -7,6 +7,7 @@ import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
 import { PostHog } from "posthog-node";
+import { cors } from "hono/cors";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromURLHandler, getFileHandler } from "./file-handlers.ts";
@@ -39,7 +40,16 @@ export type Variables = {
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
+
+app.use(
+  "*",
+  cors({
+    credentials: true,
+    origin: (c) => c,
+  }),
+);
 
 // Error tracking with PostHog
 app.onError((err, c) => {

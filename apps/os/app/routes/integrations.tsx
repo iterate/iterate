@@ -137,7 +137,7 @@ export default function Integrations() {
 
   if (isLoading) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="p-6">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Integrations</h1>
           <p className="text-muted-foreground text-lg">
@@ -164,7 +164,7 @@ export default function Integrations() {
 
   if (error) {
     return (
-      <div className="max-w-6xl mx-auto p-6">
+      <div className="p-6">
         <div className="mb-8">
           <h1 className="text-3xl font-bold mb-2">Integrations</h1>
           <p className="text-muted-foreground text-lg">
@@ -177,7 +177,7 @@ export default function Integrations() {
   }
 
   return (
-    <div className="max-w-6xl mx-auto p-6">
+    <div className="p-6">
       {/* Header */}
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Integrations</h1>

@@ -222,7 +222,7 @@ export async function reactToSlackWebhook(
             name: "eyes",
           })
           .then(
-            () => logger.log("[SlackAgent] Added eyes reaction"),
+            () => logger.info("[SlackAgent] Added eyes reaction"),
             (error) => logger.error("[SlackAgent] Failed to add eyes reaction", error),
           );
       }
@@ -246,7 +246,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
     );
 
     if (validMembers.length === 0) {
-      logger.log("No valid Slack members to sync");
+      logger.info("No valid Slack members to sync");
       return;
     }
 
@@ -318,7 +318,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
         });
       }
 
-      logger.log(`Upserting ${mappingsToUpsert.length} provider mappings`);
+      logger.info(`Upserting ${mappingsToUpsert.length} provider mappings`);
 
       if (mappingsToUpsert.length > 0) {
         await tx
@@ -333,7 +333,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       }
 
       // Step 4: Upsert organization memberships
-      logger.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
+      logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
 
       if (organizationMembershipsToUpsert.length > 0) {
         await tx

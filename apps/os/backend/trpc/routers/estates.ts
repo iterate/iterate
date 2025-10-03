@@ -1,36 +1,48 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc.ts";
 import { organizationUserMembership } from "../../db/schema.ts";
 
 export const estatesRouter = router({
-  // Get all estates for the current user
-  list: protectedProcedure.query(async ({ ctx }) => {
-    const userOrganizations = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, ctx.user.id),
-      with: {
-        organization: {
-          with: {
-            estates: true,
+  // Get estates for the current user, optionally filtered by organization
+  list: protectedProcedure
+    .input(
+      z
+        .object({
+          organizationId: z.string().optional(),
+        })
+        .optional(),
+    )
+    .query(async ({ ctx, input }) => {
+      const userOrganizations = await ctx.db.query.organizationUserMembership.findMany({
+        where: eq(organizationUserMembership.userId, ctx.user.id),
+        with: {
+          organization: {
+            with: {
+              estates: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    // Flatten estates from all organizations the user belongs to
-    const estates = userOrganizations.flatMap(({ organization }) =>
-      organization.estates.map((estate) => ({
-        id: estate.id,
-        name: estate.name,
-        organizationId: estate.organizationId,
-        organizationName: organization.name,
-        createdAt: estate.createdAt,
-        updatedAt: estate.updatedAt,
-      })),
-    );
+      // Flatten estates from all (or specific) organizations the user belongs to
+      const estates = userOrganizations
+        .filter(({ organization }) =>
+          input?.organizationId ? organization.id === input.organizationId : true,
+        )
+        .flatMap(({ organization }) =>
+          organization.estates.map((estate) => ({
+            id: estate.id,
+            name: estate.name,
+            organizationId: estate.organizationId,
+            organizationName: organization.name,
+            createdAt: estate.createdAt,
+            updatedAt: estate.updatedAt,
+          })),
+        );
 
-    return estates;
-  }),
+      return estates;
+    }),
 
   // Get current user's default/first estate
   getCurrent: protectedProcedure.query(async ({ ctx }) => {
