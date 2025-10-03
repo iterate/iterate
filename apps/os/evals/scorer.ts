@@ -74,11 +74,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
 
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
-    const score: ScoreResult & { messages: string[] } = {
-      messages: newMessages,
-      score: 0,
-      reason: "pending",
-    };
+    const score: ExplainedScoreResult = { messages: newMessages, score: 0, reason: "pending" };
     // push score immediately so the scores array is in the right order, we'll overwrite the pending props later
     scores.push(score);
     // start span immediately so it's in the right order
@@ -87,12 +83,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
       parent: params.braintrustSpanExportedId,
       type: "score",
     });
-    intermediateScoreSpan.log({
-      input: {
-        conversation,
-        expectation,
-      },
-    });
+    intermediateScoreSpan.log({ input: { conversation, expectation } });
 
     const input = dedent`
       <conversation>
@@ -112,15 +103,11 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     if (!openaiResponse.output_parsed) {
       throw new Error(`Didn't get a valid output for input:\n${input}`);
     }
-    openaiResponse.output_parsed.score /= 100; // openai returns a score between 0 and 100, we want it between 0 and 1
-    Object.assign(score, openaiResponse.output_parsed);
+    // mutate the score that's already in the array to maintain ordering (sometimes the evaluation LLM call is slower than the production one)
+    score.score = openaiResponse.output_parsed.score / 100; // openai returns a score between 0 and 100, we want it between 0 and 1
+    score.reason = openaiResponse.output_parsed.reason;
 
-    intermediateScoreSpan.log({
-      output: {
-        score: score.score,
-        reason: score.reason,
-      },
-    });
+    intermediateScoreSpan.log({ output: { score: score.score, reason: score.reason } });
     intermediateScoreSpan.end();
     await intermediateScoreSpan.flush();
   };
