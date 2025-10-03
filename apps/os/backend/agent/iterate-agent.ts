@@ -9,7 +9,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -172,7 +172,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       .fetch(req)
       .then((res) => res.text())
       .catch((e) => {
-        console.error("Could not set server name:", e);
+        logger.error("Could not set server name:", e);
       });
 
     return stub;
@@ -458,7 +458,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             }),
           );
         } catch (error) {
-          console.warn("Failed to broadcast events:", error);
+          logger.warn("Failed to broadcast events:", error);
         }
       },
 
@@ -712,7 +712,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
     // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
     //   milliseconds: 250,
-    //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    //   fallback: () => logger.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
     const rules = [
       ...defaultContextRules,
@@ -813,11 +813,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Generic handler for scheduled reminders. This method will be called by the scheduler.
    */
   async handleReminder(data: { iterateReminderId: string }) {
-    console.info(`Executing reminder: ${data.iterateReminderId}`);
+    logger.info(`Executing reminder: ${data.iterateReminderId}`);
 
     const reminder = this.state.reminders?.[data.iterateReminderId];
     if (!reminder) {
-      console.error(`Reminder with ID ${data.iterateReminderId} not found in state.`);
+      logger.error(`Reminder with ID ${data.iterateReminderId} not found in state.`);
       return;
     }
 
@@ -1267,7 +1267,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       !Array.isArray(replicateResponse) ||
       !replicateResponse.every((url) => typeof url === "string" && url.startsWith("https://"))
     ) {
-      console.warn(
+      logger.warn(
         "Replicate API returned non-array response or array contains non-string values",
         replicateResponse,
       );
@@ -1404,7 +1404,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
-        console.error({
+        logger.error({
           message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
           result: resultInit,
         });
@@ -1420,7 +1420,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!_resultExec.success) {
-        console.error({
+        logger.error({
           message: `Error running \`${commandExec}\` in sandbox`,
           result: _resultExec,
         });

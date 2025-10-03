@@ -20,7 +20,7 @@ import { OrganizationWebSocket } from "./durable-objects/organization-websocket.
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
-import { logger as console } from "./tag-logger.ts";
+import { logger } from "./tag-logger.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -44,7 +44,7 @@ app.use(contextStorage());
 // Error tracking with PostHog
 app.onError((err, c) => {
   // Log the error
-  console.error("Unhandled error:", err);
+  logger.error("Unhandled error:", err);
 
   // Track error in PostHog (non-blocking)
   waitUntil(
@@ -105,7 +105,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
     if (message.includes("not found")) {
       return c.json({ error: "Agent not found" }, 404);
     }
-    console.error("Failed to get agent stub:", error);
+    logger.error("Failed to get agent stub:", error);
     return c.json({ error: "Failed to connect to agent" }, 500);
   }
 });
@@ -119,7 +119,7 @@ app.all("/api/trpc/*", (c) => {
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
     onError: ({ path, error, type, input }) => {
-      console.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
+      logger.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
         type,
         code: error.code,
         message: error.message,
@@ -237,7 +237,7 @@ app.post(
 
       return c.json(result);
     } catch (error) {
-      console.error("Test build error:", error);
+      logger.error("Test build error:", error);
       return c.json(
         {
           error: "Internal server error during build test",

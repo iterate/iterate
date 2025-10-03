@@ -6,7 +6,7 @@ import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   generateGithubJWT,
   getGithubInstallationForEstate,
@@ -270,9 +270,7 @@ export const integrationsRouter = router({
 
       // Safety check to prevent infinite loops (max 10 pages = 1000 repos)
       if (page > 10) {
-        console.warn(
-          `Stopping repository fetch at page ${page - 1} to prevent excessive API calls`,
-        );
+        logger.warn(`Stopping repository fetch at page ${page - 1} to prevent excessive API calls`);
         break;
       }
     }
@@ -310,12 +308,12 @@ export const integrationsRouter = router({
           repoName = repoData.name;
           repoFullName = repoData.full_name;
         } else {
-          console.error(
+          logger.error(
             `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
           );
         }
       } catch (error) {
-        console.error("Error fetching repository details:", error);
+        logger.error("Error fetching repository details:", error);
       }
     }
 
@@ -397,7 +395,7 @@ export const integrationsRouter = router({
         }
       } catch (error) {
         // Log the error but don't fail the connection
-        console.error("Failed to trigger initial build:", error);
+        logger.error("Failed to trigger initial build:", error);
       }
 
       return {
@@ -496,15 +494,15 @@ export const integrationsRouter = router({
 
                   if (!deleteResponse.ok && deleteResponse.status !== 404) {
                     // Log error but don't fail the disconnection
-                    console.error(
+                    logger.error(
                       `Failed to revoke GitHub installation ${acc.accountId}: ${deleteResponse.status} ${deleteResponse.statusText}`,
                     );
                   } else if (deleteResponse.ok) {
-                    console.log(`Successfully revoked GitHub installation ${acc.accountId}`);
+                    logger.log(`Successfully revoked GitHub installation ${acc.accountId}`);
                   }
                 } catch (error) {
                   // Log error but don't fail the disconnection
-                  console.error(`Error revoking GitHub installation ${acc.accountId}:`, error);
+                  logger.error(`Error revoking GitHub installation ${acc.accountId}:`, error);
                 }
               }
             }
@@ -734,7 +732,7 @@ export const integrationsRouter = router({
         ctx.db,
         estateId,
       ).catch((e) => {
-        console.log(e);
+        logger.log(e);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message:
@@ -754,7 +752,7 @@ export const integrationsRouter = router({
       );
 
       if (!installationInfoRes.ok) {
-        console.log("Failed to get GitHub installation info", await installationInfoRes.text());
+        logger.log("Failed to get GitHub installation info", await installationInfoRes.text());
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to get GitHub installation info",
@@ -791,7 +789,7 @@ export const integrationsRouter = router({
       }
 
       if (!createRepoRes.ok) {
-        console.error(await createRepoRes.text());
+        logger.error(await createRepoRes.text());
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to create repository",

@@ -9,7 +9,7 @@ import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
-import { logger as console } from "../../tag-logger.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   extractBotUserIdFromAuthorizations,
   extractUserId,
@@ -66,7 +66,7 @@ slackApp.post("/webhook", async (c) => {
     },
   });
   if (!verification.success) {
-    console.warn("Slack webhook signature verification failed", verification);
+    logger.warn("Slack webhook signature verification failed", verification);
     return c.text(
       verification.errorMessage ?? "Slack webhook signature verification failed",
       verification.httpStatusCode,
@@ -82,7 +82,7 @@ slackApp.post("/webhook", async (c) => {
 
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
-    console.warn("Slack webhook received without a team ID", body);
+    logger.warn("Slack webhook received without a team ID", body);
     return c.text("ok");
   }
 
@@ -162,7 +162,7 @@ slackApp.post("/webhook", async (c) => {
   });
 
   if (rest.length > 0) {
-    console.error(`Multiple agents found for routing key ${routingKey}`);
+    logger.error(`Multiple agents found for routing key ${routingKey}`);
     return c.text("ok");
   }
 
@@ -222,8 +222,8 @@ export async function reactToSlackWebhook(
             name: "eyes",
           })
           .then(
-            () => console.log("[SlackAgent] Added eyes reaction"),
-            (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
+            () => logger.log("[SlackAgent] Added eyes reaction"),
+            (error) => logger.error("[SlackAgent] Failed to add eyes reaction", error),
           );
       }
     }
@@ -236,10 +236,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
     const userListResponse = await authedWebClient.users.list({});
 
     if (!userListResponse.ok || !userListResponse.members) {
-      console.error(
-        "Failed to fetch Slack users:",
-        userListResponse.error || "No members returned",
-      );
+      logger.error("Failed to fetch Slack users:", userListResponse.error || "No members returned");
       return;
     }
 
@@ -249,7 +246,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
     );
 
     if (validMembers.length === 0) {
-      console.log("No valid Slack members to sync");
+      logger.log("No valid Slack members to sync");
       return;
     }
 
@@ -263,7 +260,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       });
 
       if (!estate) {
-        console.error(`Estate ${estateId} not found`);
+        logger.error(`Estate ${estateId} not found`);
         return;
       }
 
@@ -283,7 +280,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
           )
           .onConflictDoNothing();
       } catch (error) {
-        console.error("Error creating users (will continue with existing ones):", error);
+        logger.error("Error creating users (will continue with existing ones):", error);
       }
 
       // Step 2: Fetch ALL users (both existing and newly created)
@@ -300,7 +297,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
         const user = usersByEmail.get(member.profile!.email!);
 
         if (!user) {
-          console.error(`User not found for email ${member.profile!.email!}`);
+          logger.error(`User not found for email ${member.profile!.email!}`);
           continue;
         }
 
@@ -321,7 +318,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
         });
       }
 
-      console.log(`Upserting ${mappingsToUpsert.length} provider mappings`);
+      logger.log(`Upserting ${mappingsToUpsert.length} provider mappings`);
 
       if (mappingsToUpsert.length > 0) {
         await tx
@@ -336,7 +333,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       }
 
       // Step 4: Upsert organization memberships
-      console.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
+      logger.log(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
 
       if (organizationMembershipsToUpsert.length > 0) {
         await tx
@@ -346,12 +343,12 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
       }
 
       // Log sync results
-      console.log(
+      logger.info(
         `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
       );
     });
   } catch (error) {
-    console.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
+    logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
     throw error;
   }
 }
@@ -366,7 +363,7 @@ async function handleBotChannelJoin(params: {
 
   const slackToken = await getSlackAccessTokenForEstate(db, estateId);
   if (!slackToken) {
-    console.error("No Slack token available for channel join handling");
+    logger.error("No Slack token available for channel join handling");
     return;
   }
 
@@ -378,7 +375,7 @@ async function handleBotChannelJoin(params: {
   });
 
   if (!history.ok || !history.messages) {
-    console.error("Failed to fetch channel history");
+    logger.error("Failed to fetch channel history");
     return;
   }
 
@@ -475,16 +472,20 @@ async function handleBotChannelJoin(params: {
                 name: "eyes",
               })
               .catch((error) => {
-                console.error("[SlackAgent] Failed to add reaction:", error);
+                logger.error("[SlackAgent] Failed to add reaction:", error);
               })
           : Promise.resolve(),
       ]);
 
       if (agentStub.status === "fulfilled") {
         const initEvents = await agentStub.value.initSlack(channelId, threadTs);
-        await agentStub.value.addEvents([...initEvents, ...contextEvents]);
+        const participantEvents = mentionMessage?.user
+          ? await agentStub.value.getParticipantJoinedEvents(mentionMessage.user, botUserId)
+          : [];
+
+        await agentStub.value.addEvents([...initEvents, ...participantEvents, ...contextEvents]);
       } else {
-        console.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
+        logger.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
       }
     }),
   );

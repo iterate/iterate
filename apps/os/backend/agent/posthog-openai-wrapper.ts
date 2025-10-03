@@ -1,7 +1,7 @@
 import type OpenAI from "openai";
 import { SELF_AGENT_DISTINCT_ID, type PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { formatItemsForObservability } from "../utils/observability-formatter.ts";
-import { logger as console } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 
 // Global trace storage for conversation continuity
 const _traceStorage = new Map<
@@ -128,7 +128,7 @@ export function posthogOpenAIWrapper(
                 const { model, metadata, usage, output } = await res.finalResponse();
 
                 if (process.env.DEBUG_POSTHOG) {
-                  console.log(`[PostHog] Logging trace ${traceId}: ${output.length} messages`);
+                  logger.log(`[PostHog] Logging trace ${traceId}: ${output.length} messages`);
                 }
 
                 sendPostHogGenerationEventWithFullData({

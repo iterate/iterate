@@ -6,7 +6,7 @@ import type { AgentCoreEventInput } from "./agent/agent-core-schemas.ts";
 import type { DB } from "./db/client.ts";
 import { slackWebhookEvent } from "./db/schema.ts";
 import { uploadFile } from "./file-handlers.ts";
-import { logger as console } from "./tag-logger.ts";
+import { logger } from "./tag-logger.ts";
 
 const ContentsOptions = z.object({
   text: z
@@ -499,7 +499,7 @@ async function getURLContentFromSlack(params: { url: string; db: DB }) {
       slackChannelId: channelId,
     };
   } catch (error) {
-    console.error("Failed to fetch Slack thread content:", error);
+    logger.error("Failed to fetch Slack thread content:", error);
     return {
       success: false,
       error: `Failed to fetch Slack thread content: ${error instanceof Error ? error.message : "Unknown error"}`,
@@ -537,7 +537,7 @@ async function getURLContentFromWebpage(params: {
   const exaResult = includeTextContent && isFulfilled(textResult) ? textResult.value : null;
 
   if (includeTextContent && !isFulfilled(textResult)) {
-    console.error("Exa link contents failed:", textResult.reason);
+    logger.error("Exa link contents failed:", textResult.reason);
     if (!includeScreenshotOfPage || !isFulfilled(screenshotResult)) {
       return {
         success: false,
@@ -583,10 +583,10 @@ async function getURLContentFromWebpage(params: {
         });
         screenshotTaken = true;
       } else if (screenshotPayload?.type === "text" && "text" in screenshotPayload) {
-        console.error("Screenshot failed:", screenshotPayload.text);
+        logger.error("Screenshot failed:", screenshotPayload.text);
       }
     } else {
-      console.error("Screenshot API call failed:", screenshotResult.reason);
+      logger.error("Screenshot API call failed:", screenshotResult.reason);
     }
   }
 
@@ -634,7 +634,7 @@ async function getURLContentFromFile(params: {
     contentType: contentType || "application/octet-stream",
   });
 
-  console.log(`File uploaded for ${url}: ${fileRecord.id}`);
+  logger.log(`File uploaded for ${url}: ${fileRecord.id}`);
 
   const additionalEvents: AgentCoreEventInput[] = [
     {

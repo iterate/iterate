@@ -8,7 +8,7 @@ import { schema, type DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
 import { getBaseURL } from "./utils/utils.ts";
-import { logger as console } from "./tag-logger.ts";
+import { logger } from "./tag-logger.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
@@ -187,7 +187,7 @@ export const uploadFileFromURL = async ({
     : 0;
   if (!contentLength) {
     // TODO: we could consider reading into memory here to get the content length
-    console.error("content-length header is missing, will try without it anyway");
+    logger.error("content-length header is missing, will try without it anyway");
   }
 
   const fileRecord = await uploadFile({
@@ -279,15 +279,15 @@ export const uploadFile = async ({
         controller.close();
       },
     });
-    sourceStream.pipeTo(writable).catch((err) => console.error("FixedLengthStream error:", err));
+    sourceStream.pipeTo(writable).catch((err) => logger.error("FixedLengthStream error:", err));
     stream = readable;
   } else {
     if (!contentLength) {
       // _sometimes_ this works, in cloudflare it depends on where the ReadableStream is created
-      console.error("content-length header is missing. Trying anyway without it");
+      logger.error("content-length header is missing. Trying anyway without it");
     } else {
       const { readable, writable } = new FixedLengthStream(contentLength);
-      stream.pipeTo(writable).catch((err) => console.error("FixedLengthStream error:", err));
+      stream.pipeTo(writable).catch((err) => logger.error("FixedLengthStream error:", err));
       stream = readable;
     }
   }
@@ -324,7 +324,7 @@ export const uploadFile = async ({
 
     return fileRecord;
   } catch (error) {
-    console.error("Upload error:", error);
+    logger.error("Upload error:", error);
     throw error;
   }
 };
@@ -357,7 +357,7 @@ export const uploadFileFromURLHandler = async (
     const fileRecord = await uploadFileFromURL({ url, filename, estateId, db });
     return c.json(fileRecord);
   } catch (error) {
-    console.error("Upload from URL error:", error);
+    logger.error("Upload from URL error:", error);
     return c.json(
       {
         error: error instanceof Error ? error.message : "Upload from URL failed",
@@ -382,7 +382,7 @@ export const getFileHandler = async (
     // Get file record from database
     const [fileRecord] = await db.select().from(files).where(eq(files.id, fileId)).limit(1);
     if (!fileRecord) {
-      console.error(`[getFileHandler] File not found in database: ${fileId}`);
+      logger.error(`[getFileHandler] File not found in database: ${fileId}`);
       return c.json({ error: "File not found" }, 404);
     }
 
@@ -413,7 +413,7 @@ export const getFileHandler = async (
 
     return new Response(object.body, { headers });
   } catch (error) {
-    console.error("File retrieval error:", error);
+    logger.error("File retrieval error:", error);
     return c.json(
       {
         error: error instanceof Error ? error.message : "File retrieval failed",
