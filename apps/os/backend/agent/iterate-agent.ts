@@ -1398,9 +1398,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
       // Init the sandbox (ignore any errors)
       const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-      await sandboxSession.exec(commandInit, {
+      const resultInit = await sandboxSession.exec(commandInit, {
         timeout: 360 * 1000, // 360 seconds total timeout
       });
+      if (!resultInit.success) {
+        console.error({
+          message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+          result: resultInit,
+        });
+      }
 
       // ------------------------------------------------------------------------
       // Run exec
@@ -1411,6 +1417,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       const _resultExec = await sandboxSession.exec(commandExec, {
         timeout: 360 * 1000, // 360 seconds total timeout
       });
+      if (!_resultExec.success) {
+        console.error({
+          message: `Error running \`${commandExec}\` in sandbox`,
+          result: _resultExec,
+        });
+      }
 
       return _resultExec;
     };
