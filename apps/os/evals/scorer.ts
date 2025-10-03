@@ -6,7 +6,7 @@ import dedent from "dedent";
 import { startSpan } from "braintrust";
 import { zodTextFormat } from "./zod-openai.ts";
 
-const ScoreResult = z.object({
+export const ScoreResult = z.object({
   score: z
     .number()
     .min(0)
@@ -16,6 +16,13 @@ const ScoreResult = z.object({
     ),
   reason: z.string().describe("A detailed explanation of why you gave this score."),
 });
+export const ExplainedScoreResult = ScoreResult.extend({
+  messages: z.array(z.string()).describe("The messages that were used to score the turn."),
+});
+export type ScoreResult = z.infer<typeof ScoreResult>;
+export type ExplainedScoreResult = z.infer<typeof ExplainedScoreResult>;
+
+export type ScoreOutput = { scores: ScoreResult[] };
 
 type ResponsesCreateParams = Parameters<OpenAI["responses"]["create"]>[0];
 const multiTurnScorerParamsDefaults = {
@@ -65,7 +72,11 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
 
   const scoreTurn = async (newMessages: string[], expectation: string) => {
     conversation.push(...newMessages);
-    const score: ScoreResult = { score: 0, reason: "pending", messages: newMessages };
+    const score: ScoreResult & { messages: string[] } = {
+      score: 0,
+      reason: "pending",
+      messages: newMessages,
+    };
     // push score immediately so the scores array is in the right order, we'll overwrite the pending props later
     scores.push(score);
     // start span immediately so it's in the right order
@@ -99,6 +110,7 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
     if (!openaiResponse.output_parsed) {
       throw new Error(`Didn't get a valid output for input:\n${input}`);
     }
+    openaiResponse.output_parsed.score /= 100; // openai returns a score between 0 and 100, we want it between 0 and 1
     Object.assign(score, openaiResponse.output_parsed);
 
     intermediateScoreSpan.log({
@@ -133,9 +145,6 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   };
 }
 
-type ScoreResult = { score: number; reason: string; messages: string[] };
-type ScoreOutput = { scores: ScoreResult[] };
-
 const resultScorers = {
   mean: {
     name: "mean",
@@ -164,6 +173,15 @@ const resultScorers = {
       score: 0.01 * (R.firstBy(result.output.scores, (s) => s.score)?.score ?? 0),
       metadata: { allScores: result.output.scores },
     }),
+  },
+  aggregates: {
+    meanmean: {
+      name: "meanmean",
+      scorer: (result: { output: ScoreOutput[] }) => ({
+        score: R.meanBy(result.output, (output) => 0.01 * R.meanBy(output.scores, (s) => s.score)),
+        metadata: { allScores: result.output },
+      }),
+    },
   },
 };
 
