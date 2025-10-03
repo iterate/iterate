@@ -6,6 +6,7 @@ import { z } from "zod/v4";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
+import { getSandbox } from "@cloudflare/sandbox";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
 import { logger as console } from "../tag-logger.ts";
@@ -1302,6 +1303,171 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       success: true,
       numberOfImagesGenerated: replicateResponse.length,
       __addAgentCoreEvents: fileSharedEvents,
+    };
+  }
+
+  async exec(input: Inputs["exec"]) {
+    // ------------------------------------------------------------------------
+    // Get config
+    // ------------------------------------------------------------------------
+
+    const estateId = this.databaseRecord.estateId;
+
+    // Get estate and repo information
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+    });
+
+    if (!estate) {
+      throw new Error(`Estate ${estateId} not found`);
+    }
+
+    if (!estate.connectedRepoId) {
+      throw new Error("No repository connected to this estate");
+    }
+
+    // Get GitHub installation and token
+    const githubInstallation = await this.db
+      .select({
+        accountId: schema.account.accountId,
+        accessToken: schema.account.accessToken,
+      })
+      .from(schema.estateAccountsPermissions)
+      .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+      .where(
+        and(
+          eq(schema.estateAccountsPermissions.estateId, estateId),
+          eq(schema.account.providerId, "github-app"),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    if (!githubInstallation) {
+      throw new Error("No GitHub installation found for this estate");
+    }
+
+    // Get installation token
+    const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
+    const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // Fetch repository details using Octokit
+    const { Octokit } = await import("octokit");
+    const octokit = new Octokit({ auth: githubToken });
+    const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
+      repository_id: estate.connectedRepoId,
+    });
+    const githubRepoUrl = repoData.html_url;
+    const branch = estate.connectedRepoRef || repoData.default_branch || "main";
+    const commitHash = undefined; // Use the latest commit on the branch
+
+    // ------------------------------------------------------------------------
+    // Init sandbox
+    // ------------------------------------------------------------------------
+
+    // Retrieve the sandbox
+    const sandboxId = `agent-sandbox-${estateId}`;
+    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+
+    const execInSandbox = async () => {
+      // Ensure that the session directory exists
+      const sessionId = estateId;
+      const sessionDir = `/tmp/session-${estateId}`;
+      await sandbox.mkdir(sessionDir, { recursive: true });
+
+      // Create an isolated session
+      const sandboxSession = await sandbox.createSession({
+        id: sessionId,
+        cwd: sessionDir,
+        isolation: true,
+      });
+
+      // Determine the checkout target and whether it's a commit hash
+      const checkoutTarget = commitHash || branch || "main";
+      const isCommitHash = Boolean(commitHash);
+
+      // Prepare arguments as a JSON object
+      const initArgs = {
+        sessionDir,
+        githubRepoUrl,
+        githubToken,
+        checkoutTarget,
+        isCommitHash,
+      };
+      // Escape the JSON string for shell
+      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+      // Init the sandbox (ignore any errors)
+      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+      await sandboxSession.exec(commandInit, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+
+      // ------------------------------------------------------------------------
+      // Run exec
+      // ------------------------------------------------------------------------
+
+      // Run the exec command
+      const commandExec = input.command;
+      const _resultExec = await sandboxSession.exec(commandExec, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+
+      return _resultExec;
+    };
+
+    // If sandbox is not ready, start it, and schedule exec after it boots up.
+    // NOTE: according to the exposed API this should be the correct way to
+    //       check if the sandbox is running and start it up if it isnt'. But
+    //       the logs are confusing:
+    // ... Sandbox successfully shut down
+    // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
+    // ... Error checking if container is ready: The operation was aborted
+    // ... Port 3000 is ready
+    const sandboxState = await sandbox.getState();
+    if (sandboxState.status !== "healthy") {
+      waitUntil(
+        sandbox
+          .startAndWaitForPorts(3000) // default sandbox port
+          .then(execInSandbox)
+          .then((resultExec) => {
+            // Inject a tool call event that will be processed by the agent
+            // TODO: this doesn't work
+            (this as any).addEvent({
+              type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+              data: {
+                call: {
+                  type: "function_call",
+                  call_id: `exec-result-${Date.now()}`,
+                  name: "sendSlackMessage",
+                  arguments: JSON.stringify({
+                    text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
+                    endTurn: true,
+                  }),
+                  status: "completed", // ← Changed from "pending"
+                },
+                result: {
+                  success: resultExec.success,
+                  output: {},
+                },
+              },
+              triggerLLMRequest: false,
+            });
+          }),
+      );
+
+      // TODO: this doesn't work
+      return {
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
+        __triggerLLMRequest: false,
+      };
+    }
+
+    // If sandbox is already running, just run the command
+    const resultExec = await execInSandbox();
+    return {
+      success: resultExec.success,
+      message: resultExec.stdout,
+      __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
     };
   }
 }

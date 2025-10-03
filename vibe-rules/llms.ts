@@ -378,6 +378,16 @@ import { env, type CloudflareEnv } from "../env.ts";
     },
   },
   {
+    name: "drizzle-planetscale",
+    description: "We use the drizzle ORM",
+    rule: dedent`
+      We use Planetscale Postgres with Drizzle as our ORM. In development we run postgres in a docker container.
+
+      Remember to use db.transaction() when performing multiple related database operations that should succeed or fail together.
+    `,
+    globs: ["apps/os/backend/**/*.ts"],
+  },
+  {
     name: "vibe-rules-source-of-truth",
     description: "About vibe-rules and rule generation",
     rule: dedent`

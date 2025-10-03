@@ -4,111 +4,81 @@ import { existsSync, statSync } from "node:fs";
 import { tsImport } from "tsx/esm/api";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
 import { z } from "zod/v4";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
 
 async function runBootstrap(configPath?: string) {
+  if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
+    throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
+  }
+
+  const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
+    max: 1,
+    fetch_types: false,
+  });
+
+  const db = drizzle(pg, { schema, casing: "snake_case" });
+
+  // Always delete all iterate configs first
+  await db.delete(schema.iterateConfig);
+  console.log("Emptied iterate_config table ahead of bootstrap.");
+
+  // If no config path provided, we're done
   if (!configPath) {
-    console.log("No iterate config path provided, skipping bootstrap");
-    return { success: true, message: "Skipped bootstrap (no config provided)", skipped: true };
-  }
-
-  try {
-    // Path resolution strategy:
-    // Try multiple possible locations for the config file
-    const repoRoot = resolve(process.cwd(), "../..");
-    const possiblePaths = [
-      resolve(process.cwd(), configPath),
-      resolve(process.cwd(), configPath, "iterate.config.ts"),
-      resolve(repoRoot, configPath),
-      resolve(repoRoot, configPath, "iterate.config.ts"),
-    ];
-
-    const resolvedPath = possiblePaths.find((path) => {
-      return existsSync(path) && statSync(path).isFile();
-    });
-
-    if (!resolvedPath) {
-      throw new Error(
-        `Could not find iterate config at any of these paths:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}`,
-      );
-    }
-
-    console.log(`Resolved config path: ${resolvedPath}`);
-
-    const configModule = (await tsImport(resolvedPath, {
-      parentURL: pathToFileURL(resolvedPath).toString(),
-    })) as { default?: any };
-
-    const config = configModule.default || configModule;
-
-    if (!config) {
-      throw new Error("No default export found in iterate config");
-    }
-
-    console.log("Loaded iterate config from: ", resolvedPath, config);
-
-    if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
-      throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
-    }
-
-    const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
-      max: 1,
-      fetch_types: false,
-    });
-
-    const db = drizzle(pg, { schema, casing: "snake_case" });
-
-    const estates = await db.select().from(schema.estate);
-
-    console.log(`Found ${estates.length} existing estates`);
-
-    for (const estate of estates) {
-      console.log(`Updating iterate config for estate: ${estate.name} (${estate.id})`);
-
-      const existingConfig = await db
-        .select()
-        .from(schema.iterateConfig)
-        .where(eq(schema.iterateConfig.estateId, estate.id))
-        .limit(1);
-
-      if (existingConfig.length > 0) {
-        await db
-          .update(schema.iterateConfig)
-          .set({
-            config: config,
-            updatedAt: new Date(),
-          })
-          .where(eq(schema.iterateConfig.estateId, estate.id));
-
-        console.log(`  ✓ Updated existing config`);
-      } else {
-        await db.insert(schema.iterateConfig).values({
-          config: config,
-          estateId: estate.id,
-        });
-
-        console.log(`  ✓ Created new config`);
-      }
-    }
-
-    console.log("Bootstrap complete!");
-
     await pg.end();
-
-    return {
-      success: true,
-      message: `Successfully bootstrapped ${estates.length} estates`,
-      estatesUpdated: estates.length,
-      skipped: false,
-    };
-  } catch (error) {
-    console.error("Bootstrap failed:", error);
-    throw error;
+    console.log(
+      "No iterate config path provided - estates will have an empty iterate config (like repo-less estates in production)",
+    );
+    return;
   }
+
+  // Path resolution strategy:
+  // Try multiple possible locations for the config file
+  const repoRoot = resolve(process.cwd(), "../..");
+  const possiblePaths = [
+    resolve(process.cwd(), configPath),
+    resolve(process.cwd(), configPath, "iterate.config.ts"),
+    resolve(repoRoot, configPath),
+    resolve(repoRoot, configPath, "iterate.config.ts"),
+  ];
+
+  const resolvedPath = possiblePaths.find((path) => {
+    return existsSync(path) && statSync(path).isFile();
+  });
+
+  if (!resolvedPath) {
+    await pg.end();
+    throw new Error(
+      `Could not find iterate config at any of these paths:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}`,
+    );
+  }
+
+  const configModule = (await tsImport(resolvedPath, {
+    parentURL: pathToFileURL(resolvedPath).toString(),
+  })) as { default?: any };
+
+  const config = configModule.default || configModule;
+
+  if (!config) {
+    await pg.end();
+    throw new Error("No default export found in iterate config");
+  }
+
+  const estates = await db.select().from(schema.estate);
+
+  // Insert the same config for all estates
+  for (const estate of estates) {
+    await db.insert(schema.iterateConfig).values({
+      config: config,
+      estateId: estate.id,
+    });
+  }
+
+  await pg.end();
+
+  console.log(`Bootstrapped ${estates.length} estates' iterateConfig from ${resolvedPath}`);
 }
 
 const bootstrap = t.procedure
@@ -129,18 +99,10 @@ const start = t.procedure
   )
   .mutation(async ({ input }) => {
     // Support both command-line flag and environment variable
-    // Default to template estate config if nothing is provided
-    const providedConfigPath =
-      input.config || process.env.ITERATE_CONFIG_PATH || "../../estates/template/iterate.config.ts";
+    const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
 
-    process.env.ITERATE_CONFIG_PATH = providedConfigPath;
-    console.log(`Using iterate config: ${providedConfigPath}`);
+    await runBootstrap(providedConfigPath);
 
-    console.log("Running estate bootstrap...");
-    const bootstrapResult = await runBootstrap(providedConfigPath);
-    console.log(bootstrapResult.message);
-
-    console.log("Starting development server...");
     const result = await exec("doppler", ["run", "--", "react-router", "dev"], {
       nodeOptions: {
         stdio: "inherit",
@@ -148,7 +110,6 @@ const start = t.procedure
         env: {
           ...process.env,
           CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
-          ...(providedConfigPath && { ITERATE_CONFIG_PATH: providedConfigPath }),
         },
       },
     });
