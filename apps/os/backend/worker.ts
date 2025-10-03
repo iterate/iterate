@@ -214,11 +214,11 @@ app.post(
         .string()
         .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
         .optional(),
-      workingDirectory: z
+      connectedRepoPath: z
         .string()
         .refine(
           (val) => !val || !val.startsWith("/"),
-          "Working directory should be a relative path within the repository",
+          "Directory to use within the connected repository",
         )
         .optional(),
     }),

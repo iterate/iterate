@@ -159,4 +159,11 @@ export const iterateAgentTools = defineDOTools({
       overrideReplicateParams: z.record(z.string(), z.any()).optional(),
     }),
   },
+  exec: {
+    description: "Execute a shell in a sandbox.",
+    input: z.object({
+      command: z.string(),
+      env: z.record(z.string(), z.string()).optional(),
+    }),
+  },
 });

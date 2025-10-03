@@ -1,9 +1,12 @@
 import { z } from "zod/v4";
 import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { waitUntil } from "cloudflare:workers";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
+import { syncSlackUsersInBackground } from "../../integrations/slack/slack.ts";
+import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -76,42 +79,45 @@ const deleteUserByEmail = adminProcedure
       });
     }
 
-    // Find all organizations where the user is the owner
-    const ownedOrganizations = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(schema.organizationUserMembership.userId, user.id),
-      with: {
-        organization: {
-          with: {
-            estates: true,
+    // Use a transaction to ensure all deletions are atomic
+    return await ctx.db.transaction(async (tx) => {
+      // Find all organizations where the user is the owner
+      const ownedOrganizations = await tx.query.organizationUserMembership.findMany({
+        where: eq(schema.organizationUserMembership.userId, user.id),
+        with: {
+          organization: {
+            with: {
+              estates: true,
+            },
           },
         },
-      },
+      });
+
+      const ownerOrganizations = ownedOrganizations.filter(
+        (membership) => membership.role === "owner",
+      );
+      const deletedOrganizations: string[] = [];
+      const deletedEstates: string[] = [];
+
+      // Delete organizations the user owns; estates and related records will cascade
+      for (const membership of ownerOrganizations) {
+        const org = membership.organization;
+        // Collect estate ids for return value before deletion cascades
+        for (const e of org.estates) deletedEstates.push(e.id);
+        await tx.delete(schema.organization).where(eq(schema.organization.id, org.id));
+        deletedOrganizations.push(org.id);
+      }
+
+      // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
+      await tx.delete(schema.user).where(eq(schema.user.id, user.id));
+
+      return {
+        success: true,
+        deletedUser: user.id,
+        deletedOrganizations,
+        deletedEstates,
+      };
     });
-
-    const ownerOrganizations = ownedOrganizations.filter(
-      (membership) => membership.role === "owner",
-    );
-    const deletedOrganizations: string[] = [];
-    const deletedEstates: string[] = [];
-
-    // Delete organizations the user owns; estates and related records will cascade
-    for (const membership of ownerOrganizations) {
-      const org = membership.organization;
-      // Collect estate ids for return value before deletion cascades
-      for (const e of org.estates) deletedEstates.push(e.id);
-      await ctx.db.delete(schema.organization).where(eq(schema.organization.id, org.id));
-      deletedOrganizations.push(org.id);
-    }
-
-    // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
-    await ctx.db.delete(schema.user).where(eq(schema.user.id, user.id));
-
-    return {
-      success: true,
-      deletedUser: user.id,
-      deletedOrganizations,
-      deletedEstates,
-    };
   });
 
 export const adminRouter = router({
@@ -257,6 +263,39 @@ export const adminRouter = router({
     return {
       total: estates.length,
       results,
+    };
+  }),
+  syncSlackUsersForEstate: adminProcedure
+    .input(z.object({ estateId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const slackToken = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
+
+      if (!slackToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack token found for this estate",
+        });
+      }
+
+      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, input.estateId));
+
+      return { success: true };
+    }),
+  syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
+    const estates = await ctx.db.query.estate.findMany();
+
+    for (const estate of estates) {
+      const slackToken = await getSlackAccessTokenForEstate(ctx.db, estate.id);
+
+      if (!slackToken) {
+        continue;
+      }
+
+      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, estate.id));
+    }
+
+    return {
+      total: estates.length,
     };
   }),
 });

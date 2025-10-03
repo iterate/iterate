@@ -1,13 +1,6 @@
 import { CheckCircle, ArrowRight } from "lucide-react";
 import { Button } from "../components/ui/button.tsx";
 import { Badge } from "../components/ui/badge.tsx";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card.tsx";
 import { useSlackConnection } from "../hooks/use-slack-connection.ts";
 import type { Route } from "./+types/home";
 
@@ -30,22 +23,24 @@ function ConnectSlackCard() {
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center gap-3">
-          <img src="/slack.png" alt="Slack" className="w-8 h-8" />
-          <CardTitle>Connect Slack</CardTitle>
+    <div className="border rounded-lg p-6">
+      <div className="mb-4">
+        <div className="flex items-center gap-3 mb-2">
+          <div className="w-8 h-8 rounded-lg bg-white border border-gray-200 flex items-center justify-center flex-shrink-0">
+            <img src="/slack.svg" alt="Slack" className="w-5 h-5" />
+          </div>
+          <div className="text-lg font-semibold">Connect Slack</div>
         </div>
-        <CardDescription>
+        <div className="text-sm text-muted-foreground">
           Connect Slack to start using iterate. Just{" "}
           <Badge variant="secondary" className="font-mono">
             @iterate
           </Badge>{" "}
           in Slack to help with your tasks like managing Linear tickets, searching Notion, adding
           Gmail users and sending emails.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+        </div>
+      </div>
+      <div className="space-y-4">
         {isConnected ? (
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -63,8 +58,8 @@ function ConnectSlackCard() {
             <ArrowRight className="h-4 w-4 ml-2" />
           </Button>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

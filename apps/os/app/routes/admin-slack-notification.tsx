@@ -6,13 +6,6 @@ import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Textarea } from "../components/ui/textarea.tsx";
 import { Label } from "../components/ui/label.tsx";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../components/ui/card.tsx";
 
 export default function SlackNotificationPage() {
   const trpcClient = useTRPCClient();
@@ -41,36 +34,36 @@ export default function SlackNotificationPage() {
         <p className="text-muted-foreground">Send test messages to iterate's Slack workspace</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Send Notification</CardTitle>
-          <CardDescription>Test the Slack notification system by sending a message</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="space-y-2">
-            <Label htmlFor="channel">Channel</Label>
-            <Input
-              id="channel"
-              value={channel}
-              onChange={(e) => setChannel(e.target.value)}
-              placeholder="#test-blank"
-            />
+      <div className="space-y-4 border rounded-md p-6">
+        <div>
+          <div className="font-semibold mb-1">Send Notification</div>
+          <div className="text-sm text-muted-foreground">
+            Test the Slack notification system by sending a message
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="message">Message</Label>
-            <Textarea
-              id="message"
-              value={message}
-              onChange={(e) => setMessage(e.target.value)}
-              placeholder="Enter your message here..."
-              rows={4}
-            />
-          </div>
-          <Button onClick={() => sendNotification.mutate()} disabled={sendNotification.isPending}>
-            {sendNotification.isPending ? "Sending..." : "Send Notification"}
-          </Button>
-        </CardContent>
-      </Card>
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="channel">Channel</Label>
+          <Input
+            id="channel"
+            value={channel}
+            onChange={(e) => setChannel(e.target.value)}
+            placeholder="#test-blank"
+          />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="message">Message</Label>
+          <Textarea
+            id="message"
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder="Enter your message here..."
+            rows={4}
+          />
+        </div>
+        <Button onClick={() => sendNotification.mutate()} disabled={sendNotification.isPending}>
+          {sendNotification.isPending ? "Sending..." : "Send Notification"}
+        </Button>
+      </div>
     </div>
   );
 }

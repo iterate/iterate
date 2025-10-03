@@ -17,6 +17,28 @@ pnpm dev
 # go to the local web ui and click "Connect to Slack". See below for details.
 ```
 
+### Dev cheat sheet
+
+All paths relative to repo root.
+
+```bash
+
+# Run os app and ngrok without loading any specific iterate config
+# This means the bot will behave like a "repo-less" estate in production
+pnpm dev
+
+# Use a specific iterate config
+# This is the template users start with - it contains the tutorial instructions
+pnpm dev -- -c estates/template
+
+# This is iterate's own iterate estate - so the bot will behave like the production bot in the iterate slack
+pnpm dev -- -c estates/template
+
+# Reset everything in development
+pnpm super-reset
+
+```
+
 ### Using slack in development
 
 You need to create a slack app at https://api.slack.com/apps with a manifest that looks like this (replace `{ITERATE_USER}` with your username):
