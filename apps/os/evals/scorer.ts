@@ -1,9 +1,11 @@
+import * as YAML from "yaml";
 import PQueue from "p-queue";
 import * as R from "remeda";
 import OpenAI from "openai";
 import { z } from "zod";
 import dedent from "dedent";
 import { startSpan } from "braintrust";
+import type { MultiTrialScorerOutput } from "./helpers.ts";
 import { zodTextFormat } from "./zod-openai.ts";
 
 export const ScoreResult = z.object({
@@ -145,65 +147,80 @@ function _multiTurnScorer(params: MultiTurnScorerParams = {}) {
   };
 }
 
-const resultScorers = {
-  mean: {
-    name: "mean",
-    scorer: (result: { output: ScoreOutput }) => ({
-      score: 0.01 * R.meanBy(result.output.scores, (s) => s.score),
-      metadata: { allScores: result.output.scores },
-    }),
-  },
-  median: {
-    name: "median",
-    scorer: (result: { output: ScoreOutput }) => ({
-      score:
-        0.01 *
-        R.pipe(
-          result.output.scores,
-          R.sortBy((s) => s.score),
-          R.filter((_, i, { length }) => Math.abs(length / 2 - i) < 1), // either one or two middle items
-          R.meanBy((s) => s.score),
-        ),
-      metadata: { allScores: result.output.scores },
-    }),
-  },
-  min: {
-    name: "min",
-    scorer: (result: { output: ScoreOutput }) => ({
-      score: 0.01 * (R.firstBy(result.output.scores, (s) => s.score)?.score ?? 0),
-      metadata: { allScores: result.output.scores },
-    }),
-  },
-  aggregates: {
-    meanmean: {
-      name: "meanmean",
-      scorer: (result: { output: ScoreOutput[] }) => ({
-        score: R.meanBy(result.output, (output) => 0.01 * R.meanBy(output.scores, (s) => s.score)),
-        metadata: { allScores: result.output },
+const minBy = <T>(arr: T[], fn: (t: T) => number) => arr.map(fn).sort().at(0);
+
+const meanOfMeansScorer = {
+  name: "meanMean",
+  scorer: ({ output }: { output: MultiTrialScorerOutput }) => {
+    const a = analyseTrials(output);
+    return {
+      score: a.aggregates.meanOfMeans,
+      metadata: fmt({
+        aggregates: a.aggregates,
+        trials: a.trials,
       }),
-    },
+    };
   },
 };
 
-const renderColumns = (result: { output: ScoreOutput }) =>
-  [
-    ...result.output.scores.map((s, i) => ({
-      label: `turn ${i + 1}`,
-      value: [...s.messages, `[${s.score}%]\n${s.reason}`].join("\n\n"),
-    })),
-    {
-      label: "Links",
-      value: Object.entries(result.output)
-        .flatMap(([k, s]: [string, unknown]) => {
-          if (typeof s !== "string") return [];
-          if (s.startsWith("http")) return [`- [${k}](${s})`];
-          return [`- ${s}`];
-        })
-        .join("\n"),
-    },
-  ].filter((item) => item.value);
+const turnSummaryColumnRenderer = ({ output }: { output: MultiTrialScorerOutput }) => {
+  const a = analyseTrials(output);
+  return a.turns.map((turn) => ({
+    label: turn.name,
+    value: fmt(turn),
+  }));
+};
+
+const analyseTrials = (output: MultiTrialScorerOutput) => {
+  const turns = R.uniqueBy(
+    output.trials.flatMap((t) =>
+      t.result.scores.map((_s, i) => ({ index: i, name: `turn ${i + 1}` })),
+    ),
+    (t) => t.name,
+  ).map((turn) => {
+    const resultsAcrossTrials = output.trials.map((t) => t.result.scores[turn.index]);
+    return {
+      name: turn.name,
+      index: turn.index,
+      resultsAcrossTrials: Object.fromEntries(
+        resultsAcrossTrials.map((s, i) => [output.trials[i].trialName, s]),
+      ),
+      mean: R.meanBy(resultsAcrossTrials, (s) => s.score) || 0,
+      min: minBy(resultsAcrossTrials, (s) => s.score) || 0,
+      median: R.median(resultsAcrossTrials.map((s) => s.score)) || 0,
+    };
+  });
+
+  const trials = output.trials.map((trial) => {
+    return {
+      name: trial.trialName,
+      scores: trial.result.scores,
+      mean: R.meanBy(trial.result.scores, (s) => s.score) || 0,
+      min: minBy(trial.result.scores, (s) => s.score) || 0,
+      median: R.median(trial.result.scores.map((s) => s.score)) || 0,
+    };
+  });
+
+  const aggregates = {
+    meanOfMeans: R.meanBy(turns, (t) => t.mean) || 0,
+    medianOfMedians: R.median(trials.map((t) => t.median)) || 0,
+    minOfMins: minBy(trials, (t) => t.min) || 0,
+  };
+
+  return {
+    turns,
+    trials,
+    aggregates,
+  };
+};
+
+const fmt = (x: any) => "```yaml\n" + YAML.stringify(JSON.parse(JSON.stringify(x))) + "\n```";
+
+const resultScorers = {
+  meanOfMeansScorer,
+};
 
 export const multiTurnScorer = Object.assign(_multiTurnScorer, {
   ...resultScorers,
-  renderColumns,
+  turnSummaryColumnRenderer,
 });
