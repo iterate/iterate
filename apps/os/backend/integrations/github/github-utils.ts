@@ -124,7 +124,7 @@ export async function triggerGithubBuild(params: {
   commitMessage: string;
   repoUrl: string;
   installationToken: string;
-  workingDirectory?: string;
+  connectedRepoPath?: string;
   branch?: string;
   webhookId?: string;
   workflowRunId?: string;
@@ -138,7 +138,7 @@ export async function triggerGithubBuild(params: {
     commitMessage,
     repoUrl,
     installationToken,
-    workingDirectory,
+    connectedRepoPath,
     branch,
     webhookId,
     workflowRunId,
@@ -193,7 +193,7 @@ export async function triggerGithubBuild(params: {
     githubToken: installationToken,
     commitHash,
     branch,
-    workingDirectory: workingDirectory || "/",
+    connectedRepoPath: connectedRepoPath || "/",
     callbackUrl,
     buildId: build.id,
     estateId,

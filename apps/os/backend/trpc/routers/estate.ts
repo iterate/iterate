@@ -78,7 +78,7 @@ export async function triggerEstateRebuild(params: {
     commitMessage,
     repoUrl: repoData.clone_url,
     installationToken,
-    workingDirectory: estateWithRepo.connectedRepoPath || "/",
+    connectedRepoPath: estateWithRepo.connectedRepoPath || "/",
     branch: estateWithRepo.connectedRepoRef || "main",
     isManual,
   });

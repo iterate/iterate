@@ -9,12 +9,18 @@ RUN apt-get remove -y nodejs npm && \
     ln -sf /usr/local/bin/npm /usr/bin/npm && \
     ln -sf /usr/local/bin/npx /usr/bin/npx
 
-
 # Install pnpm and tsx using Node 24
 RUN npm install -g pnpm tsx
 
-COPY build-script.ts /tmp/build-script.ts
-RUN chmod +x /tmp/build-script.ts
+# Install GitHub CLI
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
+    apt-get update && \
+    apt-get install -y gh
+
+COPY sandbox-entry.ts /tmp/sandbox-entry.ts
+RUN chmod +x /tmp/sandbox-entry.ts
 
 # Expose the ports you want to expose
 EXPOSE 3000
