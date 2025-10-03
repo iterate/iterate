@@ -8,6 +8,7 @@ beforeAll(async () => {
 });
 
 evaliterate("agent knows when to end their turn", {
+  trialCount: Number(process.env.EVAL_TRIAL_COUNT) || undefined,
   data: async () => {
     return [
       {
@@ -16,7 +17,10 @@ evaliterate("agent knows when to end their turn", {
           messages: [
             { message: "name a green fruit", expected: "a green fruit" },
             { message: "name another", expected: "a green fruit, not the same as the first" },
-            { message: "name another", expected: "a green fruit, not the same as the 1st or 2nd" },
+            {
+              message: "name another",
+              expected: "a green fruit, not the same as the 1st or 2nd",
+            },
           ].map((m, i) => {
             m.expected += `. penalize emojis by ${10 + i * 5}%`;
             return m;
@@ -42,6 +46,6 @@ evaliterate("agent knows when to end their turn", {
 
     return { scores: await scorer.getScores() };
   },
-  scorers: [multiTurnScorer.mean, multiTurnScorer.median, multiTurnScorer.min],
-  columns: multiTurnScorer.renderColumns,
+  scorers: [multiTurnScorer.meanOfMeansScorer],
+  columns: multiTurnScorer.turnSummaryColumnRenderer,
 });

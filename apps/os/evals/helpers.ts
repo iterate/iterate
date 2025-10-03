@@ -8,6 +8,7 @@ import type { StandardSchemaV1 } from "better-auth"; // standard schema v1 can c
 import { init, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
+import { match, P } from "ts-pattern";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
@@ -15,6 +16,7 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
+import type { ExplainedScoreResult } from "./scorer.ts";
 
 export * from "./scorer.ts";
 
@@ -282,77 +284,116 @@ export type WaitForEvent = {
   ): Promise<Selection>;
 };
 
+export type TrialOutput = { scores: ExplainedScoreResult[] };
+export type MultiTrialScorerOutput = {
+  trials: { trialIndex: number; trialName: string; result: TrialOutput }[];
+};
+
 /**
  * This function wraps evalite and adds braintrust logging:
  * - It saves us having to manually create braintrust spans and log scores
  * - It passes the span id to the task function, so we can inject it into the agent and get traces
  * - It is needed because we need to add the scores to the braintrust span, which is done outside of the task function
+ * - When trialCount > 1, each input is run multiple times with individual trial spans under a parent input span
  */
-export function evaliterate<TInput, TOutput, TExpected>(
-  experimentName: string,
+export function evaliterate<TInput extends { slug: string }, TExpected>(
+  name: string,
   opts: {
-    data: Evalite.RunnerOpts<TInput, TOutput, TExpected>["data"];
+    data: () => Promise<{ input: TInput }[]>;
     task: (input: {
       input: TInput;
       braintrustSpanExportedId: string;
-    }) => Evalite.MaybePromise<TOutput>;
-    scorers: Evalite.ScorerOpts<TInput, TOutput, TExpected>[];
-    columns?: Evalite.RunnerOpts<TInput, TOutput, TExpected>["columns"];
+    }) => Promise<{ scores: ExplainedScoreResult[] }>;
+    scorers: Evalite.ScorerOpts<TInput, MultiTrialScorerOutput, TExpected>[];
+    columns?: Evalite.RunnerOpts<TInput, MultiTrialScorerOutput, TExpected>["columns"];
+    trialCount?: number; // Number of times to run each input (default: 1)
   },
 ) {
-  const hash = (data: unknown) => JSON.stringify(data); // I don't think there will be any non-serializable test cases
+  const experimentName = `${name}-${inject("vitestBatchId")}`;
+  const hash = (data: unknown) =>
+    match(data)
+      .with({ slug: P.string }, (d) => d.slug)
+      .otherwise(() => JSON.stringify(data)); // serializable test cases only, please
+
   const spanMap: Record<string, Span | undefined> = {};
+  const resolvedTrialCount = opts.trialCount || 1;
+  if (resolvedTrialCount !== 1) {
+    console.log(
+      `Running ${experimentName} ${resolvedTrialCount} times. Look in https://www.braintrust.dev/app/Nustom/p/${process.env.PROJECT_NAME}/experiments for results.`,
+    );
+  }
+
   const experiment = process.env.BRAINTRUST_API_KEY
     ? init(process.env.PROJECT_NAME!, {
         apiKey: process.env.BRAINTRUST_API_KEY,
         experiment: experimentName,
         metadata: {
+          testName: name,
           experimentName,
           vitestBatchId: inject("vitestBatchId"),
+          trialCount: resolvedTrialCount,
         },
       })
     : null;
 
-  const braintrustScorerWrapper: (
+  const braintrustScorerWrapper = <TOutput>(
     scorerOpts: Evalite.ScorerOpts<TInput, TOutput, TExpected>,
-  ) => Evalite.ScorerOpts<TInput, TOutput, TExpected> = (scorerOpts) => {
+  ) => {
     const wrappedScorerFn: (
       result: Evalite.ScoreInput<TInput, TOutput, TExpected>,
-    ) => Promise<number | Evalite.UserProvidedScoreWithMetadata> = async (result) => {
-      const score = await scorerOpts.scorer(result);
+    ) => Promise<Evalite.UserProvidedScoreWithMetadata> = async (result) => {
+      const _score = await scorerOpts.scorer(result);
+      const { score, metadata } = typeof _score === "number" ? { score: _score } : _score;
 
       const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan?.log({
-        scores: {
-          [scorerOpts.name]: typeof score === "number" ? score : score.score,
-        },
-        metadata:
-          typeof score === "number"
-            ? undefined
-            : {
-                [scorerOpts.name]: score.metadata,
-              },
+        scores: { [scorerOpts.name]: score },
+        metadata: { [scorerOpts.name]: metadata },
       });
       await braintrustSpan?.flush();
 
-      return score;
+      return { score, metadata };
     };
     return {
       ...scorerOpts,
       scorer: wrappedScorerFn,
-    };
+    } as typeof scorerOpts;
   };
 
-  evalite<TInput, TOutput, TExpected>(experimentName, {
+  evalite<TInput, MultiTrialScorerOutput, TExpected>(experimentName, {
     data: opts.data,
     columns: opts.columns,
     task: async (input) => {
-      const braintrustSpan = experiment?.startSpan({ name: "eval", type: "eval" });
-      spanMap[hash(input)] = braintrustSpan;
-      braintrustSpan?.log({ input });
-      await braintrustSpan?.flush();
-      const braintrustSpanExportedId = await braintrustSpan?.export();
-      return await opts.task({ input, braintrustSpanExportedId: braintrustSpanExportedId ?? "" });
+      const parentSpan = experiment?.startSpan({ name: `eval-${input.slug}`, type: "eval" });
+      spanMap[hash(input)] = parentSpan;
+      parentSpan?.log({ input });
+      await parentSpan?.flush();
+
+      const trials = await Promise.all(
+        Array.from({ length: resolvedTrialCount }, async (_, trialIndex) => {
+          const trialName = `trial_${trialIndex + 1}`;
+          const trialSpan = parentSpan?.startSpan({ type: "task", name: trialName });
+          trialSpan?.log({ input });
+          await trialSpan?.flush();
+          const braintrustSpanExportedId = await trialSpan?.export();
+
+          const output = await opts.task({
+            input: { ...input, slug: `${input.slug}-${trialName}` },
+            braintrustSpanExportedId: braintrustSpanExportedId || "",
+          });
+
+          trialSpan?.log({ output });
+          trialSpan?.end();
+          await trialSpan?.flush();
+
+          return { trialIndex, trialName, result: output };
+        }),
+      );
+
+      parentSpan?.log({ output: trials });
+      await parentSpan?.flush();
+
+      return { trials };
     },
     scorers: opts.scorers.map(braintrustScorerWrapper),
   });
