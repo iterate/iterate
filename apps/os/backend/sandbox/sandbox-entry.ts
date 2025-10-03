@@ -232,8 +232,7 @@ async function subcommandInit(args: InitArgs) {
     process.exit(1);
   }
 
-  const segments = [args.sessionDir, "repo"];
-  const repoDir = path.join(...segments);
+  const repoDir = args.sessionDir;
 
   console.error("=== Starting sandbox init ===");
   console.error(`Repository: ${args.githubRepoUrl}`);
@@ -262,7 +261,7 @@ async function subcommandInit(args: InitArgs) {
     console.error("=== Cloning repository ===");
 
     // Build clone arguments with optimizations
-    const cloneArgs = ["repo", "clone", args.githubRepoUrl, repoDir];
+    const cloneArgs = ["clone", args.githubRepoUrl, repoDir];
 
     // For branches/tags, use shallow clone and combine with checkout
     // For commit hashes, we need full history (or at least more depth)
@@ -314,10 +313,10 @@ async function subcommandBuild(args: BuildArgs) {
     process.exit(1);
   }
 
-  const segments = [args.sessionDir, "repo"];
-  const repoDir = path.join(...segments);
-  if (args.connectedRepoPath) segments.push(args.connectedRepoPath);
-  const workDir = path.join(...segments);
+  const repoDir = args.sessionDir;
+  const workDir = args.connectedRepoPath
+    ? path.join(args.sessionDir, args.connectedRepoPath)
+    : args.sessionDir;
 
   console.error("=== Starting building process ===");
   console.error(`Repo directory: ${repoDir}`);
