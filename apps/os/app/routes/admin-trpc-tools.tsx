@@ -1,5 +1,3 @@
-"use client";
-// import "bootstrap/dist/css/bootstrap.min.css";
 import { useLocalStorageValue } from "@react-hookz/web";
 import Form from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
@@ -7,18 +5,8 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import React from "react";
 import { toast } from "sonner";
 import { Card } from "../components/ui/card.tsx";
-import { useTRPC } from "../lib/trpc.ts";
-// import type { AllProcedureInputs } from "./page";
-
-// const schema: RJSFSchema = {
-//   title: 'Todo',
-//   type: 'object',
-//   required: ['title'],
-//   properties: {
-//     title: {type: 'string', title: 'Title', default: 'A new task'},
-//     done: {type: 'boolean', title: 'Done?', default: false},
-//   },
-// }
+import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
+import { SerializedObjectCodeBlock } from "../components/serialized-object-code-block.tsx";
 
 const useAllProcedureInputs = () => {
   const trpc = useTRPC();
@@ -28,41 +16,18 @@ const useAllProcedureInputs = () => {
 type AllProcedureInputs = ReturnType<typeof useAllProcedureInputs>;
 
 const ProcedureForm = (props: { path: string; inputs: AllProcedureInputs[number][1] }) => {
+  const trpcClient: any = useTRPCClient();
   const [ignoreErrors, setIgnoreErrors] = React.useState<"no" | "offer" | "yes">("no");
   const { type } = (props.inputs.procedure as { _def: { type: string } })._def;
   const mutation = useMutation({
     mutationFn: async (val: {}) => {
-      let res: Response;
-      const pathname = `/api/trpc/${props.path}`;
       if (type === "mutation") {
-        res = await fetch(pathname, {
-          method: "POST",
-          body: JSON.stringify(val),
-          headers: {
-            "Content-Type": "application/json",
-          },
-        });
+        return trpcClient[props.path].mutation(val);
       } else if (type === "query") {
-        res = await fetch(`${pathname}?input=${encodeURIComponent(JSON.stringify(val))}`);
+        return trpcClient[props.path].query(val);
       } else {
         throw new Error(`Unsupported procedure type: ${type}`);
       }
-      if (!res.ok) {
-        const text = await res.text();
-        if (text.startsWith("{")) {
-          const json = JSON.parse(text) as { error?: { message?: string } };
-          if (typeof json.error?.message === "string") {
-            throw new Error(json.error.message);
-          }
-        }
-        throw new Error(text);
-      }
-      const json = (await res.json()) as { result?: { data?: {} } };
-      if ("result" in json && json.result && "data" in json.result) {
-        return json.result.data;
-      }
-
-      return { unexpectedResponseFormat: json };
     },
   });
   const { $schema, ...schema } = props.inputs.parsedProcedure.optionsJsonSchema as Record<
@@ -113,68 +78,14 @@ const ProcedureForm = (props: { path: string; inputs: AllProcedureInputs[number]
         <summary>
           {type}: {mutation.status}
         </summary>
-        <DataRenderer path={props.path} data={mutation.data || mutation.error || mutation.status} />
+        <SerializedObjectCodeBlock data={mutation.data || mutation.error || mutation.status} />
       </details>
     </div>
   );
 };
 
-const DataRenderer = ({ path, data: inputData }: { path: string; data: unknown }) => {
-  const { value: evalExpression, set: setEvalExpression } = useLocalStorageValue(
-    `${path}:data-renderer-expression`,
-    {
-      defaultValue: "data",
-    },
-  );
-  const result = React.useMemo(() => {
-    let output = inputData;
-    let problem = "";
-    try {
-      output = eval(`(data => ${evalExpression})(${JSON.stringify(inputData, null, 2)})`) as never;
-    } catch (error) {
-      problem = String(error);
-    }
-    if (typeof output === "function") {
-      problem = "output is a function";
-      output = inputData;
-    }
-    if (output === undefined) {
-      problem = "output is undefined - return null if you really want a nullish output";
-      output = inputData;
-    }
-    const invalidTypes = new Set(["function", "symbol", "bigint", "undefined"]);
-    const detectedInvalidTypes = new Set();
-    let pretty = JSON.stringify(
-      output,
-      (key, value: unknown) => {
-        if (invalidTypes.has(typeof value)) detectedInvalidTypes.add(typeof value);
-        return value;
-      },
-      2,
-    );
-    if (detectedInvalidTypes.size > 0) {
-      problem = `output contains invalid types: ${Array.from(detectedInvalidTypes).join(", ")}. If this is intended, convert to JSON manually.`;
-      output = inputData;
-      pretty = JSON.stringify(output, null, 2);
-    }
-    return { output, problem, pretty };
-  }, [evalExpression, inputData]);
-  return (
-    <>
-      <input
-        className="flex outline-2 outline-black p-1 w-full"
-        type="text"
-        value={evalExpression}
-        onChange={(e) => setEvalExpression(e.target.value || "data")}
-      />
-      {result.problem && <pre className="text-red-500">{result.problem}</pre>}
-      <pre className="max-w-5xl whitespace-pre-wrap">{result.pretty}</pre>
-    </>
-  );
-};
-
-// todo: some kind of jsonpath syntax to use an output of one procedure as input to another
-// todo: various output renderering options. codemirror?
+// todo: some kind of way of scripting/use an output of one procedure as input to another
+// todo: other output renderering options. codemirror?
 export default function AdminForm() {
   const inputs = useAllProcedureInputs();
   const [search, setSearch] = React.useState("");

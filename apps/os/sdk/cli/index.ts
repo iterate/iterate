@@ -24,8 +24,6 @@ const router = t.router({
   testing: testingRouter,
 });
 
-console.dir(parseRouter({ router }), { depth: 4 });
-
 if (process.argv.length === 2) {
   console.error("No command provided, assuming you want to run `iterate` sdk cli");
   // Run the cli.js script from packages/sdk
