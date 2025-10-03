@@ -1,6 +1,5 @@
 import { Outlet, redirect, isRouteErrorResponse, useRouteError, useParams, Link } from "react-router";
 import { AlertCircle } from "lucide-react";
-import { useSuspenseQuery } from "@tanstack/react-query";
 import { and, eq } from "drizzle-orm";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";

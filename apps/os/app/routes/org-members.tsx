@@ -1,5 +1,4 @@
 import { useParams } from "react-router";
-import type { Route } from "./+types/org-members";
 
 export function meta() {
   return [{ title: "Organization Members" }];
