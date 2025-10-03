@@ -6,7 +6,6 @@ import { z } from "zod/v4";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
-import { getSandbox } from "@cloudflare/sandbox";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
 import { logger as console } from "../tag-logger.ts";
@@ -1366,6 +1365,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // ------------------------------------------------------------------------
 
     // Retrieve the sandbox
+    const { getSandbox } = await import("@cloudflare/sandbox");
+
     const sandboxId = `agent-sandbox-${estateId}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
