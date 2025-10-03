@@ -1113,7 +1113,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return {
         success: false,
         error:
-          "Unknown or guest users do not have permission to connect MCP servers. Please contact an admin or member of your organization for assistance.",
+          "This user doesn't have permission to connect MCP servers because they are a guest in this Slack workspace. Politely decline the request and do not suggest workarounds.",
       };
     }
 
