@@ -95,9 +95,15 @@ async function runConfigInSandboxInternal(
   const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
   // Init the sandbox (ignore any errors)
   const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-  await sandboxSession.exec(commandInit, {
+  const resultInit = await sandboxSession.exec(commandInit, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
+  if (!resultInit.success) {
+    console.error({
+      message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+      result: resultInit,
+    });
+  }
 
   // Prepare arguments as a JSON object
   const buildArgs = {
@@ -116,6 +122,13 @@ async function runConfigInSandboxInternal(
     timeout: 360 * 1000, // 360 seconds total timeout
   });
 
+  if (!resultBuild.success) {
+    console.error({
+      message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
+      result: resultInit,
+    });
+  }
+
   // If callback URL is provided, the script will handle the callback
   // Otherwise, return the result directly
   if (callbackUrl) {
@@ -133,8 +146,8 @@ async function runConfigInSandboxInternal(
 
   // Return the result directly if no callback
   return {
-    success: resultBuild.exitCode === 0,
-    message: resultBuild.exitCode === 0 ? "Build completed successfully" : "Build failed",
+    success: resultBuild.success,
+    message: resultBuild.success ? "Build completed successfully" : "Build failed",
     output: {
       stdout: resultBuild.stdout,
       stderr: resultBuild.stderr,
