@@ -326,12 +326,7 @@ export function evaliterate<TInput, TOutput, TExpected>(
         scores: {
           [scorerOpts.name]: typeof score === "number" ? score : score.score,
         },
-        metadata:
-          typeof score === "number"
-            ? undefined
-            : {
-                [scorerOpts.name]: score.metadata,
-              },
+        ...(typeof score === "object" && { [scorerOpts.name]: score.metadata }),
       });
       await braintrustSpan?.flush();
 
