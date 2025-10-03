@@ -482,7 +482,11 @@ async function handleBotChannelJoin(params: {
 
       if (agentStub.status === "fulfilled") {
         const initEvents = await agentStub.value.initSlack(channelId, threadTs);
-        await agentStub.value.addEvents([...initEvents, ...contextEvents]);
+        const participantEvents = mentionMessage?.user
+          ? await agentStub.value.getParticipantJoinedEvents(mentionMessage.user, botUserId)
+          : [];
+
+        await agentStub.value.addEvents([...initEvents, ...participantEvents, ...contextEvents]);
       } else {
         console.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
       }
