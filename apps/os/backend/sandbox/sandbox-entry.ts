@@ -274,7 +274,7 @@ async function subcommandInit(args: InitArgs) {
       console.error("=== Cloning repository ===");
 
       // Build clone arguments with optimizations
-      const cloneArgs = ["clone", args.githubRepoUrl, repoDir];
+      const cloneArgs = ["repo", "clone", args.githubRepoUrl, repoDir];
 
       // For branches/tags, use shallow clone and combine with checkout
       // For commit hashes, we need full history (or at least more depth)

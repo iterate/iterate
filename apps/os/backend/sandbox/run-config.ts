@@ -62,15 +62,14 @@ async function runConfigInSandboxInternal(
     estateId,
   } = options;
 
-  // Compute IDs
-  const sandboxId = `agent-sandbox-${estateId}`;
-  const sessionId = estateId;
-  const sessionDir = `/tmp/session-${estateId}`;
-
   // Retrieve the sandbox
+  const sandboxId = `agent-sandbox-${estateId}`;
   const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
   // Ensure that the session directory exists
+  const sessionId = estateId;
+  // IMPORTANT: Randomize the session dir so build always works with the clean repo
+  const sessionDir = `/tmp/session-${estateId}-${Math.random().toString().slice(2)}`;
   await sandbox.mkdir(sessionDir, { recursive: true });
 
   // Create an isolated session
@@ -102,6 +101,7 @@ async function runConfigInSandboxInternal(
 
   // Prepare arguments as a JSON object
   const buildArgs = {
+    // Ensure we use a clean clone
     sessionDir,
     connectedRepoPath,
     callbackUrl: callbackUrl || "",
