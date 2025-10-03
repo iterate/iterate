@@ -1358,7 +1358,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       repository_id: estate.connectedRepoId,
     });
     const githubRepoUrl = repoData.html_url;
-    const branch = estate.connectedRepoRef || "main";
+    const branch = estate.connectedRepoRef || repoData.default_branch || "main";
     const commitHash = undefined; // Use the latest commit on the branch
 
     // ------------------------------------------------------------------------
