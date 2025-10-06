@@ -856,4 +856,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       );
     }
   }
+
+  async uploadAndShareFileInSlack() {
+    return {
+      message:
+        "This function no longer exists - but we need it here because otherwise the agent would be bricked",
+    };
+  }
 }
