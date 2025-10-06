@@ -28,6 +28,7 @@ export type CloudflareEnv = Env & {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICING_PLAN_ID: string;
+  ADMIN_EMAIL_HOSTS: string;
 };
 
 export const env = _env as CloudflareEnv;
