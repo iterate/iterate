@@ -36,8 +36,8 @@ export function PurchaseSuccess() {
           You're now the proud owner of {domainNameWithTLD}
         </h1>
         <p className="text-gray-600 dark:text-gray-400">
-          You should have received an email with the auth code. If there are any issues, email
-          sales@garple.com
+          You should have received an email with further instructions. If there are any issues,
+          email sales@garple.com
         </p>
       </div>
 
