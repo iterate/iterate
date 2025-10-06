@@ -229,7 +229,7 @@ function UserSettingsContent() {
 
 export default function UserSettings() {
   const navigate = useNavigate();
-  
+
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
     if (window.history.length > 1) {
