@@ -420,35 +420,16 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
       const { frontMatter, body } = parseFrontMatter(fileContent);
       
+      const { match, ...otherFrontMatter } = frontMatter;
       const defaultKey = filePath.replace(/\.md$/, "");
       
-      const rule: ContextRule = {
+      return defineRule({
         key: defaultKey,
         prompt: body,
+        match: parseFrontMatterMatch(match),
+        ...otherFrontMatter,
         ...overrides,
-      };
-      
-      if (frontMatter.key && typeof frontMatter.key === "string") {
-        rule.key = frontMatter.key;
-      }
-      
-      if (frontMatter.slug && typeof frontMatter.slug === "string") {
-        rule.key = frontMatter.slug;
-      }
-      
-      if (frontMatter.description && typeof frontMatter.description === "string") {
-        rule.description = frontMatter.description;
-      }
-      
-      if (frontMatter.match !== undefined) {
-        rule.match = parseFrontMatterMatch(frontMatter.match);
-      }
-      
-      if (frontMatter.tools !== undefined) {
-        rule.tools = frontMatter.tools as ContextRule["tools"];
-      }
-      
-      return defineRule(rule);
+      });
     });
   } catch (error) {
     logger.error(`Error reading files with pattern ${pattern}:`, error);
