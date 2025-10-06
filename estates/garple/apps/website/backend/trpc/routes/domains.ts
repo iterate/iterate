@@ -12,9 +12,9 @@ export const domainsRouter = createRouter({
       z
         .object({
           nameFilter: z.string().optional(),
-          availabilityFilter: z.enum(["available", "sold", "both"]).default("both")
+          availabilityFilter: z.enum(["available", "sold", "both"]).default("both"),
         })
-        .optional()
+        .optional(),
     )
     .query(async ({ input }) => {
       const filters = input || { availabilityFilter: "both" as const };
@@ -61,8 +61,8 @@ export const domainsRouter = createRouter({
       z.object({
         domainId: z.string(),
         successUrl: z.string(),
-        cancelUrl: z.string()
-      })
+        cancelUrl: z.string(),
+      }),
     )
     .mutation(async ({ input }) => {
       // Get domain details
@@ -78,12 +78,12 @@ export const domainsRouter = createRouter({
 
       const session = await createCheckoutSession(domain[0], {
         successUrl: input.successUrl,
-        cancelUrl: input.cancelUrl
+        cancelUrl: input.cancelUrl,
       });
 
       return {
         sessionId: session.id,
-        checkoutUrl: session.url
+        checkoutUrl: session.url,
       };
     }),
 
@@ -93,8 +93,8 @@ export const domainsRouter = createRouter({
       z.object({
         domainId: z.string(),
         stripeCheckoutSessionId: z.string(),
-        customerEmail: z.string()
-      })
+        customerEmail: z.string(),
+      }),
     )
     .mutation(async ({ input }) => {
       // Check if domain is still available
@@ -113,7 +113,7 @@ export const domainsRouter = createRouter({
         .update(domains)
         .set({
           purchased: true,
-          purchasedAt: new Date()
+          purchasedAt: new Date(),
         })
         .where(eq(domains.id, input.domainId));
 
@@ -122,16 +122,16 @@ export const domainsRouter = createRouter({
         domainId: input.domainId,
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         customerEmail: input.customerEmail,
-        paymentStatus: "completed"
+        paymentStatus: "completed",
       });
 
       // Generate auth code
       const authCode = `AUTH-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
       await db.insert(authCodes).values({
         domainId: input.domainId,
-        code: authCode
+        code: authCode,
       });
 
       return { success: true, authCode };
-    })
+    }),
 });
