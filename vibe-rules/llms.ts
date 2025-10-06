@@ -368,6 +368,7 @@ import { env, type CloudflareEnv } from "../env.ts";
     rule: dedent`
       - In general, logs in production are not looked at, so don't add them unless we specifically need them for debugging something.
       - Do not use the \`console\` object, use the \`logger\` object from \`apps/os/backend/tag-logger.ts\`.
+      - Use logger.info instead of logger.log
     `,
     globs: ["apps/os/backend/**/*.ts"],
     eslint: {
@@ -396,6 +397,17 @@ import { env, type CloudflareEnv } from "../env.ts";
       The source of truth for all rules is \`vibe-rules/llms.ts\`. When you need to update rules, edit that file.
     `,
     alwaysApply: true,
+  },
+  {
+    name: "design-system",
+    rule: dedent`
+      We like using vanilla shadcn style. 
+
+      Don't add unnecessary tailwind classes all over the place with random colours of even gradients.
+
+      We rely on tailwind's builtin theming, so any colours you do use must come from the theme.
+    `,
+    globs: ["**/*.tsx"],
   },
 ];
 

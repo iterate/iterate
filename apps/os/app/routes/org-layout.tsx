@@ -3,15 +3,15 @@ import { AlertCircle, Home } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
-import { getUserEstateAccess } from "../../backend/trpc/trpc.ts";
+import { getUserOrganizationAccess, getUserEstateAccess } from "../../backend/trpc/trpc.ts";
 import { DashboardLayout } from "../components/dashboard-layout.tsx";
 import { Button } from "../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPCClient } from "../lib/trpc.ts";
-import type { Route } from "./+types/estate-layout";
+import type { Route } from "./+types/org-layout";
 
-// Server-side loader that checks estate access
+// Server-side loader that checks organization and estate access
 export async function loader({ request, params }: Route.LoaderArgs) {
   const { organizationId, estateId } = params;
 
@@ -29,45 +29,60 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Validate params exist
-  if (!organizationId || !estateId) {
+  // Validate organization ID exists
+  if (!organizationId) {
     throw redirect("/");
   }
 
-  // Check if user has access to this estate
-  const { hasAccess } = await getUserEstateAccess(db, session.user.id, estateId, organizationId);
+  // If this is an estate route, check estate access
+  if (estateId) {
+    const { hasAccess } = await getUserEstateAccess(db, session.user.id, estateId, organizationId);
 
-  if (!hasAccess) {
-    // Clear the invalid estate cookie by setting an expired cookie
-    const headers = new Headers();
-    headers.append(
-      "Set-Cookie",
-      "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-    );
+    if (!hasAccess) {
+      // Clear the invalid estate cookie by setting an expired cookie
+      const headers = new Headers();
+      headers.append(
+        "Set-Cookie",
+        "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+      );
 
-    // Throw a 403 error instead of redirecting
-    throw new Response("You don't have access to this estate", {
-      status: 403,
-      statusText: "Forbidden",
-      headers,
+      // Throw a 403 error
+      throw new Response("You don't have access to this estate", {
+        status: 403,
+        statusText: "Forbidden",
+        headers,
+      });
+    }
+
+    // User has access to estate, set the estate cookie for future use
+    const estateData = JSON.stringify({ organizationId, estateId });
+    const encodedData = encodeURIComponent(estateData);
+    const expires = new Date();
+    expires.setDate(expires.getDate() + 30);
+
+    return new Response(null, {
+      headers: {
+        "Set-Cookie": `iterate-selected-estate=${encodedData}; Path=/; Expires=${expires.toUTCString()}; SameSite=Lax`,
+      },
     });
   }
 
-  // User has access, set the estate cookie for future use
-  const estateData = JSON.stringify({ organizationId, estateId });
-  const encodedData = encodeURIComponent(estateData);
-  const expires = new Date();
-  expires.setDate(expires.getDate() + 30);
+  // For organization-level routes, just check organization access
+  const { hasAccess } = await getUserOrganizationAccess(db, session.user.id, organizationId);
 
-  return new Response(null, {
-    headers: {
-      "Set-Cookie": `iterate-selected-estate=${encodedData}; Path=/; Expires=${expires.toUTCString()}; SameSite=Lax`,
-    },
-  });
+  if (!hasAccess) {
+    // Throw a 403 error
+    throw new Response("You don't have access to this organization", {
+      status: 403,
+      statusText: "Forbidden",
+    });
+  }
+
+  return null;
 }
 
 // The component just renders the outlet since access is already checked
-export default function EstateLayout() {
+export default function OrganizationLayout() {
   return (
     <DashboardLayout>
       <Outlet />

@@ -25,6 +25,9 @@ export type CloudflareEnv = Env & {
   REPLICATE_API_TOKEN: string;
   ITERATE_USER: string;
   ITERATE_NOTIFICATION_ESTATE_ID?: string;
+  STRIPE_SECRET_KEY: string;
+  STRIPE_WEBHOOK_SECRET: string;
+  STRIPE_PRICING_PLAN_ID: string;
 };
 
 export const env = _env as CloudflareEnv;

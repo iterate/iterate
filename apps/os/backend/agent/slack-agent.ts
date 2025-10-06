@@ -22,11 +22,7 @@ import type {
 } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
-import {
-  CORE_AGENT_SLICES,
-  IterateAgent,
-  type AgentInstanceDatabaseRecord,
-} from "./iterate-agent.ts";
+import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
@@ -56,6 +52,7 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
+import type { AgentInitParams } from "./iterate-agent.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   static getNamespace() {
@@ -113,7 +110,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
+  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
     await super.initAfterConstructorBeforeOnStart(params);
 
     if (params.record.durableObjectName.includes("mock_slack")) {

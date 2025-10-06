@@ -119,3 +119,31 @@ SLACK_SIGNING_SECRET
 ```
 
 You can get them from the slack app settings page.
+
+# Stripe payments
+
+We're using a new stripe product that lets us easily charge a margin on top of tokens.
+
+The primary integration points are
+
+- After an LLM request, we need to send token utilization along with a stripe customer ID to a stripe API
+- When an organization gets created, we need to create the stripe customer and subscription
+
+We use the better-auth stripe plugin with stripe customers associated to our homegrown organization model (because we are not using the better-auth organization plugin for some reason).
+
+### Using stripe in local development
+
+Add a webhook destination to our dev sandbox [here](https://dashboard.stripe.com/acct_1SE8neK5uSY4fgf4/test/workbench/webhooks)
+
+The URL should be `https://{ITERATE_USER}.dev.iterate.com/api/auth/stripe/webhook`
+
+Then set the `STRIPE_WEBHOOK_SECRET` env var in your `dev_personal` doppler config to the one for the new webhook destination.
+
+```bash
+
+brew install stripe/stripe-cli/stripe
+stripe login
+
+# Note that it will take a few seconds for the webhook to arrive
+stripe trigger v1.billing.meter.no_meter_found
+```

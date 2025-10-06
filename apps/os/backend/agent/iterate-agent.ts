@@ -18,13 +18,18 @@ import type { JSONSerializable } from "../utils/type-helpers.ts";
 // Local imports
 import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInitParams = {
+  record: AgentInstanceDatabaseRecord;
+  estate: typeof schema.estate.$inferSelect;
+  organization: typeof schema.organization.$inferSelect;
   iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
+import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -142,31 +147,47 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord(
-    record: AgentInstanceDatabaseRecord,
+  static async getStubFromDatabaseRecord(params: {
+    db: DB;
+    record: AgentInstanceDatabaseRecord;
     options?: {
       jurisdiction?: DurableObjectJurisdiction;
       locationHint?: DurableObjectLocationHint;
       props?: Record<string, unknown>;
-    },
-  ) {
+    };
+  }) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
-    if (options?.jurisdiction) {
-      namespace = namespace.jurisdiction(options.jurisdiction);
+    if (params.options?.jurisdiction) {
+      namespace = namespace.jurisdiction(params.options.jurisdiction);
     }
-    const stub = namespace.getByName(record.durableObjectName, options);
+    const stub = namespace.getByName(params.record.durableObjectName, params.options);
+
+    // Fetch related data needed for initialization in a single query
+    const estate = await params.db.query.estate.findFirst({
+      where: eq(schema.estate.id, params.record.estateId),
+      with: { organization: true, iterateConfigs: true },
+    });
+    if (!estate) {
+      throw new Error(`Estate ${params.record.estateId} not found for agent ${params.record.id}`);
+    }
+    const iterateConfig: IterateConfig = estate.iterateConfigs?.[0]?.config ?? {};
 
     // right after the constructor runs we get in there and initialise all our stuff
     // (e.g. obtaining a slack access token in the case of a slack agent)
-    await stub.initAfterConstructorBeforeOnStart({ record });
+    await stub.initAfterConstructorBeforeOnStart({
+      record: params.record,
+      estate,
+      organization: estate.organization!,
+      iterateConfig,
+    });
 
     // only now do we do the agents sdk cruft where we hit fetch to initialise party server
     // with a server name
     const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-    req.headers.set("x-partykit-room", record.durableObjectName);
-    if (options?.props) {
-      req.headers.set("x-partykit-props", JSON.stringify(options?.props));
+    req.headers.set("x-partykit-room", params.record.durableObjectName);
+    if (params.options?.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(params.options?.props));
     }
     await stub
       .fetch(req)
@@ -192,9 +213,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (!record) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
-    const iterateConfig = await this.getIterateConfigFromDB(db, record.estateId);
-
-    return this.getStubFromDatabaseRecord({ ...record, iterateConfig });
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -204,7 +223,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
-      with: { agentInstance: { with: { estate: { with: { iterateConfigs: true } } } } },
+      with: {
+        agentInstance: {
+          with: {},
+        },
+      },
     });
 
     const matchingAgents = routes
@@ -216,12 +239,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) =>
-        this.getStubFromDatabaseRecord({
-          ...record,
-          iterateConfig: record.estate.iterateConfigs[0].config ?? {},
-        }),
-      ),
+      matchingAgents.map((record) => this.getStubFromDatabaseRecord({ db, record })),
     );
 
     return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
@@ -243,6 +261,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         eq(agentInstance.className, className),
         eq(agentInstance.estateId, estateId),
       ),
+      with: {},
     });
 
     if (!record) {
@@ -263,15 +282,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           },
         })
         .returning();
-      record = inserted;
+
+      // Re-query to get the relations
+      record = await db.query.agentInstance.findFirst({
+        where: eq(agentInstance.id, inserted.id),
+        with: {},
+      });
+      if (!record) {
+        throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
+      }
     } else {
       if (record.estateId !== estateId) {
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
     }
-    const iterateConfig = await this.getIterateConfigFromDB(db, estateId);
-
-    return this.getStubFromDatabaseRecord({ ...record, iterateConfig });
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   // Get or create stub by route
@@ -286,22 +311,23 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // First check if an agent already exists for this route
     const existingRoutes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, route),
-      with: { agentInstance: true },
+      with: {
+        agentInstance: true,
+      },
     });
-    const iterateConfig = await this.getIterateConfigFromDB(db, estateId);
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromDatabaseRecord({ ...existingAgent, iterateConfig });
+      return this.getStubFromDatabaseRecord({ db, record: existingAgent });
     }
 
     // No existing agent for this route, create one with route
     const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
     const durableObjectId = this.getNamespace().idFromName(durableObjectName);
-    const [record] = await db
+    const [inserted] = await db
       .insert(agentInstance)
       .values({
         estateId,
@@ -321,31 +347,36 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Create the route association
     await db
       .insert(agentInstanceRoute)
-      .values({ agentInstanceId: record.id, routingKey: route })
+      .values({ agentInstanceId: inserted.id, routingKey: route })
       .onConflictDoNothing();
 
-    return this.getStubFromDatabaseRecord({
-      ...record,
-      iterateConfig,
+    // Re-query to get the relations
+    const record = await db.query.agentInstance.findFirst({
+      where: eq(agentInstance.id, inserted.id),
+      with: {},
     });
-  }
 
-  static async getIterateConfigFromDB(db: DB, estateId: string): Promise<IterateConfig> {
-    const config = await db.query.iterateConfig.findFirst({
-      where: eq(schema.iterateConfig.estateId, estateId),
-    });
-    return config?.config ?? {};
+    if (!record) {
+      throw new Error(`Failed to fetch created agent instance ${durableObjectName}`);
+    }
+
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   protected db: DB;
   // Runtime slice list – inferred from the generic parameter.
   agentCore!: AgentCore<Slices, CoreAgentSlices>;
   _databaseRecord?: AgentInstanceDatabaseRecord;
+  _estate?: typeof schema.estate.$inferSelect;
+  _organization?: typeof schema.organization.$inferSelect;
+  _iterateConfig?: IterateConfig;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
-    const { record } = params;
-    this._databaseRecord = record;
+  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
+    this._databaseRecord = params.record;
+    this._estate = params.estate;
+    this._organization = params.organization;
+    this._iterateConfig = params.iterateConfig;
   }
 
   initialState = {
@@ -357,6 +388,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       throw new Error("Database record not found");
     }
     return this._databaseRecord;
+  }
+
+  get estate() {
+    if (!this._estate) throw new Error("Estate not initialized");
+    return this._estate;
+  }
+
+  get organization() {
+    if (!this._organization) throw new Error("Organization not initialized");
+    return this._organization;
+  }
+
+  get iterateConfig() {
+    if (!this._iterateConfig) return {} as IterateConfig;
+    return this._iterateConfig;
   }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
@@ -521,6 +567,34 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
       getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
         return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
+      },
+
+      onLLMStreamResponseStreamingChunk: (chunk) => {
+        if (chunk.type === "response.completed") {
+          const { input_tokens, output_tokens } = chunk.response.usage ?? {};
+
+          if (input_tokens && output_tokens) {
+            const stripeCustomerId = this.organization.stripeCustomerId;
+            const model = this.agentCore.state.modelOpts.model;
+
+            if (stripeCustomerId) {
+              waitUntil(
+                (async () => {
+                  await trackTokenUsageInStripe({
+                    stripeCustomerId,
+                    model,
+                    inputTokens: input_tokens,
+                    outputTokens: output_tokens,
+                  });
+                })(),
+              );
+            } else {
+              logger.warn("No Stripe customer ID found for organization", {
+                organizationId: this.organization.id,
+              });
+            }
+          }
+        }
       },
 
       // Wrap the default console so every call is also sent to connected websocket clients
@@ -716,9 +790,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // });
     const rules = [
       ...defaultContextRules,
-      // If this.databaseRecord.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
+      // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
       // That means we want to pull in the tutorial rules
-      ...(this.databaseRecord.iterateConfig.contextRules || tutorialRules),
+      ...(this.iterateConfig.contextRules || tutorialRules),
     ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
@@ -935,18 +1009,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
   async getEstate() {
-    const estate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, this.databaseRecord.estateId),
-      columns: {
-        organizationId: true,
-        id: true,
-        name: true,
-      },
-    });
-    if (!estate) {
-      throw new Error("Estate not found");
-    }
-    return estate;
+    return {
+      organizationId: this.organization.id,
+      id: this.estate.id,
+      name: this.estate.name,
+    };
   }
   async getAgentDebugURL() {
     const estate = await this.getEstate();
