@@ -20,10 +20,17 @@ const ProcedureForm = (props: { path: string; inputs: AllProcedureInputs[number]
   const { type } = (props.inputs.procedure as { _def: { type: string } })._def;
   const mutation = useMutation({
     mutationFn: async (val: {}) => {
+      // Traverse the nested path (e.g., "admin.createOrganization" -> trpcClient.admin.createOrganization)
+      const pathParts = props.path.split(".");
+      let procedure = trpcClient;
+      for (const part of pathParts) {
+        procedure = procedure[part];
+      }
+
       if (type === "mutation") {
-        return trpcClient[props.path].mutation(val);
+        return procedure.mutate(val);
       } else if (type === "query") {
-        return trpcClient[props.path].query(val);
+        return procedure.query(val);
       } else {
         throw new Error(`Unsupported procedure type: ${type}`);
       }
