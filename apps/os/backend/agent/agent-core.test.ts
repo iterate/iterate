@@ -2028,15 +2028,16 @@ describe("CORE:FILE_SHARED event handling", () => {
   createAgentCoreTest([])("handles multiple files in sequence", async ({ h }) => {
     await h.initializeAgent();
 
-    // Add multiple FILE:SHARED events
+    // Add multiple FILE:SHARED events with PDFs (which are supported)
     await h.agentCore.addEvent({
       type: "CORE:FILE_SHARED",
       data: {
         direction: "from-user-to-agent",
         iterateFileId: "file_1",
-        originalFilename: "doc1.txt",
+        originalFilename: "doc1.pdf",
         size: 100,
         openAIFileId: "file-openai-1",
+        mimeType: "application/pdf",
       },
     });
 
@@ -2045,9 +2046,10 @@ describe("CORE:FILE_SHARED event handling", () => {
       data: {
         direction: "from-user-to-agent",
         iterateFileId: "file_2",
-        originalFilename: "doc2.txt",
+        originalFilename: "doc2.pdf",
         size: 200,
         openAIFileId: "file-openai-2",
+        mimeType: "application/pdf",
       },
     });
 

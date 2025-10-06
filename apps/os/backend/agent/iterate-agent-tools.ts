@@ -166,4 +166,30 @@ export const iterateAgentTools = defineDOTools({
       env: z.record(z.string(), z.string()).optional(),
     }),
   },
+  generateVideo: {
+    description:
+      "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
+    input: z.object({
+      prompt: z.string().describe("Text prompt that describes the video to generate"),
+      input_reference: z
+        .string()
+        .optional()
+        .describe("Optional image or video reference that guides generation"),
+      model: z
+        .string()
+        .optional()
+        .default("sora-2")
+        .describe("The video generation model to use. Defaults to sora-2"),
+      seconds: z
+        .string()
+        .optional()
+        .default("4")
+        .describe("Clip duration in seconds. Defaults to 4 seconds"),
+      size: z
+        .string()
+        .optional()
+        .default("720x1280")
+        .describe("Output resolution formatted as width x height. Defaults to 720x1280"),
+    }),
+  },
 });

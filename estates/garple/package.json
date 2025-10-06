@@ -36,7 +36,7 @@
     "db:generate": "cd apps/website && drizzle-kit generate",
     "db:migrate": "cd apps/website && doppler run -- pnpx wrangler d1 migrations apply estate-garple-production-garple-website-d1 --local",
     "db:migrate:production": "cd apps/website && doppler run -- pnpx wrangler d1 migrations apply estate-garple-production-garple-website-d1 --remote",
-    "db:studio": "cd apps/website && drizzle-kit studio"
+    "db:studio:garple": "cd apps/website && drizzle-kit studio"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.13.2",
