@@ -1,8 +1,35 @@
-import { ArrowRight, Github, ChevronDown, ChevronRight } from "lucide-react";
-import { useState } from "react";
+import { ArrowRight, Github, ChevronDown, ChevronRight, X } from "lucide-react";
+import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../components/ui/button.tsx";
 import { Badge } from "../components/ui/badge.tsx";
+import { Input } from "../components/ui/input.tsx";
+import { Label } from "../components/ui/label.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "../components/ui/dialog.tsx";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "../components/ui/alert-dialog.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -74,28 +101,53 @@ function ScopesList({ scope }: { scope: string }) {
   );
 }
 
+type MCPConnection = {
+  type: "mcp-oauth" | "mcp-params";
+  id: string;
+  name: string;
+  providerId?: string;
+  serverUrl?: string;
+  mode: "company" | "personal";
+  scope?: string | null;
+  userId?: string | null;
+  paramCount?: number;
+  connectedAt: Date | string;
+};
+
 export default function Integrations() {
   const estateId = useEstateId();
   const trpc = useTRPC();
-  const {
-    data: integrations,
-    isLoading,
-    error,
-    refetch,
-  } = useQuery(
+  const { data, isLoading, error, refetch } = useQuery(
     trpc.integrations.list.queryOptions({
       estateId: estateId,
     }),
   );
+
+  const integrations = data?.oauthIntegrations || [];
+  const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
+
+  // Count connections by mode
+  const personalCount = mcpConnections.filter((c) => c.mode === "personal").length;
+  const companyCount = mcpConnections.filter((c) => c.mode === "company").length;
+
+  // Determine default tab: personal first, then company if personal is empty
+  const defaultTab = personalCount > 0 ? "personal" : companyCount > 0 ? "company" : "personal";
+  const [activeTab, setActiveTab] = useState<"company" | "personal">(defaultTab);
+
   const { mutateAsync: startGithubAppInstallFlow } = useMutation(
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
   );
   const { mutateAsync: disconnectIntegration } = useMutation(
     trpc.integrations.disconnect.mutationOptions({}),
   );
+  const { mutateAsync: disconnectMCP } = useMutation(
+    trpc.integrations.disconnectMCP.mutationOptions({}),
+  );
 
   // Use the Slack connection hook
   const { connectSlackBot, disconnectSlackBot } = useSlackConnection();
+
+  const filteredMCPConnections = mcpConnections.filter((conn) => conn.mode === activeTab);
 
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {
@@ -132,6 +184,20 @@ export default function Integrations() {
     } catch (error) {
       console.error(`Failed to disconnect ${integrationId}:`, error);
       // You might want to show a toast notification here
+    }
+  };
+
+  const handleDisconnectMCP = async (connection: MCPConnection) => {
+    try {
+      await disconnectMCP({
+        estateId: estateId,
+        connectionId: connection.id,
+        connectionType: connection.type,
+        mode: connection.mode,
+      });
+      await refetch();
+    } catch (error) {
+      console.error(`Failed to disconnect MCP connection:`, error);
     }
   };
 
@@ -186,8 +252,9 @@ export default function Integrations() {
         </p>
       </div>
 
-      {/* Success State - Integration Cards */}
-      {!isLoading && !error && integrations && (
+      {/* OAuth Integration Cards (GitHub, Slack, Google) */}
+      <div className="mb-8">
+        <h2 className="text-xl font-semibold mb-4">Core Integrations</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {integrations.map((integration: any) => (
             <div key={integration.id} className="relative border rounded-lg">
@@ -319,7 +386,382 @@ export default function Integrations() {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* MCP Connections Table */}
+      {mcpConnections.length > 0 && (
+        <div>
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold mb-2">MCP Servers</h2>
+          </div>
+
+          {/* Tabs - only show if there are connections in multiple modes */}
+          {personalCount > 0 && companyCount > 0 && (
+            <div className="border-b mb-4">
+              <div className="flex gap-4">
+                <button
+                  className={`pb-2 px-1 border-b-2 transition-colors ${
+                    activeTab === "personal"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setActiveTab("personal")}
+                >
+                  Personal
+                  <Badge variant="secondary" className="ml-2">
+                    {personalCount}
+                  </Badge>
+                </button>
+                <button
+                  className={`pb-2 px-1 border-b-2 transition-colors ${
+                    activeTab === "company"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                  onClick={() => setActiveTab("company")}
+                >
+                  Estate-wide
+                  <Badge variant="secondary" className="ml-2">
+                    {companyCount}
+                  </Badge>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Show mode label if only one type exists */}
+          {(personalCount > 0 || companyCount > 0) && !(personalCount > 0 && companyCount > 0) && (
+            <div className="mb-4">
+              <Badge variant="outline" className="text-sm">
+                {personalCount > 0 ? "Personal" : "Estate-wide"}
+              </Badge>
+            </div>
+          )}
+
+          {/* MCP Connections Table */}
+          <MCPConnectionsTable
+            connections={filteredMCPConnections}
+            onDisconnect={handleDisconnectMCP}
+            estateId={estateId}
+            onUpdate={refetch}
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+function MCPConnectionsTable({
+  connections,
+  onDisconnect,
+  estateId,
+  onUpdate,
+}: {
+  connections: MCPConnection[];
+  onDisconnect: (connection: MCPConnection) => void;
+  estateId: string;
+  onUpdate: () => void;
+}) {
+  const trpc = useTRPC();
+  const [selectedConnection, setSelectedConnection] = useState<MCPConnection | null>(null);
+  const [connectionToDisconnect, setConnectionToDisconnect] = useState<MCPConnection | null>(null);
+  const [params, setParams] = useState<Array<{ key: string; value: string; type: string }>>([]);
+
+  const { data: connectionDetails, isLoading: isLoadingDetails } = useQuery({
+    ...trpc.integrations.getMCPConnectionDetails.queryOptions({
+      estateId,
+      connectionId: selectedConnection?.id || "",
+      connectionType: selectedConnection?.type || "mcp-params",
+    }),
+    enabled: !!selectedConnection,
+  });
+
+  const { mutateAsync: updateParams, isPending: isUpdating } = useMutation(
+    trpc.integrations.updateMCPConnectionParams.mutationOptions({}),
+  );
+
+  const handleRowClick = (connection: MCPConnection) => {
+    setSelectedConnection(connection);
+  };
+
+  const handleClose = () => {
+    setSelectedConnection(null);
+    setParams([]);
+  };
+
+  const handleSaveParams = async () => {
+    if (selectedConnection?.type === "mcp-params") {
+      await updateParams({
+        estateId,
+        connectionKey: selectedConnection.id,
+        params: params.map((p) => ({
+          key: p.key,
+          value: p.value,
+          type: p.type as "header" | "query_param",
+        })),
+      });
+      onUpdate();
+      handleClose();
+    }
+  };
+
+  // Initialize params when details load
+  useEffect(() => {
+    if (connectionDetails?.type === "params" && connectionDetails.params.length > 0) {
+      setParams(connectionDetails.params);
+    }
+  }, [connectionDetails]);
+
+  if (connections.length === 0) {
+    return (
+      <div className="border rounded-lg p-8 text-center text-muted-foreground">
+        No MCP servers connected
+      </div>
+    );
+  }
+
+  return (
+    <>
+      <div className="border rounded-lg overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-muted/50">
+            <tr>
+              <th className="text-left p-4 font-medium">Server</th>
+              <th className="text-left p-4 font-medium">Type</th>
+              <th className="text-left p-4 font-medium">Connected</th>
+              <th className="text-right p-4 font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y">
+            {connections.map((connection) => (
+              <tr
+                key={connection.id}
+                className="hover:bg-muted/30 cursor-pointer"
+                onClick={() => handleRowClick(connection)}
+              >
+                <td className="p-4">
+                  <code className="text-sm">
+                    {connection.type === "mcp-params"
+                      ? connection.serverUrl
+                      : connection.providerId}
+                  </code>
+                </td>
+                <td className="p-4">
+                  <Badge variant="outline">
+                    {connection.type === "mcp-oauth" ? "OAuth" : "Params"}
+                  </Badge>
+                </td>
+                <td className="p-4 text-sm text-muted-foreground">
+                  {connection.connectedAt &&
+                    new Date(connection.connectedAt).toLocaleString(undefined, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    })}
+                </td>
+                <td className="p-4 text-right">
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setConnectionToDisconnect(connection);
+                    }}
+                  >
+                    Disconnect
+                  </Button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Connection Details Dialog */}
+      <Dialog open={!!selectedConnection} onOpenChange={(open) => !open && handleClose()}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Connection Details</DialogTitle>
+            <DialogDescription>
+              {selectedConnection?.type === "mcp-params"
+                ? "View and edit connection parameters"
+                : "View OAuth client information"}
+            </DialogDescription>
+          </DialogHeader>
+
+          {isLoadingDetails ? (
+            <div className="py-8 text-center text-muted-foreground">Loading...</div>
+          ) : connectionDetails?.type === "params" ? (
+            <div className="space-y-4">
+              <div>
+                <Label>Server URL</Label>
+                <code className="block mt-1 p-2 bg-muted rounded text-sm">
+                  {selectedConnection?.serverUrl}
+                </code>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <Label>Parameters</Label>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setParams([...params, { key: "", value: "", type: "header" }])}
+                  >
+                    Add Parameter
+                  </Button>
+                </div>
+
+                {params.map((param, index) => (
+                  <div key={index} className="flex gap-2 items-center">
+                    <div className="flex-1">
+                      <Input
+                        placeholder="Key"
+                        value={param.key}
+                        onChange={(e) => {
+                          const newParams = [...params];
+                          newParams[index].key = e.target.value;
+                          setParams(newParams);
+                        }}
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <Input
+                        placeholder="Value"
+                        type="password"
+                        value={param.value}
+                        onChange={(e) => {
+                          const newParams = [...params];
+                          newParams[index].value = e.target.value;
+                          setParams(newParams);
+                        }}
+                      />
+                    </div>
+                    <div className="w-32">
+                      <Select
+                        value={param.type}
+                        onValueChange={(value) => {
+                          const newParams = [...params];
+                          newParams[index].type = value;
+                          setParams(newParams);
+                        }}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="header">Header</SelectItem>
+                          <SelectItem value="query_param">Query Param</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="flex-shrink-0"
+                      onClick={() => {
+                        setParams(params.filter((_, i) => i !== index));
+                      }}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : connectionDetails?.type === "oauth" ? (
+            <div className="space-y-4">
+              <div>
+                <Label>Provider ID</Label>
+                <code className="block mt-1 p-2 bg-muted rounded text-sm">
+                  {connectionDetails.providerId}
+                </code>
+              </div>
+
+              {connectionDetails.scope && (
+                <div>
+                  <Label>Scopes</Label>
+                  <div className="mt-1 p-2 bg-muted rounded text-sm">
+                    {connectionDetails.scope.split(" ").map((scope, i) => (
+                      <Badge key={i} variant="secondary" className="mr-1 mb-1">
+                        {scope}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {connectionDetails.clientInfo && (
+                <div>
+                  <Label>Client ID</Label>
+                  <code className="block mt-1 p-2 bg-muted rounded text-sm">
+                    {connectionDetails.clientInfo.client_id}
+                  </code>
+                </div>
+              )}
+
+              <div>
+                <Label>Connected</Label>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  {new Date(connectionDetails.connectedAt).toLocaleString(undefined, {
+                    dateStyle: "long",
+                    timeStyle: "medium",
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <DialogFooter>
+            {selectedConnection?.type === "mcp-params" ? (
+              <>
+                <Button variant="outline" onClick={handleClose}>
+                  Cancel
+                </Button>
+                <Button onClick={handleSaveParams} disabled={isUpdating}>
+                  {isUpdating ? "Saving..." : "Save Changes"}
+                </Button>
+              </>
+            ) : (
+              <Button onClick={handleClose}>Close</Button>
+            )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Disconnect Confirmation Dialog */}
+      <AlertDialog
+        open={!!connectionToDisconnect}
+        onOpenChange={(open) => !open && setConnectionToDisconnect(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Disconnect MCP Server</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to disconnect from{" "}
+              <code className="font-semibold">
+                {connectionToDisconnect?.type === "mcp-params"
+                  ? connectionToDisconnect?.serverUrl
+                  : connectionToDisconnect?.providerId}
+              </code>
+              ? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (connectionToDisconnect) {
+                  onDisconnect(connectionToDisconnect);
+                  setConnectionToDisconnect(null);
+                }
+              }}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              Disconnect
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
