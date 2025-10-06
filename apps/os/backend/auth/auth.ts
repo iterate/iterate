@@ -91,6 +91,22 @@ export const getAuth = (db: DB) =>
     databaseHooks: {
       user: {
         create: {
+          before: async (user) => {
+            if (user.emailVerified && user.email) {
+              const emailDomain = user.email.split("@")[1];
+              const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
+
+              if (emailDomain && adminHosts.includes(emailDomain)) {
+                return {
+                  data: {
+                    ...user,
+                    role: "admin",
+                  },
+                };
+              }
+            }
+            return;
+          },
           after: async (user) => {
             const organization = await createUserOrganizationAndEstate(db, user.id, user.name);
 
