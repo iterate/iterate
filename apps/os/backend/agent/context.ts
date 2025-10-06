@@ -352,6 +352,7 @@ function parseHm(hhmm: string): number {
  * Parses front matter from a file content string.
  * Front matter is delimited by triple dashes (---) at the start of the file.
  * Returns the parsed front matter object and the remaining content.
+ * The match field is automatically converted using parseFrontMatterMatch.
  */
 export function parseFrontMatter(content: string): { frontMatter: Record<string, unknown>; body: string } {
   const trimmedContent = content.trim();
@@ -379,7 +380,13 @@ export function parseFrontMatter(content: string): { frontMatter: Record<string,
   
   try {
     const frontMatter = parseYaml(frontMatterText) as Record<string, unknown>;
-    return { frontMatter: frontMatter || {}, body };
+    const result = frontMatter || {};
+    
+    if (result.match !== undefined) {
+      result.match = parseFrontMatterMatch(result.match);
+    }
+    
+    return { frontMatter: result, body };
   } catch (error) {
     logger.warn(`Failed to parse front matter as YAML:`, error);
     return { frontMatter: {}, body: content };
@@ -420,14 +427,12 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
       const { frontMatter, body } = parseFrontMatter(fileContent);
       
-      const { match, ...otherFrontMatter } = frontMatter;
       const defaultKey = filePath.replace(/\.md$/, "");
       
       return defineRule({
         key: defaultKey,
         prompt: body,
-        match: parseFrontMatterMatch(match),
-        ...otherFrontMatter,
+        ...frontMatter,
         ...overrides,
       });
     });

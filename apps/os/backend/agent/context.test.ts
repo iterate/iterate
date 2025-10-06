@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { evaluateContextRuleMatchers, matchers, type ContextRule, parseFrontMatter, parseFrontMatterMatch } from "./context.ts";
+import dedent from "dedent";
+import { evaluateContextRuleMatchers, matchers, type ContextRule, parseFrontMatter } from "./context.ts";
 
 describe("evaluateContextRuleMatchers", () => {
   const cases = [
@@ -678,31 +679,35 @@ describe("parseFrontMatter", () => {
   const cases = [
     {
       description: "should parse front matter with string match",
-      content: `---
-key: test-rule
-match: agentCoreState.paused
----
+      content: dedent`
+        ---
+        key: test-rule
+        match: agentCoreState.paused
+        ---
 
-This is the body content.`,
+        This is the body content.
+      `,
       expectedFrontMatter: {
         key: "test-rule",
-        match: "agentCoreState.paused",
+        match: { type: "jsonata", expression: "agentCoreState.paused" },
       },
       expectedBody: "This is the body content.",
     },
     {
       description: "should parse front matter with object match",
-      content: `---
-key: complex-rule
-match:
-  type: and
-  matchers:
-    - type: always
-    - type: jsonata
-      expression: agentCoreState.paused
----
+      content: dedent`
+        ---
+        key: complex-rule
+        match:
+          type: and
+          matchers:
+            - type: always
+            - type: jsonata
+              expression: agentCoreState.paused
+        ---
 
-Complex rule body.`,
+        Complex rule body.
+      `,
       expectedFrontMatter: {
         key: "complex-rule",
         match: {
@@ -723,31 +728,39 @@ Complex rule body.`,
     },
     {
       description: "should handle content with only opening delimiter",
-      content: `---
-key: incomplete
-This never closes`,
+      content: dedent`
+        ---
+        key: incomplete
+        This never closes
+      `,
       expectedFrontMatter: {},
-      expectedBody: `---
-key: incomplete
-This never closes`,
+      expectedBody: dedent`
+        ---
+        key: incomplete
+        This never closes
+      `,
     },
     {
       description: "should handle empty front matter",
-      content: `---
----
+      content: dedent`
+        ---
+        ---
 
-Body content here.`,
+        Body content here.
+      `,
       expectedFrontMatter: {},
       expectedBody: "Body content here.",
     },
     {
       description: "should handle front matter with key and description",
-      content: `---
-key: my-custom-key
-description: This is a description
----
+      content: dedent`
+        ---
+        key: my-custom-key
+        description: This is a description
+        ---
 
-Body content.`,
+        Body content.
+      `,
       expectedFrontMatter: {
         key: "my-custom-key",
         description: "This is a description",
@@ -760,55 +773,5 @@ Body content.`,
     const { frontMatter, body } = parseFrontMatter(content);
     expect(frontMatter).toEqual(expectedFrontMatter);
     expect(body).toBe(expectedBody);
-  });
-});
-
-describe("parseFrontMatterMatch", () => {
-  const cases = [
-    {
-      description: "should convert string to jsonata matcher",
-      input: "agentCoreState.paused",
-      expected: {
-        type: "jsonata",
-        expression: "agentCoreState.paused",
-      },
-    },
-    {
-      description: "should pass through object as-is",
-      input: { type: "always" },
-      expected: { type: "always" },
-    },
-    {
-      description: "should return undefined for null",
-      input: null,
-      expected: undefined,
-    },
-    {
-      description: "should return undefined for undefined",
-      input: undefined,
-      expected: undefined,
-    },
-    {
-      description: "should handle complex ContextRuleMatcher object",
-      input: {
-        type: "and",
-        matchers: [
-          { type: "always" },
-          { type: "jsonata", expression: "test" },
-        ],
-      },
-      expected: {
-        type: "and",
-        matchers: [
-          { type: "always" },
-          { type: "jsonata", expression: "test" },
-        ],
-      },
-    },
-  ];
-
-  it.each(cases)("$description", ({ input, expected }) => {
-    const result = parseFrontMatterMatch(input);
-    expect(result).toEqual(expected);
   });
 });
