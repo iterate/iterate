@@ -26,7 +26,7 @@
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "clean": "rm -rf ./**/node_modules",
     "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate && pnpm dev",
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
     "postinstall": "pnpm vibe-rules"
   },
   "devDependencies": {

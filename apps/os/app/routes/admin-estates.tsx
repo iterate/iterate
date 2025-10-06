@@ -167,7 +167,9 @@ export default function AdminEstatesPage() {
               <TableHead>Estate Name</TableHead>
               <TableHead>Estate ID</TableHead>
               <TableHead>Organization</TableHead>
+              <TableHead>Organization ID</TableHead>
               <TableHead>Owner</TableHead>
+              <TableHead>Owner Email</TableHead>
               <TableHead>Repository</TableHead>
               <TableHead>Updated</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -181,7 +183,13 @@ export default function AdminEstatesPage() {
                   {estate.id}
                 </TableCell>
                 <TableCell>{estate.organizationName}</TableCell>
-                <TableCell>{estate.ownerName || estate.ownerEmail || "No owner"}</TableCell>
+                <TableCell className="text-xs text-muted-foreground font-mono">
+                  {estate.organizationId}
+                </TableCell>
+                <TableCell>{estate.ownerName || "No name"}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {estate.ownerEmail || "No email"}
+                </TableCell>
                 <TableCell>
                   {estate.connectedRepoId ? (
                     <span className="text-xs text-muted-foreground">

@@ -292,8 +292,8 @@ export async function trackTokenUsageInStripe(params: {
   const payloads = [inputPayload, outputPayload];
 
   const results = await Promise.allSettled([
-    stripeV2JSON("POST", "/v2/billing/meter_events", inputPayload),
-    stripeV2JSON("POST", "/v2/billing/meter_events", outputPayload),
+    stripeClient.v2.billing.meterEvents.create(inputPayload),
+    stripeClient.v2.billing.meterEvents.create(outputPayload),
   ]);
 
   results.forEach((result, index) => {

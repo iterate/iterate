@@ -240,9 +240,11 @@ export async function getUserEstateAccess(
 }
 
 // Organization protected procedure that requires both authentication and organization membership
+// Admins can access any organization
 export const orgProtectedProcedure = protectedProcedure
   .input(z.object({ organizationId: z.string() }))
   .use(async ({ ctx, input, next, path }) => {
+    // Check if user has membership in the organization
     const membership = await ctx.db.query.organizationUserMembership.findFirst({
       where: and(
         eq(organizationUserMembership.organizationId, input.organizationId),
@@ -253,10 +255,33 @@ export const orgProtectedProcedure = protectedProcedure
       },
     });
 
-    if (!membership) {
+    // Allow if user has membership OR is a system admin
+    if (!membership && ctx.user.role !== "admin") {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: `Access to ${path} denied: User ${ctx.user.id} does not have access to organization ${input.organizationId}`,
+      });
+    }
+
+    // If admin without membership, fetch organization separately
+    if (!membership) {
+      const organization = await ctx.db.query.organization.findFirst({
+        where: (org, { eq }) => eq(org.id, input.organizationId),
+      });
+
+      if (!organization) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Organization ${input.organizationId} not found`,
+        });
+      }
+
+      return next({
+        ctx: {
+          ...ctx,
+          organization,
+          membership: undefined,
+        },
       });
     }
 
@@ -272,7 +297,15 @@ export const orgProtectedProcedure = protectedProcedure
 
 // Organization admin procedure that requires admin or owner role
 export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, path }) => {
-  if (ctx.membership.role !== "owner" && ctx.membership.role !== "admin") {
+  // System admins always have access
+  if (ctx.user.role === "admin") {
+    return next({ ctx });
+  }
+
+  // Otherwise check membership role (extract to local variable to help TypeScript narrow the type)
+  const { membership } = ctx;
+  const role = membership?.["role"];
+  if (!role || (role !== "owner" && role !== "admin")) {
     throw new TRPCError({
       code: "FORBIDDEN",
       message: `Access to ${path} denied: Only owners and admins can perform this action`,
