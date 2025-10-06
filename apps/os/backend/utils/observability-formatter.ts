@@ -59,6 +59,21 @@ same deal for posthog - although it's not as egregious, it does look nicer when 
 
 import type OpenAI from "openai";
 
+export function formatInputForObservability(input: OpenAI.Responses.ResponseCreateParamsStreaming) {
+  const formattedInput =
+    typeof input.input === "string"
+      ? [{ role: "user", content: input.input, type: "message" }]
+      : input.input
+        ? formatItemsForObservability(input.input)
+        : [];
+
+  const systemPrompt = input.instructions
+    ? [{ role: "system", content: input.instructions, type: "message" }]
+    : [];
+
+  return [...systemPrompt, ...formattedInput];
+}
+
 export function formatItemsForObservability(messages: OpenAI.Responses.ResponseInputItem[]) {
   return messages
     .map((message) => {
