@@ -6,11 +6,19 @@ import { waitUntil } from "cloudflare:workers";
 import { createAuthorizationURL } from "better-auth/oauth2";
 import { generateRandomString } from "better-auth/crypto";
 import { env as _env, env } from "../../env.ts";
+import { logger } from "../tag-logger.ts";
 import {
   getSlackAccessTokenForEstate,
   getUserSlackAccessTokenForEstate,
 } from "../auth/token-utils.ts";
-import { slackWebhookEvent, providerUserMapping } from "../db/schema.ts";
+import {
+  slackWebhookEvent,
+  providerUserMapping,
+  estate,
+  organizationUserMembership,
+  organization,
+  user,
+} from "../db/schema.ts";
 import * as schema from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import type {
@@ -20,14 +28,10 @@ import type {
 } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
-import {
-  CORE_AGENT_SLICES,
-  IterateAgent,
-  type AgentInstanceDatabaseRecord,
-} from "./iterate-agent.ts";
+import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import { shouldIncludeEventInConversation } from "./slack-agent-utils.ts";
+import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -45,7 +49,7 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
-
+import { createSlackAPIMock } from "./slack-api-mock.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -54,6 +58,7 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
+import type { AgentInitParams } from "./iterate-agent.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   static getNamespace() {
@@ -111,8 +116,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
+  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
     await super.initAfterConstructorBeforeOnStart(params);
+
+    if (params.record.durableObjectName.includes("mock_slack")) {
+      this.slackAPI = createSlackAPIMock<WebClient>();
+      return;
+    }
 
     const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
     if (!slackAccessToken) {
@@ -167,7 +177,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             ]);
             break;
           case "CORE:INTERNAL_ERROR": {
-            console.error("[SlackAgent] Internal Error:", payload.event);
+            logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
             waitUntil(
@@ -181,7 +191,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           }
         }
 
-        this.syncTypingIndicator();
+        if (event.type !== "CORE:LOG") {
+          this.syncTypingIndicator();
+        }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
@@ -208,7 +220,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           try {
             const downloadUrl = slackFile.url_private_download || slackFile.url_private;
             if (!downloadUrl) {
-              console.error(`No download URL for Slack file ${slackFile.id}`);
+              logger.error(`No download URL for Slack file ${slackFile.id}`);
               return null;
             }
             const fileRecord = await uploadFileFromURL({
@@ -220,7 +232,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 Authorization: `Bearer ${this.slackAPI.token}`,
               },
             });
-            console.log("File record", fileRecord);
+            logger.log("File record", fileRecord);
             return {
               iterateFileId: fileRecord.id,
               originalFilename: fileRecord.filename ?? undefined,
@@ -230,7 +242,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               slackFileId: slackFile.id,
             };
           } catch (error) {
-            console.error(`Failed to upload Slack file ${slackFile.id}:`, error);
+            logger.error(`Failed to upload Slack file ${slackFile.id}:`, error);
             return null;
           }
         });
@@ -337,7 +349,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Adds a participant to the conversation when they send a message.
    * This is crucial for MCP personal connections to work properly.
    */
-  protected async getParticipantJoinedEvents(
+  public async getParticipantJoinedEvents(
     slackUserId: string,
     botUserId?: string,
   ): Promise<ParticipantJoinedEventInput[]> {
@@ -353,36 +365,62 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return [];
     }
 
-    const userMapping = await this.db.query.providerUserMapping.findFirst({
-      where: and(
-        eq(providerUserMapping.providerId, "slack-bot"),
-        eq(providerUserMapping.externalId, slackUserId),
-      ),
-      with: {
-        internalUser: true,
-      },
-    });
+    const estateId = this.databaseRecord.estateId;
 
-    if (!userMapping?.internalUser) {
+    const result = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.externalId, slackUserId),
+          eq(estate.id, estateId),
+        ),
+      )
+      .limit(1);
+
+    // If no result, user either doesn't exist or doesn't have access to this estate
+    if (!result[0]) {
+      logger.info(
+        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
+      );
       return [];
     }
 
-    if (currentState.participants[userMapping.internalUser.id]) {
+    const userInfo = result[0];
+
+    if (currentState.participants[userInfo.userId]) {
       return [];
     }
 
-    const { internalUser, externalId, providerMetadata } = userMapping;
+    const internalUser = {
+      id: userInfo.userId,
+      email: userInfo.userEmail,
+      name: userInfo.userName,
+    };
+    const externalId = userInfo.slackUserId;
+    const providerMetadata = userInfo.providerMetadata;
 
     return [
       {
-        type: "CORE:PARTICIPANT_JOINED" as const,
+        type: "CORE:PARTICIPANT_JOINED",
         data: {
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
           externalUserMapping: {
             slack: {
-              integrationSlug: "slack" as const,
+              integrationSlug: "slack",
               externalUserId: externalId,
               internalUserId: internalUser.id,
               email: internalUser.email,
@@ -393,7 +431,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         triggerLLMRequest: false,
         metadata: {},
       },
-    ] as const;
+    ];
   }
 
   /**
@@ -445,14 +483,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       .map((userMapping): ParticipantMentionedEventInput => {
         const { internalUser, externalId, providerMetadata } = userMapping;
         return {
-          type: "CORE:PARTICIPANT_MENTIONED" as const,
+          type: "CORE:PARTICIPANT_MENTIONED",
           data: {
             internalUserId: internalUser!.id,
             email: internalUser!.email,
             displayName: internalUser!.name,
             externalUserMapping: {
               slack: {
-                integrationSlug: "slack" as const,
+                integrationSlug: "slack",
                 externalUserId: externalId,
                 internalUserId: internalUser.id,
                 email: internalUser.email,
@@ -469,7 +507,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   public async initSlack(channelId: string, threadTs: string) {
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
     events.push({
-      type: "SLACK:UPDATE_SLICE_STATE" as const,
+      type: "SLACK:UPDATE_SLICE_STATE",
       data: {
         slackChannelId: channelId,
         slackThreadId: threadTs,
@@ -524,7 +562,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return result.permalink;
         }
       } catch (error) {
-        console.error("Failed to get Slack permalink:", error);
+        logger.error("Failed to get Slack permalink:", error);
       }
     } else {
       // if we can't find any message, get link to the thread
@@ -532,7 +570,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       const threadTs = state.reducedState?.slackThreadId;
 
       if (!channelId || !threadTs) {
-        console.error("Channel ID and thread TS are required to get a Slack permalink", {
+        logger.error("Channel ID and thread TS are required to get a Slack permalink", {
           channelId,
           threadTs,
         });
@@ -547,7 +585,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return result.permalink;
         }
       } catch (error) {
-        console.error("Failed to get Slack permalink:", error);
+        logger.error("Failed to get Slack permalink:", error);
       }
     }
     return undefined;
@@ -640,7 +678,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     // Pass the webhook event to the reducer
     // The reducer will handle filtering and determine if LLM computation should be triggered
     events.push({
-      type: "SLACK:WEBHOOK_EVENT_RECEIVED" as const,
+      type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
         payload: slackWebhookPayload,
         updateThreadIds: true,
@@ -666,8 +704,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const { endTurn, ...sendInput } = input;
 
-    const numLinks = sendInput.text.match(/https?:\/\/[^\s|]+/g)?.length;
-    const doUnfurl = sendInput.unfurl === "all" || (sendInput.unfurl === "auto" && numLinks === 1);
+    const doUnfurl = shouldUnfurlSlackMessage({
+      text: sendInput.text,
+      unfurl: sendInput.unfurl,
+    });
 
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
@@ -783,8 +823,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
       return completeResponse;
     } catch (error) {
-      console.warn("[SlackAgent] Failed uploading file:", error);
-      console.log("Full error details:", JSON.stringify(error, null, 2));
+      logger.warn("[SlackAgent] Failed uploading file:", error);
+      logger.log("Full error details:", JSON.stringify(error, null, 2));
       return {
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
@@ -812,7 +852,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         });
       }
     } catch (error) {
-      console.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
+      logger.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
     }
     return {
       __pauseAgentUntilMentioned: true,

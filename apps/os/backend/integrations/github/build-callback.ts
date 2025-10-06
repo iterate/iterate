@@ -6,6 +6,7 @@ import type { Variables } from "../../worker";
 import * as schema from "../../db/schema.ts";
 import { verifySignedUrl, BuildCallbackPayload } from "../../utils/url-signing.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
+import { logger } from "../../tag-logger.ts";
 
 export const buildCallbackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
@@ -15,7 +16,7 @@ buildCallbackApp.post("/callback", zValidator("json", BuildCallbackPayload), asy
   const isValid = await verifySignedUrl(url, c.env.EXPIRING_URLS_SIGNING_KEY);
 
   if (!isValid) {
-    console.error("Invalid or expired callback URL");
+    logger.error("Invalid or expired callback URL");
     return c.json({ error: "Invalid or expired callback URL" }, 401);
   }
 
@@ -78,8 +79,8 @@ buildCallbackApp.post("/callback", zValidator("json", BuildCallbackPayload), asy
             },
           });
       } catch (parseError) {
-        console.error("Failed to parse configuration output:", parseError);
-        console.error("Stdout that failed to parse:", stdout);
+        logger.error("Failed to parse configuration output:", parseError);
+        logger.error("Stdout that failed to parse:", stdout);
         // The build succeeded but we couldn't parse the config
         // This is logged but not treated as a build failure
       }

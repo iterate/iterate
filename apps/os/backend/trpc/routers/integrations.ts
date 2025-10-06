@@ -6,6 +6,7 @@ import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   generateGithubJWT,
   getGithubInstallationForEstate,
@@ -85,6 +86,7 @@ export const integrationsRouter = router({
 
     // Add estate-wide accounts
     estateAccounts.forEach(({ account: acc_item }) => {
+      // Skip if account is null (orphaned permission record)
       if (!acc_item) return;
       if (!accountsByProvider[acc_item.providerId]) {
         accountsByProvider[acc_item.providerId] = [];
@@ -104,7 +106,7 @@ export const integrationsRouter = router({
 
       // Check if this account is already in estate-wide connections
       const isAlreadyEstateWide = estateAccounts.some(
-        ({ account: estateAcc }) => estateAcc.id === acc_item.id,
+        ({ account: estateAcc }) => estateAcc?.id === acc_item.id,
       );
 
       if (!isAlreadyEstateWide) {
@@ -165,8 +167,8 @@ export const integrationsRouter = router({
       }
 
       const accounts = estateAccounts
-        .filter(({ account: acc }) => acc.providerId === input.providerId)
-        .map(({ account: acc }) => acc);
+        .filter(({ account: acc }) => acc && acc.providerId === input.providerId)
+        .map(({ account: acc }) => acc!);
 
       return {
         id: input.providerId,
@@ -268,9 +270,7 @@ export const integrationsRouter = router({
 
       // Safety check to prevent infinite loops (max 10 pages = 1000 repos)
       if (page > 10) {
-        console.warn(
-          `Stopping repository fetch at page ${page - 1} to prevent excessive API calls`,
-        );
+        logger.warn(`Stopping repository fetch at page ${page - 1} to prevent excessive API calls`);
         break;
       }
     }
@@ -308,12 +308,12 @@ export const integrationsRouter = router({
           repoName = repoData.name;
           repoFullName = repoData.full_name;
         } else {
-          console.error(
+          logger.error(
             `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
           );
         }
       } catch (error) {
-        console.error("Error fetching repository details:", error);
+        logger.error("Error fetching repository details:", error);
       }
     }
 
@@ -344,6 +344,59 @@ export const integrationsRouter = router({
           connectedRepoPath: path,
         })
         .where(eq(schemas.estate.id, estateId));
+
+      // Trigger an initial build after connecting the repository
+      try {
+        // Get the GitHub installation
+        const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+        if (githubInstallation) {
+          // Get installation token
+          const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+          // Fetch the latest commit on the branch
+          const branchResponse = await fetch(
+            `https://api.github.com/repositories/${repoId}/branches/${branch}`,
+            {
+              headers: {
+                Authorization: `Bearer ${installationToken}`,
+                Accept: "application/vnd.github+json",
+                "User-Agent": "Iterate OS",
+              },
+            },
+          );
+
+          if (branchResponse.ok) {
+            const branchData = z
+              .object({
+                commit: z.object({
+                  sha: z.string(),
+                  commit: z.object({
+                    message: z.string(),
+                  }),
+                }),
+              })
+              .parse(await branchResponse.json());
+            const commitHash = branchData.commit.sha;
+            const commitMessage = branchData.commit.commit.message;
+
+            if (commitHash && commitMessage) {
+              // Import and use the helper function to trigger a build
+              const { triggerEstateRebuild } = await import("./estate.ts");
+              await triggerEstateRebuild({
+                db: ctx.db,
+                env: ctx.env,
+                estateId,
+                commitHash,
+                commitMessage,
+                isManual: false, // This is an automatic build
+              });
+            }
+          }
+        }
+      } catch (error) {
+        // Log the error but don't fail the connection
+        logger.error("Failed to trigger initial build:", error);
+      }
 
       return {
         success: true,
@@ -390,12 +443,12 @@ export const integrationsRouter = router({
         });
 
         const estateAccountsToDisconnect = estateAccounts.filter(
-          ({ account: acc }) => acc.providerId === providerId,
+          ({ account: acc }) => acc && acc.providerId === providerId,
         );
 
         if (estateAccountsToDisconnect.length > 0) {
           // Delete estate permissions for these accounts
-          const accountIds = estateAccountsToDisconnect.map(({ account: acc }) => acc.id);
+          const accountIds = estateAccountsToDisconnect.map(({ account: acc }) => acc!.id);
           await ctx.db
             .delete(estateAccountsPermissions)
             .where(
@@ -420,7 +473,7 @@ export const integrationsRouter = router({
 
             // Always revoke the GitHub app installation
             for (const { account: acc } of estateAccountsToDisconnect) {
-              if (acc.providerId === "github-app" && acc.accountId) {
+              if (acc && acc.providerId === "github-app" && acc.accountId) {
                 try {
                   // Generate JWT for authentication
                   const jwt = await generateGithubJWT();
@@ -441,15 +494,15 @@ export const integrationsRouter = router({
 
                   if (!deleteResponse.ok && deleteResponse.status !== 404) {
                     // Log error but don't fail the disconnection
-                    console.error(
+                    logger.error(
                       `Failed to revoke GitHub installation ${acc.accountId}: ${deleteResponse.status} ${deleteResponse.statusText}`,
                     );
                   } else if (deleteResponse.ok) {
-                    console.log(`Successfully revoked GitHub installation ${acc.accountId}`);
+                    logger.log(`Successfully revoked GitHub installation ${acc.accountId}`);
                   }
                 } catch (error) {
                   // Log error but don't fail the disconnection
-                  console.error(`Error revoking GitHub installation ${acc.accountId}:`, error);
+                  logger.error(`Error revoking GitHub installation ${acc.accountId}:`, error);
                 }
               }
             }
@@ -463,7 +516,7 @@ export const integrationsRouter = router({
 
             // If this account is not used by any other estate and belongs to the current user, delete it
             const acc = estateAccountsToDisconnect.find(
-              (ea) => ea.account.id === accountId,
+              (ea) => ea.account?.id === accountId,
             )?.account;
             if (!otherEstatePermissions && acc?.userId === ctx.user.id) {
               await ctx.db.delete(account).where(eq(account.id, accountId));
@@ -630,19 +683,11 @@ export const integrationsRouter = router({
         serverUrl: z.string(),
         mode: z.enum(["personal", "company"]),
         integrationSlug: z.string(),
-        requiresOAuth: z.boolean().optional(),
         requiresParams: z.array(MCPParam).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const {
-        agentDurableObject,
-        serverUrl,
-        mode,
-        integrationSlug,
-        requiresOAuth,
-        requiresParams,
-      } = input;
+      const { agentDurableObject, serverUrl, mode, integrationSlug, requiresParams } = input;
       const params = {
         db: ctx.db,
         agentInstanceName: agentDurableObject.durableObjectName,
@@ -667,7 +712,6 @@ export const integrationsRouter = router({
             mode: mode,
             userId: ctx.user.id,
             integrationSlug,
-            requiresOAuth,
             requiresParams,
             triggerLLMRequestOnEstablishedConnection: false,
           },
@@ -688,7 +732,7 @@ export const integrationsRouter = router({
         ctx.db,
         estateId,
       ).catch((e) => {
-        console.log(e);
+        logger.log(e);
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message:
@@ -708,7 +752,7 @@ export const integrationsRouter = router({
       );
 
       if (!installationInfoRes.ok) {
-        console.log("Failed to get GitHub installation info", await installationInfoRes.text());
+        logger.log("Failed to get GitHub installation info", await installationInfoRes.text());
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to get GitHub installation info",
@@ -745,7 +789,7 @@ export const integrationsRouter = router({
       }
 
       if (!createRepoRes.ok) {
-        console.error(await createRepoRes.text());
+        logger.error(await createRepoRes.text());
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to create repository",

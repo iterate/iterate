@@ -2,9 +2,12 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import { WorkerEntrypoint, waitUntil } from "cloudflare:workers";
+import { PostHog } from "posthog-node";
+import { cors } from "hono/cors";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { uploadFileHandler, uploadFileFromURLHandler, getFileHandler } from "./file-handlers.ts";
@@ -18,6 +21,7 @@ import { OrganizationWebSocket } from "./durable-objects/organization-websocket.
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
+import { logger } from "./tag-logger.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -36,7 +40,46 @@ export type Variables = {
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
+app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
+
+app.use(
+  "*",
+  cors({
+    credentials: true,
+    origin: (c) => c,
+  }),
+);
+
+// Error tracking with PostHog
+app.onError((err, c) => {
+  // Log the error
+  logger.error("Unhandled error:", err);
+
+  // Track error in PostHog (non-blocking)
+  waitUntil(
+    (async () => {
+      const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+        host: "https://eu.i.posthog.com",
+      });
+
+      // Get user ID if available
+      const userId = c.get("session")?.user?.id || "anonymous";
+
+      posthog.captureException(err, userId, {
+        path: c.req.path,
+        method: c.req.method,
+        url: c.req.url,
+        errorName: err.name,
+      });
+
+      await posthog.shutdown();
+    })(),
+  );
+
+  // Return error response
+  return c.json({ error: "Internal Server Error" }, 500);
+});
 
 app.use("*", async (c, next) => {
   const db = getDb();
@@ -72,7 +115,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
     if (message.includes("not found")) {
       return c.json({ error: "Agent not found" }, 404);
     }
-    console.error("Failed to get agent stub:", error);
+    logger.error("Failed to get agent stub:", error);
     return c.json({ error: "Failed to connect to agent" }, 500);
   }
 });
@@ -86,7 +129,7 @@ app.all("/api/trpc/*", (c) => {
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
     onError: ({ path, error, type, input }) => {
-      console.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
+      logger.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
         type,
         code: error.code,
         message: error.message,
@@ -94,6 +137,31 @@ app.all("/api/trpc/*", (c) => {
         input,
         stack: error.stack,
       });
+
+      // Track error in PostHog (non-blocking)
+      waitUntil(
+        (async () => {
+          const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
+            host: "https://eu.i.posthog.com",
+          });
+
+          const userId = c.var.session?.user?.id || "anonymous";
+          const httpCode = getHTTPStatusCodeFromError(error);
+          if (httpCode < 500) {
+            return;
+          }
+          posthog.captureException(error, userId, {
+            trpcPath: path,
+            trpcType: type,
+            trpcCode: error.code,
+            trpcInput: input,
+            method: c.req.method,
+            url: c.req.url,
+          });
+
+          await posthog.shutdown();
+        })(),
+      );
     },
   });
 });
@@ -156,11 +224,11 @@ app.post(
         .string()
         .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
         .optional(),
-      workingDirectory: z
+      connectedRepoPath: z
         .string()
         .refine(
           (val) => !val || !val.startsWith("/"),
-          "Working directory should be a relative path within the repository",
+          "Directory to use within the connected repository",
         )
         .optional(),
     }),
@@ -179,7 +247,7 @@ app.post(
 
       return c.json(result);
     } catch (error) {
-      console.error("Test build error:", error);
+      logger.error("Test build error:", error);
       return c.json(
         {
           error: "Internal server error during build test",

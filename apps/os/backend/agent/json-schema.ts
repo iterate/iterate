@@ -1,6 +1,7 @@
 import { prettifyError, z } from "zod/v4";
 import type { AnyProcedure, AnyTRPCRouter } from "@trpc/server";
 import { constructMergeSchema } from "../utils/schema-helpers.ts";
+import { logger } from "../tag-logger.ts";
 import type { RuntimeJsonSchema } from "./do-tools.ts";
 
 export type DurableObjectClass<T = any> = new (ctx: DurableObjectState, env: any) => T;
@@ -12,7 +13,7 @@ const createFallbackJsonSchema = () => {
       target: "draft-2020-12",
     });
   } catch (error) {
-    console.error("Failed to create fallback JSON schema:", error);
+    logger.error("Failed to create fallback JSON schema:", error);
     // Ultimate fallback if even the empty object schema fails
     return { type: "object", additionalProperties: true };
   }
@@ -27,7 +28,7 @@ export const convertTrpcRouterToRuntimeJsonSchema = (router: AnyTRPCRouter) => {
           const schema = procedureToJSONSchema(router, p);
           return [p, schema];
         } catch (error) {
-          console.error(`Failed to generate JSON schema for TRPC procedure ${p}:`, error);
+          logger.error(`Failed to generate JSON schema for TRPC procedure ${p}:`, error);
           // Create a fallback runtime schema
           const fallbackJsonSchema = createFallbackJsonSchema();
           return [

@@ -1,9 +1,14 @@
 import { createPrivateKey, createHmac } from "crypto";
 import { SignJWT } from "jose";
 import { eq, and } from "drizzle-orm";
+import { waitUntil } from "cloudflare:workers";
 import { env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schemas from "../../db/schema.ts";
+import type { CloudflareEnv } from "../../../env.ts";
+import { runConfigInSandbox } from "../../sandbox/run-config.ts";
+import { signUrl } from "../../utils/url-signing.ts";
+import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
 export const generateGithubJWT = async () => {
   const alg = "RS256";
@@ -109,3 +114,98 @@ export const getGithubInstallationToken = async (installationId: string) => {
   const { token } = (await tokenRes.json()) as { token: string };
   return token;
 };
+
+// Helper function to trigger a GitHub estate build
+export async function triggerGithubBuild(params: {
+  db: DB;
+  env: CloudflareEnv;
+  estateId: string;
+  commitHash: string;
+  commitMessage: string;
+  repoUrl: string;
+  installationToken: string;
+  connectedRepoPath?: string;
+  branch?: string;
+  webhookId?: string;
+  workflowRunId?: string;
+  isManual?: boolean;
+}) {
+  const {
+    db,
+    env,
+    estateId,
+    commitHash,
+    commitMessage,
+    repoUrl,
+    installationToken,
+    connectedRepoPath,
+    branch,
+    webhookId,
+    workflowRunId,
+    isManual = false,
+  } = params;
+
+  // Create a new build record
+  const [build] = await db
+    .insert(schemas.builds)
+    .values({
+      status: "in_progress",
+      commitHash,
+      commitMessage: isManual ? `[Manual] ${commitMessage}` : commitMessage,
+      webhookIterateId: webhookId || `${isManual ? "manual" : "auto"}-${Date.now()}`,
+      estateId,
+      iterateWorkflowRunId: workflowRunId,
+    })
+    .returning();
+
+  // Get the organization ID for WebSocket invalidation
+  const estateWithOrg = await db.query.estate.findFirst({
+    where: eq(schemas.estate.id, estateId),
+    with: {
+      organization: true,
+    },
+  });
+
+  // Invalidate organization queries to show the new in-progress build
+  if (estateWithOrg?.organization) {
+    await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
+      type: "INVALIDATE",
+      invalidateInfo: {
+        type: "TRPC_QUERY",
+        paths: ["estate.getBuilds"],
+      },
+    });
+  }
+
+  // Generate a signed callback URL
+  let baseUrl = env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+  // If it's localhost, use the ngrok dev URL instead
+  if (baseUrl.includes("localhost")) {
+    baseUrl = `https://${env.ITERATE_USER}.dev.iterate.com`;
+  }
+  const callbackUrl = await signUrl(
+    `${baseUrl}/api/build/callback`,
+    env.EXPIRING_URLS_SIGNING_KEY,
+    60 * 60, // 1 hour expiry
+  );
+  const buildPromise = runConfigInSandbox(env, {
+    githubRepoUrl: repoUrl,
+    githubToken: installationToken,
+    commitHash,
+    branch,
+    connectedRepoPath: connectedRepoPath || "/",
+    callbackUrl,
+    buildId: build.id,
+    estateId,
+  });
+
+  // Use waitUntil to run in background (won't throw if not in request context)
+  try {
+    waitUntil(buildPromise);
+  } catch {
+    // If waitUntil is not available (e.g., in tests), just await the promise
+    await buildPromise;
+  }
+
+  return build;
+}

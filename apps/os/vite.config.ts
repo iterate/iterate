@@ -6,10 +6,13 @@ import tsconfigPaths from "vite-tsconfig-paths";
 
 export default defineConfig({
   build: {
-    sourcemap: process.env.NODE_ENV === "development" ? true : false,
+    sourcemap: true,
   },
   server: {
     allowedHosts: [".dev.iterate.com"],
+  },
+  preview: {
+    port: 5173,
   },
   plugins: [
     cloudflare({ viteEnvironment: { name: "ssr" } }),

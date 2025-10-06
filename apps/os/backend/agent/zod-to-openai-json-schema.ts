@@ -9,6 +9,7 @@ import {
   type ZodType,
   type ZodUnion,
 } from "zod/v4";
+import { logger } from "../tag-logger.ts";
 import type { BaseJSONSchema, SchemaBranded } from "./schema-utils.ts";
 
 const keysToStrip = ["workflowCallbackTarget"];
@@ -45,7 +46,7 @@ export function zodToOpenAIJSONSchema<
       JSON.stringify(
         toJSONSchema(zodSchema, {
           override: (ctx) => {
-            console.log("ctx.jsonSchema", ctx.jsonSchema);
+            logger.log("ctx.jsonSchema", ctx.jsonSchema);
             makeJSONSchemaOpenAICompatible(ctx.jsonSchema);
           },
           unrepresentable: "any",
@@ -92,8 +93,8 @@ export function zodToOpenAIJSONSchema<
       ).replaceAll('{"not":{}}', "false"),
     ) as SchemaBranded<BaseJSONSchema, T>;
   } catch (e) {
-    console.log(zodSchema);
-    console.error("Error converting zod schema to openai json schema", e);
+    logger.log(zodSchema);
+    logger.error("Error converting zod schema to openai json schema", e);
     throw e;
   }
 }

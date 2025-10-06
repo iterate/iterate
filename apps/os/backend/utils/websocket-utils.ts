@@ -1,5 +1,6 @@
 import type { CloudflareEnv } from "../../env.ts";
 import type { PushControllerEvent } from "../durable-objects/organization-websocket.ts";
+import { logger } from "../tag-logger.ts";
 
 /**
  * Send an invalidation message to all connected WebSocket clients for an organization
@@ -23,7 +24,7 @@ export async function invalidateOrganizationQueries(
   );
 
   if (!response.ok) {
-    console.error("Failed to send invalidation:", await response.text());
+    logger.error("Failed to send invalidation:", await response.text());
   }
 }
 
@@ -56,7 +57,7 @@ export async function notifyOrganization(
   );
 
   if (!response.ok) {
-    console.error("Failed to send notification:", await response.text());
+    logger.error("Failed to send notification:", await response.text());
   }
 }
 
@@ -85,7 +86,7 @@ export async function broadcastToOrganization(
   );
 
   if (!response.ok) {
-    console.error("Failed to broadcast message:", await response.text());
+    logger.error("Failed to broadcast message:", await response.text());
   }
 }
 
@@ -106,7 +107,7 @@ export async function getOrganizationWebSocketStats(
   );
 
   if (!response.ok) {
-    console.error("Failed to get stats:", await response.text());
+    logger.error("Failed to get stats:", await response.text());
     return null;
   }
 

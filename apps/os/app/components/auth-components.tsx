@@ -1,20 +1,21 @@
 import { toast } from "sonner";
+import { useSearchParams } from "react-router";
 import { authClient } from "../lib/auth-client.ts";
+import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 
 export function LoginProviders() {
+  const [searchParams] = useSearchParams();
+  const redirectUrl = searchParams.get("redirectUrl");
+
   const handleGoogleSignIn = async () => {
     try {
       console.log("🚀 Attempting Google sign-in...");
 
-      const result = await authClient.signIn.social({
+      await authClient.signIn.social({
         provider: "google",
-        callbackURL: "/", // Redirect to home after login
+        callbackURL: redirectUrl || "/", // Redirect to home after login
       });
-
-      if (result.error) {
-        toast.error("Failed to sign in with Google");
-      }
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }
@@ -25,19 +26,32 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
         query: {
-          callbackURL: "/",
+          // /onboarding-after-slack-login will either redirect the user to a nice page with onboarding tasks,
+          // or it will redirect the user to the home page (if they already set up a github repo)
+          callbackURL: redirectUrl || "/onboarding-after-slack-login",
         },
       });
 
-      if (result.error || !result.data?.url) {
+      if (!result || !("url" in result)) {
         toast.error("Failed to sign in with Slack");
         return;
       }
 
-      window.location.href = result.data.url.toString();
+      window.location.href = result.url.toString();
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }
+  };
+
+  const handleTestAdminUserSignIn = async () => {
+    const credentials = prompt(
+      "Enter email and password (colon separated)",
+      testAdminUser.credentials || "",
+    );
+    if (!credentials) return;
+    const { email, password } = parseCredentials(credentials);
+    const result = await authClient.signIn.email({ email, password });
+    window.location.href = result?.url ?? "/";
   };
 
   return (
@@ -76,6 +90,16 @@ export function LoginProviders() {
       >
         Continue with Slack
       </Button>
+      {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (
+        <Button
+          onClick={handleTestAdminUserSignIn}
+          variant="outline"
+          size="lg"
+          className="w-full h-12 text-base font-medium"
+        >
+          Continue as test admin user
+        </Button>
+      )}
     </div>
   );
 }

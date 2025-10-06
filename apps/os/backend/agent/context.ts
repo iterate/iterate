@@ -3,6 +3,7 @@ import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
 import jsonataLib from "jsonata/sync";
+import { logger } from "../tag-logger.ts";
 import type {
   ContextRule,
   ContextRuleMatcher,
@@ -86,6 +87,12 @@ export function forAgentClass(className: string) {
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
+export function sandboxStatus(status: "starting" | "attached") {
+  // Construct JSONata expression that checks if agentCoreState.metadata.sandboxStatus matches the provided status
+  const expression = `agentCoreState.metadata.sandboxStatus = ${JSON.stringify(status)}`;
+  return { type: "jsonata", expression } satisfies ContextRuleMatcher;
+}
+
 export const matchers = {
   never,
   always,
@@ -96,6 +103,7 @@ export const matchers = {
   hasTool,
   hasMCPConnection,
   forAgentClass,
+  sandboxStatus,
   and,
   or,
   not,
@@ -361,7 +369,7 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       });
     });
   } catch (error) {
-    console.error(`Error reading files with pattern ${pattern}:`, error);
+    logger.error(`Error reading files with pattern ${pattern}:`, error);
     return [];
   }
 }

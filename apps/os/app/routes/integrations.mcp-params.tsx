@@ -109,7 +109,6 @@ export default function MCPParams() {
           serverUrl,
           mode: mode as "personal" | "company",
           integrationSlug,
-          requiresOAuth: false,
           requiresParams: requiredParams,
         });
       }
@@ -129,7 +128,7 @@ export default function MCPParams() {
   };
 
   return (
-    <div className="max-w-2xl mx-auto p-6">
+    <div className="p-6">
       <div className="mb-8">
         <h1 className="text-3xl font-bold mb-2">Configure MCP Server</h1>
         <p className="text-muted-foreground text-lg">

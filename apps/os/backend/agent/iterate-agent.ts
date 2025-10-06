@@ -2,26 +2,34 @@ import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
+import dedent from "dedent";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
+import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute } from "../db/schema.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect & {
-  contextRules: ContextRule[];
+import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
+import type { IterateConfig } from "../../sdk/iterate-config.ts";
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInitParams = {
+  record: AgentInstanceDatabaseRecord;
+  estate: typeof schema.estate.$inferSelect;
+  organization: typeof schema.organization.$inferSelect;
+  iterateConfig: IterateConfig;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { getEnvironmentName } from "../utils/utils.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import { tutorialRules } from "../../sdk/tutorial.ts";
+import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -139,37 +147,53 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord(
-    record: AgentInstanceDatabaseRecord,
+  static async getStubFromDatabaseRecord(params: {
+    db: DB;
+    record: AgentInstanceDatabaseRecord;
     options?: {
       jurisdiction?: DurableObjectJurisdiction;
       locationHint?: DurableObjectLocationHint;
       props?: Record<string, unknown>;
-    },
-  ) {
+    };
+  }) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
-    if (options?.jurisdiction) {
-      namespace = namespace.jurisdiction(options.jurisdiction);
+    if (params.options?.jurisdiction) {
+      namespace = namespace.jurisdiction(params.options.jurisdiction);
     }
-    const stub = namespace.getByName(record.durableObjectName, options);
+    const stub = namespace.getByName(params.record.durableObjectName, params.options);
+
+    // Fetch related data needed for initialization in a single query
+    const estate = await params.db.query.estate.findFirst({
+      where: eq(schema.estate.id, params.record.estateId),
+      with: { organization: true, iterateConfigs: true },
+    });
+    if (!estate) {
+      throw new Error(`Estate ${params.record.estateId} not found for agent ${params.record.id}`);
+    }
+    const iterateConfig: IterateConfig = estate.iterateConfigs?.[0]?.config ?? {};
 
     // right after the constructor runs we get in there and initialise all our stuff
     // (e.g. obtaining a slack access token in the case of a slack agent)
-    await stub.initAfterConstructorBeforeOnStart({ record });
+    await stub.initAfterConstructorBeforeOnStart({
+      record: params.record,
+      estate,
+      organization: estate.organization!,
+      iterateConfig,
+    });
 
     // only now do we do the agents sdk cruft where we hit fetch to initialise party server
     // with a server name
     const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-    req.headers.set("x-partykit-room", record.durableObjectName);
-    if (options?.props) {
-      req.headers.set("x-partykit-props", JSON.stringify(options?.props));
+    req.headers.set("x-partykit-room", params.record.durableObjectName);
+    if (params.options?.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(params.options?.props));
     }
     await stub
       .fetch(req)
       .then((res) => res.text())
       .catch((e) => {
-        console.error("Could not set server name:", e);
+        logger.error("Could not set server name:", e);
       });
 
     return stub;
@@ -189,9 +213,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (!record) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
-    const contextRules = await this.getRulesFromDB(db, record.estateId);
-
-    return this.getStubFromDatabaseRecord({ ...record, contextRules });
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -201,7 +223,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     const routes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, routingKey),
-      with: { agentInstance: { with: { estate: { with: { iterateConfigs: true } } } } },
+      with: {
+        agentInstance: {
+          with: {},
+        },
+      },
     });
 
     const matchingAgents = routes
@@ -213,12 +239,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) =>
-        this.getStubFromDatabaseRecord({
-          ...record,
-          contextRules: record.estate.iterateConfigs[0].config.contextRules ?? [],
-        }),
-      ),
+      matchingAgents.map((record) => this.getStubFromDatabaseRecord({ db, record })),
     );
 
     return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
@@ -238,7 +259,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
+        eq(agentInstance.estateId, estateId),
       ),
+      with: {},
     });
 
     if (!record) {
@@ -259,15 +282,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           },
         })
         .returning();
-      record = inserted;
+
+      // Re-query to get the relations
+      record = await db.query.agentInstance.findFirst({
+        where: eq(agentInstance.id, inserted.id),
+        with: {},
+      });
+      if (!record) {
+        throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
+      }
     } else {
       if (record.estateId !== estateId) {
         throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
       }
     }
-    const contextRules = await this.getRulesFromDB(db, estateId);
-
-    return this.getStubFromDatabaseRecord({ ...record, contextRules });
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   // Get or create stub by route
@@ -282,22 +311,23 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // First check if an agent already exists for this route
     const existingRoutes = await db.query.agentInstanceRoute.findMany({
       where: eq(agentInstanceRoute.routingKey, route),
-      with: { agentInstance: true },
+      with: {
+        agentInstance: true,
+      },
     });
-    const contextRules = await this.getRulesFromDB(db, estateId);
 
     const existingAgent = existingRoutes
       .map((r) => r.agentInstance)
       .find((r) => r.className === this.name && r.estateId === estateId);
 
     if (existingAgent) {
-      return this.getStubFromDatabaseRecord({ ...existingAgent, contextRules });
+      return this.getStubFromDatabaseRecord({ db, record: existingAgent });
     }
 
     // No existing agent for this route, create one with route
     const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
     const durableObjectId = this.getNamespace().idFromName(durableObjectName);
-    const [record] = await db
+    const [inserted] = await db
       .insert(agentInstance)
       .values({
         estateId,
@@ -317,31 +347,36 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // Create the route association
     await db
       .insert(agentInstanceRoute)
-      .values({ agentInstanceId: record.id, routingKey: route })
+      .values({ agentInstanceId: inserted.id, routingKey: route })
       .onConflictDoNothing();
 
-    return this.getStubFromDatabaseRecord({
-      ...record,
-      contextRules,
+    // Re-query to get the relations
+    const record = await db.query.agentInstance.findFirst({
+      where: eq(agentInstance.id, inserted.id),
+      with: {},
     });
-  }
 
-  static async getRulesFromDB(db: DB, estateId: string): Promise<ContextRule[]> {
-    const config = await db.query.iterateConfig.findFirst({
-      where: eq(schema.iterateConfig.estateId, estateId),
-    });
-    return config?.config?.contextRules ?? [];
+    if (!record) {
+      throw new Error(`Failed to fetch created agent instance ${durableObjectName}`);
+    }
+
+    return this.getStubFromDatabaseRecord({ db, record });
   }
 
   protected db: DB;
   // Runtime slice list – inferred from the generic parameter.
   agentCore!: AgentCore<Slices, CoreAgentSlices>;
   _databaseRecord?: AgentInstanceDatabaseRecord;
+  _estate?: typeof schema.estate.$inferSelect;
+  _organization?: typeof schema.organization.$inferSelect;
+  _iterateConfig?: IterateConfig;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: { record: AgentInstanceDatabaseRecord }) {
-    const { record } = params;
-    this._databaseRecord = record;
+  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
+    this._databaseRecord = params.record;
+    this._estate = params.estate;
+    this._organization = params.organization;
+    this._iterateConfig = params.iterateConfig;
   }
 
   initialState = {
@@ -353,6 +388,21 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       throw new Error("Database record not found");
     }
     return this._databaseRecord;
+  }
+
+  get estate() {
+    if (!this._estate) throw new Error("Estate not initialized");
+    return this._estate;
+  }
+
+  get organization() {
+    if (!this._organization) throw new Error("Organization not initialized");
+    return this._organization;
+  }
+
+  get iterateConfig() {
+    if (!this._iterateConfig) return {} as IterateConfig;
+    return this._iterateConfig;
   }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
@@ -408,14 +458,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
     const posthogClient = pMemoize(async () => {
       const estate = await getEstate();
-      const environment = getEnvironmentName({
-        ITERATE_USER: this.env.ITERATE_USER,
-        STAGE__PR_ID: this.env.STAGE__PR_ID,
-        ESTATE_NAME: estate.name,
-      });
       return new PosthogCloudflare(this.ctx, {
         estateName: estate.name,
-        environmentName: environment,
+        projectName: this.env.PROJECT_NAME,
       });
     });
 
@@ -459,7 +504,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             }),
           );
         } catch (error) {
-          console.warn("Failed to broadcast events:", error);
+          logger.warn("Failed to broadcast events:", error);
         }
       },
 
@@ -470,13 +515,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       getOpenAIClient: async () => {
         const estate = await getEstate();
         return await openAIProvider({
+          estateName: estate.name,
           posthog: {
-            estateName: estate.name,
-            environmentName: getEnvironmentName({
-              STAGE__PR_ID: this.env.STAGE__PR_ID,
-              ITERATE_USER: this.env.ITERATE_USER,
-              ESTATE_NAME: estate.name,
-            }),
+            projectName: this.env.PROJECT_NAME,
             traceId: `${this.constructor.name}-${this.name}`,
           },
           env: {
@@ -526,6 +567,34 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
       getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
         return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
+      },
+
+      onLLMStreamResponseStreamingChunk: (chunk) => {
+        if (chunk.type === "response.completed") {
+          const { input_tokens, output_tokens } = chunk.response.usage ?? {};
+
+          if (input_tokens && output_tokens) {
+            const stripeCustomerId = this.organization.stripeCustomerId;
+            const model = this.agentCore.state.modelOpts.model;
+
+            if (stripeCustomerId) {
+              waitUntil(
+                (async () => {
+                  await trackTokenUsageInStripe({
+                    stripeCustomerId,
+                    model,
+                    inputTokens: input_tokens,
+                    outputTokens: output_tokens,
+                  });
+                })(),
+              );
+            } else {
+              logger.warn("No Stripe customer ID found for organization", {
+                organizationId: this.organization.id,
+              });
+            }
+          }
+        }
       },
 
       // Wrap the default console so every call is also sent to connected websocket clients
@@ -713,15 +782,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * For example, the SlackAgent can override this to add the get-agent-debug-url rule.
    */
   protected async getContextRules(): Promise<ContextRule[]> {
-    const defaultRules = await defaultContextRules();
     // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
     // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
     //   milliseconds: 250,
-    //   fallback: () => console.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
+    //   fallback: () => logger.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
-    const rulesFromDb = [] as ContextRule[];
-    const rules = [...defaultRules, ...(rulesFromDb || this.databaseRecord.contextRules)];
+    const rules = [
+      ...defaultContextRules,
+      // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
+      // That means we want to pull in the tutorial rules
+      ...(this.iterateConfig.contextRules || tutorialRules),
+    ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
       if (seenIds.has(rule.key)) {
@@ -731,6 +803,31 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       return true;
     });
     return dedupedRules;
+  }
+
+  /**
+   * Check if a user is a guest in the organization that owns this estate.
+   * Returns true if the user is a guest, false otherwise.
+   */
+  private async getUserRole(userId: string): Promise<UserRole | undefined> {
+    const result = await this.db
+      .select({
+        role: schema.organizationUserMembership.role,
+      })
+      .from(schema.estate)
+      .innerJoin(
+        schema.organizationUserMembership,
+        eq(schema.estate.organizationId, schema.organizationUserMembership.organizationId),
+      )
+      .where(
+        and(
+          eq(schema.estate.id, this.databaseRecord.estateId),
+          eq(schema.organizationUserMembership.userId, userId),
+        ),
+      )
+      .limit(1);
+
+    return result[0]?.role;
   }
 
   async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
@@ -790,11 +887,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Generic handler for scheduled reminders. This method will be called by the scheduler.
    */
   async handleReminder(data: { iterateReminderId: string }) {
-    console.log(`Executing reminder: ${data.iterateReminderId}`);
+    logger.info(`Executing reminder: ${data.iterateReminderId}`);
 
     const reminder = this.state.reminders?.[data.iterateReminderId];
     if (!reminder) {
-      console.error(`Reminder with ID ${data.iterateReminderId} not found in state.`);
+      logger.error(`Reminder with ID ${data.iterateReminderId} not found in state.`);
       return;
     }
 
@@ -872,15 +969,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
-      const projectName = `${getEnvironmentName({
-        ITERATE_USER: this.env.ITERATE_USER,
-        STAGE__PR_ID: this.env.STAGE__PR_ID,
-        ESTATE_NAME: estateName,
-      })}-platform`;
       const spanExportedId = await makeBraintrustSpan({
         braintrustKey: this.env.BRAINTRUST_API_KEY,
-        projectName,
+        projectName: this.env.PROJECT_NAME,
         spanName: `${this.constructor.name}-${this.name}`,
+        estateName,
       });
       this.setState({
         ...this.state,
@@ -893,7 +986,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   ping() {
     return { message: "pong back at you!" };
   }
-  async flexibleTestTool(input: Inputs["flexibleTestTool"]) {
+  async flexibleTestTool({ params: input }: Inputs["flexibleTestTool"]) {
     switch (input.behaviour) {
       case "slow-tool": {
         const start = input.recordStartTime ? new Date().toISOString() : undefined;
@@ -916,23 +1009,16 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return {};
   }
   async getEstate() {
-    const estate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, this.databaseRecord.estateId),
-      columns: {
-        organizationId: true,
-        id: true,
-        name: true,
-      },
-    });
-    if (!estate) {
-      throw new Error("Estate not found");
-    }
-    return estate;
+    return {
+      organizationId: this.organization.id,
+      id: this.estate.id,
+      name: this.estate.name,
+    };
   }
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
-      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${this.name}`,
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
     };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
@@ -1076,6 +1162,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
+    const userRole = await this.getUserRole(input.onBehalfOfIterateUserId);
+    if (!userRole || userRole === "guest") {
+      return {
+        success: false,
+        error:
+          "This user doesn't have permission to connect MCP servers because they are a guest in this Slack workspace. Tell the user that their request is not possible in one line. Do not suggest user to upgrade their access.",
+      };
+    }
+
     const formattedServerUrl = new URL(input.serverUrl);
 
     const requiresParams: MCPParam[] = [
@@ -1110,7 +1205,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const mcpServer = {
       serverUrl: formattedServerUrl.toString(),
       mode: input.mode,
-      requiresOAuth: input.requiresOAuth || false,
       requiresParams,
     };
 
@@ -1240,7 +1334,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       !Array.isArray(replicateResponse) ||
       !replicateResponse.every((url) => typeof url === "string" && url.startsWith("https://"))
     ) {
-      console.warn(
+      logger.warn(
         "Replicate API returned non-array response or array contains non-string values",
         replicateResponse,
       );
@@ -1276,6 +1370,205 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       success: true,
       numberOfImagesGenerated: replicateResponse.length,
       __addAgentCoreEvents: fileSharedEvents,
+    };
+  }
+
+  async exec(input: Inputs["exec"]) {
+    // ------------------------------------------------------------------------
+    // Get config
+    // ------------------------------------------------------------------------
+
+    const estateId = this.databaseRecord.estateId;
+
+    // Get estate and repo information
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+    });
+
+    if (!estate) {
+      throw new Error(`Estate ${estateId} not found`);
+    }
+
+    if (!estate.connectedRepoId) {
+      throw new Error("No repository connected to this estate");
+    }
+
+    // Get GitHub installation and token
+    const githubInstallation = await this.db
+      .select({
+        accountId: schema.account.accountId,
+        accessToken: schema.account.accessToken,
+      })
+      .from(schema.estateAccountsPermissions)
+      .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+      .where(
+        and(
+          eq(schema.estateAccountsPermissions.estateId, estateId),
+          eq(schema.account.providerId, "github-app"),
+        ),
+      )
+      .limit(1)
+      .then((rows) => rows[0]);
+
+    if (!githubInstallation) {
+      throw new Error("No GitHub installation found for this estate");
+    }
+
+    // Get installation token
+    const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
+    const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // Fetch repository details using Octokit
+    const { Octokit } = await import("octokit");
+    const octokit = new Octokit({ auth: githubToken });
+    const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
+      repository_id: estate.connectedRepoId,
+    });
+    const githubRepoUrl = repoData.html_url;
+    const branch = estate.connectedRepoRef || repoData.default_branch || "main";
+    const commitHash = undefined; // Use the latest commit on the branch
+
+    // ------------------------------------------------------------------------
+    // Init sandbox
+    // ------------------------------------------------------------------------
+
+    // Retrieve the sandbox
+    const { getSandbox } = await import("@cloudflare/sandbox");
+
+    const sandboxId = `agent-sandbox-${estateId}`;
+    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+
+    const execInSandbox = async () => {
+      // Ensure that the session directory exists
+      const sessionId = estateId;
+      const sessionDir = `/tmp/session-${estateId}`;
+      await sandbox.mkdir(sessionDir, { recursive: true });
+
+      // Create an isolated session
+      const sandboxSession = await sandbox.createSession({
+        id: sessionId,
+        cwd: sessionDir,
+        isolation: true,
+      });
+
+      // Determine the checkout target and whether it's a commit hash
+      const checkoutTarget = commitHash || branch || "main";
+      const isCommitHash = Boolean(commitHash);
+
+      // Prepare arguments as a JSON object
+      const initArgs = {
+        sessionDir,
+        githubRepoUrl,
+        githubToken,
+        checkoutTarget,
+        isCommitHash,
+      };
+      // Escape the JSON string for shell
+      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+      // Init the sandbox (ignore any errors)
+      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+      const resultInit = await sandboxSession.exec(commandInit, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+      if (!resultInit.success) {
+        logger.error({
+          message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+          result: resultInit,
+        });
+      }
+
+      // ------------------------------------------------------------------------
+      // Run exec
+      // ------------------------------------------------------------------------
+
+      // Run the exec command
+      const commandExec = input.command;
+      const _resultExec = await sandboxSession.exec(commandExec, {
+        timeout: 360 * 1000, // 360 seconds total timeout
+      });
+      if (!_resultExec.success) {
+        logger.error({
+          message: `Error running \`${commandExec}\` in sandbox`,
+          result: _resultExec,
+        });
+      }
+
+      return _resultExec;
+    };
+
+    // If sandbox is not ready, start it, and schedule exec after it boots up.
+    // NOTE: according to the exposed API this should be the correct way to
+    //       check if the sandbox is running and start it up if it isnt'. But
+    //       the logs are confusing:
+    // ... Sandbox successfully shut down
+    // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
+    // ... Error checking if container is ready: The operation was aborted
+    // ... Port 3000 is ready
+    const sandboxState = await sandbox.getState();
+    if (sandboxState.status !== "healthy") {
+      waitUntil(
+        sandbox
+          .startAndWaitForPorts(3000) // default sandbox port
+          .then(execInSandbox)
+          .then((resultExec) => {
+            // Inject a tool call event that will be processed by the agent
+            // TODO: this doesn't work
+            (this as any).addEvent({
+              type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+              data: {
+                call: {
+                  type: "function_call",
+                  call_id: `exec-result-${Date.now()}`,
+                  name: "sendSlackMessage",
+                  arguments: JSON.stringify({
+                    text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
+                    endTurn: true,
+                  }),
+                  status: "completed", // ← Changed from "pending"
+                },
+                result: {
+                  success: resultExec.success,
+                  output: {},
+                },
+              },
+              triggerLLMRequest: false,
+            });
+          }),
+      );
+
+      // TODO: this doesn't work
+      return {
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
+        __triggerLLMRequest: false,
+      };
+    }
+
+    // If sandbox is already running, just run the command
+    const resultExec = await execInSandbox();
+
+    if (!resultExec.success) {
+      return {
+        success: false,
+        error: dedent`
+          Command failed with exit code ${resultExec.exitCode}
+
+          stdout:
+          ${resultExec.stdout || "(empty)"}
+
+          stderr:
+          ${resultExec.stderr || "(empty)"}
+        `,
+        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
+      };
+    }
+
+    return {
+      success: true,
+      output: {
+        message: resultExec.stdout,
+        stderr: resultExec.stderr,
+      },
+      __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
     };
   }
 }

@@ -1,11 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
-import {
-  WebClient,
-  type UsersListResponse,
-  type ConversationsRepliesResponse,
-} from "@slack/web-api";
+import { and, eq, inArray, sql } from "drizzle-orm";
+import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
 import { type CloudflareEnv } from "../../../env.ts";
@@ -13,6 +9,7 @@ import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   extractBotUserIdFromAuthorizations,
   extractUserId,
@@ -69,7 +66,7 @@ slackApp.post("/webhook", async (c) => {
     },
   });
   if (!verification.success) {
-    console.warn("Slack webhook signature verification failed", verification);
+    logger.warn("Slack webhook signature verification failed", verification);
     return c.text(
       verification.errorMessage ?? "Slack webhook signature verification failed",
       verification.httpStatusCode,
@@ -85,7 +82,7 @@ slackApp.post("/webhook", async (c) => {
 
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
-    console.warn("Slack webhook received without a team ID", body);
+    logger.warn("Slack webhook received without a team ID", body);
     return c.text("ok");
   }
 
@@ -165,7 +162,7 @@ slackApp.post("/webhook", async (c) => {
   });
 
   if (rest.length > 0) {
-    console.error(`Multiple agents found for routing key ${routingKey}`);
+    logger.error(`Multiple agents found for routing key ${routingKey}`);
     return c.text("ok");
   }
 
@@ -225,96 +222,134 @@ export async function reactToSlackWebhook(
             name: "eyes",
           })
           .then(
-            () => console.log("[SlackAgent] Added eyes reaction"),
-            (error) => console.error("[SlackAgent] Failed to add eyes reaction", error),
+            () => logger.info("[SlackAgent] Added eyes reaction"),
+            (error) => logger.error("[SlackAgent] Failed to add eyes reaction", error),
           );
       }
     }
   }
 }
 
-export async function saveSlackUserMapping(
-  db: ReturnType<typeof getDb>,
-  member: NonNullable<UsersListResponse["members"]>[number],
-) {
-  await db.transaction(async (tx) => {
-    if (!member.id || !member.profile?.email || member.deleted) {
-      return;
-    }
-    const existingMapping = await tx.query.providerUserMapping.findFirst({
-      where: and(
-        eq(schema.providerUserMapping.providerId, "slack-bot"),
-        eq(schema.providerUserMapping.externalId, member.id),
-      ),
-    });
+export async function syncSlackUsersInBackground(db: DB, botToken: string, estateId: string) {
+  try {
+    const authedWebClient = new WebClient(botToken);
+    const userListResponse = await authedWebClient.users.list({});
 
-    if (existingMapping) {
-      await tx
-        .update(schema.user)
-        .set({
-          name: member.real_name || member.name || undefined,
-          image: member.profile?.image_192,
-        })
-        .where(eq(schema.user.id, existingMapping.internalUserId));
-      await tx
-        .update(schema.providerUserMapping)
-        .set({
-          providerMetadata: member,
-        })
-        .where(eq(schema.providerUserMapping.id, existingMapping.id));
+    if (!userListResponse.ok || !userListResponse.members) {
+      logger.error("Failed to fetch Slack users:", userListResponse.error || "No members returned");
       return;
     }
 
-    const existingUser = await tx.query.user.findFirst({
-      where: eq(schema.user.email, member.profile.email),
-    });
+    // Filter out invalid members upfront
+    const validMembers = userListResponse.members.filter(
+      (member) => member.id && member.profile?.email && !member.deleted,
+    );
 
-    if (existingUser) {
-      await tx
-        .update(schema.user)
-        .set({
-          name: member.real_name || member.name || "",
-          image: member.profile?.image_192,
-        })
-        .where(eq(schema.user.id, existingUser.id));
+    if (validMembers.length === 0) {
+      logger.info("No valid Slack members to sync");
+      return;
+    }
 
-      await tx.insert(schema.providerUserMapping).values({
-        providerId: "slack-bot",
-        internalUserId: existingUser.id,
-        externalId: member.id,
-        providerMetadata: member,
+    await db.transaction(async (tx) => {
+      // Get the organization ID from the estate
+      const estate = await tx.query.estate.findFirst({
+        where: eq(schema.estate.id, estateId),
+        columns: {
+          organizationId: true,
+        },
       });
 
-      return;
-    }
-    const newUser = await tx
-      .insert(schema.user)
-      .values({
-        name: member.real_name || member.name || "",
-        email: member.profile.email,
-        image: member.profile?.image_192,
-        emailVerified: false,
-      })
-      .returning();
+      if (!estate) {
+        logger.error(`Estate ${estateId} not found`);
+        return;
+      }
 
-    await tx.insert(schema.providerUserMapping).values({
-      providerId: "slack-bot",
-      internalUserId: newUser[0].id,
-      externalId: member.id,
-      providerMetadata: member,
+      const emails = validMembers.map((m) => m.profile!.email!);
+
+      // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
+      try {
+        await tx
+          .insert(schema.user)
+          .values(
+            validMembers.map((member) => ({
+              name: member.real_name || member.name || "",
+              email: member.profile!.email!,
+              image: member.profile?.image_192,
+              emailVerified: false,
+            })),
+          )
+          .onConflictDoNothing();
+      } catch (error) {
+        logger.error("Error creating users (will continue with existing ones):", error);
+      }
+
+      // Step 2: Fetch ALL users (both existing and newly created)
+      const allUsers = await tx.query.user.findMany({
+        where: inArray(schema.user.email, emails),
+      });
+      const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
+
+      // Step 3: Upsert all provider mappings at once
+      const mappingsToUpsert = [];
+      const organizationMembershipsToUpsert = [];
+
+      for (const member of validMembers) {
+        const user = usersByEmail.get(member.profile!.email!);
+
+        if (!user) {
+          logger.error(`User not found for email ${member.profile!.email!}`);
+          continue;
+        }
+
+        mappingsToUpsert.push({
+          providerId: "slack-bot" as const,
+          internalUserId: user.id,
+          externalId: member.id!,
+          providerMetadata: member,
+        });
+
+        // Determine role based on Slack restrictions
+        const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
+
+        organizationMembershipsToUpsert.push({
+          organizationId: estate.organizationId,
+          userId: user.id,
+          role: role as "guest" | "member",
+        });
+      }
+
+      logger.info(`Upserting ${mappingsToUpsert.length} provider mappings`);
+
+      if (mappingsToUpsert.length > 0) {
+        await tx
+          .insert(schema.providerUserMapping)
+          .values(mappingsToUpsert)
+          .onConflictDoUpdate({
+            target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+            set: {
+              providerMetadata: sql`excluded.provider_metadata`,
+            },
+          });
+      }
+
+      // Step 4: Upsert organization memberships
+      logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
+
+      if (organizationMembershipsToUpsert.length > 0) {
+        await tx
+          .insert(schema.organizationUserMembership)
+          .values(organizationMembershipsToUpsert)
+          .onConflictDoNothing();
+      }
+
+      // Log sync results
+      logger.info(
+        `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
+      );
     });
-  });
-}
-
-export async function syncSlackUsersInBackground(db: DB, botToken: string) {
-  const authedWebClient = new WebClient(botToken);
-  const userListResponse = await authedWebClient.users.list({});
-  if (userListResponse.ok && userListResponse.members) {
-    await Promise.allSettled(
-      userListResponse.members.map(async (member) => {
-        await saveSlackUserMapping(db, member);
-      }),
-    );
+  } catch (error) {
+    logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
+    throw error;
   }
 }
 
@@ -328,7 +363,7 @@ async function handleBotChannelJoin(params: {
 
   const slackToken = await getSlackAccessTokenForEstate(db, estateId);
   if (!slackToken) {
-    console.error("No Slack token available for channel join handling");
+    logger.error("No Slack token available for channel join handling");
     return;
   }
 
@@ -340,7 +375,7 @@ async function handleBotChannelJoin(params: {
   });
 
   if (!history.ok || !history.messages) {
-    console.error("Failed to fetch channel history");
+    logger.error("Failed to fetch channel history");
     return;
   }
 
@@ -437,16 +472,20 @@ async function handleBotChannelJoin(params: {
                 name: "eyes",
               })
               .catch((error) => {
-                console.error("[SlackAgent] Failed to add reaction:", error);
+                logger.error("[SlackAgent] Failed to add reaction:", error);
               })
           : Promise.resolve(),
       ]);
 
       if (agentStub.status === "fulfilled") {
         const initEvents = await agentStub.value.initSlack(channelId, threadTs);
-        await agentStub.value.addEvents([...initEvents, ...contextEvents]);
+        const participantEvents = mentionMessage?.user
+          ? await agentStub.value.getParticipantJoinedEvents(mentionMessage.user, botUserId)
+          : [];
+
+        await agentStub.value.addEvents([...initEvents, ...participantEvents, ...contextEvents]);
       } else {
-        console.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
+        logger.error("[SlackAgent] Failed to create agent stub:", agentStub.reason);
       }
     }),
   );

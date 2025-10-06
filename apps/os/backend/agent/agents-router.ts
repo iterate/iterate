@@ -16,6 +16,7 @@ import { SlackAgent, type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import type { MergedEventForSlices } from "./agent-core.ts";
 import { MCPEventInput } from "./mcp/mcp-slice.ts";
+import { SlackEventInput } from "./slack-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
 // import { SlackEventInput } from "./slack-slice.ts";
 // import type { IterateAgentState } from "./iterate-agent.ts";
@@ -74,7 +75,7 @@ const ContextRule = z.object({
 export const AllAgentEventInputSchemas = z.union([
   AgentCoreEventInput,
   FileSharedEventInput,
-  // SlackEventInput,
+  SlackEventInput as unknown as z.ZodNever, // too complex for typescirpt to handle
   MCPEventInput,
 ]);
 export type AllAgentEventInputs = z.input<typeof AllAgentEventInputSchemas>;
@@ -109,7 +110,7 @@ export const agentsRouter = router({
       // const rulesFromDb = dbRules.map((r) => r.serializedRule);
       const rulesFromDb: z.infer<typeof ContextRule>[] = [];
       // Merge and dedupe rules by slug, preferring the first occurrence (defaultContextRules first)
-      const allRules = [...(await defaultContextRules()), ...rulesFromDb];
+      const allRules = [...defaultContextRules, ...rulesFromDb];
       const seenKeys = new Set<string>();
       const dedupedRules = allRules.filter((rule) => {
         if (typeof rule.key !== "string") {
@@ -142,6 +143,10 @@ export const agentsRouter = router({
     .query(async ({ ctx }) => {
       return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
     }),
+
+  getAgentDebugURL: agentStubProcedure.query(async ({ ctx }) => {
+    return ctx.agent.getAgentDebugURL();
+  }),
 
   setBraintrustParentSpanExportedId: agentStubProcedure
     .meta({ description: "Set the braintrust span exported id for an agent instance" })
@@ -191,7 +196,8 @@ export const agentsRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return (await ctx.agent.getReducedStateAtEventIndex(
+      // cast to avoid "type instantiation is excessively deep and possibly infinite" error
+      return (await (ctx.agent.getReducedStateAtEventIndex as Function)(
         input.eventIndex,
       )) as AugmentedCoreReducedState;
     }),

@@ -9,8 +9,11 @@
     "format:check": "prettier --check .",
     "iterate": "pnpm run --silent os iterate",
     "os": "pnpm run --filter ./apps/os",
+    "eval": "cd apps/os && doppler run -- pnpm evalite",
+    "eval:light": "cd apps/os && doppler run -- env -u BRAINTRUST_API_KEY pnpm evalite",
     "lint": "eslint . --fix",
-    "lint:check": "eslint .",
+    "lint:check": "eslint . --max-warnings 0",
+    "lint:inspect": "pnpx @eslint/config-inspector",
     "prepare": "cd apps/os && pnpm tsdown",
     "test": "pnpm -r --parallel test",
     "test:watch": "pnpm -r --parallel test:watch",
@@ -20,12 +23,11 @@
     "db:migrate": "pnpm -r db:migrate",
     "db:generate": "pnpm -r db:generate",
     "db:studio": "pnpm -r --parallel db:studio",
-    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
+    "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "clean": "rm -rf ./**/node_modules",
-    "rules": "vibe-rules install ${VIBE_RULES_EDITOR:-cursor}",
-    "rules:cursor": "pnpm rules",
-    "rules:claudecode": "VIBE_RULES_EDITOR=claude-code pnpm rules",
-    "rules:codex": "VIBE_RULES_EDITOR=codex pnpm rules"
+    "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
+    "postinstall": "pnpm vibe-rules"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
@@ -42,10 +44,11 @@
     "eslint-plugin-unicorn": "^61.0.2",
     "globals": "^16.4.0",
     "prettier": "^3.6.2",
+    "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },
   "dependencies": {
     "vibe-rules": "^0.3.91"
   },
-  "packageManager": "pnpm@10.17.0"
+  "packageManager": "pnpm@10.17.1"
 }

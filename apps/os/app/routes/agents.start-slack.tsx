@@ -84,8 +84,8 @@ export default function StartSlackPage() {
   };
 
   return (
-    <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
-      <div className="max-w-2xl mx-auto w-full space-y-6">
+    <div className="p-6">
+      <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2">
             <MessageSquarePlus className="h-6 w-6" />

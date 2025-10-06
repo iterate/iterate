@@ -9,6 +9,7 @@ import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
+import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
@@ -125,7 +126,7 @@ export const integrationsPlugin = () =>
           const estateWithMembership = result[0]?.estate;
 
           if (!estateWithMembership) {
-            console.error("Estate not found or user not authorized", {
+            logger.error("Estate not found or user not authorized", {
               estateId: state.estateId,
               userId: state.userId,
             });
@@ -152,7 +153,6 @@ export const integrationsPlugin = () =>
                   mode: state.userId ? "personal" : "company",
                   userId: state.userId,
                   integrationSlug: state.integrationSlug,
-                  requiresOAuth: true,
                   reconnect: {
                     oauthClientId: state.clientId,
                     oauthCode: code,
@@ -176,6 +176,7 @@ export const integrationsPlugin = () =>
           method: "GET",
           query: z.object({
             callbackURL: z.string().default("/"),
+            mode: z.enum(["redirect", "json"]).default("json"),
           }),
         },
         async (ctx) => {
@@ -208,6 +209,11 @@ export const integrationsPlugin = () =>
               user_scope: SLACK_USER_AUTH_SCOPES.join(","),
             },
           });
+
+          // If mode is redirect, redirect directly to OAuth URL
+          if (ctx.query.mode === "redirect") {
+            return ctx.redirect(url.toString());
+          }
 
           return ctx.json({ url });
         },
@@ -393,9 +399,19 @@ export const integrationsPlugin = () =>
                 image: userInfo.user.image_192,
                 emailVerified: true,
               });
+
+              if (env.ADMIN_EMAIL_HOSTS) {
+                const emailDomain = userInfo.user.email.split("@")[1];
+                const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
+
+                if (emailDomain && adminHosts.includes(emailDomain)) {
+                  await ctx.context.internalAdapter.updateUser(user.id, {
+                    role: "admin",
+                  });
+                }
+              }
             }
 
-            // Get the user's organization and estates FIRST, before handling accounts
             const memberships = await db.query.organizationUserMembership.findFirst({
               where: eq(schema.organizationUserMembership.userId, user.id),
               columns: {},
@@ -605,11 +621,14 @@ export const integrationsPlugin = () =>
 
             // estateId is guaranteed to be defined here due to the if condition above
 
+            // Sync Slack users to the organization in the background
+            waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+
             await db
               .insert(schema.estateAccountsPermissions)
               .values({
                 accountId: botAccount.id,
-                estateId: estateId,
+                estateId,
               })
               .onConflictDoNothing();
 

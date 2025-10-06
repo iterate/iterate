@@ -1,15 +1,50 @@
 import { spawnSync } from "node:child_process";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
+import { proxify } from "trpc-cli/dist/proxify";
+import { createTRPCClient, httpLink } from "@trpc/client";
+import { testingRouter } from "../../backend/trpc/routers/testing.ts";
+import { appRouter } from "../../backend/trpc/root.ts";
+import { authClient } from "../../app/lib/auth-client.ts";
+import { testAdminUser } from "../../backend/auth/test-admin.ts";
 import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
+import { dev } from "./commands/dev.ts";
+import { db } from "./cli-db.ts";
+
+// Normalize forwarded args when invoked via pnpm recursion.
+// pnpm adds a standalone "--" before forwarded args, which stops option parsing.
+// Remove it so flags like "-c" are recognized by the CLI.
+const dashdashIndex = process.argv.indexOf("--");
+if (dashdashIndex !== -1) {
+  process.argv.splice(dashdashIndex, 1);
+}
 
 const router = t.router({
   estate,
   gh,
+  dev,
+  testing: testingRouter,
+  trpc: proxify(appRouter, async () => {
+    const baseURL = process.env.VITE_PUBLIC_URL!;
+    // for now, you can only sign in as the test admin user - somewhat limited in usefulness
+    // todo: use impersonation
+    // todo: maybe add an `auth` thing to trpc-cli - pass it a better-auth client and it could do a full CLI-based auth flow
+    // how it would work:
+    // - start a (trpc-based) server
+    // - do some redirect magic
+    // - send the creds to the CLI from the browser window?
+    let cookie = "";
+    await authClient.signIn.email(
+      { email: testAdminUser.email!, password: testAdminUser.password! },
+      { onResponse: ({ response: r }) => void (cookie = r.headers.getSetCookie().join("; ")) },
+    );
+    return createTRPCClient<typeof appRouter>({
+      links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie } })],
+    });
+  }),
 });
 
 if (process.argv.length === 2) {
@@ -23,5 +58,5 @@ if (process.argv.length === 2) {
   process.exit(result.status ?? 0);
 }
 
-const cli = createCli({ router });
+const cli = createCli({ router, context: { db } });
 cli.run({ prompts });

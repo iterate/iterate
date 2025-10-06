@@ -1,9 +1,12 @@
 import { redirect } from "react-router";
 import { eq } from "drizzle-orm";
+import { waitUntil } from "cloudflare:workers";
 import { GlobalLoading } from "../components/global-loading.tsx";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
-import { organizationUserMembership } from "../../backend/db/schema.ts";
+import * as schema from "../../backend/db/schema.ts";
+import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
+import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
 import type { Route } from "./+types/root-redirect";
 
 // Server-side business logic for determining where to redirect
@@ -12,7 +15,7 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
 
   // Get user's estates from the database
   const userOrganizations = await db.query.organizationUserMembership.findMany({
-    where: eq(organizationUserMembership.userId, userId),
+    where: eq(schema.organizationUserMembership.userId, userId),
     with: {
       organization: {
         with: {
@@ -21,6 +24,28 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       },
     },
   });
+
+  if (userOrganizations.length === 0) {
+    // No organizations, do first time setup
+    const user = await db.query.user.findFirst({
+      where: eq(schema.user.id, userId),
+    });
+    if (!user) {
+      throw new Error(`User ${userId} not found - this should never happen.`);
+    }
+    const newOrgAndEstate = await createUserOrganizationAndEstate(db, userId, user.name);
+    waitUntil(
+      createStripeCustomerAndSubscriptionForOrganization(
+        db,
+        newOrgAndEstate.organization,
+        user,
+      ).catch(() => {
+        // Error is already logged in the helper function
+      }),
+    );
+
+    return `/${newOrgAndEstate.organization.id}/${newOrgAndEstate.estate?.id}`;
+  }
 
   // Flatten estates from all organizations
   const userEstates = userOrganizations.flatMap(({ organization }) =>

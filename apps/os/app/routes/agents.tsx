@@ -31,7 +31,6 @@ import { Button } from "../components/ui/button.tsx";
 import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
 import { Badge } from "../components/ui/badge.tsx";
 import { Alert, AlertDescription } from "../components/ui/alert.tsx";
-import { Card } from "../components/ui/card.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -820,7 +819,7 @@ function ToolCallInjector({
       ) : (
         <div className="flex gap-4 h-[calc(80vh-12rem)]">
           {/* Tool selector */}
-          <Card className="w-80 flex-shrink-0 p-0 flex flex-col">
+          <div className="w-80 flex-shrink-0 border rounded-lg flex flex-col">
             <div className="p-4 flex flex-col h-full">
               <h3 className="font-medium mb-3 flex-shrink-0">Available Tools</h3>
               <div className="space-y-1 flex-1 overflow-y-auto pr-2">
@@ -844,10 +843,10 @@ function ToolCallInjector({
                 ))}
               </div>
             </div>
-          </Card>
+          </div>
 
           {/* Tool configuration */}
-          <Card className="flex-1 p-0">
+          <div className="flex-1 border rounded-lg">
             <div className="p-4 h-full flex flex-col">
               {selectedTool ? (
                 <>
@@ -936,7 +935,7 @@ function ToolCallInjector({
                 </div>
               )}
             </div>
-          </Card>
+          </div>
         </div>
       )}
     </div>
@@ -967,10 +966,10 @@ function ParallelToolGroup({
   const errorCount = toolCalls.length - successCount;
 
   return (
-    <Card className="mb-3 border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/30 p-0">
+    <div className="mb-3 border border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/30 rounded-lg">
       <Collapsible open={isOpen} onOpenChange={setIsOpen}>
         <CollapsibleTrigger className="w-full">
-          <div className="p-3 cursor-pointer hover:bg-blue-100/50 dark:hover:bg-blue-900/50 transition-colors">
+          <div className="p-3 cursor-pointer hover:bg-blue-100/50 dark:hover:bg-blue-900/50 transition-colors rounded-lg">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <Zap className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -1030,7 +1029,7 @@ function ParallelToolGroup({
           </div>
         </CollapsibleContent>
       </Collapsible>
-    </Card>
+    </div>
   );
 }
 
@@ -1382,7 +1381,7 @@ function CoreEventRenderer({
 
       // For other non-message events, show expanded card
       return (
-        <Card className={`mb-3 ${borderColor} ${bgColor} p-3`}>
+        <div className={`mb-3 ${borderColor} ${bgColor} border rounded-lg p-3`}>
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               <Icon className={`h-4 w-4 ${iconColor}`} />
@@ -1426,7 +1425,7 @@ function CoreEventRenderer({
               </div>
             </div>
           </div>
-        </Card>
+        </div>
       );
     }
 
@@ -1788,6 +1787,16 @@ export default function AgentsPage() {
     }),
   );
 
+  // Get initial reduced state with suspense
+  const { data: initialReducedState } = useSuspenseQuery(
+    trpc.agents.getReducedStateAtEventIndex.queryOptions({
+      estateId,
+      agentInstanceName: durableObjectName,
+      agentClassName,
+      eventIndex: initialEvents.length - 1,
+    }),
+  );
+
   const [events, setEvents] = useState<AgentEvent[]>(initialEvents as unknown as AgentEvent[]);
 
   // Connect to agent via WebSocket
@@ -1834,6 +1843,7 @@ export default function AgentsPage() {
       },
       {
         enabled: !!agentState,
+        initialData: initialReducedState,
       },
     ),
   );

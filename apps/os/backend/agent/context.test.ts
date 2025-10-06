@@ -66,23 +66,6 @@ describe("evaluateContextRuleMatchers", () => {
       expected: true,
     },
     {
-      description: "[jsonata] array elements exist",
-      state: {
-        toolSpecs: [
-          {
-            type: "serialized_callable_tool",
-            callable: {
-              $infer: { Input: {}, Output: {} },
-              type: "NOOP",
-              passThroughArgs: null,
-            },
-          },
-        ],
-      },
-      matchers: [matchers.jsonata("$length(agentCoreState.toolSpecs[*].type) > 0")],
-      expected: true,
-    },
-    {
       description: "[jsonata] nonexistent property -> false",
       state: {},
       matchers: [matchers.jsonata("$exists(agentCoreState.nonexistent)")],

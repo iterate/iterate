@@ -9,7 +9,38 @@ function codeblock(lang: string, code: string) {
   `;
 }
 
-const rules: PackageRuleItem[] = [
+type RuleSeverity = "error" | "warn" | "off";
+type PackageRuleItemWithESLintEnforcement = Extract<PackageRuleItem, { name: string }> & {
+  eslint?: {
+    ignores?: string[];
+    rules: Record<string, RuleSeverity | [RuleSeverity, ...unknown[]]>;
+  };
+};
+
+const rules: PackageRuleItemWithESLintEnforcement[] = [
+  {
+    name: "repo-setup",
+    description: "Basic commands to get the repo working",
+    rule: dedent`
+      To get the repo working, you can run the following commands:
+      - \`pnpm install\`
+      - \`pnpm typecheck\`
+      - \`pnpm lint\`
+      - \`pnpm format\`
+      - \`pnpm test\`
+
+      You must run lint, format, typecheck, and test before opening pull requests.
+    `,
+    alwaysApply: true,
+  },
+  {
+    name: "iterate-branding",
+    description: "iterate branding",
+    rule: dedent`
+      When used inside a sentence, iterate doesn't need to be capitalised.
+    `,
+    alwaysApply: true,
+  },
   {
     name: "naming-things",
     description: "Guidelines for naming things",
@@ -23,7 +54,6 @@ const rules: PackageRuleItem[] = [
   {
     name: "trpc-and-tanstack-query-usage",
     description: "Usage of trpc and tanstack react query in apps",
-    alwaysApply: true,
     rule: dedent`
       ## Prefer the useSuspenseQuery hook when making trpc queries 
 
@@ -45,7 +75,6 @@ const rules: PackageRuleItem[] = [
   {
     name: "use-effect-sucks",
     description: "Use of useEffect",
-    alwaysApply: true,
     rule: dedent`
       - Strongly prefer not to use the react useEffect hook unless there is NO other choice. It is error prone and hard to reason about.
       - If you need to calculate something during render, just do it in the render function.
@@ -61,7 +90,6 @@ const rules: PackageRuleItem[] = [
   {
     name: "typescript",
     description: "How to write good typescript",
-    alwaysApply: true,
     rule: dedent`
       - Use inferred types where possible. If you're creating super complex generic type expressions you're probably doing it wrong
       - Use strict typescript
@@ -305,6 +333,81 @@ const rules: PackageRuleItem[] = [
       Always test your schemas with the actual OpenAI API to ensure compatibility.
     `,
     globs: ["**/*.ts", "**/*.tsx"],
+  },
+  {
+    name: "cloudflare-workerd-stuff",
+    description: "Cloudflare Workers patterns and utilities",
+    rule: dedent`
+      Our backend is deployed to cloudflare workers with nodejs-compat turned on.
+
+      ### Use \`waitUntil()\` to run tasks in the background
+      ${codeblock(
+        "ts",
+        `
+import { waitUntil } from "cloudflare:workers";
+
+waitUntil(async () => {
+  await someAsyncTask();
+})
+      `,
+      )}
+
+      ### Import cloudflare env from \`apps/os/env.ts\`
+      ${codeblock(
+        "ts",
+        `
+import { env, type CloudflareEnv } from "../env.ts";
+      `,
+      )}
+    `,
+    globs: ["**/*.ts"],
+  },
+  {
+    name: "logging",
+    description: "Logging guidelines",
+    rule: dedent`
+      - In general, logs in production are not looked at, so don't add them unless we specifically need them for debugging something.
+      - Do not use the \`console\` object, use the \`logger\` object from \`apps/os/backend/tag-logger.ts\`.
+      - Use logger.info instead of logger.log
+    `,
+    globs: ["apps/os/backend/**/*.ts"],
+    eslint: {
+      ignores: ["**/*test*/**", "**/*test*"],
+      rules: {
+        "no-console": "error",
+      },
+    },
+  },
+  {
+    name: "drizzle-planetscale",
+    description: "We use the drizzle ORM",
+    rule: dedent`
+      We use Planetscale Postgres with Drizzle as our ORM. In development we run postgres in a docker container.
+
+      Remember to use db.transaction() when performing multiple related database operations that should succeed or fail together.
+    `,
+    globs: ["apps/os/backend/**/*.ts"],
+  },
+  {
+    name: "vibe-rules-source-of-truth",
+    description: "About vibe-rules and rule generation",
+    rule: dedent`
+      We use a package called vibe-rules to transpile rules from \`vibe-rules/llms.ts\` to popular coding agent formats like \`AGENTS.md\`, \`CLAUDE.md\`, and \`.cursor/rules\`.
+
+      The source of truth for all rules is \`vibe-rules/llms.ts\`. When you need to update rules, edit that file.
+    `,
+    alwaysApply: true,
+  },
+  {
+    name: "design-system",
+    rule: dedent`
+      We like using vanilla shadcn style. 
+
+      Don't add unnecessary tailwind classes all over the place with random colours of even gradients.
+
+      We rely on tailwind's builtin theming, so any colours you do use must come from the theme.
+    `,
+    globs: ["**/*.tsx"],
   },
 ];
 

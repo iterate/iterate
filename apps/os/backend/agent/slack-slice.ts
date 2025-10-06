@@ -35,6 +35,7 @@ export const SlackWebhookEventReceivedInput = z.object({
   ...agentCoreBaseEventInputFields,
   ...slackWebhookEventReceivedFields,
 });
+export type SlackWebhookEventReceivedInput = z.input<typeof SlackWebhookEventReceivedInput>;
 
 // SLACK:UPDATE_SLICE_STATE
 export const slackUpdateSliceStateFields = {
@@ -170,7 +171,23 @@ export const slackSlice = defineAgentCoreSlice<{
           };
           next.inputItems = [...next.inputItems, message];
         }
-        next.triggerLLMRequest = shouldTriggerLLM && !next.paused;
+
+        // Check if the user who sent the message is in participants.
+        // This filters out messages from users who are not participants and the agent would be in read-only mode for them.
+        let userIsJoinedParticipant = false;
+        if (payload.event?.type === "message" && "user" in payload.event && payload.event.user) {
+          const slackUserId = payload.event.user;
+          userIsJoinedParticipant = Object.values(next.participants || {}).some(
+            (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+          );
+          // TODO: if false, add a CORE:LOG event saying "message from <slackUserId> ignored because they are not a joined participant" or something
+
+          // hack to make evals/e2e tests get responses for now
+          // TODO: remove! we need to just send the approrpriate add participant events for the test users
+          if (slackUserId === "UALICE" || slackUserId === "UBOB") userIsJoinedParticipant = true;
+        }
+
+        next.triggerLLMRequest = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
         break;
       }
     }

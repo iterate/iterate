@@ -8,8 +8,8 @@ export default function ContactUs() {
         <h1 className="text-3xl font-bold text-gray-900 headline-mark">Contact Us</h1>
         <p className="text-gray-700">
           For any issues or support, email{" "}
-          <Link to="mailto:support@nustom.com" variant="underline" external>
-            support@nustom.com
+          <Link to="mailto:support@iterate.com" variant="underline" external>
+            support@iterate.com
           </Link>
           .
         </p>

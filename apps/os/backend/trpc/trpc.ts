@@ -1,9 +1,10 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { prettifyError, z, ZodError } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
+import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -56,7 +57,7 @@ const t = initTRPC.context<Context>().create({
       };
     }
 
-    console.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
+    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
       code: error.code,
       message: formattedError,
       zodFormatted,
@@ -118,7 +119,7 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
         },
       }).catch((error) => {
         // Log but don't fail the mutation if invalidation fails
-        console.error("Failed to invalidate queries:", error);
+        logger.error("Failed to invalidate queries:", error);
       });
     }
   }
@@ -170,10 +171,33 @@ export async function notifyOrganizationFromContext(
   if (membership?.organizationId) {
     await notifyOrganization(ctx.env, membership.organizationId, type, message, extraArgs).catch(
       (error) => {
-        console.error("Failed to send notification:", error);
+        logger.error("Failed to send notification:", error);
       },
     );
   }
+}
+
+// Helper function to get user's organization access
+export async function getUserOrganizationAccess(
+  db: DB,
+  userId: string,
+  organizationId: string,
+): Promise<{ hasAccess: boolean; organization: any | null }> {
+  const membership = await db.query.organizationUserMembership.findFirst({
+    where: and(
+      eq(organizationUserMembership.userId, userId),
+      eq(organizationUserMembership.organizationId, organizationId),
+    ),
+    with: {
+      organization: true,
+    },
+  });
+
+  if (!membership) {
+    return { hasAccess: false, organization: null };
+  }
+
+  return { hasAccess: true, organization: membership.organization };
 }
 
 // Helper function to get user's estate if they have access
@@ -215,10 +239,86 @@ export async function getUserEstateAccess(
   return { hasAccess: true, estate: userEstate };
 }
 
+// Organization protected procedure that requires both authentication and organization membership
+// Admins can access any organization
+export const orgProtectedProcedure = protectedProcedure
+  .input(z.object({ organizationId: z.string() }))
+  .use(async ({ ctx, input, next, path }) => {
+    // Check if user has membership in the organization
+    const membership = await ctx.db.query.organizationUserMembership.findFirst({
+      where: and(
+        eq(organizationUserMembership.organizationId, input.organizationId),
+        eq(organizationUserMembership.userId, ctx.user.id),
+      ),
+      with: {
+        organization: true,
+      },
+    });
+
+    // Allow if user has membership OR is a system admin
+    if (!membership && ctx.user.role !== "admin") {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: `Access to ${path} denied: User ${ctx.user.id} does not have access to organization ${input.organizationId}`,
+      });
+    }
+
+    // If admin without membership, fetch organization separately
+    if (!membership) {
+      const organization = await ctx.db.query.organization.findFirst({
+        where: (org, { eq }) => eq(org.id, input.organizationId),
+      });
+
+      if (!organization) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Organization ${input.organizationId} not found`,
+        });
+      }
+
+      return next({
+        ctx: {
+          ...ctx,
+          organization,
+          membership: undefined,
+        },
+      });
+    }
+
+    // Pass the organization and membership data to the next middleware/resolver
+    return next({
+      ctx: {
+        ...ctx,
+        organization: membership.organization,
+        membership,
+      },
+    });
+  });
+
+// Organization admin procedure that requires admin or owner role
+export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, path }) => {
+  // System admins always have access
+  if (ctx.user.role === "admin") {
+    return next({ ctx });
+  }
+
+  // Otherwise check membership role (extract to local variable to help TypeScript narrow the type)
+  const { membership } = ctx;
+  const role = membership?.["role"];
+  if (!role || (role !== "owner" && role !== "admin")) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: `Access to ${path} denied: Only owners and admins can perform this action`,
+    });
+  }
+
+  return next({ ctx });
+});
+
 // Estate protected procedure that requires both authentication and estate access
 export const estateProtectedProcedure = protectedProcedure
   .input(z.object({ estateId: z.string() }))
-  .use(async ({ ctx, input, next }) => {
+  .use(async ({ ctx, input, next, path }) => {
     const { hasAccess, estate: userEstate } = await getUserEstateAccess(
       ctx.db,
       ctx.user.id,
@@ -228,7 +328,7 @@ export const estateProtectedProcedure = protectedProcedure
     if (!hasAccess || !userEstate) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: "Access denied: User does not have permission to access this estate",
+        message: `Access to ${path} denied: User ${ctx.user.id} does not have permission to access this estate ${input.estateId}`,
       });
     }
 

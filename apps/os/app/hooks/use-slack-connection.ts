@@ -33,11 +33,7 @@ export function useSlackConnection() {
       callbackURL: callbackURL,
     });
 
-    if (result.error) {
-      toast.error(result.error.message);
-    } else {
-      window.location.href = result.data.url.toString();
-    }
+    window.location.href = result.url.toString();
 
     return result;
   };
