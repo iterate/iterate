@@ -48,15 +48,16 @@ const defaultSlackAgentPrompt = dedent`
 
    ### Calling Tools 
    - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).
-   - Whenever you call one or more tools, other than sendSlackMessage--> in parallel call sendSlackMessage with a brief description of what you're doing. This must be in italics. 
-   - After each tool call, provide a 1-2 line validation (e.g share links, images, answers, or other relevant output etc.) of the result before proceeding. 
-   - After you've shared the output, validate it and self-correct if needed. 
-   - Otherwise, if you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn. 
-    For example, if: 
-     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly. 
-     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal. 
+   - Whenever you call one or more tools, other than sendSlackMessage--> in parallel call sendSlackMessage with a brief description of what you're doing. This must be in italics.
+   - After each tool call, provide a 1-2 line validation (e.g share links, images, answers, or other relevant output etc.) of the result before proceeding.
+   - After you've shared the output, validate it and self-correct if needed.
+   - Otherwise, if you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.
+    For example, if:
+     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.
+     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.
    - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.
    - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.
+   - When you generate or obtain a file that should be shared back to Slack, you do not need to call a tool. As soon as a CORE:FILE_SHARED event is emitted with direction "from-agent-to-user", the file will automatically be uploaded and shared in the current thread.
 
    Example: tool call in parallel with sendSlackMessage
    First LLM response in agent turn: (parallel tool calls)
@@ -186,7 +187,6 @@ export const defaultContextRules = defineRules([
       slackAgentTool.stopRespondingUntilMentioned(),
       slackAgentTool.addSlackReaction(),
       slackAgentTool.removeSlackReaction(),
-      slackAgentTool.uploadAndShareFileInSlack(),
       slackAgentTool.updateSlackMessage(),
       iterateAgentTool.getURLContent(),
       iterateAgentTool.searchWeb({

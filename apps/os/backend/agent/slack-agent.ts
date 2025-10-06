@@ -170,6 +170,23 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               },
             ]);
             break;
+          case "CORE:FILE_SHARED": {
+            const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
+            if (fileSharedEvent.data.direction === "from-agent-to-user") {
+              this.ctx.waitUntil(
+                this.shareFileWithSlack({
+                  iterateFileId: fileSharedEvent.data.iterateFileId,
+                  originalFilename: fileSharedEvent.data.originalFilename,
+                }).catch((error) => {
+                  logger.warn(
+                    `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
+                    error,
+                  );
+                }),
+              );
+            }
+            break;
+          }
           case "CORE:INTERNAL_ERROR": {
             logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
@@ -751,81 +768,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     });
   }
 
-  async uploadAndShareFileInSlack(input: Inputs["uploadAndShareFileInSlack"]) {
-    const slackThreadId = this.agentCore.state.slackThreadId;
-    const slackChannelId = this.agentCore.state.slackChannelId;
-
-    if (typeof slackThreadId !== "string" || typeof slackChannelId !== "string") {
-      throw new Error(
-        "INTERNAL ERROR: Slack thread ID and channel ID are not set on the agent core state. This is an iterate bug.",
-      );
-    }
-    const { content, fileRecord } = await getFileContent({
-      iterateFileId: input.iterateFileId,
-      db: this.db,
-      estateId: this.databaseRecord.estateId,
-    });
-
-    // Ensure filename has a proper extension for better Slack unfurl behavior
-    const filename = fileRecord.filename || fileRecord.id;
-    const filenameWithExtension = filename.includes(".") ? filename : `${filename}.txt`;
-
-    try {
-      // The Slack SDK's uploadV2 helper doesn't handle ReadableStream properly,
-      // so we implement the three-step process manually as per:
-      // https://docs.slack.dev/messaging/working-with-files/#upload
-
-      // Convert ReadableStream to Buffer for upload
-      const buffer = Buffer.from(await new Response(content).arrayBuffer());
-
-      // Step 1: Get upload URL from Slack
-      const uploadUrlResponse = await this.slackAPI.files.getUploadURLExternal({
-        filename: filenameWithExtension,
-        length: buffer.length,
-      });
-
-      if (!uploadUrlResponse.ok || !uploadUrlResponse.upload_url || !uploadUrlResponse.file_id) {
-        throw new Error("Failed to get upload URL from Slack");
-      }
-
-      // Step 2: Upload file data to the external URL
-      // The external URL expects raw binary data, not multipart form data
-      const uploadResponse = await fetch(uploadUrlResponse.upload_url, {
-        method: "POST",
-        body: buffer,
-        headers: {
-          "Content-Type": fileRecord.mimeType || "application/octet-stream",
-          "Content-Length": buffer.length.toString(),
-        },
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`Failed to upload file data: ${uploadResponse.statusText}`);
-      }
-
-      // Step 3: Complete the upload and share in the channel
-      const completeResponse = await this.slackAPI.files.completeUploadExternal({
-        files: [
-          {
-            id: uploadUrlResponse.file_id,
-            title: filenameWithExtension,
-          },
-        ],
-        channel_id: slackChannelId,
-        thread_ts: slackThreadId,
-      });
-
-      return completeResponse;
-    } catch (error) {
-      logger.warn("[SlackAgent] Failed uploading file:", error);
-      logger.log("Full error details:", JSON.stringify(error, null, 2));
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
-  }
-
   async updateSlackMessage(input: Inputs["updateSlackMessage"]) {
     return await this.slackAPI.chat.update({
       channel: this.agentCore.state.slackChannelId!,
@@ -852,5 +794,66 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       __pauseAgentUntilMentioned: true,
       __triggerLLMRequest: false,
     } satisfies MagicAgentInstructions;
+  }
+
+  async shareFileWithSlack(params: { iterateFileId: string; originalFilename?: string | null }) {
+    const slackThreadId = this.agentCore.state.slackThreadId;
+    const slackChannelId = this.agentCore.state.slackChannelId;
+
+    if (typeof slackThreadId !== "string" || typeof slackChannelId !== "string") {
+      throw new Error(
+        "INTERNAL ERROR: Slack thread ID and channel ID are not set on the agent core state. This is an iterate bug.",
+      );
+    }
+
+    const { content, fileRecord } = await getFileContent({
+      iterateFileId: params.iterateFileId,
+      db: this.db,
+      estateId: this.databaseRecord.estateId,
+    });
+
+    const filename = params.originalFilename || fileRecord.filename || fileRecord.id;
+    const filenameWithExtension = filename.includes(".") ? filename : `${filename}.txt`;
+
+    const buffer = Buffer.from(await new Response(content).arrayBuffer());
+
+    const uploadUrlResponse = await this.slackAPI.files.getUploadURLExternal({
+      filename: filenameWithExtension,
+      length: buffer.length,
+    });
+
+    if (!uploadUrlResponse.ok || !uploadUrlResponse.upload_url || !uploadUrlResponse.file_id) {
+      throw new Error("Failed to get upload URL from Slack");
+    }
+
+    const uploadResponse = await fetch(uploadUrlResponse.upload_url, {
+      method: "POST",
+      body: buffer,
+      headers: {
+        "Content-Type": fileRecord.mimeType || "application/octet-stream",
+        "Content-Length": buffer.length.toString(),
+      },
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error(`Failed to upload file data: ${uploadResponse.statusText}`);
+    }
+
+    const completeResponse = await this.slackAPI.files.completeUploadExternal({
+      files: [
+        {
+          id: uploadUrlResponse.file_id,
+          title: filenameWithExtension,
+        },
+      ],
+      channel_id: slackChannelId,
+      thread_ts: slackThreadId,
+    });
+
+    if (!completeResponse.ok) {
+      throw new Error(
+        `Failed to share file in Slack: ${completeResponse.error ?? "Unknown error"}`,
+      );
+    }
   }
 }
