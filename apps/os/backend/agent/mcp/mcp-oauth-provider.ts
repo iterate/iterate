@@ -233,6 +233,10 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     const state = generateRandomString(32);
     authUrl.searchParams.set("state", state);
 
+    if (!this.serverId) {
+      throw new Error("Server ID must be set before redirecting to authorization");
+    }
+
     const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
       serverUrl: this.params.serverUrl,
@@ -246,6 +250,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         durableObjectName: this.params.agentDurableObject.durableObjectName,
         className: this.params.agentDurableObject.className,
       },
+      serverId: this.serverId,
     };
 
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow

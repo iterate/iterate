@@ -48,15 +48,16 @@ const defaultSlackAgentPrompt = dedent`
 
    ### Calling Tools 
    - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).
-   - Whenever you call one or more tools, other than sendSlackMessage--> in parallel call sendSlackMessage with a brief description of what you're doing. This must be in italics. 
-   - After each tool call, provide a 1-2 line validation (e.g share links, images, answers, or other relevant output etc.) of the result before proceeding. 
-   - After you've shared the output, validate it and self-correct if needed. 
-   - Otherwise, if you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn. 
-    For example, if: 
-     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly. 
-     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal. 
+   - Whenever you call one or more tools, other than sendSlackMessage--> in parallel call sendSlackMessage with a brief description of what you're doing. This must be in italics.
+   - After each tool call, provide a 1-2 line validation (e.g share links, images, answers, or other relevant output etc.) of the result before proceeding.
+   - After you've shared the output, validate it and self-correct if needed.
+   - Otherwise, if you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.
+    For example, if:
+     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.
+     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.
    - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.
    - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.
+   - When you generate or obtain a file that should be shared back to Slack, you do not need to call a tool. As soon as a CORE:FILE_SHARED event is emitted with direction "from-agent-to-user", the file will automatically be uploaded and shared in the current thread.
 
    Example: tool call in parallel with sendSlackMessage
    First LLM response in agent turn: (parallel tool calls)
@@ -98,6 +99,7 @@ const defaultSlackAgentPrompt = dedent`
    - Briefly acknowledge mistakes and correct yourself when you've made a mistake.
    - Never repeat a message or update that has already been communicated to the user.
      - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. 
+   - Be extremely concise. Sacrifice grammar for the sake of concision.
 
    Message formatting:
    - Use Slack-flavour markdown
@@ -186,7 +188,6 @@ export const defaultContextRules = defineRules([
       slackAgentTool.stopRespondingUntilMentioned(),
       slackAgentTool.addSlackReaction(),
       slackAgentTool.removeSlackReaction(),
-      slackAgentTool.uploadAndShareFileInSlack(),
       slackAgentTool.updateSlackMessage(),
       iterateAgentTool.getURLContent(),
       iterateAgentTool.searchWeb({
@@ -197,6 +198,7 @@ export const defaultContextRules = defineRules([
         ),
       }),
       iterateAgentTool.generateImage(),
+      iterateAgentTool.generateVideo(),
       slackAgentTool.sendSlackMessage({
         overrideInputJSONSchema: z.toJSONSchema(
           slackAgentTools.sendSlackMessage.input.pick({
@@ -215,9 +217,7 @@ export const defaultContextRules = defineRules([
     prompt: dedent`
       When using Linear tools:
       - When displaying Linear issues, use: "<issue.url|issue.identifier>: title (_state_)".
-      - For bug tickets, gather: steps to reproduce, expected vs. actual behavior, and environment.
-      - For feature tickets, require: user story and success criteria.
-      - If information is missing, ask targeted questions; avoid using placeholders like "TBD".
+      - Make sure to link the slack thread URL to the linear issue
       - Tools that take a "limit" parameter can be slow if limit is > 10 so default to that
       - When using the linear_oauth_proxy_list_issues tool:
         - Active issues are recently (in the last 7 days) created or updated issues with state 'Up Next', 'In Progress' or 'In Review' 
@@ -254,11 +254,423 @@ export const defaultContextRules = defineRules([
     match: matchers.sandboxStatus("starting"),
   },
   {
+    key: "google-gmail-tools",
+    prompt: dedent`
+      You have access to Gmail tools to send, read, reply to, and forward emails.
+
+      When sending emails:
+      - Use simple, plain text by default
+      - Only use HTML formatting when explicitly requested
+      - Keep emails concise and professional
+
+      When replying to emails:
+      - Use sendGmail with threadId and inReplyTo (messageId) from getGmailMessage
+      - This keeps the reply in the same thread
+
+      When forwarding emails:
+      - First use getGmailMessage to retrieve the original email
+      - Then use sendGmail with a formatted body including the original message details
+
+      When organizing emails:
+      - Use modifyGmailLabels to add/remove labels from messages
+      - Common system labels: STARRED (star), UNREAD/INBOX (mark unread/read), TRASH (trash), SPAM (mark as spam), IMPORTANT
+      - Use listGmailLabels to see all available labels including custom ones
+      - Use createGmailLabel to create new organizational labels
+
+      When reading emails:
+      - Use list tools with appropriate filters (e.g., is:unread, from:someone@example.com)
+      - Respect user privacy and only access what's needed
+    `,
+    match: matchers.forAgentClass("SlackAgent"),
+    tools: [
+      iterateAgentTool.sendGmail(),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listGmailMessages",
+        overrideDescription:
+          "List Gmail messages. Supports Gmail search syntax (e.g., 'is:unread', 'from:someone@example.com', 'subject:meeting')",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            queryParams: {
+              type: "object",
+              properties: {
+                q: {
+                  type: "string",
+                  description:
+                    "Search query using Gmail search syntax (e.g., 'is:unread', 'from:someone@example.com')",
+                },
+                maxResults: {
+                  type: "string",
+                  description: "Maximum number of messages to return (default: 10)",
+                },
+                labelIds: {
+                  type: "string",
+                  description: "Comma-separated label IDs (e.g., 'INBOX,UNREAD')",
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to list messages for",
+            },
+          },
+          required: ["userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/messages",
+          method: "GET",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.getGmailMessage(),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "modifyGmailLabels",
+        overrideDescription:
+          "Add or remove labels from a Gmail message. Use system labels (STARRED, TRASH, INBOX, UNREAD, SPAM, IMPORTANT) or custom label IDs from listGmailLabels.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                messageId: { type: "string", description: "The ID of the message to modify" },
+              },
+              required: ["messageId"],
+            },
+            body: {
+              type: "object",
+              properties: {
+                addLabelIds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Label IDs to add (e.g., ['STARRED', 'INBOX'])",
+                },
+                removeLabelIds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Label IDs to remove (e.g., ['UNREAD', 'INBOX'])",
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to modify messages for",
+            },
+          },
+          required: ["pathParams", "body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/messages/[messageId]/modify",
+          method: "POST",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listGmailLabels",
+        overrideDescription:
+          "List all Gmail labels including system labels (INBOX, STARRED, etc) and user-created labels. Returns label IDs and names.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            userId: {
+              type: "string",
+              description: "The ID of the user to list labels for",
+            },
+          },
+          required: ["userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels",
+          method: "GET",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "createGmailLabel",
+        overrideDescription: "Create a new custom Gmail label",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            body: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "The label name (e.g., 'Work/Important')" },
+                labelListVisibility: {
+                  type: "string",
+                  enum: ["labelShow", "labelShowIfUnread", "labelHide"],
+                  description: "Show label in label list (default: labelShow)",
+                },
+                messageListVisibility: {
+                  type: "string",
+                  enum: ["show", "hide"],
+                  description: "Show label in message list (default: show)",
+                },
+              },
+              required: ["name"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to create labels for",
+            },
+          },
+          required: ["body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels",
+          method: "POST",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "deleteGmailLabel",
+        overrideDescription:
+          "Delete a custom Gmail label. Cannot delete system labels like INBOX, STARRED, etc.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                labelId: {
+                  type: "string",
+                  description: "The ID of the label to delete (from listGmailLabels)",
+                },
+              },
+              required: ["labelId"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to delete labels for",
+            },
+          },
+          required: ["pathParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels/[labelId]",
+          method: "DELETE",
+        },
+      }),
+    ],
+  },
+  {
+    key: "google-calendar-tools",
+    prompt: dedent`
+      You have access to Google Calendar tools to create, read, and manage calendar events.
+
+      When creating events:
+      - Always specify a clear title and time
+      - Use ISO 8601 format for dates and times (e.g., '2024-12-25T10:00:00-08:00')
+      - Set reasonable defaults (e.g., 30 min duration if not specified)
+
+      When listing events:
+      - By default, recurring events are shown compactly with recurrence rules (saves tokens)
+      - Only set singleEvents="true" and orderBy="startTime" if you need each occurrence separately
+      - Use appropriate time ranges to avoid overwhelming results
+    `,
+    match: matchers.forAgentClass("SlackAgent"),
+    tools: [
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "createCalendarEvent",
+        overrideDescription: "Create a new event in Google Calendar",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            body: {
+              type: "object",
+              properties: {
+                summary: { type: "string", description: "Event title" },
+                description: { type: "string", description: "Event description" },
+                start: {
+                  type: "object",
+                  properties: {
+                    dateTime: {
+                      type: "string",
+                      description:
+                        "Start time in ISO 8601 format (e.g., '2024-12-25T10:00:00-08:00')",
+                    },
+                    timeZone: {
+                      type: "string",
+                      description: "Time zone (e.g., 'America/Los_Angeles')",
+                    },
+                  },
+                  required: ["dateTime"],
+                },
+                end: {
+                  type: "object",
+                  properties: {
+                    dateTime: {
+                      type: "string",
+                      description:
+                        "End time in ISO 8601 format (e.g., '2024-12-25T11:00:00-08:00')",
+                    },
+                    timeZone: {
+                      type: "string",
+                      description: "Time zone (e.g., 'America/Los_Angeles')",
+                    },
+                  },
+                  required: ["dateTime"],
+                },
+                attendees: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: { email: { type: "string" } },
+                    required: ["email"],
+                  },
+                  description: "List of attendee emails",
+                },
+              },
+              required: ["summary", "start", "end"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to create events for",
+            },
+          },
+          required: ["body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events",
+          method: "POST",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listCalendarEvents",
+        overrideDescription:
+          "List upcoming events from Google Calendar. IMPORTANT: Always set maxResults to a small number (5-20) to avoid overwhelming responses.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            queryParams: {
+              type: "object",
+              properties: {
+                timeMin: {
+                  type: "string",
+                  description: "Start time in ISO 8601 format (default: now)",
+                },
+                timeMax: { type: "string", description: "End time in ISO 8601 format" },
+                maxResults: {
+                  type: "string",
+                  description:
+                    "Maximum number of events to return. Use 5-20 to avoid overwhelming responses.",
+                },
+                q: { type: "string", description: "Free text search query" },
+                singleEvents: {
+                  type: "string",
+                  description:
+                    "Set to 'true' to expand recurring events into separate instances. Omit or use 'false' to show recurring events compactly with recurrence rules.",
+                },
+                orderBy: {
+                  type: "string",
+                  description:
+                    "Set to 'startTime' for chronological order (only works when singleEvents='true'). Otherwise omit.",
+                },
+              },
+              required: ["maxResults"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to list events for",
+            },
+          },
+          required: ["queryParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events",
+          method: "GET",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "updateCalendarEvent",
+        overrideDescription: "Update an existing calendar event",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                eventId: { type: "string", description: "The ID of the event to update" },
+              },
+              required: ["eventId"],
+            },
+            body: {
+              type: "object",
+              properties: {
+                summary: { type: "string", description: "New event title" },
+                description: { type: "string", description: "New event description" },
+                start: {
+                  type: "object",
+                  properties: {
+                    dateTime: { type: "string", description: "Start time in ISO 8601 format" },
+                  },
+                },
+                end: {
+                  type: "object",
+                  properties: {
+                    dateTime: { type: "string", description: "End time in ISO 8601 format" },
+                  },
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to update events for",
+            },
+          },
+          required: ["pathParams", "body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
+          method: "PATCH",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "deleteCalendarEvent",
+        overrideDescription: "Delete a calendar event",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                eventId: { type: "string", description: "The ID of the event to delete" },
+              },
+              required: ["eventId"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to delete events for",
+            },
+          },
+          required: ["pathParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
+          method: "DELETE",
+        },
+      }),
+    ],
+  },
+  {
     key: "sandbox-attached",
     prompt: dedent`
       The sandbox is currently running and attached.
       You can execute commands immediately using the exec tool.
     `,
     match: matchers.sandboxStatus("attached"),
+  },
+  {
+    key: "external-users-present",
+    prompt: dedent`
+      ⚠️ External Slack Connect users may be present in this conversation.
+
+      - Avoid sharing internal company information
+      - Don't discuss internal metrics, roadmaps, or confidential matters
+      - Treat all discussions as public-facing
+      - If a true member of the slack workspace tells you it's okay to do something for an external user, then you can do it
+    `,
+    match: matchers.slackChannelHasExternalUsers(true),
   },
 ]);

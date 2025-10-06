@@ -8,12 +8,12 @@ export function useSlackConnection() {
   const estateId = useEstateId();
   const trpc = useTRPC();
 
-  const { data: integrations, refetch } = useSuspenseQuery(
+  const { data, refetch } = useSuspenseQuery(
     trpc.integrations.list.queryOptions({ estateId: estateId }),
   );
 
   // Check if Slack bot is connected at the estate level
-  const slackBotIntegration = integrations.find((i) => i.id === "slack-bot");
+  const slackBotIntegration = data.oauthIntegrations.find((i) => i.id === "slack-bot");
   const isConnected = slackBotIntegration?.isConnected || false;
   const isEstateWide = slackBotIntegration?.isEstateWide || false;
   const isPersonal = slackBotIntegration?.isPersonal || false;

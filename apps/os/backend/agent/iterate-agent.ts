@@ -3,20 +3,23 @@ import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { Zip, ZipPassThrough, strToU8 } from "fflate";
+import { typeid } from "typeid-js";
+import { permalink as getPermalink } from "braintrust/browser";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
-import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
+import { toFile, type Uploadable } from "openai";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
-import type { JSONSerializable } from "../utils/type-helpers.ts";
+import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
@@ -24,12 +27,21 @@ export type AgentInitParams = {
   estate: typeof schema.estate.$inferSelect;
   organization: typeof schema.organization.$inferSelect;
   iterateConfig: IterateConfig;
+  // Optional props forwarded to PartyKit when setting the room name
+  // Used to pass initial metadata for the room/server initialisation
+  props?: Record<string, unknown>;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
-import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import {
+  getFileContent,
+  getFilePublicURL,
+  uploadFile,
+  uploadFileFromURL,
+} from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -46,7 +58,14 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-import { runMCPEventHooks, getOrCreateMCPConnection } from "./mcp/mcp-event-hooks.ts";
+import {
+  runMCPEventHooks,
+  getOrCreateMCPConnection,
+  createMCPManagerCache,
+  createMCPConnectionQueues,
+  type MCPManagerCache,
+  type MCPConnectionQueues,
+} from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -146,55 +165,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT;
   }
 
-  // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord(params: {
-    db: DB;
-    record: AgentInstanceDatabaseRecord;
-    options?: {
-      jurisdiction?: DurableObjectJurisdiction;
-      locationHint?: DurableObjectLocationHint;
-      props?: Record<string, unknown>;
-    };
+  // Get stub when the caller already has initialisation params
+  static async getStub(params: {
+    agentInitParams: AgentInitParams;
+    jurisdiction?: DurableObjectJurisdiction;
+    locationHint?: DurableObjectLocationHint;
   }) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
-    if (params.options?.jurisdiction) {
-      namespace = namespace.jurisdiction(params.options.jurisdiction);
+    if (params.jurisdiction) {
+      namespace = namespace.jurisdiction(params.jurisdiction);
     }
-    const stub = namespace.getByName(params.record.durableObjectName, params.options);
-
-    // Fetch related data needed for initialization in a single query
-    const estate = await params.db.query.estate.findFirst({
-      where: eq(schema.estate.id, params.record.estateId),
-      with: { organization: true, iterateConfigs: true },
-    });
-    if (!estate) {
-      throw new Error(`Estate ${params.record.estateId} not found for agent ${params.record.id}`);
-    }
-    const iterateConfig: IterateConfig = estate.iterateConfigs?.[0]?.config ?? {};
+    const options = {
+      ...(params.locationHint && { locationHint: params.locationHint }),
+    };
+    const stub = namespace.getByName(params.agentInitParams.record.durableObjectName, options);
 
     // right after the constructor runs we get in there and initialise all our stuff
     // (e.g. obtaining a slack access token in the case of a slack agent)
-    await stub.initAfterConstructorBeforeOnStart({
-      record: params.record,
-      estate,
-      organization: estate.organization!,
-      iterateConfig,
-    });
-
-    // only now do we do the agents sdk cruft where we hit fetch to initialise party server
-    // with a server name
-    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-    req.headers.set("x-partykit-room", params.record.durableObjectName);
-    if (params.options?.props) {
-      req.headers.set("x-partykit-props", JSON.stringify(params.options?.props));
-    }
-    await stub
-      .fetch(req)
-      .then((res) => res.text())
-      .catch((e) => {
-        logger.error("Could not set server name:", e);
-      });
+    await stub.initIterateAgent(params.agentInitParams);
 
     return stub;
   }
@@ -204,16 +193,36 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const { db, agentInstanceName } = params;
     const className = this.name;
 
-    const record = await db.query.agentInstance.findFirst({
+    const row = await db.query.agentInstance.findFirst({
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
       ),
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
     });
-    if (!record) {
+    if (!row) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
-    return this.getStubFromDatabaseRecord({ db, record });
+    const { estate: estateJoined, ...record } = row;
+    if (!estateJoined) {
+      throw new Error(`Estate ${record.estateId} not found for agent ${record.id}`);
+    }
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -225,7 +234,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: eq(agentInstanceRoute.routingKey, routingKey),
       with: {
         agentInstance: {
-          with: {},
+          with: {
+            estate: {
+              with: {
+                organization: true,
+                iterateConfigs: true,
+              },
+            },
+          },
         },
       },
     });
@@ -239,7 +255,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) => this.getStubFromDatabaseRecord({ db, record })),
+      matchingAgents.map(async (row) => {
+        const { estate: estateJoined, ...record } = row;
+        const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+        return this.getStub({
+          agentInitParams: {
+            record,
+            estate: estateJoined,
+            organization: estateJoined.organization!,
+            iterateConfig,
+          },
+        });
+      }),
     );
 
     return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
@@ -255,84 +282,44 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const { db, estateId, agentInstanceName, reason } = params;
     const className = this.name;
 
-    let record = await db.query.agentInstance.findFirst({
+    // Fast path: try to load everything in a single select
+    const existing = await db.query.agentInstance.findFirst({
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
         eq(agentInstance.estateId, estateId),
       ),
-      with: {},
-    });
-
-    if (!record) {
-      const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
-      const [inserted] = await db
-        .insert(agentInstance)
-        .values({
-          estateId,
-          className,
-          durableObjectName: agentInstanceName,
-          durableObjectId: durableObjectId.toString(),
-          metadata: { reason },
-        })
-        .onConflictDoUpdate({
-          target: agentInstance.durableObjectId,
-          set: {
-            metadata: { reason },
-          },
-        })
-        .returning();
-
-      // Re-query to get the relations
-      record = await db.query.agentInstance.findFirst({
-        where: eq(agentInstance.id, inserted.id),
-        with: {},
-      });
-      if (!record) {
-        throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
-      }
-    } else {
-      if (record.estateId !== estateId) {
-        throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
-      }
-    }
-    return this.getStubFromDatabaseRecord({ db, record });
-  }
-
-  // Get or create stub by route
-  static async getOrCreateStubByRoute(params: {
-    db: DB;
-    estateId: string;
-    route: string;
-    reason?: string;
-  }) {
-    const { db, estateId, route, reason } = params;
-
-    // First check if an agent already exists for this route
-    const existingRoutes = await db.query.agentInstanceRoute.findMany({
-      where: eq(agentInstanceRoute.routingKey, route),
       with: {
-        agentInstance: true,
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
       },
     });
 
-    const existingAgent = existingRoutes
-      .map((r) => r.agentInstance)
-      .find((r) => r.className === this.name && r.estateId === estateId);
-
-    if (existingAgent) {
-      return this.getStubFromDatabaseRecord({ db, record: existingAgent });
+    if (existing) {
+      const { estate: estateJoined, ...record } = existing;
+      const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+      return this.getStub({
+        agentInitParams: {
+          record,
+          estate: estateJoined,
+          organization: estateJoined.organization!,
+          iterateConfig,
+        },
+      });
     }
 
-    // No existing agent for this route, create one with route
-    const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
-    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
+    // Create path: upsert then hydrate with a single joined select
+    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
     const [inserted] = await db
       .insert(agentInstance)
       .values({
         estateId,
-        className: this.name,
-        durableObjectName: durableObjectName,
+        className,
+        durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
       })
@@ -344,23 +331,134 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       })
       .returning();
 
-    // Create the route association
-    await db
-      .insert(agentInstanceRoute)
-      .values({ agentInstanceId: inserted.id, routingKey: route })
-      .onConflictDoNothing();
-
-    // Re-query to get the relations
-    const record = await db.query.agentInstance.findFirst({
+    const row = await db.query.agentInstance.findFirst({
       where: eq(agentInstance.id, inserted.id),
-      with: {},
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
+    });
+    if (!row) {
+      throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
+    }
+    if (row.estateId !== estateId) {
+      throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
+    }
+    const { estate: estateJoined, ...record } = row;
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
+  }
+
+  // Get or create stub by route
+  static async getOrCreateStubByRoute(params: {
+    db: DB;
+    estateId: string;
+    route: string;
+    reason?: string;
+  }) {
+    const { db, estateId, route, reason } = params;
+
+    // First check if an agent already exists for this route (single joined query)
+    const existingRoutes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, route),
+      with: {
+        agentInstance: {
+          with: {
+            estate: {
+              with: {
+                organization: true,
+                iterateConfigs: true,
+              },
+            },
+          },
+        },
+      },
     });
 
-    if (!record) {
+    const existingAgent = existingRoutes
+      .map((r) => r.agentInstance)
+      .find((r) => r.className === this.name && r.estateId === estateId);
+
+    if (existingAgent) {
+      const { estate: estateJoined, ...record } = existingAgent;
+      const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+      return this.getStub({
+        agentInitParams: {
+          record,
+          estate: estateJoined,
+          organization: estateJoined.organization!,
+          iterateConfig,
+        },
+      });
+    }
+
+    // No existing agent for this route, create one with route
+    const durableObjectName = `${this.name}-${route}-${typeid().toString()}`;
+    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
+
+    const insertedId = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(agentInstance)
+        .values({
+          estateId,
+          className: this.name,
+          durableObjectName: durableObjectName,
+          durableObjectId: durableObjectId.toString(),
+          metadata: { reason },
+        })
+        .onConflictDoUpdate({
+          target: agentInstance.durableObjectId,
+          set: {
+            metadata: { reason },
+          },
+        })
+        .returning();
+
+      await tx
+        .insert(agentInstanceRoute)
+        .values({ agentInstanceId: inserted.id, routingKey: route })
+        .onConflictDoNothing();
+
+      return inserted.id;
+    });
+
+    const row = await db.query.agentInstance.findFirst({
+      where: eq(agentInstance.id, insertedId),
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
+    });
+
+    if (!row) {
       throw new Error(`Failed to fetch created agent instance ${durableObjectName}`);
     }
 
-    return this.getStubFromDatabaseRecord({ db, record });
+    const { estate: estateJoined, ...record } = row;
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
   }
 
   protected db: DB;
@@ -370,13 +468,54 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   _estate?: typeof schema.estate.$inferSelect;
   _organization?: typeof schema.organization.$inferSelect;
   _iterateConfig?: IterateConfig;
+  // Instance-level MCP manager cache and connection queues to avoid sharing across DOs
+  protected mcpManagerCache: MCPManagerCache;
+  protected mcpConnectionQueues: MCPConnectionQueues;
+  _isInitialized = false;
 
-  // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
+  // This runs between the synchronous durable object constructor and the asynchronous onStart of the agents SDK
+  // It also performs the PartyKit set-name fetch internally to trigger onStart.
+  async initIterateAgent(params: AgentInitParams) {
+    if (this._isInitialized) return; // no-op if already initialised in this DO lifecycle
+
     this._databaseRecord = params.record;
     this._estate = params.estate;
     this._organization = params.organization;
     this._iterateConfig = params.iterateConfig;
+
+    // Store init params so onAlarm re-hydration can re-initialise without DB calls
+    this.ctx.storage.kv.put("agent-init-params", params);
+
+    // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
+    // These records (estate, organization, iterateConfig) change infrequently and callers
+    // typically already fetched them. This also helps when the DO is not colocated with
+    // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
+
+    // Perform the PartyKit set-name fetch internally so it triggers onStart inside this DO
+    try {
+      const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+      req.headers.set("x-partykit-room", params.record.durableObjectName);
+      if (params.props) {
+        req.headers.set("x-partykit-props", JSON.stringify(params.props));
+      }
+      const res = await this.fetch(req);
+      await res.text();
+    } catch (e) {
+      logger.error("Could not set server name:", e);
+    }
+
+    this._isInitialized = true;
+  }
+
+  override async onAlarm() {
+    logger.info("onAlarm - pulling init params from storage");
+    const params = this.ctx.storage.kv.get<AgentInitParams>("agent-init-params");
+    if (!params) {
+      logger.info("IterateAgent durable object constructed for the first time");
+      return;
+    }
+    await this.initIterateAgent(params);
+    super.onAlarm();
   }
 
   initialState = {
@@ -385,18 +524,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   get databaseRecord() {
     if (!this._databaseRecord) {
-      throw new Error("Database record not found");
+      throw new Error("this._databaseRecord not set in IterateAgent - this should never happen");
     }
     return this._databaseRecord;
   }
 
   get estate() {
-    if (!this._estate) throw new Error("Estate not initialized");
+    if (!this._estate)
+      throw new Error("this._estate not set in IterateAgent - this should never happen");
     return this._estate;
   }
 
   get organization() {
-    if (!this._organization) throw new Error("Organization not initialized");
+    if (!this._organization)
+      throw new Error("this._organization not set in IterateAgent - this should never happen");
     return this._organization;
   }
 
@@ -408,6 +549,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
     this.db = getDb();
+    // Initialize instance-level MCP manager cache and connection queues
+    this.mcpManagerCache = createMCPManagerCache();
+    this.mcpConnectionQueues = createMCPConnectionQueues();
     // DO NOT CHANGE THE SCHEMA WITHOUT UPDATING THE MIGRATION LOGIC
     // If you need to change the schema, you can add more columns with separate statements
     this.sql`
@@ -509,7 +653,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       background: (fn: () => Promise<void>) => {
-        waitUntil(fn());
+        void fn();
       },
 
       getOpenAIClient: async () => {
@@ -518,7 +662,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           estateName: estate.name,
           posthog: {
             projectName: this.env.PROJECT_NAME,
-            traceId: `${this.constructor.name}-${this.name}`,
+            traceId: this.posthogTraceId,
           },
           env: {
             BRAINTRUST_API_KEY: this.env.BRAINTRUST_API_KEY,
@@ -578,16 +722,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             const model = this.agentCore.state.modelOpts.model;
 
             if (stripeCustomerId) {
-              waitUntil(
-                (async () => {
-                  await trackTokenUsageInStripe({
-                    stripeCustomerId,
-                    model,
-                    inputTokens: input_tokens,
-                    outputTokens: output_tokens,
-                  });
-                })(),
-              );
+              void trackTokenUsageInStripe({
+                stripeCustomerId,
+                model,
+                inputTokens: input_tokens,
+                outputTokens: output_tokens,
+              });
             } else {
               logger.warn("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
@@ -612,49 +752,46 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
         if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
-          waitUntil(
-            (async () => {
-              if (reducedState.mcpConnections) {
-                const eventsToAdd = await runMCPEventHooks({
-                  event: mcpEvent,
-                  reducedState,
-                  agentDurableObject: this.hydrationInfo,
-                  estateId: this.databaseRecord.estateId,
-                  getFinalRedirectUrl: deps.getFinalRedirectUrl!,
-                });
-
-                for (const eventToAdd of eventsToAdd) {
-                  this.agentCore.addEvent(eventToAdd);
-                }
+          if (reducedState.mcpConnections) {
+            void runMCPEventHooks({
+              event: mcpEvent,
+              reducedState,
+              agentDurableObject: this.hydrationInfo,
+              estateId: this.databaseRecord.estateId,
+              mcpConnectionCache: this.mcpManagerCache,
+              mcpConnectionQueues: this.mcpConnectionQueues,
+              getFinalRedirectUrl: deps.getFinalRedirectUrl!,
+            }).then((eventsToAdd) => {
+              for (const eventToAdd of eventsToAdd) {
+                this.agentCore.addEvent(eventToAdd);
               }
-            })(),
-          );
+            });
+          }
         }
 
         if (event.type === "CORE:LLM_REQUEST_END") {
           // fairly arbitrarily, refresh context rules after each LLM request so the agent will have updated instructions by next time
           // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
           // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
-          waitUntil(this.refreshContextRules());
+          void this.refreshContextRules();
         }
 
-        this.ctx.waitUntil(
-          (async () => {
-            const posthog = await posthogClient();
-            return await processPosthogAgentCoreEvent({
-              posthog,
-              data: {
-                event,
-                reducedState,
-              },
-            });
-          })(),
+        void posthogClient().then((posthog) =>
+          processPosthogAgentCoreEvent({
+            posthog,
+            data: {
+              event,
+              reducedState,
+            },
+          }),
         );
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
+        mcpConnectionCache: this.mcpManagerCache,
+        mcpConnectionQueues: this.mcpConnectionQueues,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
         },
@@ -714,8 +851,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Called after an agent object in constructed and the state has been loaded from the DO store.
    */
   async onStart(): Promise<void> {
-    // Call parent onStart to ensure persistence completes
-    await super.onStart();
     const event = this.getEvents();
     if (event.length === 0) {
       // new agent, fetch initial context rules, along with tool schemas etc.
@@ -830,11 +965,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return result[0]?.role;
   }
 
-  async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
+  addEvent(event: MergedEventInputForSlices<Slices>): { eventIndex: number }[] {
     return this.agentCore.addEvent(event);
   }
 
-  async addEvents(events: MergedEventInputForSlices<Slices>[]): Promise<{ eventIndex: number }[]> {
+  addEvents(events: MergedEventInputForSlices<Slices>[]): { eventIndex: number }[] {
     return this.agentCore.addEvents(events);
   }
 
@@ -847,7 +982,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   /*
    * Get the reduced state at a specific event index
    */
-  async getReducedStateAtEventIndex(eventIndex: number): Promise<AugmentedCoreReducedState> {
+  getReducedStateAtEventIndex(eventIndex: number): AugmentedCoreReducedState {
     return this.agentCore.getReducedStateAtEventIndex(eventIndex);
   }
 
@@ -961,6 +1096,202 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // get the braintrust parent span exported id from the state
   async getBraintrustParentSpanExportedId() {
     return this.state.braintrustParentSpanExportedId;
+  }
+
+  get posthogTraceId() {
+    return `${this.constructor.name}-${this.name}`;
+  }
+
+  async exportTrace(opts?: { user?: typeof schema.user.$inferSelect }): Promise<string> {
+    const exportId = typeid("export").toString();
+    const events = this.getEvents();
+
+    const fullEstate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+    });
+    if (!fullEstate) {
+      throw new Error("Estate not found");
+    }
+
+    const organizationRecord = await this.db.query.organization.findFirst({
+      where: eq(schema.organization.id, fullEstate.organizationId),
+    });
+    if (!organizationRecord) {
+      throw new Error("Organization not found");
+    }
+
+    const iterateConfigRecord = await this.db.query.iterateConfig.findFirst({
+      where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
+    });
+
+    const fileIds = new Set<string>();
+    for (const event of events) {
+      if (event.type === "CORE:FILE_SHARED" && event.data?.iterateFileId) {
+        fileIds.add(event.data.iterateFileId);
+      }
+    }
+
+    const fileMetadataMap: Record<string, FileMetadata> = {};
+
+    for (const fileId of fileIds) {
+      const [fileRecord] = await this.db.select().from(files).where(eq(files.id, fileId)).limit(1);
+
+      if (!fileRecord) {
+        throw new Error(`File record not found for export: ${fileId}`);
+      }
+
+      if (fileRecord.status !== "completed") {
+        throw new Error(`File record not completed for export: ${fileId}`);
+      }
+
+      fileMetadataMap[fileId] = fileRecord;
+    }
+
+    const braintrustPermalink = this.state.braintrustParentSpanExportedId
+      ? await getPermalink(this.state.braintrustParentSpanExportedId)
+      : undefined;
+
+    const debugUrl = `${this.env.VITE_PUBLIC_URL}/${this.databaseRecord.estateId}/agents/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}`;
+
+    const reducedStateSnapshots: Record<number, any> = {};
+    for (let i = 0; i < events.length; i++) {
+      reducedStateSnapshots[i] = await this.getReducedStateAtEventIndex(i);
+    }
+    const exportData: AgentTraceExport = {
+      version: "1.0.0",
+      exportedAt: new Date().toISOString(),
+      metadata: {
+        agentTraceExportId: exportId,
+        braintrustPermalink,
+        posthogTraceId: this.posthogTraceId,
+        debugUrl,
+        user: opts?.user ?? null,
+        estate: fullEstate,
+        organization: organizationRecord,
+        agentInstance: this.databaseRecord,
+        iterateConfig: iterateConfigRecord ?? null,
+      },
+      events,
+      fileMetadata: fileMetadataMap,
+      reducedStateSnapshots,
+    };
+
+    const r2Key = `exports/${exportId}.zip`;
+    const multipartUpload = await this.env.ITERATE_FILES.createMultipartUpload(r2Key, {
+      httpMetadata: {
+        contentType: "application/zip",
+      },
+      customMetadata: {
+        exportId,
+        estateId: this.databaseRecord.estateId,
+        exportedAt: new Date().toISOString(),
+      },
+    });
+
+    const PART_SIZE = 5 * 1024 * 1024;
+    const uploadedParts: R2UploadedPart[] = [];
+    let partNumber = 1;
+    let buffer = new Uint8Array(PART_SIZE);
+    let bufferOffset = 0;
+    let zipError: Error | null = null;
+    let zipFinished = false;
+    let zipResolve: (() => void) | null = null;
+
+    const uploadPart = async (data: Uint8Array) => {
+      const uploadedPart = await multipartUpload.uploadPart(partNumber, data);
+      uploadedParts.push(uploadedPart);
+      partNumber++;
+    };
+
+    const zipPromise = new Promise<void>((resolve) => (zipResolve = resolve));
+    const zip = new Zip(async (err, chunk, final) => {
+      if (err) {
+        zipError = err;
+        zipResolve?.();
+        return;
+      }
+
+      try {
+        let chunkOffset = 0;
+        while (chunkOffset < chunk.length) {
+          const remainingInBuffer = PART_SIZE - bufferOffset;
+          const remainingInChunk = chunk.length - chunkOffset;
+          const bytesToCopy = Math.min(remainingInBuffer, remainingInChunk);
+
+          buffer.set(chunk.subarray(chunkOffset, chunkOffset + bytesToCopy), bufferOffset);
+          bufferOffset += bytesToCopy;
+          chunkOffset += bytesToCopy;
+
+          if (bufferOffset === PART_SIZE) {
+            await uploadPart(buffer);
+            buffer = new Uint8Array(PART_SIZE);
+            bufferOffset = 0;
+          }
+        }
+
+        if (final && bufferOffset > 0) {
+          await uploadPart(buffer.subarray(0, bufferOffset));
+          zipFinished = true;
+        } else if (final) {
+          zipFinished = true;
+        }
+      } catch (uploadErr) {
+        zipError = uploadErr as Error;
+      } finally {
+        if (final) {
+          zipResolve?.();
+        }
+      }
+    });
+
+    const exportJsonFile = new ZipPassThrough("export.json");
+    zip.add(exportJsonFile);
+    exportJsonFile.push(strToU8(JSON.stringify(exportData, null, 2)), true);
+
+    for (const fileId of fileIds) {
+      const r2Key = `files/${fileId}`;
+      const object = await this.env.ITERATE_FILES.get(r2Key);
+
+      if (!object) {
+        throw new Error(`File not found in storage: ${fileId}`);
+      }
+
+      const fileStream = new ZipPassThrough(`files/${fileId}`);
+      zip.add(fileStream);
+
+      const reader = object.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            fileStream.push(new Uint8Array(0), true);
+            break;
+          }
+          fileStream.push(value, false);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    zip.end();
+
+    await zipPromise;
+
+    if (zipError) {
+      await multipartUpload.abort();
+      throw zipError;
+    }
+
+    if (!zipFinished) {
+      await multipartUpload.abort();
+      throw new Error("ZIP archive did not finish properly");
+    }
+
+    await multipartUpload.complete(uploadedParts);
+
+    const downloadUrl = `/api/estate/${this.databaseRecord.estateId}/exports/${exportId}`;
+    return downloadUrl;
   }
 
   // get the braintrust parent span exported id from the state
@@ -1234,6 +1565,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       agentDurableObject: this.hydrationInfo,
       estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
+      mcpConnectionCache: this.mcpManagerCache,
+      mcpConnectionQueues: this.mcpConnectionQueues,
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
@@ -1373,6 +1706,171 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
+  async generateVideo(input: Inputs["generateVideo"]) {
+    const openai = await openAIProvider({
+      env,
+      estateName: this.estate.name,
+    });
+
+    let inputReference: Uploadable | undefined;
+    if (input.inputReferenceFileId) {
+      const { content, fileRecord } = await getFileContent({
+        iterateFileId: input.inputReferenceFileId,
+        db: this.db,
+        estateId: this.databaseRecord.estateId,
+      });
+      inputReference = await toFile(content, fileRecord.filename ?? undefined, {
+        type: fileRecord.mimeType ?? undefined,
+      });
+    }
+
+    const video = await openai.videos.create({
+      prompt: input.prompt,
+      model: input.model,
+      seconds: input.seconds,
+      size: input.size,
+      input_reference: inputReference,
+    });
+
+    logger.info("scheduling OpenAI video poll:", { videoId: video.id });
+    await this.schedule(10, "pollForVideoGeneration", {
+      videoId: video.id,
+      pollUntil: Date.now() + 10 * 60 * 1000, // Poll for at most 10 minutes
+    });
+
+    return {
+      status: video.status,
+      message:
+        "The video generation has been queued. I will poll the API every 10 seconds and share the video as soon as it's ready.",
+      apiResponse: {
+        id: video.id,
+        status: video.status,
+        progress: video.progress,
+      },
+    };
+  }
+
+  async pollForVideoGeneration(data: { videoId: string; pollUntil: number }) {
+    // Helper function to add developer messages
+    const addDeveloperMessage = ({
+      text,
+      triggerLLMRequest,
+    }: {
+      text: string;
+      triggerLLMRequest: boolean;
+    }) => {
+      this.agentCore.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text,
+            },
+          ],
+        },
+        triggerLLMRequest,
+      });
+    };
+
+    // Check if we've exceeded the polling time limit
+    if (Date.now() > data.pollUntil) {
+      logger.info("video polling timeout reached:", { videoId: data.videoId });
+      addDeveloperMessage({
+        text: `Video generation polling timeout reached for video ${data.videoId}. The video generation is taking longer than expected (>10 minutes).`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    const openai = await openAIProvider({
+      env,
+      estateName: this.estate.name,
+    });
+
+    try {
+      const video = await openai.videos.retrieve(data.videoId);
+      logger.info("video status:", {
+        id: video.id,
+        status: video.status,
+        progress: video.progress,
+      });
+
+      // Add developer message about video progress
+      addDeveloperMessage({
+        text: `Video ${data.videoId} has status ${video.status} and is ${video.progress}% complete`,
+        triggerLLMRequest: false,
+      });
+
+      if (video.status === "failed") {
+        const errorMessage = video.error
+          ? `${video.error.code}: ${video.error.message}`
+          : "Unknown error";
+        addDeveloperMessage({
+          text: `Video generation failed for video ${data.videoId}: ${errorMessage}`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+
+      if (video.status === "completed") {
+        const contentRes = await openai.videos.downloadContent(data.videoId);
+        if (contentRes.ok && contentRes.body) {
+          const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
+          const contentLengthHeader = contentRes.headers.get("content-length");
+          const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+          logger.info("uploading video to r2", { contentLength, contentType });
+          const fileRecord = await uploadFile({
+            stream: contentRes.body,
+            contentLength,
+            filename: `generated-video-${Date.now()}.mp4`,
+            contentType,
+            estateId: this.databaseRecord.estateId,
+            db: this.db,
+          });
+          logger.info("video uploaded:", {
+            fileId: fileRecord.id,
+            publicURL: getFilePublicURL(fileRecord.id),
+          });
+
+          this.agentCore.addEvent({
+            type: "CORE:FILE_SHARED",
+            data: {
+              direction: "from-agent-to-user",
+              iterateFileId: fileRecord.id,
+              openAIFileId: fileRecord.openAIFileId ?? undefined,
+              mimeType: fileRecord.mimeType ?? undefined,
+            },
+            metadata: {
+              openaiSoraVideoId: data.videoId,
+            },
+            triggerLLMRequest: true,
+          });
+        } else {
+          throw new Error(`Video content download failed: ${contentRes.status}`);
+        }
+        return;
+      }
+
+      // For in_progress and queued statuses, continue polling
+    } catch (err) {
+      logger.error("video polling error:", err);
+      addDeveloperMessage({
+        text: `Video generation polling error for video ${data.videoId}: ${err}`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    // Schedule next poll
+    await this.schedule(10, "pollForVideoGeneration", {
+      videoId: data.videoId,
+      pollUntil: data.pollUntil,
+    });
+  }
+
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config
@@ -1506,35 +2004,33 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
     if (sandboxState.status !== "healthy") {
-      waitUntil(
-        sandbox
-          .startAndWaitForPorts(3000) // default sandbox port
-          .then(execInSandbox)
-          .then((resultExec) => {
-            // Inject a tool call event that will be processed by the agent
-            // TODO: this doesn't work
-            (this as any).addEvent({
-              type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
-              data: {
-                call: {
-                  type: "function_call",
-                  call_id: `exec-result-${Date.now()}`,
-                  name: "sendSlackMessage",
-                  arguments: JSON.stringify({
-                    text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
-                    endTurn: true,
-                  }),
-                  status: "completed", // ← Changed from "pending"
-                },
-                result: {
-                  success: resultExec.success,
-                  output: {},
-                },
+      void sandbox
+        .startAndWaitForPorts(3000) // default sandbox port
+        .then(execInSandbox)
+        .then((resultExec) => {
+          // Inject a tool call event that will be processed by the agent
+          // TODO: this doesn't work
+          (this as any).addEvent({
+            type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+            data: {
+              call: {
+                type: "function_call",
+                call_id: `exec-result-${Date.now()}`,
+                name: "sendSlackMessage",
+                arguments: JSON.stringify({
+                  text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
+                  endTurn: true,
+                }),
+                status: "completed", // ← Changed from "pending"
               },
-              triggerLLMRequest: false,
-            });
-          }),
-      );
+              result: {
+                success: resultExec.success,
+                output: {},
+              },
+            },
+            triggerLLMRequest: false,
+          });
+        });
 
       // TODO: this doesn't work
       return {
@@ -1569,6 +2065,196 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         stderr: resultExec.stderr,
       },
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
+    };
+  }
+
+  async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
+    const { endpoint, method, body, queryParams, pathParams, userId } = input;
+
+    if (!userId.startsWith("usr_")) {
+      return {
+        success: false,
+        error: dedent`
+          The user ID ${userId} is not a valid user ID.
+          It should start with "usr_".
+        `,
+      };
+    }
+
+    let accessToken: string;
+    try {
+      const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
+      accessToken = await getGoogleAccessTokenForUser(this.db, userId);
+    } catch (error) {
+      const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
+      const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
+        durableObjectInstanceName: this.databaseRecord.durableObjectName,
+      });
+      const url = await getGoogleOAuthURL({
+        db: this.db,
+        estateId: this.databaseRecord.estateId,
+        userId,
+        agentDurableObject: this.databaseRecord,
+        callbackUrl,
+      });
+      return {
+        success: false,
+        error: dedent`
+          Failed to get Google access token: ${error instanceof Error ? error.message : String(error)}. 
+          If the user is missing an auth token, you should provided them with the URL: ${url} to complete authorization. 
+          Remember to follow your instructions on formatting when providing the URL.
+          You will be automatically notified when the user has completed authorization.
+          You should not ask the user to notify you when they are done; instead, you notify them with confirmation, and continue.
+        `,
+      };
+    }
+
+    let finalEndpoint = endpoint;
+    if (pathParams) {
+      Object.entries(pathParams).forEach(([key, value]) => {
+        finalEndpoint = finalEndpoint.replace(`[${key}]`, value);
+      });
+    }
+
+    const url = new URL(`https://www.googleapis.com${finalEndpoint}`);
+    if (queryParams) {
+      Object.entries(queryParams).forEach(([key, value]) => {
+        url.searchParams.append(key, value);
+      });
+    }
+
+    const response = await fetch(url.toString(), {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        success: false,
+        error: `Google API request failed: ${response.status} ${response.statusText}. ${errorText}`,
+      };
+    }
+
+    const responseData = (await response.json()) as unknown;
+    return { success: true, data: responseData };
+  }
+
+  async sendGmail(input: Inputs["sendGmail"]): Promise<Result<unknown>> {
+    const { to, subject, body, cc, bcc, threadId, inReplyTo, userId } = input;
+
+    let emailContent = `To: ${to}\r\n`;
+    if (cc) emailContent += `Cc: ${cc}\r\n`;
+    if (bcc) emailContent += `Bcc: ${bcc}\r\n`;
+    emailContent += `Subject: ${subject}\r\n`;
+    if (inReplyTo) {
+      emailContent += `In-Reply-To: ${inReplyTo}\r\n`;
+      emailContent += `References: ${inReplyTo}\r\n`;
+    }
+    emailContent += `\r\n${body}`;
+
+    const encodedMessage = Buffer.from(emailContent)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    const requestBody: { raw: string; threadId?: string } = { raw: encodedMessage };
+    if (threadId) {
+      requestBody.threadId = threadId;
+    }
+
+    return this.callGoogleAPI({
+      endpoint: "/gmail/v1/users/me/messages/send",
+      method: "POST",
+      userId,
+      body: requestBody,
+    });
+  }
+
+  async getGmailMessage(input: Inputs["getGmailMessage"]): Promise<Result<unknown>> {
+    const { messageId, userId } = input;
+
+    const result = await this.callGoogleAPI({
+      endpoint: `/gmail/v1/users/me/messages/${messageId}`,
+      method: "GET",
+      userId,
+      queryParams: { format: "full" },
+    });
+
+    if (!result.success) {
+      return result;
+    }
+
+    const message = result.data as {
+      id: string;
+      threadId: string;
+      snippet: string;
+      payload?: {
+        headers?: Array<{ name: string; value: string }>;
+        body?: { data?: string };
+        parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown }>;
+      };
+    };
+
+    const headers: Record<string, string> = {};
+    if (message.payload?.headers) {
+      for (const header of message.payload.headers) {
+        const name = header.name.toLowerCase();
+        if (
+          name === "from" ||
+          name === "to" ||
+          name === "subject" ||
+          name === "date" ||
+          name === "message-id"
+        ) {
+          headers[name] = header.value;
+        }
+      }
+    }
+
+    let textBody = "";
+
+    const decodeBase64 = (data: string) => {
+      return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+    };
+
+    if (message.payload?.body?.data) {
+      textBody = decodeBase64(message.payload.body.data);
+    } else if (message.payload?.parts) {
+      for (const part of message.payload.parts) {
+        if (part.mimeType === "text/plain" && part.body?.data) {
+          textBody = decodeBase64(part.body.data);
+          break;
+        }
+      }
+      if (!textBody) {
+        for (const part of message.payload.parts) {
+          if (part.mimeType === "text/html" && part.body?.data) {
+            textBody = decodeBase64(part.body.data);
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        id: message.id,
+        threadId: message.threadId,
+        snippet: message.snippet,
+        from: headers.from,
+        to: headers.to,
+        subject: headers.subject,
+        date: headers.date,
+        messageId: headers["message-id"],
+        body: textBody,
+      },
     };
   }
 }

@@ -16,6 +16,8 @@ export type AgentDurableObjectInfo = z.infer<typeof AgentDurableObjectInfo>;
 
 export const BaseOAuthState = z.object({
   callbackUrl: z.string().optional(),
+  fullUrl: z.string().optional(),
+  agentDurableObject: AgentDurableObjectInfo.optional(),
 });
 
 export const MCPOAuthState = BaseOAuthState.extend({
@@ -24,8 +26,7 @@ export const MCPOAuthState = BaseOAuthState.extend({
   estateId: z.string(),
   userId: z.string(),
   clientId: z.string(),
-  fullUrl: z.string(),
-  agentDurableObject: AgentDurableObjectInfo,
+  serverId: z.string(),
 });
 
 export const SlackDirectLoginState = BaseOAuthState.extend({});
@@ -48,8 +49,15 @@ export const SlackBotOAuthState = BaseOAuthState.extend({
     .optional(),
 });
 
+export const GoogleOAuthState = BaseOAuthState.extend({
+  link: z.object({
+    userId: z.string(),
+  }),
+});
+
 export type BaseOAuthState = z.infer<typeof BaseOAuthState>;
 export type MCPOAuthState = z.infer<typeof MCPOAuthState>;
 export type SlackDirectLoginState = z.infer<typeof SlackDirectLoginState>;
 export type SlackBotLinkState = z.infer<typeof SlackBotLinkState>;
 export type SlackBotOAuthState = z.infer<typeof SlackBotOAuthState>;
+export type GoogleOAuthState = z.infer<typeof GoogleOAuthState>;

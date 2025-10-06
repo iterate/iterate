@@ -2,10 +2,10 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
-import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import * as schema from "../db/schema.ts";
 import {
   slackWebhookEvent,
   providerUserMapping,
@@ -29,7 +29,6 @@ import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./sl
 import type {
   AgentCoreEvent,
   CoreReducedState,
-  LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
@@ -85,7 +84,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (!status) return;
 
     if (this.agentCore.llmRequestInProgress()) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
       return;
     }
 
@@ -95,23 +94,23 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         data: { status: null },
       },
     ]);
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(null));
+    void this.updateSlackStatusDebounced(null);
   }, 15000);
 
   private syncTypingIndicator() {
     const state = this.agentCore.state as SlackSliceState;
     const status = state.typingIndicatorStatus ?? null;
 
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(status));
+    void this.updateSlackStatusDebounced(status);
 
     if (status) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
     }
   }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
-    await super.initAfterConstructorBeforeOnStart(params);
+  async initIterateAgent(params: AgentInitParams) {
+    await super.initIterateAgent(params);
 
     if (params.record.durableObjectName.includes("mock_slack")) {
       this.slackAPI = createSlackAPIMock<WebClient>();
@@ -170,16 +169,29 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               },
             ]);
             break;
+          case "CORE:FILE_SHARED": {
+            const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
+            if (fileSharedEvent.data.direction === "from-agent-to-user") {
+              void this.shareFileWithSlack({
+                iterateFileId: fileSharedEvent.data.iterateFileId,
+                originalFilename: fileSharedEvent.data.originalFilename,
+              }).catch((error) => {
+                logger.warn(
+                  `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
+                  error,
+                );
+              });
+            }
+            break;
+          }
           case "CORE:INTERNAL_ERROR": {
             logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
-            waitUntil(
-              this.getAgentDebugURL().then((url) =>
-                this.sendSlackMessage({
-                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
-                }),
-              ),
+            void this.getAgentDebugURL().then((url) =>
+              this.sendSlackMessage({
+                text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
+              }),
             );
             break;
           }
@@ -196,6 +208,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
+        mcpConnectionCache: this.mcpManagerCache,
+        mcpConnectionQueues: this.mcpConnectionQueues,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();
         },
@@ -265,10 +279,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   /**
    * Fetches previous messages in a Slack thread and returns an LLM input item event
+   * Also processes any files that were shared in the thread history
    */
   public async getSlackThreadHistoryInputEvents(
     threadTs: string,
-  ): Promise<LlmInputItemEventInput[]> {
+    botUserId: string | undefined,
+  ): Promise<AgentCoreEventInput[]> {
     const timings: Record<string, number> = { startTime: performance.now() };
     const previousMessages = await this.db
       .select()
@@ -320,7 +336,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ],
     });
 
-    return [
+    const events: AgentCoreEventInput[] = [
       {
         type: "CORE:LLM_INPUT_ITEM",
         data: {
@@ -337,6 +353,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         metadata: { timings },
       },
     ];
+
+    // Process any files that were shared in the thread history
+    const fileEventsPromises = previousMessages.map(async (message) => {
+      const slackEvent = message.data as SlackEvent;
+      return await this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId);
+    });
+
+    const fileEventsArrays = await Promise.all(fileEventsPromises);
+    const fileEvents = fileEventsArrays.flat();
+
+    events.push(...fileEvents);
+
+    return events;
   }
 
   /**
@@ -366,6 +395,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         userId: user.id,
         userEmail: user.email,
         userName: user.name,
+        orgRole: organizationUserMembership.role,
         slackUserId: providerUserMapping.externalId,
         providerMetadata: providerUserMapping.providerMetadata,
       })
@@ -412,6 +442,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
+          role: userInfo.orgRole,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
@@ -462,49 +493,90 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return [];
     }
 
-    const userMappings = await this.db.query.providerUserMapping.findMany({
-      where: and(
-        eq(providerUserMapping.providerId, "slack-bot"),
-        inArray(providerUserMapping.externalId, newMentionedUserIds),
-      ),
-      with: {
-        internalUser: true,
-      },
-    });
+    const estateId = this.databaseRecord.estateId;
 
-    return userMappings
-      .filter((userMapping) => userMapping.internalUser != null)
-      .map((userMapping): ParticipantMentionedEventInput => {
-        const { internalUser, externalId, providerMetadata } = userMapping;
-        return {
-          type: "CORE:PARTICIPANT_MENTIONED",
-          data: {
-            internalUserId: internalUser!.id,
-            email: internalUser!.email,
-            displayName: internalUser!.name,
-            externalUserMapping: {
-              slack: {
-                integrationSlug: "slack",
-                externalUserId: externalId,
-                internalUserId: internalUser.id,
-                email: internalUser.email,
-                rawUserInfo: providerMetadata as Record<string, unknown>,
-              },
+    const userMappings = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          inArray(providerUserMapping.externalId, newMentionedUserIds),
+          eq(estate.id, estateId),
+        ),
+      );
+
+    return userMappings.map((userMapping): ParticipantMentionedEventInput => {
+      return {
+        type: "CORE:PARTICIPANT_MENTIONED",
+        data: {
+          internalUserId: userMapping.userId,
+          email: userMapping.userEmail,
+          displayName: userMapping.userName,
+          role: userMapping.orgRole,
+          externalUserMapping: {
+            slack: {
+              integrationSlug: "slack",
+              externalUserId: userMapping.slackUserId,
+              internalUserId: userMapping.userId,
+              email: userMapping.userEmail,
+              rawUserInfo: userMapping.providerMetadata as Record<string, unknown>,
             },
           },
-          triggerLLMRequest: false,
-          metadata: {},
-        };
-      });
+        },
+        triggerLLMRequest: false,
+        metadata: {},
+      };
+    });
   }
 
   public async initSlack(channelId: string, threadTs: string) {
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
+
+    // Query database for channel info to populate state
+    let slackChannel: { name: string; isShared: boolean; isExtShared: boolean } | null = null;
+
+    try {
+      const channelMapping = await this.db.query.slackChannel.findFirst({
+        where: and(
+          eq(schema.slackChannel.estateId, this.databaseRecord.estateId),
+          eq(schema.slackChannel.externalId, channelId),
+        ),
+        columns: {
+          name: true,
+          isShared: true,
+          isExtShared: true,
+        },
+      });
+
+      if (channelMapping) {
+        slackChannel = {
+          name: channelMapping.name,
+          isShared: channelMapping.isShared,
+          isExtShared: channelMapping.isExtShared,
+        };
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch channel info during initialization for ${channelId}:`, error);
+    }
+
     events.push({
       type: "SLACK:UPDATE_SLICE_STATE",
       data: {
         slackChannelId: channelId,
         slackThreadId: threadTs,
+        slackChannel,
       },
       triggerLLMRequest: false,
     });
@@ -664,7 +736,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         : Promise.resolve([]),
       this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId),
       !isSlackInitialized && !isThreadStarter
-        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs)
+        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs, botUserId)
         : Promise.resolve([]),
     ]);
     events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());
@@ -751,81 +823,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     });
   }
 
-  async uploadAndShareFileInSlack(input: Inputs["uploadAndShareFileInSlack"]) {
-    const slackThreadId = this.agentCore.state.slackThreadId;
-    const slackChannelId = this.agentCore.state.slackChannelId;
-
-    if (typeof slackThreadId !== "string" || typeof slackChannelId !== "string") {
-      throw new Error(
-        "INTERNAL ERROR: Slack thread ID and channel ID are not set on the agent core state. This is an iterate bug.",
-      );
-    }
-    const { content, fileRecord } = await getFileContent({
-      iterateFileId: input.iterateFileId,
-      db: this.db,
-      estateId: this.databaseRecord.estateId,
-    });
-
-    // Ensure filename has a proper extension for better Slack unfurl behavior
-    const filename = fileRecord.filename || fileRecord.id;
-    const filenameWithExtension = filename.includes(".") ? filename : `${filename}.txt`;
-
-    try {
-      // The Slack SDK's uploadV2 helper doesn't handle ReadableStream properly,
-      // so we implement the three-step process manually as per:
-      // https://docs.slack.dev/messaging/working-with-files/#upload
-
-      // Convert ReadableStream to Buffer for upload
-      const buffer = Buffer.from(await new Response(content).arrayBuffer());
-
-      // Step 1: Get upload URL from Slack
-      const uploadUrlResponse = await this.slackAPI.files.getUploadURLExternal({
-        filename: filenameWithExtension,
-        length: buffer.length,
-      });
-
-      if (!uploadUrlResponse.ok || !uploadUrlResponse.upload_url || !uploadUrlResponse.file_id) {
-        throw new Error("Failed to get upload URL from Slack");
-      }
-
-      // Step 2: Upload file data to the external URL
-      // The external URL expects raw binary data, not multipart form data
-      const uploadResponse = await fetch(uploadUrlResponse.upload_url, {
-        method: "POST",
-        body: buffer,
-        headers: {
-          "Content-Type": fileRecord.mimeType || "application/octet-stream",
-          "Content-Length": buffer.length.toString(),
-        },
-      });
-
-      if (!uploadResponse.ok) {
-        throw new Error(`Failed to upload file data: ${uploadResponse.statusText}`);
-      }
-
-      // Step 3: Complete the upload and share in the channel
-      const completeResponse = await this.slackAPI.files.completeUploadExternal({
-        files: [
-          {
-            id: uploadUrlResponse.file_id,
-            title: filenameWithExtension,
-          },
-        ],
-        channel_id: slackChannelId,
-        thread_ts: slackThreadId,
-      });
-
-      return completeResponse;
-    } catch (error) {
-      logger.warn("[SlackAgent] Failed uploading file:", error);
-      logger.log("Full error details:", JSON.stringify(error, null, 2));
-      return {
-        success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
-      };
-    }
-  }
-
   async updateSlackMessage(input: Inputs["updateSlackMessage"]) {
     return await this.slackAPI.chat.update({
       channel: this.agentCore.state.slackChannelId!,
@@ -852,5 +849,73 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       __pauseAgentUntilMentioned: true,
       __triggerLLMRequest: false,
     } satisfies MagicAgentInstructions;
+  }
+
+  async shareFileWithSlack(params: { iterateFileId: string; originalFilename?: string | null }) {
+    const slackThreadId = this.agentCore.state.slackThreadId;
+    const slackChannelId = this.agentCore.state.slackChannelId;
+
+    if (typeof slackThreadId !== "string" || typeof slackChannelId !== "string") {
+      throw new Error(
+        "INTERNAL ERROR: Slack thread ID and channel ID are not set on the agent core state. This is an iterate bug.",
+      );
+    }
+
+    const { content, fileRecord } = await getFileContent({
+      iterateFileId: params.iterateFileId,
+      db: this.db,
+      estateId: this.databaseRecord.estateId,
+    });
+
+    const filename = params.originalFilename || fileRecord.filename || fileRecord.id;
+    const filenameWithExtension = filename.includes(".") ? filename : `${filename}.txt`;
+
+    const buffer = Buffer.from(await new Response(content).arrayBuffer());
+
+    const uploadUrlResponse = await this.slackAPI.files.getUploadURLExternal({
+      filename: filenameWithExtension,
+      length: buffer.length,
+    });
+
+    if (!uploadUrlResponse.ok || !uploadUrlResponse.upload_url || !uploadUrlResponse.file_id) {
+      throw new Error("Failed to get upload URL from Slack");
+    }
+
+    const uploadResponse = await fetch(uploadUrlResponse.upload_url, {
+      method: "POST",
+      body: buffer,
+      headers: {
+        "Content-Type": fileRecord.mimeType || "application/octet-stream",
+        "Content-Length": buffer.length.toString(),
+      },
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error(`Failed to upload file data: ${uploadResponse.statusText}`);
+    }
+
+    const completeResponse = await this.slackAPI.files.completeUploadExternal({
+      files: [
+        {
+          id: uploadUrlResponse.file_id,
+          title: filenameWithExtension,
+        },
+      ],
+      channel_id: slackChannelId,
+      thread_ts: slackThreadId,
+    });
+
+    if (!completeResponse.ok) {
+      throw new Error(
+        `Failed to share file in Slack: ${completeResponse.error ?? "Unknown error"}`,
+      );
+    }
+  }
+
+  async uploadAndShareFileInSlack() {
+    return {
+      message:
+        "This function no longer exists - but we need it here because otherwise the agent would be bricked",
+    };
   }
 }

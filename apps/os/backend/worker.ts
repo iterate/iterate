@@ -10,7 +10,12 @@ import { PostHog } from "posthog-node";
 import { cors } from "hono/cors";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
-import { uploadFileHandler, uploadFileFromURLHandler, getFileHandler } from "./file-handlers.ts";
+import {
+  uploadFileHandler,
+  uploadFileFromURLHandler,
+  getFileHandler,
+  getExportHandler,
+} from "./file-handlers.ts";
 import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
@@ -67,6 +72,7 @@ app.onError((err, c) => {
       const userId = c.get("session")?.user?.id || "anonymous";
 
       posthog.captureException(err, userId, {
+        environment: c.env.POSTHOG_ENVIRONMENT,
         path: c.req.path,
         method: c.req.method,
         url: c.req.url,
@@ -151,6 +157,7 @@ app.all("/api/trpc/*", (c) => {
             return;
           }
           posthog.captureException(error, userId, {
+            environment: c.env.POSTHOG_ENVIRONMENT,
             trpcPath: path,
             trpcType: type,
             trpcCode: error.code,
@@ -177,6 +184,7 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
 
 app.post("/api/estate/:estateId/files", uploadFileHandler);
 app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
+app.get("/api/estate/:estateId/exports/:exportId", getExportHandler);
 
 app.get("/api/files/:id", getFileHandler);
 

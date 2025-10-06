@@ -62,17 +62,6 @@ export const slackAgentTools = defineDOTools({
       name: z.string().describe("The emoji name (without colons, e.g., 'thumbsup')"),
     }),
   },
-  uploadAndShareFileInSlack: {
-    description:
-      "Upload and share a file with all users in the current Slack conversation with rich preview/unfurling",
-    input: z.object({
-      iterateFileId: z.string().describe("The Iterate file ID to upload"),
-      // If you allow the agent to provide a comment with the file, it will say something like "here's your file",
-      // and then again sendSlackMessage({ text: "here's your file", endTurn: true })
-      // TODO: Find a better solution to that prompting issue that doens't take away the ability to provide a comment with the file
-      // initialComment: z.string().optional().describe("Optional comment to include with the file"),
-    }),
-  },
   updateSlackMessage: {
     description:
       "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
@@ -95,6 +84,13 @@ export const slackAgentTools = defineDOTools({
         .describe(
           "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
         ),
+    }),
+  },
+
+  uploadAndShareFileInSlack: {
+    description: "DO NOT USE - this is just here so old agents don't get bricked",
+    input: z.object({
+      iterateFileId: z.string().describe("The ID of the file to upload"),
     }),
   },
 });

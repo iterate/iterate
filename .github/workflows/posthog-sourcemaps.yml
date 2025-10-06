@@ -1,0 +1,64 @@
+name: Upload source maps to PostHog
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  upload-sourcemaps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+
+      - name: Setup Doppler
+        run: doppler setup --config 'prd' --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Build OS app
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: pnpm run build
+        working-directory: apps/os
+
+      - name: Get PostHog secrets from Doppler
+        id: posthog
+        run: |
+          echo "env-id=$(doppler secrets get POSTHOG_ENV_ID --plain)" >> $GITHUB_OUTPUT
+          echo "cli-token=$(doppler secrets get POSTHOG_CLI_TOKEN --plain)" >> $GITHUB_OUTPUT
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+
+      - name: Upload client source maps to PostHog
+        uses: PostHog/upload-source-maps@v0.4.6
+        with:
+          directory: apps/os/build/client
+          env-id: ${{ steps.posthog.outputs.env-id }}
+          cli-token: ${{ steps.posthog.outputs.cli-token }}
+          host: https://eu.posthog.com
+          project: iterate-com
+
+      - name: Upload server source maps to PostHog
+        uses: PostHog/upload-source-maps@v0.4.6
+        with:
+          directory: apps/os/build/server
+          env-id: ${{ steps.posthog.outputs.env-id }}
+          cli-token: ${{ steps.posthog.outputs.cli-token }}
+          host: https://eu.posthog.com
+          project: iterate-com

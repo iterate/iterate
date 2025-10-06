@@ -14,6 +14,7 @@ export const Participant = z.object({
   lastActiveAt: z.string().datetime().optional(),
   email: z.string().optional(),
   displayName: z.string().optional(),
+  role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
   externalUserMapping: z.record(z.string(), IntegrationUserMap).optional(),
 });
 

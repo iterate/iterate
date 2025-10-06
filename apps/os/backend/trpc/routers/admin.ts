@@ -6,8 +6,13 @@ import { parseRouter, type AnyRouter } from "trpc-cli";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
-import { syncSlackUsersInBackground } from "../../integrations/slack/slack.ts";
+import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import {
+  stripeClient,
+  createStripeCustomerAndSubscriptionForOrganization,
+} from "../../integrations/stripe/stripe.ts";
+import { logger } from "../../tag-logger.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -81,7 +86,7 @@ const deleteUserByEmail = adminProcedure
     }
 
     // Use a transaction to ensure all deletions are atomic
-    return await ctx.db.transaction(async (tx) => {
+    const result = await ctx.db.transaction(async (tx) => {
       // Find all organizations where the user is the owner
       const ownedOrganizations = await tx.query.organizationUserMembership.findMany({
         where: eq(schema.organizationUserMembership.userId, user.id),
@@ -99,12 +104,17 @@ const deleteUserByEmail = adminProcedure
       );
       const deletedOrganizations: string[] = [];
       const deletedEstates: string[] = [];
+      const stripeCustomerIds: string[] = [];
 
       // Delete organizations the user owns; estates and related records will cascade
       for (const membership of ownerOrganizations) {
         const org = membership.organization;
         // Collect estate ids for return value before deletion cascades
         for (const e of org.estates) deletedEstates.push(e.id);
+        // Collect stripe customer IDs for background deletion
+        if (org.stripeCustomerId) {
+          stripeCustomerIds.push(org.stripeCustomerId);
+        }
         await tx.delete(schema.organization).where(eq(schema.organization.id, org.id));
         deletedOrganizations.push(org.id);
       }
@@ -117,8 +127,27 @@ const deleteUserByEmail = adminProcedure
         deletedUser: user.id,
         deletedOrganizations,
         deletedEstates,
+        stripeCustomerIds,
       };
     });
+
+    // Delete Stripe customers in the background
+    if (result.stripeCustomerIds.length > 0) {
+      waitUntil(
+        Promise.all(
+          result.stripeCustomerIds.map(async (customerId) => {
+            try {
+              await stripeClient.customers.del(customerId);
+            } catch (error) {
+              // Log error but don't fail the deletion
+              logger.error(`Failed to delete Stripe customer ${customerId}`, error);
+            }
+          }),
+        ),
+      );
+    }
+
+    return result;
   });
 
 const allProcedureInputs = adminProcedure.query(async () => {
@@ -290,9 +319,7 @@ export const adminRouter = router({
         });
       }
 
-      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, input.estateId));
-
-      return { success: true };
+      return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
     }),
   syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     const estates = await ctx.db.query.estate.findMany();
@@ -304,11 +331,67 @@ export const adminRouter = router({
         continue;
       }
 
-      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, estate.id));
+      waitUntil(syncSlackForEstateInBackground(ctx.db, slackToken, estate.id));
     }
 
     return {
       total: estates.length,
     };
   }),
+  // Create Stripe customer for an organization (admin only)
+  createStripeCustomer: adminProcedure
+    .input(
+      z.object({
+        organizationId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Fetch the organization
+      const organization = await ctx.db.query.organization.findFirst({
+        where: eq(schema.organization.id, input.organizationId),
+      });
+
+      if (!organization) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Organization not found",
+        });
+      }
+
+      // Check if organization already has a Stripe customer
+      if (organization.stripeCustomerId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Organization already has a Stripe customer: ${organization.stripeCustomerId}`,
+        });
+      }
+
+      // Get the organization owner for Stripe customer details
+      const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: (membership, { and, eq }) =>
+          and(eq(membership.organizationId, input.organizationId), eq(membership.role, "owner")),
+        with: {
+          user: true,
+        },
+      });
+
+      if (!ownerMembership) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Organization owner not found",
+        });
+      }
+
+      // Create Stripe customer and subscription synchronously so we can return the result
+      const customer = await createStripeCustomerAndSubscriptionForOrganization(
+        ctx.db,
+        organization,
+        ownerMembership.user,
+      );
+
+      return {
+        success: true,
+        stripeCustomerId: customer.id,
+      };
+    }),
 });

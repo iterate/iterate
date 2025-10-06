@@ -2,16 +2,13 @@ import { betterAuth } from "better-auth";
 import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
-import { waitUntil } from "cloudflare:workers";
 import { stripe } from "@better-auth/stripe";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
-import { createUserOrganizationAndEstate } from "./hooks.ts";
 
 export const getAuth = (db: DB) =>
   betterAuth({
@@ -85,24 +82,6 @@ export const getAuth = (db: DB) =>
           } as Record<string, string>;
 
           return typeid(map[opts.model] ?? opts.model).toString();
-        },
-      },
-    },
-    databaseHooks: {
-      user: {
-        create: {
-          after: async (user) => {
-            const organization = await createUserOrganizationAndEstate(db, user.id, user.name);
-
-            // Create Stripe customer and subscribe in the background (non-blocking)
-            waitUntil(
-              createStripeCustomerAndSubscriptionForOrganization(db, organization, user).catch(
-                () => {
-                  // Error is already logged in the helper function
-                },
-              ),
-            );
-          },
         },
       },
     },

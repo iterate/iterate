@@ -26,14 +26,14 @@ const someRule = defineRule({
 });
 ```
 
-You can find the default rules that the agent uses here: https://github.com/iterate-com/iterate/blob/main/apps/os/backend/agent/default-context-rules.ts
+You can find the default rules that the agent uses here: https://github.com/iterate/iterate/blob/main/apps/os/backend/agent/default-context-rules.ts
 
 # Things to do next
 
 - Remove the annoying example rules and update or add others that explain how your company works
 - Remove any rules that are annoying you
 - Join our community slack channel - email jonas@iterate.com for an invite if you haven't gotten one
-- Have a look at iterate's own iterate estate to see how we use it: https://github.com/iterate-com/iterate/estates/iterate
+- Have a look at iterate's own iterate estate to see how we use it: https://github.com/iterate/iterate/estates/iterate
 
 # Why is everything in a git repository?
 

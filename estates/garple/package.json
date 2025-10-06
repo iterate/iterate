@@ -1,11 +1,56 @@
 {
-  "name": "@iterate-com/iterate-estate",
-  "version": "0.0.1",
+  "name": "@iterate-com/estate-garple",
   "type": "module",
+  "dependencies": {
+    "@radix-ui/react-select": "^2.2.6",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@tanstack/react-query": "5.85.5",
+    "@trpc/client": "^11.6.0",
+    "@trpc/server": "^11.6.0",
+    "@trpc/tanstack-react-query": "^11.6.0",
+    "@uidotdev/usehooks": "^2.4.1",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "drizzle-orm": "^0.44.6",
+    "hono": "^4.9.10",
+    "lucide-react": "0.542.0",
+    "posthog-js": "^1.271.0",
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "react-router": "7.8.2",
+    "resend": "^6.1.2",
+    "stripe": "^19.1.0",
+    "superjson": "^2.2.2",
+    "tailwind-merge": "^3.3.1",
+    "typeid-js": "^1.2.0",
+    "zod": "^4.1.11"
+  },
   "scripts": {
-    "typecheck": "tsc"
+    "dev": "cd apps/website && CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- vite dev",
+    "build": "cd apps/website && doppler run -- vite build",
+    "deploy": "pnpm run build && cd apps/website && doppler run -- wrangler deploy",
+    "typecheck": "cd apps/website && tsc --noEmit",
+    "test": "cd apps/website && vitest run --passWithNoTests",
+    "lint": "cd apps/website && eslint . --fix",
+    "lint:check": "cd apps/website && eslint . --max-warnings 0",
+    "db:generate": "cd apps/website && drizzle-kit generate",
+    "db:migrate": "cd apps/website && doppler run -- wrangler d1 migrations apply estate-garple-production-garple-website-d1 --local",
+    "db:migrate:production": "cd apps/website && doppler run -- wrangler d1 migrations apply estate-garple-production-garple-website-d1 --remote",
+    "db:studio:garple": "cd apps/website && drizzle-kit studio"
   },
   "devDependencies": {
-    "@iterate-com/sdk": "workspace:*"
+    "@cloudflare/vite-plugin": "^1.13.10",
+    "@cloudflare/workers-types": "^4.20251004.0",
+    "@iterate-com/sdk": "workspace:*",
+    "@types/react": "19.1.8",
+    "@types/react-dom": "19.1.6",
+    "autoprefixer": "^10.4.21",
+    "drizzle-kit": "^0.31.5",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.9",
+    "vitest": "^3.2.4",
+    "wrangler": "^4.42.0"
   }
 }

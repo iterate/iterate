@@ -380,6 +380,7 @@ const participantJoinedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
+    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -426,6 +427,7 @@ const participantMentionedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
+    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
     externalUserMapping: z
       .record(
         z.string(),

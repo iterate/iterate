@@ -15,8 +15,10 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
-import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
-import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
+import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
+import { createUserOrganizationAndEstate } from "../org-utils.ts";
+import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
+import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
   "app_mentions:read",
@@ -42,18 +44,23 @@ export const SLACK_BOT_SCOPES = [
   "assistant:write",
 ];
 
-export const SLACK_USER_AUTH_SCOPES = [
-  "identity.email",
-  "identity.basic",
-  "identity.team",
-  "identity.avatar",
+export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];
+
+export const GOOGLE_INTEGRATION_SCOPES = [
+  // approved scopes
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "openid",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/calendar",
+  // unapproved scopes
+  "https://www.googleapis.com/auth/gmail.modify",
 ];
 
 export const integrationsPlugin = () =>
   ({
     id: "integrations",
     endpoints: {
-      // MCP OAuth callback endpoint
       callbackMCP: createAuthEndpoint(
         "/integrations/callback/mcp",
         {
@@ -153,6 +160,7 @@ export const integrationsPlugin = () =>
                   userId: state.userId,
                   integrationSlug: state.integrationSlug,
                   reconnect: {
+                    id: state.serverId,
                     oauthClientId: state.clientId,
                     oauthCode: code,
                   },
@@ -296,6 +304,58 @@ export const integrationsPlugin = () =>
           return ctx.json({ url });
         },
       ),
+      linkGoogle: createAuthEndpoint(
+        "/integrations/link/google",
+        {
+          method: "POST",
+          body: z.object({
+            callbackURL: z.string(),
+          }),
+          use: [sessionMiddleware],
+        },
+        async (ctx) => {
+          const { callbackURL } = ctx.body;
+          const session = ctx.context.session;
+
+          const { env } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+
+          const state = generateRandomString(32);
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+          const data = JSON.stringify({
+            link: {
+              userId: session.user.id,
+            },
+            callbackUrl: callbackURL,
+          } satisfies GoogleOAuthState);
+
+          await ctx.context.internalAdapter.createVerificationValue({
+            expiresAt,
+            identifier: state,
+            value: data,
+          });
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/google`;
+          const url = await createAuthorizationURL({
+            id: "google",
+            options: {
+              clientId: env.GOOGLE_CLIENT_ID,
+              clientSecret: env.GOOGLE_CLIENT_SECRET,
+              redirectURI,
+            },
+            redirectURI,
+            authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+            scopes: GOOGLE_INTEGRATION_SCOPES,
+            state,
+            additionalParams: {
+              access_type: "offline",
+              prompt: "consent",
+            },
+          });
+
+          return ctx.json({ url });
+        },
+      ),
       callbackSlack: createAuthEndpoint(
         "/integrations/callback/slack-bot",
         {
@@ -360,21 +420,20 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get tokens", details: tokens.error });
           }
 
-          if (!tokens || !tokens.access_token || !tokens.authed_user.access_token) {
+          if (
+            !tokens ||
+            !tokens.access_token ||
+            !tokens.authed_user.access_token ||
+            !tokens.authed_user.id
+          ) {
             return ctx.json({ error: "Failed to get tokens" });
           }
 
           const userSlackClient = new WebClient(tokens.authed_user.access_token);
 
-          const userInfo = await userSlackClient.users.identity({});
+          const userInfo = await userSlackClient.openid.connect.userInfo({});
 
-          if (
-            !userInfo ||
-            !userInfo.ok ||
-            !userInfo.user ||
-            !userInfo.user.email ||
-            !userInfo.user.id
-          ) {
+          if (!userInfo || !userInfo.ok || !userInfo.email || !userInfo.sub) {
             return ctx.json({ error: "Failed to get user info", details: userInfo.error });
           }
 
@@ -383,22 +442,48 @@ export const integrationsPlugin = () =>
           let user: User | null = null;
 
           if (!link) {
-            const existingUser = await ctx.context.internalAdapter.findUserByEmail(
-              userInfo.user.email,
-            );
+            const existingUser = await ctx.context.internalAdapter.findUserByEmail(userInfo.email);
             if (existingUser) {
               await ctx.context.internalAdapter.updateUser(existingUser.user.id, {
-                name: userInfo.user.name,
-                image: userInfo.user.image_192,
+                name: userInfo.name,
+                image: userInfo.picture,
               });
               user = existingUser.user;
             } else {
               user = await ctx.context.internalAdapter.createUser({
-                email: userInfo.user.email,
-                name: userInfo.user.name || "",
-                image: userInfo.user.image_192,
+                email: userInfo.email,
+                name: userInfo.name || "",
+                image: userInfo.picture,
                 emailVerified: true,
               });
+
+              if (env.ADMIN_EMAIL_HOSTS) {
+                const emailDomain = userInfo.email.split("@")[1];
+                const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
+
+                if (emailDomain && adminHosts.includes(emailDomain)) {
+                  await ctx.context.internalAdapter.updateUser(user.id, {
+                    role: "admin",
+                  });
+                }
+              }
+
+              const newOrgAndEstate = await createUserOrganizationAndEstate(db, user.id, user.name);
+              waitUntil(
+                createStripeCustomerAndSubscriptionForOrganization(
+                  db,
+                  newOrgAndEstate.organization,
+                  user,
+                ).catch(() => {
+                  // Error is already logged in the helper function
+                }),
+              );
+
+              if (!newOrgAndEstate.estate) {
+                return ctx.json({ error: "Failed to create an estate for the user" });
+              }
+
+              estateId = newOrgAndEstate.estate.id;
             }
 
             const existingUserAccount = existingUser?.accounts.find(
@@ -413,36 +498,10 @@ export const integrationsPlugin = () =>
             } else {
               await ctx.context.internalAdapter.createAccount({
                 providerId: "slack",
-                accountId: userInfo.user.id,
+                accountId: tokens.authed_user.id,
                 userId: user.id,
                 accessToken: tokens.authed_user.access_token,
                 scope: SLACK_USER_AUTH_SCOPES.join(","),
-              });
-            }
-
-            // When a user is created, an estate and organization is created automatically via hooks
-            // SO we can be sure that the user has only that estate
-            const memberships = await db.query.organizationUserMembership.findFirst({
-              where: eq(schema.organizationUserMembership.userId, user.id),
-              columns: {},
-              with: {
-                organization: {
-                  columns: {},
-                  with: {
-                    estates: {
-                      columns: {
-                        id: true,
-                      },
-                    },
-                  },
-                },
-              },
-            });
-
-            if (!memberships) {
-              // This should never happen
-              return ctx.json({
-                error: "Internal Error: Failed to get estate memberships, this should never happen",
               });
             }
 
@@ -451,11 +510,6 @@ export const integrationsPlugin = () =>
               session,
               user,
             });
-
-            // If the estate id is not set, set it to the first estate in the organization
-            if (!estateId) {
-              estateId = memberships.organization.estates[0].id;
-            }
           } else {
             const linkedUser = await ctx.context.internalAdapter.findUserByEmail(link.email);
             if (!linkedUser) {
@@ -489,45 +543,198 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get account id" });
           }
 
-          if (!estateId) {
-            return ctx.json({ error: "Failed to get estate id" });
-          }
+          // Link estate if we have an ID
+          // TODO(rahul): figure out if there are any edge cases
+          // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
+          // So we can skip this step for them
+          if (estateId) {
+            // For linking flow, connect everything now
+            // Sync Slack channels, users (internal and external) in the background
+            waitUntil(syncSlackForEstateInBackground(db, tokens.access_token, estateId));
 
-          // Sync Slack users to the organization in the background
-          waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+            await db
+              .insert(schema.estateAccountsPermissions)
+              .values({
+                accountId: botAccount.id,
+                estateId,
+              })
+              .onConflictDoNothing();
 
-          await db
-            .insert(schema.estateAccountsPermissions)
-            .values({
-              accountId: botAccount.id,
-              estateId,
-            })
-            .onConflictDoNothing();
-
-          await db
-            .insert(schema.providerEstateMapping)
-            .values({
-              internalEstateId: estateId,
-              externalId: tokens.team?.id,
-              providerId: "slack-bot",
-              providerMetadata: {
-                botUserId,
-                team: tokens.team,
-              },
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.providerEstateMapping.providerId,
-                schema.providerEstateMapping.externalId,
-              ],
-              set: {
-                internalEstateId: estateId, // We may want to require a confirmation to change the estate
+            await db
+              .insert(schema.providerEstateMapping)
+              .values({
+                internalEstateId: estateId,
+                externalId: tokens.team?.id,
+                providerId: "slack-bot",
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
                 },
-              },
+              })
+              .onConflictDoUpdate({
+                target: [
+                  schema.providerEstateMapping.providerId,
+                  schema.providerEstateMapping.externalId,
+                ],
+                set: {
+                  internalEstateId: estateId, // We may want to require a confirmation to change the estate
+                  providerMetadata: {
+                    botUserId,
+                    team: tokens.team,
+                  },
+                },
+              });
+          }
+
+          return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
+        },
+      ),
+      callbackGoogle: createAuthEndpoint(
+        "/integrations/callback/google",
+        {
+          method: "GET",
+          query: z.object({
+            error: z
+              .string()
+              .meta({
+                description: "The error message, if any",
+              })
+              .optional(),
+            error_description: z
+              .string()
+              .meta({
+                description: "The error description, if any",
+              })
+              .optional(),
+            code: z.string().meta({
+              description: "The OAuth2 code",
+            }),
+            state: z.string().meta({
+              description: "The state parameter from the OAuth2 request",
+            }),
+          }),
+        },
+        async (ctx) => {
+          const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
+
+          if (!value) {
+            return ctx.json({ error: "Invalid state" });
+          }
+
+          const parsedState = GoogleOAuthState.parse(JSON.parse(value.value));
+          const { link, callbackUrl: callbackURL, agentDurableObject } = parsedState;
+
+          const {
+            env,
+            var: { db },
+          } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/google`;
+
+          const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({
+              code: ctx.query.code,
+              client_id: env.GOOGLE_CLIENT_ID,
+              client_secret: env.GOOGLE_CLIENT_SECRET,
+              redirect_uri: redirectURI,
+              grant_type: "authorization_code",
+            }),
+          });
+
+          if (!tokenResponse.ok) {
+            return ctx.json({ error: "Failed to exchange code for tokens" });
+          }
+
+          const tokens = (await tokenResponse.json()) as {
+            access_token: string;
+            refresh_token?: string;
+            expires_in?: number;
+          };
+
+          if (!tokens.access_token) {
+            return ctx.json({ error: "Failed to get access token" });
+          }
+
+          const accessTokenExpiresAt = tokens.expires_in
+            ? new Date(Date.now() + tokens.expires_in * 1000)
+            : undefined;
+
+          const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+            },
+          });
+
+          if (!userInfoResponse.ok) {
+            return ctx.json({ error: "Failed to get user info" });
+          }
+
+          const userInfo = (await userInfoResponse.json()) as {
+            email: string;
+            id: string;
+            name?: string;
+            picture?: string;
+          };
+
+          if (!userInfo.id) {
+            return ctx.json({ error: "Failed to get user info" });
+          }
+
+          const existingAccount = await ctx.context.internalAdapter.findAccount(userInfo.id);
+
+          if (existingAccount) {
+            await ctx.context.internalAdapter.updateAccount(existingAccount.id, {
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              accessTokenExpiresAt,
+              scope: GOOGLE_INTEGRATION_SCOPES.join(" "),
             });
+          } else {
+            const account = await ctx.context.internalAdapter.createAccount({
+              providerId: "google",
+              accountId: userInfo.id,
+              userId: link.userId,
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              accessTokenExpiresAt,
+              scope: GOOGLE_INTEGRATION_SCOPES.join(" "),
+            });
+
+            if (!account) {
+              return ctx.json({ error: "Failed to create account" });
+            }
+          }
+
+          if (agentDurableObject) {
+            const params = {
+              db,
+              agentInstanceName: agentDurableObject.durableObjectName,
+            };
+            const agentStub =
+              agentDurableObject.className === "SlackAgent"
+                ? await SlackAgent.getStubByName(params)
+                : await IterateAgent.getStubByName(params);
+            await agentStub.addEvents([
+              {
+                type: "CORE:LLM_INPUT_ITEM",
+                data: {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `The user with ID ${link.userId} has completed authorizing with Google.`,
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              },
+            ]);
+          }
 
           if (!callbackURL) {
             return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);

@@ -5,6 +5,7 @@ import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
+import { normalizeNullableFields } from "../utils/type-helpers.ts";
 import {
   AgentCoreEventInput,
   FileSharedEventInput,
@@ -172,6 +173,16 @@ export const agentsRouter = router({
       }
       const permalink = await getPermalink(braintrustParentSpanExportedId);
       return { permalink };
+    }),
+
+  exportTrace: agentStubProcedure
+    .meta({ description: "Export agent trace to a downloadable archive" })
+    .output(z.object({ downloadUrl: z.string() }))
+    .mutation(async ({ ctx }) => {
+      const downloadUrl = await ctx.agent.exportTrace({
+        user: normalizeNullableFields(ctx.user),
+      });
+      return { downloadUrl };
     }),
 
   addEvents: agentStubProcedure
