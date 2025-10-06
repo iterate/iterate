@@ -63,14 +63,19 @@ export const createUserOrganizationAndEstate = async (
 
   const result = { organization, estate };
 
-  // Send Slack notification to our own slack instance
+  // Send Slack notification to our own slack instance, unless suppressed for test users
   // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id
   if (env.ITERATE_NOTIFICATION_ESTATE_ID) {
-    waitUntil(
-      sendEstateCreatedNotificationToSlack(result.organization, result.estate).catch((error) => {
-        logger.error("Failed to send Slack notification for new estate", error);
-      }),
-    );
+    const userRecord = await db.query.user.findFirst({ where: (u, { eq }) => eq(u.id, userId) });
+    const shouldSuppress = isTestSignup(userName, userRecord?.email, organization.name);
+
+    if (!shouldSuppress) {
+      waitUntil(
+        sendEstateCreatedNotificationToSlack(result.organization, result.estate).catch((error) => {
+          logger.error("Failed to send Slack notification for new estate", error);
+        }),
+      );
+    }
   }
   return result;
 };
@@ -92,4 +97,39 @@ async function sendEstateCreatedNotificationToSlack(
   `;
 
   await sendNotificationToIterateSlack(message, "#general");
+}
+
+function isTestSignup(
+  userName: string,
+  userEmail: string | undefined,
+  organizationName: string,
+): boolean {
+  const raw = env.TEST_USER_PATTERNS;
+  if (!raw) return false;
+
+  const patterns = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
+
+  if (patterns.length === 0) return false;
+
+  const valuesToTest = [userName, organizationName, userEmail ?? ""].filter((v) => v.length > 0);
+  if (valuesToTest.length === 0) return false;
+
+  for (const pattern of patterns) {
+    let regex: RegExp | undefined;
+    try {
+      // Allow bare patterns; default to case-insensitive
+      regex = new RegExp(pattern, "i");
+    } catch {
+      // Skip invalid patterns
+      continue;
+    }
+
+    for (const value of valuesToTest) {
+      if (regex.test(value)) return true;
+    }
+  }
+  return false;
 }
