@@ -1,18 +1,18 @@
 import { useState, Suspense } from "react";
 import { Settings, Loader2, Save } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
-import { useTRPC } from "../lib/trpc.ts";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
+import { useTRPC } from "../../lib/trpc.ts";
+import { Button } from "../../components/ui/button.tsx";
+import { Input } from "../../components/ui/input.tsx";
+import { Label } from "../../components/ui/label.tsx";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../components/ui/card.tsx";
-import type { Route } from "./+types/org-settings";
+} from "../../components/ui/card.tsx";
+import type { Route } from "./+types/settings.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

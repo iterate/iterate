@@ -102,6 +102,7 @@ const rules: PackageRuleItemWithESLintEnforcement[] = [
       - Unit tests are always colocated in *.test.ts files alongside the tested file. We use vitest.
       - You do not need to ever import React
       - Do not ever 'as any' to work around typescript issues. Instead, fix the typescript issues or ask your human for help.
+      - Acronyms in identifiers should be all caps (e.g. \`callbackURL\`, \`getHTMLElement\`), with the bizarre exception that \`Id\` should be capitalized as a word (e.g. \`userId\`, \`organizationId\`).
 
       # Third party dependencies
 

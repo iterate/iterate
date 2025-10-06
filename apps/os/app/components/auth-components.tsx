@@ -26,9 +26,7 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       const result = await authClient.integrations.directLoginWithSlack({
         query: {
-          // /onboarding-after-slack-login will either redirect the user to a nice page with onboarding tasks,
-          // or it will redirect the user to the home page (if they already set up a github repo)
-          callbackURL: redirectUrl || "/onboarding-after-slack-login",
+          callbackURL: redirectUrl || "/",
         },
       });
 
@@ -88,6 +86,7 @@ export function LoginProviders() {
         size="lg"
         className="w-full h-12 text-base font-medium"
       >
+        <img src="/slack.svg" alt="Slack" className="mr-2 h-5 w-5" />
         Continue with Slack
       </Button>
       {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (

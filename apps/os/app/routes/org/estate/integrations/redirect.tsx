@@ -1,8 +1,8 @@
 import { redirect } from "react-router";
 import { eq } from "drizzle-orm";
-import { getDb, schema } from "../../backend/db/client.ts";
-import { MCPOAuthState } from "../../backend/auth/oauth-state-schemas.ts";
-import type { Route } from "./+types/integrations.redirect";
+import { getDb, schema } from "../../../../../backend/db/client.ts";
+import { MCPOAuthState } from "../../../../../backend/auth/oauth-state-schemas.ts";
+import type { Route } from "./+types/redirect.ts";
 
 export async function loader({ request }: Route.LoaderArgs) {
   const url = new URL(request.url);

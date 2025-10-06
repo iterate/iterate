@@ -1,8 +1,8 @@
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { MoreVertical } from "lucide-react";
-import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
-import { authClient } from "../lib/auth-client.ts";
-import { Button } from "../components/ui/button.tsx";
+import { useTRPC, useTRPCClient } from "../../lib/trpc.ts";
+import { authClient } from "../../lib/auth-client.ts";
+import { Button } from "../../components/ui/button.tsx";
 import {
   Table,
   TableBody,
@@ -10,13 +10,13 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "../components/ui/table.tsx";
+} from "../../components/ui/table.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from "../components/ui/dropdown-menu.tsx";
+} from "../../components/ui/dropdown-menu.tsx";
 
 export default function AdminEstatesPage() {
   const trpc = useTRPC();

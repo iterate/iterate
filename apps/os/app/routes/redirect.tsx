@@ -7,7 +7,7 @@ import { getAuth } from "../../backend/auth/auth.ts";
 import * as schema from "../../backend/db/schema.ts";
 import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
-import type { Route } from "./+types/root-redirect";
+import type { Route } from "./+types/redirect";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
