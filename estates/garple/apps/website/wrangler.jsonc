@@ -1,0 +1,32 @@
+{
+  // this is horrible but we need to do it this way because it doesn't seem to work with symlinks
+  "$schema": "../../../../node_modules/wrangler/config-schema.json",
+  "name": "estate-garple-production-garple-website",
+  "compatibility_date": "2025-08-13",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "main": "./backend/worker.ts",
+  "assets": {
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "html_handling": "drop-trailing-slash",
+    "run_worker_first": ["/api/*"],
+  },
+  "d1_databases": [
+    {
+      "binding": "D1",
+      "database_name": "estate-garple-production-garple-website-d1",
+      "database_id": "5ca4b6ae-6ede-4aea-9daa-cd12a6067348",
+      "migrations_dir": "backend/drizzle/migrations",
+    },
+  ],
+  "routes": [
+    {
+      "pattern": "garple.com",
+      "custom_domain": true,
+    },
+    {
+      "pattern": "www.garple.com",
+      "custom_domain": true,
+    },
+  ],
+}
