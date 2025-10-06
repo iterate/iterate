@@ -333,12 +333,6 @@ export const integrationsPlugin = () =>
           const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
 
-          console.log("DEBUG: Parsed OAuth state", {
-            parsedState,
-            estateId,
-            hasLink: !!link,
-          });
-
           const code = ctx.query.code;
 
           const {
@@ -439,7 +433,6 @@ export const integrationsPlugin = () =>
             // If the estate id is not set, set it to the first estate in the organization
             if (!estateId && memberships.organization.estates.length > 0) {
               estateId = memberships.organization.estates[0].id;
-              console.log("DEBUG: Set estateId to first estate for user", estateId);
             }
 
             // Handle Slack account creation/update
@@ -473,13 +466,6 @@ export const integrationsPlugin = () =>
               userSlackAccountId = newAccount.id;
             }
 
-            // Always ensure user's Slack account is in estate permissions (whether new or existing)
-            console.log("DEBUG: About to insert estate permissions", {
-              estateId,
-              userSlackAccountId,
-              hasEstateId: !!estateId,
-            });
-
             if (estateId) {
               await db
                 .insert(schema.estateAccountsPermissions)
@@ -488,14 +474,10 @@ export const integrationsPlugin = () =>
                   estateId: estateId,
                 })
                 .onConflictDoNothing(); // This handles if the permission already exists
-
-              console.log("DEBUG: Inserted estate permissions successfully");
-            } else {
-              console.log("DEBUG: No estateId provided, skipping estate permissions");
             }
 
-            if (hasBotAccess && tokens.access_token) {
-              waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
+            if (hasBotAccess && tokens.access_token && estateId) {
+              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
             }
 
             const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
@@ -531,7 +513,6 @@ export const integrationsPlugin = () =>
 
               if (userMemberships && userMemberships.organization.estates.length > 0) {
                 estateId = userMemberships.organization.estates[0].id;
-                console.log("DEBUG: Set estateId to first estate for existing user", estateId);
               }
             }
 
@@ -563,13 +544,6 @@ export const integrationsPlugin = () =>
               linkedUserSlackAccountId = newLinkedAccount.id;
             }
 
-            // Always ensure linked user's Slack account is in estate permissions (whether new or existing)
-            console.log("DEBUG: About to insert estate permissions for linked user", {
-              estateId,
-              linkedUserSlackAccountId,
-              hasEstateId: !!estateId,
-            });
-
             if (estateId) {
               await db
                 .insert(schema.estateAccountsPermissions)
@@ -578,17 +552,11 @@ export const integrationsPlugin = () =>
                   estateId: estateId,
                 })
                 .onConflictDoNothing(); // This handles if the permission already exists
-
-              console.log("DEBUG: Inserted estate permissions for linked user successfully");
-            } else {
-              console.log(
-                "DEBUG: No estateId provided for linked user, skipping estate permissions",
-              );
             }
 
             // Only sync Slack users if we have bot access
-            if (hasBotAccess && tokens.access_token) {
-              waitUntil(syncSlackUsersInBackground(db, tokens.access_token));
+            if (hasBotAccess && tokens.access_token && estateId) {
+              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
             }
           }
 
@@ -619,10 +587,9 @@ export const integrationsPlugin = () =>
               return ctx.json({ error: "Failed to get account id" });
             }
 
-            // estateId is guaranteed to be defined here due to the if condition above
-
-            // Sync Slack users to the organization in the background
-            waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+            if (tokens.access_token) {
+              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+            }
 
             await db
               .insert(schema.estateAccountsPermissions)
