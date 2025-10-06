@@ -1373,6 +1373,172 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
   }
 
+  async generateVideo(input: Inputs["generateVideo"]) {
+    const payload: Record<string, unknown> = {
+      model: "sora-2",
+      prompt: input.prompt,
+      ...input.additionalParameters,
+    };
+
+    const response = await fetch("https://api.openai.com/v1/videos", {
+      method: "POST",
+      headers: {
+        ...this.getOpenAIVideoHeaders(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const responseText = await response.text();
+    let parsedResponse: Record<string, unknown> | undefined;
+    try {
+      parsedResponse = JSON.parse(responseText) as Record<string, unknown>;
+    } catch (error) {
+      logger.error("Unable to parse Sora create response as JSON", error);
+    }
+
+    if (!response.ok) {
+      logger.error("Failed to start Sora 2 video generation", {
+        status: response.status,
+        statusText: response.statusText,
+        response: parsedResponse ?? responseText,
+      });
+      return parsedResponse ?? { error: "Failed to start video generation" };
+    }
+
+    const createData = parsedResponse ?? { rawResponse: responseText };
+
+    const videoId = extractVideoIdFromCreateResponse(createData);
+    if (videoId) {
+      waitUntil(
+        this.monitorVideoGeneration({
+          videoId,
+          preferredFilename: input.preferredFilename,
+        }),
+      );
+    } else {
+      logger.warn("Sora create response did not include a video id", createData);
+    }
+
+    return createData;
+  }
+
+  private getOpenAIVideoHeaders() {
+    return {
+      Authorization: `Bearer ${this.env.OPENAI_API_KEY}`,
+    };
+  }
+
+  private async monitorVideoGeneration(params: { videoId: string; preferredFilename?: string }) {
+    const { videoId, preferredFilename } = params;
+    const pollIntervalMs = 5_000;
+    const maxAttempts = 120;
+
+    try {
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const statusResponse = await fetch(`https://api.openai.com/v1/videos/${videoId}`, {
+          method: "GET",
+          headers: this.getOpenAIVideoHeaders(),
+        });
+
+        if (!statusResponse.ok) {
+          logger.error("Failed to retrieve Sora video status", {
+            videoId,
+            status: statusResponse.status,
+            statusText: statusResponse.statusText,
+          });
+          await sleep(pollIntervalMs);
+          continue;
+        }
+
+        const statusPayload = (await statusResponse.json()) as Record<string, unknown>;
+        const statusValue =
+          typeof statusPayload.status === "string" ? statusPayload.status : undefined;
+
+        if (isVideoCompletedStatus(statusValue)) {
+          await this.downloadAndShareVideo({
+            videoId,
+            preferredFilename,
+          });
+          return;
+        }
+
+        if (isVideoFailedStatus(statusValue)) {
+          logger.error("Sora video generation failed", {
+            videoId,
+            status: statusValue,
+            response: statusPayload,
+          });
+          return;
+        }
+
+        await sleep(pollIntervalMs);
+      }
+
+      logger.error("Timed out while waiting for Sora video generation", { videoId });
+    } catch (error) {
+      logger.error("Unexpected error while monitoring Sora video generation", { videoId, error });
+    }
+  }
+
+  private async downloadAndShareVideo(params: { videoId: string; preferredFilename?: string }) {
+    const { videoId, preferredFilename } = params;
+
+    try {
+      const contentResponse = await fetch(`https://api.openai.com/v1/videos/${videoId}/content`, {
+        method: "GET",
+        headers: this.getOpenAIVideoHeaders(),
+      });
+
+      if (!contentResponse.ok) {
+        logger.error("Failed to download Sora video content", {
+          videoId,
+          status: contentResponse.status,
+          statusText: contentResponse.statusText,
+        });
+        return;
+      }
+
+      const stream = contentResponse.body;
+      if (!stream) {
+        logger.error("Sora video content response did not include a body", { videoId });
+        return;
+      }
+
+      const contentType = contentResponse.headers.get("content-type") ?? "video/mp4";
+      const contentLengthHeader = contentResponse.headers.get("content-length");
+      const contentLength = contentLengthHeader ? Number.parseInt(contentLengthHeader, 10) || 0 : 0;
+
+      const filename = deriveVideoFilename({
+        preferredFilename,
+        videoId,
+        contentType,
+      });
+
+      const fileRecord = await uploadFile({
+        estateId: this.databaseRecord.estateId,
+        db: this.db,
+        stream,
+        contentLength,
+        filename,
+        contentType,
+      });
+
+      await this.addEvent({
+        type: "CORE:FILE_SHARED",
+        data: {
+          direction: "from-agent-to-user",
+          iterateFileId: fileRecord.id,
+          openAIFileId: fileRecord.openAIFileId ?? undefined,
+          mimeType: fileRecord.mimeType ?? contentType,
+        },
+        triggerLLMRequest: false,
+      });
+    } catch (error) {
+      logger.error("Unexpected error while downloading Sora video content", { videoId, error });
+    }
+  }
+
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config
@@ -1596,4 +1762,66 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
+}
+
+function extractVideoIdFromCreateResponse(response: Record<string, unknown>) {
+  if (typeof response.id === "string") {
+    return response.id;
+  }
+
+  const data = response.data;
+  if (Array.isArray(data)) {
+    for (const item of data) {
+      if (item && typeof item === "object" && typeof (item as { id?: unknown }).id === "string") {
+        return (item as { id: string }).id;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function isVideoCompletedStatus(status: string | undefined) {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return ["completed", "succeeded", "ready", "finished"].includes(normalized);
+}
+
+function isVideoFailedStatus(status: string | undefined) {
+  if (!status) return false;
+  const normalized = status.toLowerCase();
+  return ["failed", "error", "cancelled", "canceled", "rejected"].includes(normalized);
+}
+
+function deriveVideoFilename(params: {
+  preferredFilename?: string;
+  videoId: string;
+  contentType: string;
+}) {
+  const { preferredFilename, videoId, contentType } = params;
+  const baseName = preferredFilename
+    ? sanitizeFilename(preferredFilename)
+    : `sora-video-${videoId}`;
+  const extension = contentTypeToExtension(contentType) ?? "mp4";
+
+  return baseName.endsWith(`.${extension}`) ? baseName : `${baseName}.${extension}`;
+}
+
+function sanitizeFilename(input: string) {
+  const trimmed = input.trim();
+  const replaced = trimmed.replace(/[^a-zA-Z0-9._-]+/g, "-");
+  return replaced.replace(/^-+|-+$/g, "") || "sora-video";
+}
+
+function contentTypeToExtension(contentType: string) {
+  const lower = contentType.toLowerCase();
+  if (lower.includes("mp4")) return "mp4";
+  if (lower.includes("webm")) return "webm";
+  if (lower.includes("quicktime")) return "mov";
+  if (lower.includes("ogg")) return "ogv";
+  return undefined;
+}
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }

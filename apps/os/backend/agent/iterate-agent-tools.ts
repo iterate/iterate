@@ -159,6 +159,27 @@ export const iterateAgentTools = defineDOTools({
       overrideReplicateParams: z.record(z.string(), z.any()).optional(),
     }),
   },
+  generateVideo: {
+    description:
+      "Generate a video with OpenAI Sora 2. The tool immediately returns the create API response and will share the finished video automatically once it has been uploaded to storage.",
+    input: z.object({
+      prompt: z
+        .string()
+        .describe(
+          "Detailed description of the video you want Sora 2 to create. Include information about setting, camera moves, style, and anything else that matters.",
+        ),
+      additionalParameters: z
+        .record(z.string(), z.any())
+        .default({})
+        .describe(
+          "Optional raw parameters to merge into the Sora 2 request body (e.g. aspect_ratio, duration_seconds). Only include fields explicitly supported by the API.",
+        ),
+      preferredFilename: z
+        .string()
+        .optional()
+        .describe("Optional filename (without extension) to use when saving the generated video."),
+    }),
+  },
   exec: {
     description: "Execute a shell in a sandbox.",
     input: z.object({
