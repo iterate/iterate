@@ -35,7 +35,7 @@ export type CloudflareEnv = Env & {
   ADMIN_EMAIL_HOSTS?: string;
 
   // Comma-separated list of regex patterns used to detect test users.
-  // Each pattern is applied to user name, email, and organization name.
+  // Matching is case-insensitive substring across user name, email, and organization name.
   TEST_USER_PATTERNS?: string;
 };
 
