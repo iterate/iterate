@@ -1,17 +1,20 @@
 import { waitUntil } from "cloudflare:workers";
 import dedent from "dedent";
-import type { DB } from "../db/client.ts";
-import * as schema from "../db/schema.ts";
-import { env } from "../../env.ts";
-import { logger } from "../tag-logger.ts";
-import { sendNotificationToIterateSlack } from "../integrations/slack/slack-utils.ts";
+import { env } from "../env.ts";
+import type { DB } from "./db/client.ts";
+import * as schema from "./db/schema.ts";
+import { logger } from "./tag-logger.ts";
+import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
   db: DB,
   userId: string,
   userName: string,
-): Promise<typeof schema.organization.$inferSelect> => {
+): Promise<{
+  organization: typeof schema.organization.$inferSelect;
+  estate?: typeof schema.estate.$inferSelect;
+}> => {
   const existingMembership = await db.query.organizationUserMembership.findFirst({
     where: (membership, { eq }) => eq(membership.userId, userId),
     with: {
@@ -21,7 +24,9 @@ export const createUserOrganizationAndEstate = async (
 
   // Only create organization and estate for new users
   if (existingMembership) {
-    return existingMembership.organization;
+    return {
+      organization: existingMembership.organization,
+    };
   }
 
   // Perform sequential inserts without opening a new transaction to avoid
@@ -67,7 +72,7 @@ export const createUserOrganizationAndEstate = async (
       }),
     );
   }
-  return result.organization;
+  return result;
 };
 
 async function sendEstateCreatedNotificationToSlack(
