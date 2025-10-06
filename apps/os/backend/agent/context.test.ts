@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { evaluateContextRuleMatchers, matchers, type ContextRule } from "./context.ts";
+import { evaluateContextRuleMatchers, matchers, type ContextRule, parseFrontMatter, parseFrontMatterMatch } from "./context.ts";
 
 describe("evaluateContextRuleMatchers", () => {
   const cases = [
@@ -671,5 +671,138 @@ describe("timeWindow matcher", () => {
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("parseFrontMatter", () => {
+  it("should parse front matter with string match as jsonata expression", () => {
+    const content = `---
+slug: test-rule
+match: agentCoreState.paused
+---
+
+This is the body content.`;
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter.slug).toBe("test-rule");
+    expect(frontMatter.match).toBe("agentCoreState.paused");
+    expect(body).toBe("This is the body content.");
+  });
+
+  it("should parse front matter with object match as ContextRuleMatcher", () => {
+    const content = `---
+slug: complex-rule
+match:
+  type: and
+  matchers:
+    - type: always
+    - type: jsonata
+      expression: agentCoreState.paused
+---
+
+Complex rule body.`;
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter.slug).toBe("complex-rule");
+    expect(frontMatter.match).toEqual({
+      type: "and",
+      matchers: [
+        { type: "always" },
+        { type: "jsonata", expression: "agentCoreState.paused" },
+      ],
+    });
+    expect(body).toBe("Complex rule body.");
+  });
+
+  it("should handle content without front matter", () => {
+    const content = "This is just regular content without front matter.";
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter).toEqual({});
+    expect(body).toBe(content);
+  });
+
+  it("should handle content with only opening delimiter", () => {
+    const content = `---
+slug: incomplete
+This never closes`;
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter).toEqual({});
+    expect(body).toBe(content);
+  });
+
+  it("should handle empty front matter", () => {
+    const content = `---
+---
+
+Body content here.`;
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter).toEqual({});
+    expect(body).toBe("Body content here.");
+  });
+
+  it("should handle front matter with key instead of slug", () => {
+    const content = `---
+key: my-custom-key
+description: This is a description
+---
+
+Body content.`;
+
+    const { frontMatter, body } = parseFrontMatter(content);
+
+    expect(frontMatter.key).toBe("my-custom-key");
+    expect(frontMatter.description).toBe("This is a description");
+    expect(body).toBe("Body content.");
+  });
+});
+
+describe("parseFrontMatterMatch", () => {
+  it("should convert string to jsonata matcher", () => {
+    const result = parseFrontMatterMatch("agentCoreState.paused");
+
+    expect(result).toEqual({
+      type: "jsonata",
+      expression: "agentCoreState.paused",
+    });
+  });
+
+  it("should pass through object as-is", () => {
+    const input = { type: "always" };
+    const result = parseFrontMatterMatch(input);
+
+    expect(result).toEqual(input);
+  });
+
+  it("should return undefined for null", () => {
+    const result = parseFrontMatterMatch(null);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("should return undefined for undefined", () => {
+    const result = parseFrontMatterMatch(undefined);
+
+    expect(result).toBeUndefined();
+  });
+
+  it("should handle complex ContextRuleMatcher object", () => {
+    const input = {
+      type: "and",
+      matchers: [
+        { type: "always" },
+        { type: "jsonata", expression: "test" },
+      ],
+    };
+    const result = parseFrontMatterMatch(input);
+
+    expect(result).toEqual(input);
   });
 });
