@@ -2,7 +2,7 @@ import { Resend } from "resend";
 import { eq } from "drizzle-orm";
 import { env } from "../env.ts";
 import { db } from "./db/client.ts";
-import { domains, authCodes } from "./db/schema.ts";
+import { domains } from "./db/schema.ts";
 
 const apiKey = env.RESEND_GARPLECOM_API_KEY;
 if (!apiKey) {
@@ -13,7 +13,6 @@ const resend = new Resend(apiKey);
 
 interface DomainPurchaseEmailProps {
   domainNameWithTLD: string;
-  authCode: string;
 }
 
 function generateDomainPurchaseEmail(props: DomainPurchaseEmailProps): string {
@@ -83,19 +82,8 @@ export async function sendDomainPurchaseEmail(domainId: string, customerEmail: s
     throw new Error("Domain not found");
   }
 
-  // Get auth code
-  const authCode = await db
-    .select()
-    .from(authCodes)
-    .where(eq(authCodes.domainId, domainId))
-    .limit(1);
-  if (!authCode[0]) {
-    throw new Error("Auth code not found");
-  }
-
   const emailHtml = generateDomainPurchaseEmail({
     domainNameWithTLD: domain[0].nameWithTld,
-    authCode: authCode[0].code,
   });
 
   const { data, error } = await resend.emails.send({
