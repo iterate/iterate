@@ -400,13 +400,15 @@ export const integrationsPlugin = () =>
                 emailVerified: true,
               });
 
-              const emailDomain = userInfo.user.email.split("@")[1];
-              const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
+              if (env.ADMIN_EMAIL_HOSTS) {
+                const emailDomain = userInfo.user.email.split("@")[1];
+                const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
 
-              if (emailDomain && adminHosts.includes(emailDomain)) {
-                await ctx.context.internalAdapter.updateUser(user.id, {
-                  role: "admin",
-                });
+                if (emailDomain && adminHosts.includes(emailDomain)) {
+                  await ctx.context.internalAdapter.updateUser(user.id, {
+                    role: "admin",
+                  });
+                }
               }
             }
 
