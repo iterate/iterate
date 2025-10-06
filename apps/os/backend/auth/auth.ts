@@ -27,6 +27,14 @@ export const getAuth = (db: DB) =>
       provider: "pg",
       schema,
     }),
+    user: {
+      additionalFields: {
+        debugMode: {
+          type: "boolean",
+          defaultValue: false,
+        },
+      },
+    },
     account: {
       accountLinking: {
         enabled: true,

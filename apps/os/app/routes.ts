@@ -5,6 +5,9 @@ export default [
   route("/login", "./routes/login.tsx"),
   route("/no-access", "./routes/no-access.tsx"),
 
+  // User settings route (requires auth but no specific org/estate context)
+  route("/user-settings", "./routes/user-settings.tsx"),
+
   // Root index - will handle redirect logic to org/estate routes
   index("./routes/root-redirect.tsx"),
 

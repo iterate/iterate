@@ -30,6 +30,7 @@ export const user = pgTable("user", (t) => ({
   image: t.text(),
   // https://www.better-auth.com/docs/plugins/admin#schema
   role: t.text().default("user"),
+  debugMode: t.boolean().default(false),
   banned: t.boolean(),
   banReason: t.text(),
   banExpires: t.timestamp(),
