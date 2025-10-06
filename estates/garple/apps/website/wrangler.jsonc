@@ -5,6 +5,9 @@
   "compatibility_date": "2025-08-13",
   "compatibility_flags": ["nodejs_compat_v2"],
   "main": "./backend/worker.ts",
+  "observability": {
+    "enabled": true,
+  },
   "assets": {
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
