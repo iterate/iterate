@@ -86,4 +86,11 @@ export const slackAgentTools = defineDOTools({
         ),
     }),
   },
+
+  uploadAndShareFileInSlack: {
+    description: "DO NOT USE - this is just here so old agents don't get bricked",
+    input: z.object({
+      iterateFileId: z.string().describe("The ID of the file to upload"),
+    }),
+  },
 });

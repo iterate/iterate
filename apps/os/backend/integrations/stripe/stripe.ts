@@ -297,9 +297,7 @@ export async function trackTokenUsageInStripe(params: {
   ]);
 
   results.forEach((result, index) => {
-    if (result.status === "fulfilled") {
-      logger.info("Stripe meter event success");
-    } else {
+    if (result.status === "rejected") {
       logger.error("Stripe meter event failed", {
         error: result.reason,
         payload: payloads[index],
