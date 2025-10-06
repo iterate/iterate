@@ -796,7 +796,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     } satisfies MagicAgentInstructions;
   }
 
-  private async shareFileWithSlack(params: {
+  async shareFileWithSlack(params: {
     iterateFileId: string;
     originalFilename?: string | null;
   }) {
