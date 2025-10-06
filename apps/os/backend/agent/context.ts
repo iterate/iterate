@@ -352,7 +352,8 @@ function parseHm(hhmm: string): number {
  * Parses front matter from a file content string.
  * Front matter is delimited by triple dashes (---) at the start of the file.
  * Returns the parsed front matter object and the remaining content.
- * The match field is automatically converted using parseFrontMatterMatch.
+ * The match field is automatically converted: strings become jsonata expressions,
+ * objects are treated as ContextRuleMatcher directly.
  */
 export function parseFrontMatter(content: string): { frontMatter: Record<string, unknown>; body: string } {
   const trimmedContent = content.trim();
@@ -382,33 +383,17 @@ export function parseFrontMatter(content: string): { frontMatter: Record<string,
     const frontMatter = parseYaml(frontMatterText) as Record<string, unknown>;
     const result = frontMatter || {};
     
-    if (result.match !== undefined) {
-      result.match = parseFrontMatterMatch(result.match);
+    if (result.match !== undefined && result.match !== null) {
+      if (typeof result.match === "string") {
+        result.match = { type: "jsonata", expression: result.match };
+      }
     }
     
     return { frontMatter: result, body };
   } catch (error) {
-    logger.warn(`Failed to parse front matter as YAML:`, error);
+    logger.error(`Failed to parse front matter as YAML:`, error);
     return { frontMatter: {}, body: content };
   }
-}
-
-/**
- * Converts a match value from front matter into a proper ContextRuleMatcher.
- * Handles two cases:
- * 1. If match is a string, treat it as a jsonata expression (JSON data matcher)
- * 2. If match is an object, treat it as a ContextRuleMatcher directly
- */
-export function parseFrontMatterMatch(match: unknown): ContextRuleMatcher | undefined {
-  if (match === undefined || match === null) {
-    return undefined;
-  }
-  
-  if (typeof match === "string") {
-    return { type: "jsonata", expression: match };
-  }
-  
-  return match as ContextRuleMatcher;
 }
 
 /**
