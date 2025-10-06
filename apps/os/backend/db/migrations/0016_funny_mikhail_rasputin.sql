@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "debug_mode" boolean DEFAULT false;

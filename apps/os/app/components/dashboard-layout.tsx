@@ -14,6 +14,8 @@ import {
   Shield,
   UserCog,
   CreditCard,
+  User,
+  Bug,
 } from "lucide-react";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -37,6 +39,7 @@ import {
   SidebarGroupContent,
 } from "../components/ui/sidebar.tsx";
 import { Avatar, AvatarFallback, AvatarImage } from "../components/ui/avatar.tsx";
+import { Badge } from "../components/ui/badge.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -174,6 +177,12 @@ function UserSwitcher() {
               </DropdownMenuItem>
             )}
             {(impersonation.isAdmin || impersonation.impersonatedBy) && <DropdownMenuSeparator />}
+            <DropdownMenuItem asChild>
+              <Link to="/user-settings">
+                <User className="mr-2 h-4 w-4" />
+                <span>User Settings</span>
+              </Link>
+            </DropdownMenuItem>
             <DropdownMenuItem onClick={handleLogout}>
               <LogOut className="mr-2 h-4 w-4" />
               <span>Log out</span>
@@ -240,6 +249,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const trpc = useTRPC();
   const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions({ organizationId }));
   const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   // Only connect websocket if we're in an estate context
   const ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
@@ -270,6 +280,16 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <OrganizationSwitcher />
           </SidebarHeader>
           <SidebarContent>
+            {/* Debug Mode Badge */}
+            {user.debugMode && (
+              <div className="px-3 pb-2">
+                <Badge variant="secondary" className="text-xs">
+                  <Bug className="mr-1 h-3 w-3" />
+                  DEBUG MODE
+                </Badge>
+              </div>
+            )}
+
             {/* Estate Navigation - One section per estate */}
             {estates?.map((estate: Estate) => (
               <SidebarGroup key={estate.id}>
