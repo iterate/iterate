@@ -8,7 +8,7 @@ permissions:
   deployments: write
 
 jobs:
-  deploy:
+  deploy-os:
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - name: Checkout code
@@ -51,11 +51,36 @@ jobs:
         with:
           platforms: all
 
-      - name: Deploy
+      - name: Deploy OS
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run deploy
         working-directory: apps/os
+
+  deploy-website:
+    runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+
+      - name: Setup Doppler
+        run: doppler setup --config 'prd' --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
       - name: Deploy Website
         env:
