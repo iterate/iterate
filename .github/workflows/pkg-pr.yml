@@ -34,8 +34,13 @@ jobs:
         run: pnpx --package @arethetypeswrong/cli attw --pack --profile esm-only
         working-directory: packages/sdk
 
-      - name: Publish SDK package
-        run: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk
+      - name: Publish SDK package with retries
+        uses: nick-fields/retry@v3
+        with:
+          timeout_seconds: 30
+          max_attempts: 3
+          retry_wait_seconds: 5
+          command: pnpx pkg-pr-new publish --comment=off --bin --pnpm ./packages/sdk
 
   sync-estate-template-to-repo:
     runs-on: ubuntu-24.04
