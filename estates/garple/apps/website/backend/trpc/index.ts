@@ -4,7 +4,7 @@ import { createRouter } from "./trpc.ts";
 
 export const appRouter = createRouter({
   domains: domainsRouter,
-  webhooks: webhooksRouter
+  webhooks: webhooksRouter,
 });
 
 export type AppRouter = typeof appRouter;

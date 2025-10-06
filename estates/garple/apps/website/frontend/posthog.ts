@@ -5,6 +5,6 @@ export function initPostHog() {
     api_host: "https://eu.i.posthog.com",
     defaults: "2025-05-24",
     person_profiles: "always",
-    capture_exceptions: true
+    capture_exceptions: true,
   });
 }
