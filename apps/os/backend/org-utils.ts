@@ -109,26 +109,16 @@ function isTestSignup(
 
   const patterns = raw
     .split(",")
-    .map((s) => s.trim())
+    .map((s) => s.trim().toLowerCase())
     .filter((s) => s.length > 0);
 
   if (patterns.length === 0) return false;
 
-  const valuesToTest = [userName, organizationName, userEmail ?? ""].filter((v) => v.length > 0);
-  if (valuesToTest.length === 0) return false;
+  const valuesToTest = [userName, organizationName, userEmail ?? ""].map((v) => v.toLowerCase());
 
   for (const pattern of patterns) {
-    let regex: RegExp | undefined;
-    try {
-      // Allow bare patterns; default to case-insensitive
-      regex = new RegExp(pattern, "i");
-    } catch {
-      // Skip invalid patterns
-      continue;
-    }
-
     for (const value of valuesToTest) {
-      if (regex.test(value)) return true;
+      if (value.includes(pattern)) return true;
     }
   }
   return false;
