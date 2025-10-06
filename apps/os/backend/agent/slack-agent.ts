@@ -9,7 +9,7 @@ import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import {
   getSlackAccessTokenForEstate,
-  getUserSlackAccessTokenForEstate,
+  getUserSlackSearchAccessTokenForEstate,
 } from "../auth/token-utils.ts";
 import {
   slackWebhookEvent,
@@ -862,18 +862,25 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   // TODO: once we get access to the Slack Data Access API, we can use their semantic search in combination with full-text search
   async searchSlackHistory(input: Inputs["searchSlackHistory"]) {
-    const userSlackAccessToken = await getUserSlackAccessTokenForEstate(
+    const userSlackAccessToken = await getUserSlackSearchAccessTokenForEstate(
       this.db,
       this.databaseRecord.estateId,
       input.onBehalfOfIterateUserId,
     );
     if (!userSlackAccessToken) {
-      const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
+      const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-search`;
       const state = generateRandomString(32);
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
       const data = JSON.stringify({
-        callbackURL: "https://iterate.com",
+        callbackURL: await this.getSlackPermalink(),
+        agentDurableObject: {
+          durableObjectName: this.hydrationInfo.durableObjectName,
+          className: "SlackAgent",
+        },
+        userId: input.onBehalfOfIterateUserId,
+        searchQuery: input.query,
+        estateId: this.databaseRecord.estateId,
       });
 
       await this.db.insert(schema.verification).values({
@@ -883,7 +890,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       });
 
       const userSlackOAuthUrl = await createAuthorizationURL({
-        id: "slack-bot",
+        id: "slack-search",
         options: {
           clientId: env.SLACK_CLIENT_ID,
           clientSecret: env.SLACK_CLIENT_SECRET,

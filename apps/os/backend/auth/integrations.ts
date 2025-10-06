@@ -42,7 +42,12 @@ export const SLACK_BOT_SCOPES = [
   "assistant:write",
 ];
 
-export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email", "search:read"];
+export const SLACK_USER_AUTH_SCOPES = [
+  "identity.email",
+  "identity.basic",
+  "identity.team",
+  "identity.avatar",
+];
 
 export const integrationsPlugin = () =>
   ({
@@ -200,7 +205,7 @@ export const integrationsPlugin = () =>
             scopes: SLACK_BOT_SCOPES,
             state,
             additionalParams: {
-              user_scope: SLACK_USER_AUTH_SCOPES.join(" "),
+              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
             },
           });
 
@@ -284,11 +289,162 @@ export const integrationsPlugin = () =>
             scopes: SLACK_BOT_SCOPES,
             state,
             additionalParams: {
-              user_scope: SLACK_USER_AUTH_SCOPES.join(" "),
+              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
             },
           });
 
           return ctx.json({ url });
+        },
+      ),
+      callbackSlackSearch: createAuthEndpoint(
+        "/integrations/callback/slack-search",
+        {
+          method: "GET",
+          query: z.object({
+            error: z.string().optional(),
+            error_description: z.string().optional(),
+            code: z.string(),
+            state: z.string(),
+          }),
+          use: [sessionMiddleware],
+        },
+        async (ctx) => {
+          const { code, state: stateId, error, error_description } = ctx.query;
+          const session = ctx.context.session;
+
+          if (error) {
+            return ctx.json(
+              {
+                error: "OAuth authorization failed",
+                details: { error, error_description },
+              },
+              { status: 400 },
+            );
+          }
+
+          const {
+            env,
+            var: { db },
+          } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+
+          const value = await ctx.context.internalAdapter.findVerificationValue(stateId);
+          if (!value) {
+            return ctx.json({ error: "Invalid state" }, { status: 400 });
+          }
+
+          const stateData = JSON.parse(value.value);
+          const callbackURL = stateData.callbackURL || import.meta.env.VITE_PUBLIC_URL;
+          const agentDurableObject = stateData.agentDurableObject;
+          const userId = stateData.userId;
+          const searchQuery = stateData.searchQuery;
+          const estateId = stateData.estateId;
+
+          await ctx.context.internalAdapter.deleteVerificationValue(stateId);
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-search`;
+          const unauthedSlackClient = new WebClient();
+
+          const tokens = await unauthedSlackClient.oauth.v2.access({
+            client_id: env.SLACK_CLIENT_ID,
+            client_secret: env.SLACK_CLIENT_SECRET,
+            code: code,
+            redirect_uri: redirectURI,
+          });
+
+          if (!tokens || !tokens.ok || !tokens.authed_user || !tokens.authed_user.access_token) {
+            return ctx.json({ error: "Failed to get tokens", details: tokens.error });
+          }
+
+          const userSlackClient = new WebClient(tokens.authed_user.access_token);
+          const userInfo = await userSlackClient.users.identity({});
+
+          if (
+            !userInfo ||
+            !userInfo.ok ||
+            !userInfo.user ||
+            !userInfo.user.email ||
+            !userInfo.user.id
+          ) {
+            return ctx.json({ error: "Failed to get user info", details: userInfo.error });
+          }
+
+          // Verify the user matches the session
+          if (userInfo.user.email !== session.user.email) {
+            return ctx.json({ error: "User mismatch" }, { status: 403 });
+          }
+
+          // Create or update search-specific account
+          const existingSearchAccount = await db.query.account.findFirst({
+            where: and(
+              eq(schema.account.providerId, "slack-search"),
+              eq(schema.account.userId, session.user.id),
+            ),
+          });
+
+          let accountId: string;
+          if (existingSearchAccount) {
+            await ctx.context.internalAdapter.updateAccount(existingSearchAccount.id, {
+              accessToken: tokens.authed_user.access_token,
+              scope: "search:read",
+              accountId: userInfo.user.id,
+            });
+            accountId = existingSearchAccount.id;
+          } else {
+            const newAccount = await ctx.context.internalAdapter.createAccount({
+              providerId: "slack-search",
+              accountId: userInfo.user.id,
+              userId: session.user.id,
+              accessToken: tokens.authed_user.access_token,
+              scope: "search:read",
+            });
+            accountId = newAccount.id;
+          }
+
+          // Link account to estate if we have an estateId
+          if (estateId) {
+            const existingPermission = await db.query.estateAccountsPermissions.findFirst({
+              where: and(
+                eq(schema.estateAccountsPermissions.accountId, accountId),
+                eq(schema.estateAccountsPermissions.estateId, estateId),
+              ),
+            });
+
+            if (!existingPermission) {
+              await db.insert(schema.estateAccountsPermissions).values({
+                accountId,
+                estateId,
+              });
+            }
+          }
+
+          // Trigger the agent to resume now that we have the search token
+          if (agentDurableObject) {
+            const params = {
+              db,
+              agentInstanceName: agentDurableObject.durableObjectName,
+            };
+            const agentStub = await SlackAgent.getStubByName(params);
+
+            // Send developer message to inform the agent that search permission was granted
+            await agentStub.addEvents([
+              {
+                type: "CORE:LLM_INPUT_ITEM",
+                data: {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: "The user has granted Slack search permissions. Please retry the search query now.",
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              },
+            ]);
+          }
+
+          return ctx.redirect(callbackURL);
         },
       ),
       callbackSlack: createAuthEndpoint(
@@ -345,44 +501,58 @@ export const integrationsPlugin = () =>
             redirect_uri: redirectURI,
           });
 
-          if (!tokens || !tokens.ok || !tokens.authed_user || !tokens.authed_user.access_token) {
+          if (
+            !tokens.ok ||
+            !tokens.authed_user ||
+            !tokens.authed_user.access_token ||
+            !tokens.bot_user_id ||
+            !tokens.team?.id
+          ) {
             return ctx.json({ error: "Failed to get tokens", details: tokens.error });
           }
 
-          // Bot access is optional
-          const hasBotAccess = tokens.bot_user_id && tokens.team?.id;
+          if (!tokens || !tokens.access_token || !tokens.authed_user.access_token) {
+            return ctx.json({ error: "Failed to get tokens" });
+          }
 
           const userSlackClient = new WebClient(tokens.authed_user.access_token);
 
-          const userInfo = await userSlackClient.openid.connect.userInfo({});
+          const userInfo = await userSlackClient.users.identity({});
 
-          // OpenID Connect returns data in the format: { sub, email, name, picture }
-          if (!userInfo || !userInfo.ok || !userInfo.email || !userInfo.sub) {
+          if (
+            !userInfo ||
+            !userInfo.ok ||
+            !userInfo.user ||
+            !userInfo.user.email ||
+            !userInfo.user.id
+          ) {
             return ctx.json({ error: "Failed to get user info", details: userInfo.error });
           }
 
-          const botUserId = tokens.bot_user_id; // May be undefined if no bot access
+          const botUserId = tokens.bot_user_id;
 
           let user: User | null = null;
 
           if (!link) {
-            const existingUser = await ctx.context.internalAdapter.findUserByEmail(userInfo.email);
+            const existingUser = await ctx.context.internalAdapter.findUserByEmail(
+              userInfo.user.email,
+            );
             if (existingUser) {
               await ctx.context.internalAdapter.updateUser(existingUser.user.id, {
-                name: userInfo.name,
-                image: userInfo.picture,
+                name: userInfo.user.name,
+                image: userInfo.user.image_192,
               });
               user = existingUser.user;
             } else {
               user = await ctx.context.internalAdapter.createUser({
-                email: userInfo.email,
-                name: userInfo.name || "",
-                image: userInfo.picture,
+                email: userInfo.user.email,
+                name: userInfo.user.name || "",
+                image: userInfo.user.image_192,
                 emailVerified: true,
               });
 
               if (env.ADMIN_EMAIL_HOSTS) {
-                const emailDomain = userInfo.email.split("@")[1];
+                const emailDomain = userInfo.user.email.split("@")[1];
                 const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
 
                 if (emailDomain && adminHosts.includes(emailDomain)) {
@@ -393,6 +563,27 @@ export const integrationsPlugin = () =>
               }
             }
 
+            const existingUserAccount = existingUser?.accounts.find(
+              (account) => account.providerId === "slack",
+            );
+            if (existingUserAccount) {
+              await ctx.context.internalAdapter.updateAccount(existingUserAccount.id, {
+                accessToken: tokens.authed_user.access_token,
+                scope: SLACK_USER_AUTH_SCOPES.join(","),
+                accountId: tokens.authed_user.id,
+              });
+            } else {
+              await ctx.context.internalAdapter.createAccount({
+                providerId: "slack",
+                accountId: userInfo.user.id,
+                userId: user.id,
+                accessToken: tokens.authed_user.access_token,
+                scope: SLACK_USER_AUTH_SCOPES.join(","),
+              });
+            }
+
+            // When a user is created, an estate and organization is created automatically via hooks
+            // SO we can be sure that the user has only that estate
             const memberships = await db.query.organizationUserMembership.findFirst({
               where: eq(schema.organizationUserMembership.userId, user.id),
               columns: {},
@@ -417,200 +608,88 @@ export const integrationsPlugin = () =>
               });
             }
 
-            // If the estate id is not set, set it to the first estate in the organization
-            if (!estateId && memberships.organization.estates.length > 0) {
-              estateId = memberships.organization.estates[0].id;
-            }
-
-            // Handle Slack account creation/update
-            let userSlackAccountId: string;
-
-            // Check if user already has a Slack account in the database
-            const existingSlackAccount = await db.query.account.findFirst({
-              where: and(
-                eq(schema.account.providerId, "slack"),
-                eq(schema.account.userId, user.id),
-              ),
-            });
-
-            if (existingSlackAccount) {
-              // Update existing account
-              await ctx.context.internalAdapter.updateAccount(existingSlackAccount.id, {
-                accessToken: tokens.authed_user.access_token,
-                scope: SLACK_USER_AUTH_SCOPES.join(","),
-                accountId: userInfo.sub,
-              });
-              userSlackAccountId = existingSlackAccount.id;
-            } else {
-              // Create new account
-              const newAccount = await ctx.context.internalAdapter.createAccount({
-                providerId: "slack",
-                accountId: userInfo.sub,
-                userId: user.id,
-                accessToken: tokens.authed_user.access_token,
-                scope: SLACK_USER_AUTH_SCOPES.join(","),
-              });
-              userSlackAccountId = newAccount.id;
-            }
-
-            if (estateId) {
-              await db
-                .insert(schema.estateAccountsPermissions)
-                .values({
-                  accountId: userSlackAccountId,
-                  estateId: estateId,
-                })
-                .onConflictDoNothing(); // This handles if the permission already exists
-            }
-
-            if (hasBotAccess && tokens.access_token && estateId) {
-              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
-            }
-
             const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
             await setSessionCookie(ctx, {
               session,
               user,
             });
+
+            // If the estate id is not set, set it to the first estate in the organization
+            if (!estateId) {
+              estateId = memberships.organization.estates[0].id;
+            }
           } else {
             const linkedUser = await ctx.context.internalAdapter.findUserByEmail(link.email);
             if (!linkedUser) {
               return ctx.json({ error: "Can't find the existing user to link to" });
             }
             user = linkedUser.user;
-
-            // If no estateId provided (e.g., direct login), get the user's first estate
-            if (!estateId) {
-              const userMemberships = await db.query.organizationUserMembership.findFirst({
-                where: eq(schema.organizationUserMembership.userId, user.id),
-                columns: {},
-                with: {
-                  organization: {
-                    columns: {},
-                    with: {
-                      estates: {
-                        columns: {
-                          id: true,
-                        },
-                      },
-                    },
-                  },
-                },
-              });
-
-              if (userMemberships && userMemberships.organization.estates.length > 0) {
-                estateId = userMemberships.organization.estates[0].id;
-              }
-            }
-
-            // Create or update the Slack account for the linked user
-            const existingLinkedSlackAccount = await db.query.account.findFirst({
-              where: and(
-                eq(schema.account.providerId, "slack"),
-                eq(schema.account.userId, user.id),
-              ),
-            });
-
-            let linkedUserSlackAccountId: string;
-
-            if (existingLinkedSlackAccount) {
-              await ctx.context.internalAdapter.updateAccount(existingLinkedSlackAccount.id, {
-                accessToken: tokens.authed_user.access_token,
-                scope: SLACK_USER_AUTH_SCOPES.join(","),
-                accountId: userInfo.sub,
-              });
-              linkedUserSlackAccountId = existingLinkedSlackAccount.id;
-            } else {
-              const newLinkedAccount = await ctx.context.internalAdapter.createAccount({
-                providerId: "slack",
-                accountId: userInfo.sub,
-                userId: user.id,
-                accessToken: tokens.authed_user.access_token,
-                scope: SLACK_USER_AUTH_SCOPES.join(","),
-              });
-              linkedUserSlackAccountId = newLinkedAccount.id;
-            }
-
-            if (estateId) {
-              await db
-                .insert(schema.estateAccountsPermissions)
-                .values({
-                  accountId: linkedUserSlackAccountId,
-                  estateId: estateId,
-                })
-                .onConflictDoNothing(); // This handles if the permission already exists
-            }
-
-            // Only sync Slack users if we have bot access
-            if (hasBotAccess && tokens.access_token && estateId) {
-              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
-            }
           }
 
           if (!user) {
             return ctx.json({ error: "Failed to get user" });
           }
 
-          // Only handle bot account and related setup if we have bot access AND estate context
-          if (hasBotAccess && botUserId && estateId) {
-            let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
-            if (botAccount) {
-              await ctx.context.internalAdapter.updateAccount(botAccount.id, {
-                accessToken: tokens.access_token,
-                scope: SLACK_BOT_SCOPES.join(","),
-                accountId: botUserId,
-              });
-            } else {
-              botAccount = await ctx.context.internalAdapter.createAccount({
-                providerId: "slack-bot",
-                userId: user.id,
-                accessToken: tokens.access_token,
-                scope: SLACK_BOT_SCOPES.join(","),
-                accountId: botUserId,
-              });
-            }
+          let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          if (botAccount) {
+            await ctx.context.internalAdapter.updateAccount(botAccount.id, {
+              accessToken: tokens.access_token,
+              scope: SLACK_BOT_SCOPES.join(","),
+              accountId: botUserId,
+            });
+          } else {
+            botAccount = await ctx.context.internalAdapter.createAccount({
+              providerId: "slack-bot",
+              userId: user.id,
+              accessToken: tokens.access_token,
+              scope: SLACK_BOT_SCOPES.join(","),
+              accountId: botUserId,
+            });
+          }
 
-            if (!botAccount) {
-              return ctx.json({ error: "Failed to get account id" });
-            }
+          if (!botAccount) {
+            return ctx.json({ error: "Failed to get account id" });
+          }
 
-            if (tokens.access_token) {
-              waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
-            }
+          if (!estateId) {
+            return ctx.json({ error: "Failed to get estate id" });
+          }
 
-            await db
-              .insert(schema.estateAccountsPermissions)
-              .values({
-                accountId: botAccount.id,
-                estateId,
-              })
-              .onConflictDoNothing();
+          // Sync Slack users to the organization in the background
+          waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
 
-            await db
-              .insert(schema.providerEstateMapping)
-              .values({
-                internalEstateId: estateId,
-                externalId: tokens.team!.id!, // We know team exists because hasBotAccess checked it
-                providerId: "slack-bot",
+          await db
+            .insert(schema.estateAccountsPermissions)
+            .values({
+              accountId: botAccount.id,
+              estateId,
+            })
+            .onConflictDoNothing();
+
+          await db
+            .insert(schema.providerEstateMapping)
+            .values({
+              internalEstateId: estateId,
+              externalId: tokens.team?.id,
+              providerId: "slack-bot",
+              providerMetadata: {
+                botUserId,
+                team: tokens.team,
+              },
+            })
+            .onConflictDoUpdate({
+              target: [
+                schema.providerEstateMapping.providerId,
+                schema.providerEstateMapping.externalId,
+              ],
+              set: {
+                internalEstateId: estateId, // We may want to require a confirmation to change the estate
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
                 },
-              })
-              .onConflictDoUpdate({
-                target: [
-                  schema.providerEstateMapping.providerId,
-                  schema.providerEstateMapping.externalId,
-                ],
-                set: {
-                  internalEstateId: estateId, // We may want to require a confirmation to change the estate
-                  providerMetadata: {
-                    botUserId,
-                    team: tokens.team,
-                  },
-                },
-              });
-          }
+              },
+            });
 
           if (!callbackURL) {
             return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);

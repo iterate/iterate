@@ -22,7 +22,7 @@
     "docker:clean": "docker compose down -v",
     "db:migrate": "pnpm -r db:migrate",
     "db:generate": "pnpm -r db:generate",
-    "db:studio": "pnpm -r --parallel db:studio",
+    "db:studio": "pnpm run --filter ./apps/os db:studio",
     "db:studio:production": "PSCALE_DATABASE_URL=$(doppler secrets --config prd get --plain DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING) pnpm db:studio",
     "clean": "rm -rf ./**/node_modules",
     "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",

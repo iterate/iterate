@@ -45,6 +45,26 @@ export const getUserSlackAccessTokenForEstate = async (
   return result[0]?.accessToken || null;
 };
 
+export const getUserSlackSearchAccessTokenForEstate = async (
+  db: DB,
+  estateId: string,
+  userId: string,
+) => {
+  const result = await db
+    .select({ accessToken: schema.account.accessToken })
+    .from(schema.estateAccountsPermissions)
+    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+    .where(
+      and(
+        eq(schema.estateAccountsPermissions.estateId, estateId),
+        eq(schema.account.providerId, "slack-search"),
+        eq(schema.account.userId, userId),
+      ),
+    )
+    .limit(1);
+  return result[0]?.accessToken || null;
+};
+
 export const GithubUserAccessTokenResponse = z.object({
   access_token: z.string(),
   expires_in: z.number(),
