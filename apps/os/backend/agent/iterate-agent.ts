@@ -3,6 +3,9 @@ import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
+import { zipSync, strToU8 } from "fflate";
+import { typeid } from "typeid-js";
+import { permalink as getPermalink } from "braintrust/browser";
 
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
@@ -16,7 +19,7 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 
 // Local imports
-import { agentInstance, agentInstanceRoute, UserRole } from "../db/schema.ts";
+import { agentInstance, agentInstanceRoute, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
@@ -30,6 +33,7 @@ import { searchWeb, getURLContent } from "../default-tools.ts";
 import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -518,7 +522,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           estateName: estate.name,
           posthog: {
             projectName: this.env.PROJECT_NAME,
-            traceId: `${this.constructor.name}-${this.name}`,
+            traceId: this.posthogTraceId,
           },
           env: {
             BRAINTRUST_API_KEY: this.env.BRAINTRUST_API_KEY,
@@ -961,6 +965,130 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // get the braintrust parent span exported id from the state
   async getBraintrustParentSpanExportedId() {
     return this.state.braintrustParentSpanExportedId;
+  }
+
+  get posthogTraceId() {
+    return `${this.constructor.name}-${this.name}`;
+  }
+
+  async exportTrace(opts?: { user?: typeof schema.user.$inferSelect }): Promise<string> {
+    const exportId = typeid("export").toString();
+    const events = this.getEvents();
+
+    const fullEstate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+    });
+    if (!fullEstate) {
+      throw new Error("Estate not found");
+    }
+
+    const organizationRecord = await this.db.query.organization.findFirst({
+      where: eq(schema.organization.id, fullEstate.organizationId),
+    });
+    if (!organizationRecord) {
+      throw new Error("Organization not found");
+    }
+
+    const iterateConfigRecord = await this.db.query.iterateConfig.findFirst({
+      where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
+    });
+
+    const fileIds = new Set<string>();
+    for (const event of events) {
+      if (event.type === "CORE:FILE_SHARED" && event.data?.iterateFileId) {
+        fileIds.add(event.data.iterateFileId);
+      }
+    }
+
+    const fileMap: Record<
+      string,
+      {
+        content: Uint8Array;
+        metadata: FileMetadata;
+      }
+    > = {};
+
+    for (const fileId of fileIds) {
+      const r2Key = `files/${fileId}`;
+      const object = await this.env.ITERATE_FILES.get(r2Key);
+
+      if (!object) {
+        throw new Error(`File not found in storage: ${fileId}`);
+      }
+
+      const response = new Response(object.body);
+      const arrayBuffer = await response.arrayBuffer();
+      const [fileRecord] = await this.db.select().from(files).where(eq(files.id, fileId)).limit(1);
+
+      if (!fileRecord) {
+        throw new Error(`File record not found for export: ${fileId}`);
+      }
+
+      if (fileRecord.status !== "completed") {
+        throw new Error(`File record not completed for export: ${fileId}`);
+      }
+
+      fileMap[fileId] = {
+        content: new Uint8Array(arrayBuffer),
+        metadata: fileRecord,
+      };
+    }
+
+    const braintrustPermalink = this.state.braintrustParentSpanExportedId
+      ? await getPermalink(this.state.braintrustParentSpanExportedId)
+      : undefined;
+
+    const debugUrl = `${this.env.VITE_PUBLIC_URL}/${this.databaseRecord.estateId}/agents/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}`;
+
+    const reducedStateSnapshots: Record<number, any> = {};
+    for (let i = 0; i < events.length; i++) {
+      reducedStateSnapshots[i] = await this.getReducedStateAtEventIndex(i);
+    }
+    const exportData: AgentTraceExport = {
+      version: "1.0.0",
+      exportedAt: new Date().toISOString(),
+      metadata: {
+        agentTraceExportId: exportId,
+        braintrustPermalink,
+        posthogTraceId: this.posthogTraceId,
+        debugUrl,
+        user: opts?.user ?? null,
+        estate: fullEstate,
+        organization: organizationRecord,
+        agentInstance: this.databaseRecord,
+        iterateConfig: iterateConfigRecord ?? null,
+      },
+      events,
+      fileMetadata: Object.fromEntries(
+        Object.entries(fileMap).map(([id, { metadata }]) => [id, metadata]),
+      ),
+      reducedStateSnapshots,
+    };
+
+    const archiveFiles: Record<string, Uint8Array> = {
+      "export.json": strToU8(JSON.stringify(exportData, null, 2)),
+    };
+
+    for (const [fileId, { content }] of Object.entries(fileMap)) {
+      archiveFiles[`files/${fileId}`] = content;
+    }
+
+    const compressed = zipSync(archiveFiles, { level: 6 });
+
+    const r2Key = `exports/${exportId}.zip`;
+    await this.env.ITERATE_FILES.put(r2Key, compressed, {
+      httpMetadata: {
+        contentType: "application/zip",
+      },
+      customMetadata: {
+        exportId,
+        estateId: this.databaseRecord.estateId,
+        exportedAt: new Date().toISOString(),
+      },
+    });
+
+    const downloadUrl = `/api/estate/${this.databaseRecord.estateId}/exports/${exportId}`;
+    return downloadUrl;
   }
 
   // get the braintrust parent span exported id from the state

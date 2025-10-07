@@ -58,6 +58,7 @@
     "hono": "^4.9.10",
     "input-otp": "^1.4.2",
     "isbot": "^5.1.31",
+    "fflate": "^0.8.2",
     "jose": "^6.1.0",
     "jsonata": "github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337",
     "lucide-react": "^0.544.0",

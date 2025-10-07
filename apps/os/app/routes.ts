@@ -50,7 +50,8 @@ export default [
         ...prefix("agents", [
           index("./routes/org/estate/agents/index.tsx"),
           route("start-slack", "./routes/org/estate/agents/start-slack.tsx"),
-          route(":agentClassName/:durableObjectName", "./routes/org/estate/agents/agents.tsx"),
+          route("offline", "./routes/offline-agent-detail.tsx"),
+          route(":agentClassName/:durableObjectName", "./routes/online-agent-detail.tsx"),
         ]),
       ]),
     ]),
