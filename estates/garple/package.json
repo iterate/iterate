@@ -28,14 +28,14 @@
   "scripts": {
     "dev": "cd apps/website && CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- vite dev",
     "build": "cd apps/website && doppler run -- vite build",
-    "deploy": "pnpm run build && cd apps/website && doppler run -- pnpx wrangler deploy",
+    "deploy": "pnpm run build && cd apps/website && doppler run -- wrangler deploy",
     "typecheck": "cd apps/website && tsc --noEmit",
     "test": "cd apps/website && vitest run --passWithNoTests",
     "lint": "cd apps/website && eslint . --fix",
     "lint:check": "cd apps/website && eslint . --max-warnings 0",
     "db:generate": "cd apps/website && drizzle-kit generate",
-    "db:migrate": "cd apps/website && doppler run -- pnpx wrangler d1 migrations apply estate-garple-production-garple-website-d1 --local",
-    "db:migrate:production": "cd apps/website && doppler run -- pnpx wrangler d1 migrations apply estate-garple-production-garple-website-d1 --remote",
+    "db:migrate": "cd apps/website && doppler run -- wrangler d1 migrations apply estate-garple-production-garple-website-d1 --local",
+    "db:migrate:production": "cd apps/website && doppler run -- wrangler d1 migrations apply estate-garple-production-garple-website-d1 --remote",
     "db:studio:garple": "cd apps/website && drizzle-kit studio"
   },
   "devDependencies": {
