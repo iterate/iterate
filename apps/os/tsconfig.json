@@ -4,7 +4,7 @@
     "target": "esnext",
     "types": ["@cloudflare/workers-types", "node", "vite/client"],
     "sourceMap": false,
-    "declaration": true,
+    "declaration": false, // turning this on breaks better-auth organization plugin
     "declarationMap": false,
     "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,

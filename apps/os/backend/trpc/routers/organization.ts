@@ -5,18 +5,18 @@ import { waitUntil } from "cloudflare:workers";
 import { protectedProcedure, router, orgProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
+import { getAuth } from "../../auth/auth.ts";
 
 export const organizationRouter = router({
   // List all organizations the user has access to
   list: protectedProcedure.query(async ({ ctx }) => {
-    const userOrganizations = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(schema.organizationUserMembership.userId, ctx.user.id),
-      with: {
-        organization: true,
-      },
+    const auth = getAuth(ctx.db);
+
+    const organizations = await auth.api.listOrganizations({
+      headers: ctx.headers,
     });
 
-    return userOrganizations.map(({ organization, role }) => ({
+    return organizations.map(({ organization, role }) => ({
       id: organization.id,
       name: organization.name,
       role,
@@ -35,9 +35,14 @@ export const organizationRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       // Create the organization
+      const organizationId = schema.organization.id.defaultFn!() as string;
       const [organization] = await ctx.db
         .insert(schema.organization)
-        .values({ name: input.name })
+        .values({
+          id: organizationId,
+          name: input.name,
+          slug: organizationId,
+        })
         .returning();
 
       if (!organization) {

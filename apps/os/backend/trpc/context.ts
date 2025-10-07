@@ -9,6 +9,7 @@ export async function createContext(
 ) {
   const { db, session } = c.var;
   return {
+    headers: c.req.raw.headers,
     db,
     session,
     user: session?.user || null,

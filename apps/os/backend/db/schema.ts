@@ -55,6 +55,9 @@ export const session = pgTable("session", (t) => ({
     .references(() => user.id, { onDelete: "cascade" }),
   // https://www.better-auth.com/docs/plugins/admin#schema
   impersonatedBy: t.text().references(() => user.id, { onDelete: "cascade" }),
+  // https://www.better-auth.com/docs/plugins/organization#schema
+  activeOrganizationId: t.text().references(() => organization.id, { onDelete: "set null" }),
+  activeEstateId: t.text().references(() => estate.id, { onDelete: "set null" }),
   ...withTimestamps,
 }));
 export const sessionRelations = relations(session, ({ one }) => ({
@@ -160,17 +163,23 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
+  estateMembers: many(estateMember),
+  invitations: many(invitation),
 }));
 
 export const organization = pgTable("organization", (t) => ({
   id: iterateId("org"),
   name: t.text().notNull(),
+  slug: t.text().notNull().unique(),
+  logo: t.text(),
+  metadata: t.jsonb().$type<Record<string, unknown>>(),
   stripeCustomerId: t.text(),
   ...withTimestamps,
 }));
 export const organizationRelations = relations(organization, ({ many }) => ({
   estates: many(estate),
   members: many(organizationUserMembership),
+  invitations: many(invitation),
 }));
 
 export const estateAccountsPermissions = pgTable(
@@ -280,6 +289,74 @@ export const organizationUserMembershipRelations = relations(
     }),
   }),
 );
+
+// Better Auth Organization Plugin Tables
+// https://www.better-auth.com/docs/plugins/organization#schema
+export const invitation = pgTable("invitation", (t) => ({
+  id: iterateId("inv"),
+  email: t.text().notNull(),
+  inviterId: t
+    .text()
+    .notNull()
+    .references(() => user.id, { onDelete: "cascade" }),
+  organizationId: t
+    .text()
+    .notNull()
+    .references(() => organization.id, { onDelete: "cascade" }),
+  role: t.text().notNull(),
+  status: t
+    .text({ enum: ["pending", "accepted", "rejected", "cancelled"] })
+    .notNull()
+    .default("pending"),
+  expiresAt: t.timestamp().notNull(),
+  // Map to estate instead of team
+  estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
+  ...withTimestamps,
+}));
+
+export const invitationRelations = relations(invitation, ({ one }) => ({
+  inviter: one(user, {
+    fields: [invitation.inviterId],
+    references: [user.id],
+  }),
+  organization: one(organization, {
+    fields: [invitation.organizationId],
+    references: [organization.id],
+  }),
+  estate: one(estate, {
+    fields: [invitation.estateId],
+    references: [estate.id],
+  }),
+}));
+
+// Estate members - maps to Better Auth's teamMember concept
+export const estateMember = pgTable(
+  "estate_member",
+  (t) => ({
+    id: iterateId("emem"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    userId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId, t.userId)],
+);
+
+export const estateMemberRelations = relations(estateMember, ({ one }) => ({
+  estate: one(estate, {
+    fields: [estateMember.estateId],
+    references: [estate.id],
+  }),
+  user: one(user, {
+    fields: [estateMember.userId],
+    references: [user.id],
+  }),
+}));
 
 export const agentInstance = pgTable(
   "agent_instance",

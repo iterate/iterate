@@ -3,6 +3,7 @@ import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { stripe } from "@better-auth/stripe";
+import { organization } from "better-auth/plugins";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
@@ -10,8 +11,8 @@ import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
 
-export const getAuth = (db: DB) =>
-  betterAuth({
+export function getAuth(db: DB) {
+  return betterAuth({
     baseURL: env.VITE_PUBLIC_URL,
     trustedOrigins: [
       env.VITE_PUBLIC_URL,
@@ -46,6 +47,32 @@ export const getAuth = (db: DB) =>
     plugins: [
       admin(),
       integrationsPlugin(),
+      organization({
+        schema: {
+          session: {
+            fields: {
+              activeTeamId: "activeEstateId",
+            },
+          },
+          invitation: {
+            fields: {
+              teamId: "estateId",
+            },
+          },
+          member: {
+            modelName: "organizationUserMembership",
+          },
+          team: {
+            modelName: "estate",
+          },
+          teamMember: {
+            modelName: "estateMember",
+            fields: {
+              teamId: "estateId",
+            },
+          },
+        },
+      }),
       // We don't use any of the better auth stripe plugin's database schema or
       // subscription / plan management features
       // But it's handy just for the webhook handling and for creating a customer portal
@@ -86,6 +113,7 @@ export const getAuth = (db: DB) =>
       },
     },
   });
+}
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;

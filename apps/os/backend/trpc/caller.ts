@@ -13,6 +13,7 @@ export const createTrpcCaller = (headers?: Headers) =>
         })
       : null;
     return {
+      headers,
       db,
       session,
       user: session?.user || null,

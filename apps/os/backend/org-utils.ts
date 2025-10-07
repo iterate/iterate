@@ -32,9 +32,15 @@ export const createUserOrganizationAndEstate = async (
   // Perform sequential inserts without opening a new transaction to avoid
   // cross-transaction FK visibility issues with the user record.
   // If the auth layer wraps this in a transaction, these operations will be part of it.
+  const organizationName = `${userName}'s Organization`;
+  const organizationId = schema.organization.id.defaultFn!() as string;
   const organizationResult = await db
     .insert(schema.organization)
-    .values({ name: `${userName}'s Organization` })
+    .values({
+      id: organizationId,
+      name: organizationName,
+      slug: organizationId,
+    })
     .returning();
 
   const organization = organizationResult[0];
