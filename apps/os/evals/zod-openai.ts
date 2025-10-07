@@ -8,7 +8,9 @@ export const zodTextFormat: typeof openAIBrokenZodTextFormatButWhichHasCorrectTy
 ) => {
   return {
     type: "json_schema",
-    schema: z.toJSONSchema(zodSchema),
+    schema: z.toJSONSchema(zodSchema as any),
     name,
-  } as ReturnType<typeof openAIBrokenZodTextFormatButWhichHasCorrectTypeScriptTypes> as never;
+  } as unknown as ReturnType<
+    typeof openAIBrokenZodTextFormatButWhichHasCorrectTypeScriptTypes
+  > as never;
 };
