@@ -43,6 +43,14 @@ export const slackUpdateSliceStateFields = {
   data: z.object({
     slackChannelId: z.string().nullable().optional(),
     slackThreadId: z.string().nullable().optional(),
+    slackChannel: z
+      .object({
+        name: z.string(),
+        isShared: z.boolean(),
+        isExtShared: z.boolean(),
+      })
+      .nullable()
+      .optional(),
   }),
 };
 
@@ -99,6 +107,11 @@ export type SlackSliceEventInput = z.input<typeof SlackEventInput>;
 export interface SlackSliceState {
   slackThreadId?: string | null;
   slackChannelId?: string | null;
+  slackChannel?: {
+    name: string;
+    isShared: boolean;
+    isExtShared: boolean;
+  } | null;
   botUserId?: string;
   typingIndicatorStatus?: string | null;
 }
@@ -117,6 +130,7 @@ export const slackSlice = defineAgentCoreSlice<{
   initialState: {
     slackThreadId: undefined,
     slackChannelId: undefined,
+    slackChannel: undefined,
     botUserId: undefined,
     typingIndicatorStatus: null,
   },
@@ -130,6 +144,9 @@ export const slackSlice = defineAgentCoreSlice<{
         }
         if (event.data.slackThreadId !== undefined) {
           next.slackThreadId = event.data.slackThreadId;
+        }
+        if (event.data.slackChannel !== undefined) {
+          next.slackChannel = event.data.slackChannel;
         }
         break;
       }

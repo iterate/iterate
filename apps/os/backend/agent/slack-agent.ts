@@ -6,6 +6,7 @@ import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import * as schema from "../db/schema.ts";
 import {
   slackWebhookEvent,
   providerUserMapping,
@@ -142,6 +143,22 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
+      getRuleMatchData: (state: CoreReducedState) => {
+        const slackState = state as SlackSliceState;
+
+        return {
+          agentCoreState: state,
+          durableObjectClassName: this.constructor.name,
+          slack: {
+            channelId: slackState.slackChannelId || null,
+            channelName: slackState.slackChannel?.name || null,
+            threadId: slackState.slackThreadId || null,
+            isSharedChannel: slackState.slackChannel
+              ? slackState.slackChannel.isShared || slackState.slackChannel.isExtShared
+              : null,
+          },
+        };
+      },
       onEventAdded: (payload: {
         event: AgentCoreEvent;
         reducedState: CoreReducedState;
@@ -517,11 +534,40 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   public async initSlack(channelId: string, threadTs: string) {
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
+
+    // Query database for channel info to populate state
+    let slackChannel: { name: string; isShared: boolean; isExtShared: boolean } | null = null;
+
+    try {
+      const channelMapping = await this.db.query.providerChannelMapping.findFirst({
+        where: and(
+          eq(schema.providerChannelMapping.providerId, "slack-bot"),
+          eq(schema.providerChannelMapping.externalId, channelId),
+        ),
+        columns: {
+          name: true,
+          isShared: true,
+          isExtShared: true,
+        },
+      });
+
+      if (channelMapping) {
+        slackChannel = {
+          name: channelMapping.name,
+          isShared: channelMapping.isShared,
+          isExtShared: channelMapping.isExtShared,
+        };
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch channel info during initialization for ${channelId}:`, error);
+    }
+
     events.push({
       type: "SLACK:UPDATE_SLICE_STATE",
       data: {
         slackChannelId: channelId,
         slackThreadId: threadTs,
+        slackChannel,
       },
       triggerLLMRequest: false,
     });

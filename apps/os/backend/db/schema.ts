@@ -4,7 +4,7 @@ import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
-export const UserRole = ["member", "admin", "owner", "guest"] as const;
+export const UserRole = ["member", "admin", "owner", "guest", "external"] as const;
 export type UserRole = (typeof UserRole)[number];
 
 export const withTimestamps = {
@@ -160,6 +160,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
+  providerChannelMapping: many(providerChannelMapping),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -243,6 +244,38 @@ export const providerEstateMapping = pgTable(
 export const providerEstateMappingRelations = relations(providerEstateMapping, ({ one }) => ({
   internalEstate: one(estate, {
     fields: [providerEstateMapping.internalEstateId],
+    references: [estate.id],
+  }),
+}));
+
+export const providerChannelMapping = pgTable(
+  "provider_channel_mapping",
+  (t) => ({
+    id: iterateId("pcm"),
+    providerId: t.text().notNull(),
+    internalEstateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    externalId: t.text().notNull(),
+    name: t.text().notNull(),
+    isShared: t.boolean().default(false).notNull(),
+    isExtShared: t.boolean().default(false).notNull(),
+    isPrivate: t.boolean().default(false).notNull(),
+    isArchived: t.boolean().default(false).notNull(),
+    providerMetadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.providerId, t.externalId),
+    index().on(t.internalEstateId),
+    index().on(t.name),
+  ],
+);
+
+export const providerChannelMappingRelations = relations(providerChannelMapping, ({ one }) => ({
+  internalEstate: one(estate, {
+    fields: [providerChannelMapping.internalEstateId],
     references: [estate.id],
   }),
 }));

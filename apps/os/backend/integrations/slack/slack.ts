@@ -230,14 +230,111 @@ export async function reactToSlackWebhook(
   }
 }
 
-export async function syncSlackUsersInBackground(db: DB, botToken: string, estateId: string) {
+/**
+ * Syncs Slack channels for an estate.
+ * Returns array of all channels and Set of shared channel IDs.
+ */
+export async function syncSlackChannels(
+  db: DB,
+  botToken: string,
+  estateId: string,
+): Promise<{
+  allChannels: Array<{ id: string; name: string; isShared: boolean; isExtShared: boolean }>;
+  sharedChannelIds: Set<string>;
+}> {
+  try {
+    const authedWebClient = new WebClient(botToken);
+    const channelsResponse = await authedWebClient.conversations.list({
+      types: "public_channel,private_channel",
+      exclude_archived: false,
+      limit: 200, // Max per page
+    });
+
+    if (!channelsResponse.ok || !channelsResponse.channels) {
+      logger.error(
+        "Failed to fetch Slack channels:",
+        channelsResponse.error || "No channels returned",
+      );
+      return { allChannels: [], sharedChannelIds: new Set() };
+    }
+
+    const channels = channelsResponse.channels.filter((c) => c.id && c.name);
+
+    if (channels.length === 0) {
+      logger.info("No valid Slack channels to sync");
+      return { allChannels: [], sharedChannelIds: new Set() };
+    }
+
+    await db.transaction(async (tx) => {
+      const channelMappings = channels.map((channel) => ({
+        providerId: "slack-bot" as const,
+        internalEstateId: estateId,
+        externalId: channel.id!,
+        name: channel.name!,
+        isShared: channel.is_shared ?? false,
+        isExtShared: channel.is_ext_shared ?? false,
+        isPrivate: channel.is_private ?? false,
+        isArchived: channel.is_archived ?? false,
+        providerMetadata: channel,
+      }));
+
+      if (channelMappings.length > 0) {
+        await tx
+          .insert(schema.providerChannelMapping)
+          .values(channelMappings)
+          .onConflictDoUpdate({
+            target: [
+              schema.providerChannelMapping.providerId,
+              schema.providerChannelMapping.externalId,
+            ],
+            set: {
+              name: sql`excluded.name`,
+              isShared: sql`excluded.is_shared`,
+              isExtShared: sql`excluded.is_ext_shared`,
+              isPrivate: sql`excluded.is_private`,
+              isArchived: sql`excluded.is_archived`,
+              providerMetadata: sql`excluded.provider_metadata`,
+            },
+          });
+      }
+
+      logger.info(`Synced ${channelMappings.length} Slack channels for estate ${estateId}`);
+    });
+
+    const allChannels = channels.map((c) => ({
+      id: c.id!,
+      name: c.name!,
+      isShared: c.is_shared ?? false,
+      isExtShared: c.is_ext_shared ?? false,
+    }));
+
+    const sharedChannelIds = new Set(
+      allChannels.filter((c) => c.isShared || c.isExtShared).map((c) => c.id),
+    );
+
+    return { allChannels, sharedChannelIds };
+  } catch (error) {
+    logger.error("Error syncing Slack channels:", error instanceof Error ? error.message : error);
+    throw error;
+  }
+}
+
+/**
+ * Syncs internal Slack workspace users for an estate.
+ * Returns Set of Slack user IDs that are internal to the workspace.
+ */
+export async function syncSlackUsersInBackground(
+  db: DB,
+  botToken: string,
+  estateId: string,
+): Promise<Set<string>> {
   try {
     const authedWebClient = new WebClient(botToken);
     const userListResponse = await authedWebClient.users.list({});
 
     if (!userListResponse.ok || !userListResponse.members) {
       logger.error("Failed to fetch Slack users:", userListResponse.error || "No members returned");
-      return;
+      return new Set();
     }
 
     // Filter out invalid members upfront
@@ -247,7 +344,7 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
 
     if (validMembers.length === 0) {
       logger.info("No valid Slack members to sync");
-      return;
+      return new Set();
     }
 
     await db.transaction(async (tx) => {
@@ -347,10 +444,256 @@ export async function syncSlackUsersInBackground(db: DB, botToken: string, estat
         `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
       );
     });
+
+    // Return Set of all internal user IDs for Slack Connect detection
+    return new Set(validMembers.map((m) => m.id!));
   } catch (error) {
     logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
     throw error;
   }
+}
+
+/**
+ * Orchestrates complete Slack sync for an estate:
+ * 1. Syncs channels (parallel with users)
+ * 2. Syncs internal workspace users (parallel with channels)
+ * 3. Syncs external Slack Connect users from shared channels (sequential)
+ */
+export async function syncSlackForEstateInBackground(
+  db: DB,
+  botToken: string,
+  estateId: string,
+): Promise<{
+  channels: { count: number; sharedCount: number };
+  users: { internalCount: number; externalCount: number };
+  errors: string[];
+}> {
+  try {
+    logger.info(`Starting complete Slack sync for estate ${estateId}`);
+
+    // Phase 1: Sync channels and internal users in parallel
+    const [channelsResult, internalUserIds] = await Promise.all([
+      syncSlackChannels(db, botToken, estateId),
+      syncSlackUsersInBackground(db, botToken, estateId),
+    ]);
+
+    const { sharedChannelIds } = channelsResult;
+
+    // Phase 2: Sync external users from shared channels (needs internal user IDs)
+    const externalUsersResult = await syncSlackConnectUsers(
+      db,
+      botToken,
+      estateId,
+      sharedChannelIds,
+      internalUserIds,
+    );
+
+    logger.info(
+      `Complete Slack sync finished for estate ${estateId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
+    );
+
+    return {
+      channels: {
+        count: channelsResult.allChannels.length,
+        sharedCount: sharedChannelIds.size,
+      },
+      users: {
+        internalCount: internalUserIds.size,
+        externalCount: externalUsersResult.externalUserCount,
+      },
+      errors: externalUsersResult.errors,
+    };
+  } catch (error) {
+    logger.error(
+      "Error in syncSlackForEstateInBackground:",
+      error instanceof Error ? error.message : error,
+    );
+    throw error;
+  }
+}
+
+/**
+ * Syncs Slack Connect (external) users from shared channels.
+ * Creates user records and marks them as "external" in organization membership.
+ */
+export async function syncSlackConnectUsers(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  sharedChannelIds: Set<string>,
+  internalUserIds: Set<string>,
+): Promise<{ externalUserCount: number; errors: string[] }> {
+  if (sharedChannelIds.size === 0) {
+    logger.info("No shared channels to sync external users from");
+    return { externalUserCount: 0, errors: [] };
+  }
+
+  const authedWebClient = new WebClient(botToken);
+  const errors: string[] = [];
+  const externalUsersByIdMap = new Map<string, { userInfo: any; discoveredInChannels: string[] }>();
+
+  // Fetch members for each shared channel in parallel
+  const channelMemberResults = await Promise.allSettled(
+    Array.from(sharedChannelIds).map(async (channelId) => {
+      try {
+        const membersResponse = await authedWebClient.conversations.members({
+          channel: channelId,
+          limit: 1000,
+        });
+
+        if (!membersResponse.ok || !membersResponse.members) {
+          throw new Error(
+            `Failed to fetch members for channel ${channelId}: ${membersResponse.error}`,
+          );
+        }
+
+        return { channelId, members: membersResponse.members };
+      } catch (error) {
+        const errorMsg = `Error fetching members for channel ${channelId}: ${error instanceof Error ? error.message : error}`;
+        logger.error(errorMsg);
+        errors.push(errorMsg);
+        return null;
+      }
+    }),
+  );
+
+  // Identify external users (not in internal user list)
+  for (const result of channelMemberResults) {
+    if (result.status === "fulfilled" && result.value) {
+      const { channelId, members } = result.value;
+
+      for (const memberId of members) {
+        if (!internalUserIds.has(memberId)) {
+          // This is an external user
+          if (externalUsersByIdMap.has(memberId)) {
+            // Already found in another channel
+            externalUsersByIdMap.get(memberId)!.discoveredInChannels.push(channelId);
+          } else {
+            externalUsersByIdMap.set(memberId, {
+              userInfo: null, // Will fetch later
+              discoveredInChannels: [channelId],
+            });
+          }
+        }
+      }
+    }
+  }
+
+  if (externalUsersByIdMap.size === 0) {
+    logger.info("No external Slack Connect users found in shared channels");
+    return { externalUserCount: 0, errors };
+  }
+
+  // Fetch user info for all external users in parallel
+  const userInfoResults = await Promise.allSettled(
+    Array.from(externalUsersByIdMap.keys()).map(async (userId) => {
+      try {
+        const userInfoResponse = await authedWebClient.users.info({ user: userId });
+        if (!userInfoResponse.ok || !userInfoResponse.user) {
+          throw new Error(`Failed to fetch user info: ${userInfoResponse.error}`);
+        }
+        return { userId, userInfo: userInfoResponse.user };
+      } catch (error) {
+        const errorMsg = `Error fetching user info for ${userId}: ${error instanceof Error ? error.message : error}`;
+        logger.error(errorMsg);
+        errors.push(errorMsg);
+        return null;
+      }
+    }),
+  );
+
+  // Update map with fetched user info
+  for (const result of userInfoResults) {
+    if (result.status === "fulfilled" && result.value) {
+      const { userId, userInfo } = result.value;
+      externalUsersByIdMap.get(userId)!.userInfo = userInfo;
+    }
+  }
+
+  // Insert/update external users in database
+  await db.transaction(async (tx) => {
+    const estate = await tx.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+      columns: { organizationId: true },
+    });
+
+    if (!estate) {
+      throw new Error(`Estate ${estateId} not found`);
+    }
+
+    for (const [externalUserId, { userInfo, discoveredInChannels }] of externalUsersByIdMap) {
+      if (!userInfo) {
+        logger.warn(`Skipping external user ${externalUserId} - no user info available`);
+        continue;
+      }
+
+      // Create synthetic email if real email not available
+      const email =
+        userInfo.profile?.email || `slack-connect-${externalUserId}@external.slack.iterate.com`;
+
+      // Create or get user
+      try {
+        await tx
+          .insert(schema.user)
+          .values({
+            name: userInfo.real_name || userInfo.name || "External User",
+            email: email,
+            emailVerified: false,
+            image: userInfo.profile?.image_192,
+          })
+          .onConflictDoNothing();
+      } catch (error) {
+        logger.error(`Error creating external user ${externalUserId}:`, error);
+        continue;
+      }
+
+      // Get the user we just created/found
+      const user = await tx.query.user.findFirst({
+        where: eq(schema.user.email, email),
+      });
+
+      if (!user) {
+        logger.error(`User not found after insert for email ${email}`);
+        continue;
+      }
+
+      // Upsert provider mapping
+      await tx
+        .insert(schema.providerUserMapping)
+        .values({
+          providerId: "slack-bot",
+          internalUserId: user.id,
+          externalId: externalUserId,
+          providerMetadata: {
+            ...userInfo,
+            isSlackConnect: true,
+            discoveredInChannels,
+          },
+        })
+        .onConflictDoUpdate({
+          target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+          set: {
+            providerMetadata: sql`excluded.provider_metadata`,
+          },
+        });
+
+      // Create organization membership with "external" role
+      await tx
+        .insert(schema.organizationUserMembership)
+        .values({
+          organizationId: estate.organizationId,
+          userId: user.id,
+          role: "external",
+        })
+        .onConflictDoNothing(); // Don't override if already a member with different role
+    }
+
+    logger.info(
+      `Synced ${externalUsersByIdMap.size} external Slack Connect users for estate ${estateId}`,
+    );
+  });
+
+  return { externalUserCount: externalUsersByIdMap.size, errors };
 }
 
 async function handleBotChannelJoin(params: {

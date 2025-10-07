@@ -15,7 +15,7 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
-import { syncSlackUsersInBackground } from "../integrations/slack/slack.ts";
+import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
@@ -480,8 +480,8 @@ export const integrationsPlugin = () =>
           }
 
           // For linking flow, connect everything now
-          // Sync Slack users to the organization in the background
-          waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+          // Sync Slack channels, users (internal and external) in the background
+          waitUntil(syncSlackForEstateInBackground(db, tokens.access_token, estateId));
 
           await db
             .insert(schema.estateAccountsPermissions)
