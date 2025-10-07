@@ -44,12 +44,7 @@ export const SLACK_BOT_SCOPES = [
   "assistant:write",
 ];
 
-export const SLACK_USER_AUTH_SCOPES = [
-  "identity.email",
-  "identity.basic",
-  "identity.team",
-  "identity.avatar",
-];
+export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];
 
 export const integrationsPlugin = () =>
   ({
@@ -363,21 +358,20 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get tokens", details: tokens.error });
           }
 
-          if (!tokens || !tokens.access_token || !tokens.authed_user.access_token) {
+          if (
+            !tokens ||
+            !tokens.access_token ||
+            !tokens.authed_user.access_token ||
+            !tokens.authed_user.id
+          ) {
             return ctx.json({ error: "Failed to get tokens" });
           }
 
           const userSlackClient = new WebClient(tokens.authed_user.access_token);
 
-          const userInfo = await userSlackClient.users.identity({});
+          const userInfo = await userSlackClient.openid.connect.userInfo({});
 
-          if (
-            !userInfo ||
-            !userInfo.ok ||
-            !userInfo.user ||
-            !userInfo.user.email ||
-            !userInfo.user.id
-          ) {
+          if (!userInfo || !userInfo.ok || !userInfo.email || !userInfo.sub) {
             return ctx.json({ error: "Failed to get user info", details: userInfo.error });
           }
 
@@ -386,25 +380,23 @@ export const integrationsPlugin = () =>
           let user: User | null = null;
 
           if (!link) {
-            const existingUser = await ctx.context.internalAdapter.findUserByEmail(
-              userInfo.user.email,
-            );
+            const existingUser = await ctx.context.internalAdapter.findUserByEmail(userInfo.email);
             if (existingUser) {
               await ctx.context.internalAdapter.updateUser(existingUser.user.id, {
-                name: userInfo.user.name,
-                image: userInfo.user.image_192,
+                name: userInfo.name,
+                image: userInfo.picture,
               });
               user = existingUser.user;
             } else {
               user = await ctx.context.internalAdapter.createUser({
-                email: userInfo.user.email,
-                name: userInfo.user.name || "",
-                image: userInfo.user.image_192,
+                email: userInfo.email,
+                name: userInfo.name || "",
+                image: userInfo.picture,
                 emailVerified: true,
               });
 
               if (env.ADMIN_EMAIL_HOSTS) {
-                const emailDomain = userInfo.user.email.split("@")[1];
+                const emailDomain = userInfo.email.split("@")[1];
                 const adminHosts = env.ADMIN_EMAIL_HOSTS.split(",").map((host) => host.trim());
 
                 if (emailDomain && adminHosts.includes(emailDomain)) {
@@ -444,7 +436,7 @@ export const integrationsPlugin = () =>
             } else {
               await ctx.context.internalAdapter.createAccount({
                 providerId: "slack",
-                accountId: userInfo.user.id,
+                accountId: tokens.authed_user.id,
                 userId: user.id,
                 accessToken: tokens.authed_user.access_token,
                 scope: SLACK_USER_AUTH_SCOPES.join(","),
