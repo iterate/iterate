@@ -26,7 +26,7 @@ export default [
 
   // loader.tsx doesn't apply a layout
   route(":organizationId", "./routes/org/loader.tsx", [
-    ...prefix("onboarding", [index("./routes/org/onboarding.tsx")]),
+    route("onboarding/:step?", "./routes/org/onboarding.tsx"),
 
     layout("./routes/org/layout.tsx", [
       // Redirect org index to first estate
