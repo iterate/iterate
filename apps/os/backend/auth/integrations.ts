@@ -335,8 +335,7 @@ export const integrationsPlugin = () =>
           const stateData = JSON.parse(value.value);
           const callbackURL = stateData.callbackURL || import.meta.env.VITE_PUBLIC_URL;
           const agentDurableObject = stateData.agentDurableObject;
-          const userId = stateData.userId;
-          const searchQuery = stateData.searchQuery;
+
           const estateId = stateData.estateId;
 
           await ctx.context.internalAdapter.deleteVerificationValue(stateId);
@@ -368,12 +367,10 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get user info", details: userInfo.error });
           }
 
-          // Verify the user matches the session
           if (userInfo.user.email !== session.user.email) {
             return ctx.json({ error: "User mismatch" }, { status: 403 });
           }
 
-          // Create or update search-specific account
           const existingSearchAccount = await db.query.account.findFirst({
             where: and(
               eq(schema.account.providerId, "slack-search"),
@@ -400,7 +397,6 @@ export const integrationsPlugin = () =>
             accountId = newAccount.id;
           }
 
-          // Link account to estate if we have an estateId
           if (estateId) {
             const existingPermission = await db.query.estateAccountsPermissions.findFirst({
               where: and(
@@ -417,7 +413,6 @@ export const integrationsPlugin = () =>
             }
           }
 
-          // Trigger the agent to resume now that we have the search token
           if (agentDurableObject) {
             const params = {
               db,
@@ -425,7 +420,6 @@ export const integrationsPlugin = () =>
             };
             const agentStub = await SlackAgent.getStubByName(params);
 
-            // Send developer message to inform the agent that search permission was granted
             await agentStub.addEvents([
               {
                 type: "CORE:LLM_INPUT_ITEM",
