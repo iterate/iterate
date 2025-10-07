@@ -16,6 +16,8 @@ import { env, type CloudflareEnv } from "../../env.ts";
 import { IterateAgent } from "../agent/iterate-agent.ts";
 import { SlackAgent } from "../agent/slack-agent.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
+import { createUserOrganizationAndEstate } from "../org-utils.ts";
+import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
@@ -330,7 +332,7 @@ export const integrationsPlugin = () =>
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
 
           const { link, callbackUrl: callbackURL } = parsedState;
-          const estateId = parsedState.estateId;
+          let estateId = parsedState.estateId;
 
           const code = ctx.query.code;
 
@@ -410,6 +412,23 @@ export const integrationsPlugin = () =>
                   });
                 }
               }
+
+              const newOrgAndEstate = await createUserOrganizationAndEstate(db, user.id, user.name);
+              waitUntil(
+                createStripeCustomerAndSubscriptionForOrganization(
+                  db,
+                  newOrgAndEstate.organization,
+                  user,
+                ).catch(() => {
+                  // Error is already logged in the helper function
+                }),
+              );
+
+              if (!newOrgAndEstate.estate) {
+                return ctx.json({ error: "Failed to create an estate for the user" });
+              }
+
+              estateId = newOrgAndEstate.estate.id;
             }
 
             const existingUserAccount = existingUser?.accounts.find(
@@ -467,11 +486,6 @@ export const integrationsPlugin = () =>
 
           if (!botAccount) {
             return ctx.json({ error: "Failed to get account id" });
-          }
-
-          // For direct signup, just redirect and let the org-layout handle everything
-          if (!link) {
-            return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
           }
 
           // For linking flow, we need an estateId

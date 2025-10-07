@@ -300,3 +300,55 @@ export const backcompat = <T, U>(params: {
  * }
  */
 export type Result<T, E = string> = { success: true; data: T } | { success: false; error: E };
+
+/**
+ * converts optional nullable fields to required nullable fields by replacing undefined with null.
+ * useful when working with types that have optional nullable fields but you need to serialize
+ * them to formats that don't support undefined (like database rows).
+ *
+ * @example
+ * type User = { name: string; image?: string | null };
+ * const user: User = { name: "Alice", image: undefined };
+ * const normalized = normalizeNullableFields(user);
+ * // normalized: { name: "Alice", image: null }
+ */
+export function normalizeNullableFields<T>(obj: T): NormalizeNullableFields<T> {
+  if (obj === null || obj === undefined) {
+    return null as NormalizeNullableFields<T>;
+  }
+
+  if (typeof obj !== "object") {
+    return obj as NormalizeNullableFields<T>;
+  }
+
+  if (obj instanceof Date || obj instanceof RegExp || obj instanceof Error) {
+    return obj as NormalizeNullableFields<T>;
+  }
+
+  if (Array.isArray(obj)) {
+    return obj.map((item) => normalizeNullableFields(item)) as NormalizeNullableFields<T>;
+  }
+
+  const result: any = {};
+  for (const key in obj) {
+    if (Object.prototype.hasOwnProperty.call(obj, key)) {
+      const value = obj[key];
+      result[key] = value === undefined ? null : normalizeNullableFields(value);
+    }
+  }
+  return result as NormalizeNullableFields<T>;
+}
+
+type NormalizeNullableFields<T> = T extends null | undefined
+  ? null
+  : T extends Date | RegExp | Error
+    ? T
+    : T extends (infer U)[]
+      ? NormalizeNullableFields<U>[]
+      : T extends object
+        ? {
+            [K in keyof T]-?: undefined extends T[K]
+              ? NormalizeNullableFields<Exclude<T[K], undefined>> | null
+              : NormalizeNullableFields<T[K]>;
+          }
+        : T;

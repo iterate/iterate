@@ -51,13 +51,14 @@ export const MessageContent = ({ children, className, variant, ...props }: Messa
 );
 
 export type MessageAvatarProps = ComponentProps<typeof Avatar> & {
-  src: string;
+  src?: string;
   name?: string;
+  icon?: React.ReactNode;
 };
 
-export const MessageAvatar = ({ src, name, className, ...props }: MessageAvatarProps) => (
+export const MessageAvatar = ({ src, name, icon, className, ...props }: MessageAvatarProps) => (
   <Avatar className={cn("size-8 ring-1 ring-border", className)} {...props}>
     <AvatarImage alt="" className="mt-0 mb-0" src={src} />
-    <AvatarFallback>{name?.slice(0, 2) || "ME"}</AvatarFallback>
+    <AvatarFallback>{icon || name?.slice(0, 2) || "ME"}</AvatarFallback>
   </Avatar>
 );

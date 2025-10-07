@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useMemo } from "react";
 import { useNavigate } from "react-router";
-import { Bot, ChevronUp, ChevronDown, Search } from "lucide-react";
+import { Bot, ChevronUp, ChevronDown, Search, Archive } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../../../../components/ui/button.tsx";
@@ -216,31 +216,50 @@ export default function AgentsIndexPage() {
 
   return (
     <div className="flex flex-1 flex-col gap-4 p-4 pt-4">
-      <div className="border rounded-lg bg-muted/30 p-6">
-        <div className="mb-4">
-          <div className="text-lg font-semibold">Create New Agent</div>
-        </div>
-        <div className="flex gap-2 relative">
-          <div className="relative flex-1">
-            <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
-              <Bot size={16} className="text-muted-foreground" />
-            </div>
-            <Input
-              id="agent-name"
-              ref={inputRef}
-              value={agentName}
-              onChange={(e) => setAgentName(e.target.value)}
-              placeholder="Enter agent durable object instance name"
-              className="flex-1 pl-10"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  handleNavigate();
-                }
-              }}
-            />
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="border rounded-lg bg-muted/30 p-6">
+          <div className="mb-4">
+            <div className="text-lg font-semibold">Create New Agent</div>
           </div>
-          <Button onClick={handleNavigate} disabled={!agentName.trim()}>
-            Go
+          <div className="flex gap-2 relative">
+            <div className="relative flex-1">
+              <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                <Bot size={16} className="text-muted-foreground" />
+              </div>
+              <Input
+                id="agent-name"
+                ref={inputRef}
+                value={agentName}
+                onChange={(e) => setAgentName(e.target.value)}
+                placeholder="Enter agent durable object instance name"
+                className="flex-1 pl-10"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    handleNavigate();
+                  }
+                }}
+              />
+            </div>
+            <Button onClick={handleNavigate} disabled={!agentName.trim()}>
+              Go
+            </Button>
+          </div>
+        </div>
+
+        <div className="border rounded-lg bg-muted/30 p-6">
+          <div className="mb-4">
+            <div className="text-lg font-semibold">View Offline Archive</div>
+            <p className="text-sm text-muted-foreground mt-1">
+              Upload and inspect exported agent traces
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            onClick={() => navigate(getEstateUrl("/agents/offline"))}
+            className="w-full"
+          >
+            <Archive className="h-4 w-4 mr-2" />
+            Open Offline Viewer
           </Button>
         </div>
       </div>

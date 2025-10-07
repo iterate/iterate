@@ -422,3 +422,41 @@ export const getFileHandler = async (
     );
   }
 };
+
+export const getExportHandler = async (
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
+  const exportId = c.req.param("exportId");
+  const estateId = c.req.param("estateId");
+
+  try {
+    const r2Key = `exports/${exportId}.zip`;
+
+    const object = await c.env.ITERATE_FILES.get(r2Key);
+    if (!object) {
+      return c.json({ error: "Export not found" }, 404);
+    }
+
+    if (object.customMetadata?.estateId !== estateId) {
+      return c.json({ error: "Export not found for this estate" }, 404);
+    }
+
+    const headers = new Headers();
+    headers.set("Content-Type", "application/zip");
+    headers.set("Content-Disposition", `attachment; filename="agent-trace-${exportId}.zip"`);
+
+    if (object.httpEtag) {
+      headers.set("ETag", object.httpEtag);
+    }
+
+    return new Response(object.body, { headers });
+  } catch (error) {
+    logger.error("Export retrieval error:", error);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Export retrieval failed",
+      },
+      500,
+    );
+  }
+};
