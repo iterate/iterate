@@ -50,7 +50,14 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
-import { runMCPEventHooks, getOrCreateMCPConnection } from "./mcp/mcp-event-hooks.ts";
+import {
+  runMCPEventHooks,
+  getOrCreateMCPConnection,
+  createMCPManagerCache,
+  createMCPConnectionQueues,
+  type MCPManagerCache,
+  type MCPConnectionQueues,
+} from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -374,6 +381,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   _estate?: typeof schema.estate.$inferSelect;
   _organization?: typeof schema.organization.$inferSelect;
   _iterateConfig?: IterateConfig;
+  // Instance-level MCP manager cache and connection queues to avoid sharing across DOs
+  protected mcpManagerCache: MCPManagerCache;
+  protected mcpConnectionQueues: MCPConnectionQueues;
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
@@ -412,6 +422,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
     this.db = getDb();
+    // Initialize instance-level MCP manager cache and connection queues
+    this.mcpManagerCache = createMCPManagerCache();
+    this.mcpConnectionQueues = createMCPConnectionQueues();
     // DO NOT CHANGE THE SCHEMA WITHOUT UPDATING THE MIGRATION LOGIC
     // If you need to change the schema, you can add more columns with separate statements
     this.sql`
@@ -624,6 +637,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
                   reducedState,
                   agentDurableObject: this.hydrationInfo,
                   estateId: this.databaseRecord.estateId,
+                  mcpConnectionCache: this.mcpManagerCache,
+                  mcpConnectionQueues: this.mcpConnectionQueues,
                   getFinalRedirectUrl: deps.getFinalRedirectUrl!,
                 });
 
@@ -659,6 +674,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
+        mcpConnectionCache: this.mcpManagerCache,
+        mcpConnectionQueues: this.mcpConnectionQueues,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
         },
@@ -1434,6 +1451,8 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       agentDurableObject: this.hydrationInfo,
       estateId: this.databaseRecord.estateId,
       reducedState: this.getReducedState(),
+      mcpConnectionCache: this.mcpManagerCache,
+      mcpConnectionQueues: this.mcpConnectionQueues,
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 

@@ -196,6 +196,7 @@ describe("mcp-slice", () => {
             userId: "user123",
             integrationSlug: "github",
             oauthUrl: "https://github.com/oauth/authorize",
+            serverId: "server-123",
           },
           metadata: {},
           triggerLLMRequest: false,
@@ -786,13 +787,14 @@ describe("mcp-slice", () => {
             userId: "user123",
             integrationSlug: "github",
             oauthUrl: "https://github.com/oauth/authorize",
+            serverId: "server-123",
           },
         });
 
         const state = h.agentCore.state as any;
         expect(state.mcpConnections).toHaveProperty(connectionKey);
         expect(state.mcpConnections[connectionKey]).toMatchObject({
-          serverId: "",
+          serverId: "server-123",
           serverUrl: "https://github.com/mcp",
           mode: "personal",
           userId: "user123",
@@ -822,6 +824,7 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             integrationSlug: "github",
             oauthUrl: "",
+            serverId: "server-123",
           },
         });
 
@@ -861,6 +864,7 @@ describe("mcp-slice", () => {
             mode: "company" as const,
             integrationSlug: "github",
             oauthUrl: "https://github.com/oauth/authorize",
+            serverId: "server-456",
           },
         });
       });

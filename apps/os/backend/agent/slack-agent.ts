@@ -213,6 +213,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
+        mcpConnectionCache: this.mcpManagerCache,
+        mcpConnectionQueues: this.mcpConnectionQueues,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();
         },
