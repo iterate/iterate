@@ -3,7 +3,7 @@ import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
-import { zipSync, strToU8 } from "fflate";
+import { Zip, ZipPassThrough, strToU8 } from "fflate";
 import { typeid } from "typeid-js";
 import { permalink as getPermalink } from "braintrust/browser";
 
@@ -1000,24 +1000,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       }
     }
 
-    const fileMap: Record<
-      string,
-      {
-        content: Uint8Array;
-        metadata: FileMetadata;
-      }
-    > = {};
+    const fileMetadataMap: Record<string, FileMetadata> = {};
 
     for (const fileId of fileIds) {
-      const r2Key = `files/${fileId}`;
-      const object = await this.env.ITERATE_FILES.get(r2Key);
-
-      if (!object) {
-        throw new Error(`File not found in storage: ${fileId}`);
-      }
-
-      const response = new Response(object.body);
-      const arrayBuffer = await response.arrayBuffer();
       const [fileRecord] = await this.db.select().from(files).where(eq(files.id, fileId)).limit(1);
 
       if (!fileRecord) {
@@ -1028,10 +1013,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         throw new Error(`File record not completed for export: ${fileId}`);
       }
 
-      fileMap[fileId] = {
-        content: new Uint8Array(arrayBuffer),
-        metadata: fileRecord,
-      };
+      fileMetadataMap[fileId] = fileRecord;
     }
 
     const braintrustPermalink = this.state.braintrustParentSpanExportedId
@@ -1059,24 +1041,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         iterateConfig: iterateConfigRecord ?? null,
       },
       events,
-      fileMetadata: Object.fromEntries(
-        Object.entries(fileMap).map(([id, { metadata }]) => [id, metadata]),
-      ),
+      fileMetadata: fileMetadataMap,
       reducedStateSnapshots,
     };
 
-    const archiveFiles: Record<string, Uint8Array> = {
-      "export.json": strToU8(JSON.stringify(exportData, null, 2)),
-    };
-
-    for (const [fileId, { content }] of Object.entries(fileMap)) {
-      archiveFiles[`files/${fileId}`] = content;
-    }
-
-    const compressed = zipSync(archiveFiles, { level: 6 });
-
     const r2Key = `exports/${exportId}.zip`;
-    await this.env.ITERATE_FILES.put(r2Key, compressed, {
+    const multipartUpload = await this.env.ITERATE_FILES.createMultipartUpload(r2Key, {
       httpMetadata: {
         contentType: "application/zip",
       },
@@ -1086,6 +1056,108 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         exportedAt: new Date().toISOString(),
       },
     });
+
+    const PART_SIZE = 5 * 1024 * 1024;
+    const uploadedParts: R2UploadedPart[] = [];
+    let partNumber = 1;
+    let buffer = new Uint8Array(PART_SIZE);
+    let bufferOffset = 0;
+    let zipError: Error | null = null;
+    let zipFinished = false;
+    let zipResolve: (() => void) | null = null;
+
+    const uploadPart = async (data: Uint8Array) => {
+      const uploadedPart = await multipartUpload.uploadPart(partNumber, data);
+      uploadedParts.push(uploadedPart);
+      partNumber++;
+    };
+
+    const zipPromise = new Promise<void>((resolve) => (zipResolve = resolve));
+    const zip = new Zip(async (err, chunk, final) => {
+      if (err) {
+        zipError = err;
+        zipResolve?.();
+        return;
+      }
+
+      try {
+        let chunkOffset = 0;
+        while (chunkOffset < chunk.length) {
+          const remainingInBuffer = PART_SIZE - bufferOffset;
+          const remainingInChunk = chunk.length - chunkOffset;
+          const bytesToCopy = Math.min(remainingInBuffer, remainingInChunk);
+
+          buffer.set(chunk.subarray(chunkOffset, chunkOffset + bytesToCopy), bufferOffset);
+          bufferOffset += bytesToCopy;
+          chunkOffset += bytesToCopy;
+
+          if (bufferOffset === PART_SIZE) {
+            await uploadPart(buffer);
+            buffer = new Uint8Array(PART_SIZE);
+            bufferOffset = 0;
+          }
+        }
+
+        if (final && bufferOffset > 0) {
+          await uploadPart(buffer.subarray(0, bufferOffset));
+          zipFinished = true;
+        } else if (final) {
+          zipFinished = true;
+        }
+      } catch (uploadErr) {
+        zipError = uploadErr as Error;
+      } finally {
+        if (final) {
+          zipResolve?.();
+        }
+      }
+    });
+
+    const exportJsonFile = new ZipPassThrough("export.json");
+    zip.add(exportJsonFile);
+    exportJsonFile.push(strToU8(JSON.stringify(exportData, null, 2)), true);
+
+    for (const fileId of fileIds) {
+      const r2Key = `files/${fileId}`;
+      const object = await this.env.ITERATE_FILES.get(r2Key);
+
+      if (!object) {
+        throw new Error(`File not found in storage: ${fileId}`);
+      }
+
+      const fileStream = new ZipPassThrough(`files/${fileId}`);
+      zip.add(fileStream);
+
+      const reader = object.body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            fileStream.push(new Uint8Array(0), true);
+            break;
+          }
+          fileStream.push(value, false);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+    }
+
+    zip.end();
+
+    await zipPromise;
+
+    if (zipError) {
+      await multipartUpload.abort();
+      throw zipError;
+    }
+
+    if (!zipFinished) {
+      await multipartUpload.abort();
+      throw new Error("ZIP archive did not finish properly");
+    }
+
+    await multipartUpload.complete(uploadedParts);
 
     const downloadUrl = `/api/estate/${this.databaseRecord.estateId}/exports/${exportId}`;
     return downloadUrl;
