@@ -45,10 +45,19 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
-      - name: Upload source maps to PostHog
+      - name: Upload client source maps to PostHog
         uses: PostHog/upload-source-maps@v0.4.6
         with:
-          directory: apps/os/build
+          directory: apps/os/build/client
+          env-id: ${{ steps.posthog.outputs.env-id }}
+          cli-token: ${{ steps.posthog.outputs.cli-token }}
+          host: https://eu.posthog.com
+          project: iterate-com
+
+      - name: Upload server source maps to PostHog
+        uses: PostHog/upload-source-maps@v0.4.6
+        with:
+          directory: apps/os/build/server
           env-id: ${{ steps.posthog.outputs.env-id }}
           cli-token: ${{ steps.posthog.outputs.cli-token }}
           host: https://eu.posthog.com

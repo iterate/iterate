@@ -3,9 +3,9 @@ import validator from "@rjsf/validator-ajv8";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import React from "react";
 import { toast } from "sonner";
-import { Card } from "../components/ui/card.tsx";
-import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
-import { SerializedObjectCodeBlock } from "../components/serialized-object-code-block.tsx";
+import { Card } from "../../components/ui/card.tsx";
+import { useTRPC, useTRPCClient } from "../../lib/trpc.ts";
+import { SerializedObjectCodeBlock } from "../../components/serialized-object-code-block.tsx";
 
 const useAllProcedureInputs = () => {
   const trpc = useTRPC();

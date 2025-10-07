@@ -1,9 +1,18 @@
 import { Link, Outlet, useLocation } from "react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Shield, MessageSquare, Info, ArrowLeft, AlertCircle } from "lucide-react";
-import { useTRPC } from "../lib/trpc.ts";
-import { Button } from "../components/ui/button.tsx";
-import { authClient } from "../lib/auth-client.ts";
+import {
+  Shield,
+  MessageSquare,
+  Info,
+  ArrowLeft,
+  AlertCircle,
+  Database,
+  Building2,
+  Server,
+} from "lucide-react";
+import { useTRPC } from "../../lib/trpc.ts";
+import { Button } from "../../components/ui/button.tsx";
+import { authClient } from "../../lib/auth-client.ts";
 import {
   Sidebar,
   SidebarContent,
@@ -18,11 +27,14 @@ import {
   SidebarGroup,
   SidebarGroupLabel,
   SidebarGroupContent,
-} from "../components/ui/sidebar.tsx";
+} from "../../components/ui/sidebar.tsx";
 
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
-  { title: "Test Slack", icon: MessageSquare, path: "/admin/slack-notification" },
+  { title: "Estates", icon: Building2, path: "/admin/estates" },
+  { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
+  { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
+  { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
 ];
 
 export default function AdminLayout() {
@@ -85,6 +97,18 @@ export default function AdminLayout() {
         <Sidebar className="border-r">
           <SidebarHeader>
             <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton size="lg" asChild>
+                  <Link to="/">
+                    <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
+                      <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
+                    </div>
+                    <div className="grid flex-1 text-left leading-tight">
+                      <span className="truncate font-medium">iterate</span>
+                    </div>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton size="lg" asChild>
                   <Link to="/admin">

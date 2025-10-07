@@ -59,10 +59,11 @@ githubApp.get(
         estateId: z.string(),
         redirectUri: z.string(),
         userId: z.string(),
+        callbackURL: z.string().optional(),
       })
       .parse(JSON.parse(verification.value));
 
-    const { estateId, redirectUri, userId } = parsedState;
+    const { estateId, redirectUri, userId, callbackURL } = parsedState;
 
     const userAccessTokenRes = await fetch(`https://github.com/login/oauth/access_token`, {
       method: "POST",
@@ -135,7 +136,7 @@ githubApp.get(
       estateId,
     });
 
-    return c.redirect("/");
+    return c.redirect(callbackURL || "/");
   },
 );
 

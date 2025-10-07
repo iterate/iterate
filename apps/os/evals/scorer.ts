@@ -31,6 +31,7 @@ const multiTurnScorerParamsDefaults = {
   model: "gpt-5",
   instructions: `You are an eval assistant. Your job is to check if the last response matches the expectation. Respond with a score between 0 and 100.`,
   text: {
+    // @ts-expect-error openai is broken
     format: zodTextFormat(ScoreResult, "ScoreResult"),
   },
 } satisfies Omit<ResponsesCreateParams, "input">;

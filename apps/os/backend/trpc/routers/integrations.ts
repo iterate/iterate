@@ -78,6 +78,8 @@ export const integrationsRouter = router({
       .from(account)
       .where(eq(account.userId, ctx.user.id));
 
+    const knownOAuthProviders = ["github-app", "slack-bot", "google", "slack"];
+
     // Group accounts by provider and track connection type
     const accountsByProvider: Record<
       string,
@@ -139,7 +141,92 @@ export const integrationsRouter = router({
       };
     });
 
-    return integrations;
+    // Get MCP connections
+    // 1. Get param-based MCP connections from mcpConnectionParam
+    const mcpParams = await ctx.db.query.mcpConnectionParam.findMany({
+      where: eq(schemas.mcpConnectionParam.estateId, estateId),
+    });
+
+    // Group by connectionKey
+    const mcpParamsByKey = mcpParams.reduce(
+      (acc, param) => {
+        if (!acc[param.connectionKey]) {
+          acc[param.connectionKey] = {
+            connectionKey: param.connectionKey,
+            params: [],
+            createdAt: param.createdAt,
+          };
+        }
+        acc[param.connectionKey].params.push({
+          key: param.paramKey,
+          type: param.paramType,
+        });
+        // Keep the earliest createdAt
+        if (param.createdAt < acc[param.connectionKey].createdAt) {
+          acc[param.connectionKey].createdAt = param.createdAt;
+        }
+        return acc;
+      },
+      {} as Record<
+        string,
+        { connectionKey: string; params: Array<{ key: string; type: string }>; createdAt: Date }
+      >,
+    );
+
+    // 2. Get OAuth-based MCP connections (accounts with providerId not in known list)
+    // OAuth connections are always personal since they're user-specific authentication
+    const mcpOAuthConnections = [
+      ...estateAccounts
+        .filter(({ account: acc }) => acc && !knownOAuthProviders.includes(acc.providerId))
+        .map(({ account: acc }) => ({
+          type: "mcp-oauth" as const,
+          id: acc!.id,
+          name: acc!.providerId,
+          providerId: acc!.providerId,
+          mode: "personal" as const,
+          scope: acc!.scope,
+          connectedAt: acc!.createdAt,
+        })),
+      ...personalAccounts
+        .filter((acc) => !knownOAuthProviders.includes(acc.providerId))
+        .filter((acc) => !estateAccounts.some(({ account: estateAcc }) => estateAcc?.id === acc.id))
+        .map((acc) => ({
+          type: "mcp-oauth" as const,
+          id: acc.id,
+          name: acc.providerId,
+          providerId: acc.providerId,
+          mode: "personal" as const,
+          scope: acc.scope,
+          connectedAt: acc.createdAt,
+        })),
+    ];
+
+    // Format param-based MCP connections
+    const mcpParamConnections = Object.values(mcpParamsByKey).map((conn) => {
+      const [serverUrl, mode, userId] = conn.connectionKey.split("::");
+      let displayName = serverUrl;
+      try {
+        displayName = new URL(serverUrl).hostname;
+      } catch {
+        // If URL parsing fails, use serverUrl as is
+      }
+
+      return {
+        type: "mcp-params" as const,
+        id: conn.connectionKey,
+        name: displayName,
+        serverUrl,
+        mode,
+        userId: userId || null,
+        paramCount: conn.params.length,
+        connectedAt: conn.createdAt,
+      };
+    });
+
+    return {
+      oauthIntegrations: integrations,
+      mcpConnections: [...mcpOAuthConnections, ...mcpParamConnections],
+    };
   }),
 
   // Get details for a specific integration
@@ -188,30 +275,37 @@ export const integrationsRouter = router({
     }),
   // Make it work
   // TODO: Make this good later
-  startGithubAppInstallFlow: estateProtectedProcedure.mutation(async ({ ctx, input }) => {
-    const state = generateRandomString(32);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    const { estateId } = input;
+  startGithubAppInstallFlow: estateProtectedProcedure
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = generateRandomString(32);
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      const { estateId, callbackURL } = input;
 
-    const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
-    const data = JSON.stringify({
-      userId: ctx.user.id,
-      estateId,
-      redirectUri,
-    });
+      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        estateId,
+        redirectUri,
+        callbackURL,
+      });
 
-    await ctx.db.insert(schemas.verification).values({
-      identifier: state,
-      value: data,
-      expiresAt,
-    });
+      await ctx.db.insert(schemas.verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
 
-    const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
+      const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
 
-    return {
-      installationUrl,
-    };
-  }),
+      return {
+        installationUrl,
+      };
+    }),
   listAvailableGithubRepos: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
     const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
@@ -574,6 +668,166 @@ export const integrationsRouter = router({
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
       };
+    }),
+
+  disconnectMCP: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionId: z.string(),
+        connectionType: z.enum(["mcp-oauth", "mcp-params"]),
+        mode: z.enum(["company", "personal"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, connectionId, connectionType } = input;
+
+      if (connectionType === "mcp-params") {
+        // Delete from mcpConnectionParam table
+        await ctx.db
+          .delete(schemas.mcpConnectionParam)
+          .where(eq(schemas.mcpConnectionParam.connectionKey, connectionId));
+      } else {
+        // Delete from account table (OAuth)
+        // First check if this account is linked to this estate
+        const estatePermission = await ctx.db.query.estateAccountsPermissions.findFirst({
+          where: and(
+            eq(estateAccountsPermissions.estateId, estateId),
+            eq(estateAccountsPermissions.accountId, connectionId),
+          ),
+        });
+
+        // Remove estate permission if it exists
+        if (estatePermission) {
+          await ctx.db
+            .delete(estateAccountsPermissions)
+            .where(
+              and(
+                eq(estateAccountsPermissions.estateId, estateId),
+                eq(estateAccountsPermissions.accountId, connectionId),
+              ),
+            );
+        }
+
+        // Check if account is used by other estates
+        const otherEstates = await ctx.db.query.estateAccountsPermissions.findFirst({
+          where: eq(estateAccountsPermissions.accountId, connectionId),
+        });
+
+        // Only delete the account if it's not used by any other estate
+        if (!otherEstates) {
+          // Also check if the account belongs to the current user
+          const acc = await ctx.db.query.account.findFirst({
+            where: eq(account.id, connectionId),
+          });
+
+          if (acc && acc.userId === ctx.user.id) {
+            await ctx.db.delete(account).where(eq(account.id, connectionId));
+          }
+        }
+      }
+
+      return { success: true };
+    }),
+
+  getMCPConnectionDetails: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionId: z.string(),
+        connectionType: z.enum(["mcp-oauth", "mcp-params"]),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { estateId, connectionId, connectionType } = input;
+
+      if (connectionType === "mcp-params") {
+        // Get params for param-based connection
+        const params = await ctx.db.query.mcpConnectionParam.findMany({
+          where: and(
+            eq(schemas.mcpConnectionParam.estateId, estateId),
+            eq(schemas.mcpConnectionParam.connectionKey, connectionId),
+          ),
+        });
+
+        return {
+          type: "params" as const,
+          params: params.map((p) => ({
+            key: p.paramKey,
+            value: p.paramValue,
+            type: p.paramType,
+          })),
+        };
+      } else {
+        // Get dynamic client info for OAuth connection
+        const acc = await ctx.db.query.account.findFirst({
+          where: eq(account.id, connectionId),
+        });
+
+        if (!acc) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Connection not found",
+          });
+        }
+
+        const dynamicClient = await ctx.db.query.dynamicClientInfo.findFirst({
+          where: and(
+            eq(schemas.dynamicClientInfo.providerId, acc.providerId),
+            eq(schemas.dynamicClientInfo.userId, acc.userId),
+          ),
+        });
+
+        return {
+          type: "oauth" as const,
+          providerId: acc.providerId,
+          scope: acc.scope,
+          clientInfo: dynamicClient?.clientInfo || null,
+          connectedAt: acc.createdAt,
+        };
+      }
+    }),
+
+  updateMCPConnectionParams: estateProtectedProcedure
+    .input(
+      z.object({
+        connectionKey: z.string(),
+        params: z.array(
+          z.object({
+            key: z.string(),
+            value: z.string(),
+            type: z.enum(["header", "query_param"]),
+          }),
+        ),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, connectionKey, params } = input;
+
+      await ctx.db.transaction(async (tx) => {
+        // Delete existing params
+        await tx
+          .delete(schemas.mcpConnectionParam)
+          .where(
+            and(
+              eq(schemas.mcpConnectionParam.estateId, estateId),
+              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+            ),
+          );
+
+        // Insert new params
+        if (params.length > 0) {
+          await tx.insert(schemas.mcpConnectionParam).values(
+            params.map((param) => ({
+              estateId,
+              connectionKey,
+              paramKey: param.key,
+              paramValue: param.value,
+              paramType: param.type,
+            })),
+          );
+        }
+      });
+
+      return { success: true };
     }),
 
   saveMCPConnectionParams: estateProtectedProcedure

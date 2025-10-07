@@ -1,5 +1,5 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useTRPC } from "../lib/trpc.ts";
+import { useTRPC } from "../../lib/trpc.ts";
 
 export default function SessionInfoPage() {
   const trpc = useTRPC();

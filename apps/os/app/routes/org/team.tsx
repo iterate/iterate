@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { UserCog, Loader2 } from "lucide-react";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useTRPC } from "../lib/trpc.ts";
+import { useTRPC } from "../../lib/trpc.ts";
 import {
   Table,
   TableBody,
@@ -9,22 +9,22 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "../components/ui/table.tsx";
+} from "../../components/ui/table.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.tsx";
+} from "../../components/ui/select.tsx";
 import {
   Card,
   CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-} from "../components/ui/card.tsx";
-import type { Route } from "./+types/org-team";
+} from "../../components/ui/card.tsx";
+import type { Route } from "./+types/team.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

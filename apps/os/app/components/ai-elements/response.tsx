@@ -1,8 +1,15 @@
 import { type ComponentProps, memo } from "react";
-import { Streamdown } from "streamdown";
+import type { Streamdown as StreamdownType } from "streamdown";
 import { cn } from "../../lib/utils.ts";
 
-type ResponseProps = ComponentProps<typeof Streamdown>;
+type ResponseProps = ComponentProps<typeof StreamdownType>;
+
+let Streamdown: typeof StreamdownType;
+if (import.meta.env.SSR) {
+  Streamdown = memo(({ ...props }: ResponseProps) => <div {...props} />);
+} else {
+  Streamdown = await import("streamdown").then((m) => m.Streamdown);
+}
 
 export const Response = memo(
   ({ className, ...props }: ResponseProps) => (

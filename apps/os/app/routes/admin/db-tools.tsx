@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
-import { useTRPC, trpcClient } from "../lib/trpc.ts";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
-import { Alert, AlertDescription } from "../components/ui/alert.tsx";
+import { useTRPC, trpcClient } from "../../lib/trpc.ts";
+import { Button } from "../../components/ui/button.tsx";
+import { Input } from "../../components/ui/input.tsx";
+import { Label } from "../../components/ui/label.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 
 export default function AdminDBToolsPage() {
   const trpc = useTRPC();

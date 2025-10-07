@@ -385,7 +385,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   get databaseRecord() {
     if (!this._databaseRecord) {
-      throw new Error("Database record not found");
+      throw new Error("agent_instance database record not found");
     }
     return this._databaseRecord;
   }
@@ -1370,6 +1370,117 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       success: true,
       numberOfImagesGenerated: replicateResponse.length,
       __addAgentCoreEvents: fileSharedEvents,
+    };
+  }
+
+  async generateVideo(input: Inputs["generateVideo"]) {
+    const videoCreationResponse = await fetch("https://api.openai.com/v1/videos", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        prompt: input.prompt,
+        model: input.model,
+        seconds: input.seconds,
+        size: input.size,
+        input_reference: input.input_reference,
+      }),
+    });
+
+    if (!videoCreationResponse.ok) {
+      const errorText = await videoCreationResponse.text();
+      throw new Error(`Video creation failed: ${videoCreationResponse.status} ${errorText}`);
+    }
+
+    const videoCreationData = (await videoCreationResponse.json()) as {
+      id: string;
+      status: string;
+    };
+
+    logger.debug("polling OpenAI video:", { videoId: videoCreationData.id });
+    waitUntil(
+      (async () => {
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+        while (true) {
+          try {
+            const statusRes = await fetch(
+              `https://api.openai.com/v1/videos/${videoCreationData.id}`,
+              {
+                method: "GET",
+                headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+              },
+            );
+            if (!statusRes.ok) {
+              logger.debug("video status not ok:", statusRes.status);
+              await sleep(5000);
+              continue;
+            }
+            const statusJson = (await statusRes.json()) as { id: string; status: string };
+            logger.debug("video status:", statusJson);
+            if (statusJson.status === "completed") {
+              const contentRes = await fetch(
+                `https://api.openai.com/v1/videos/${videoCreationData.id}/content`,
+                {
+                  method: "GET",
+                  headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+                },
+              );
+              if (contentRes.ok && contentRes.body) {
+                const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
+                const contentLengthHeader = contentRes.headers.get("content-length");
+                const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+                logger.debug("uploading video to r2", { contentLength, contentType });
+                const fileRecord = await uploadFile({
+                  stream: contentRes.body,
+                  contentLength,
+                  filename: `generated-video-${Date.now()}.mp4`,
+                  contentType,
+                  estateId: this.databaseRecord.estateId,
+                  db: this.db,
+                });
+                logger.debug("video uploaded:", {
+                  fileId: fileRecord.id,
+                  publicURL: getFilePublicURL(fileRecord.id),
+                });
+
+                this.agentCore.addEvent({
+                  type: "CORE:FILE_SHARED",
+                  data: {
+                    direction: "from-agent-to-user",
+                    iterateFileId: fileRecord.id,
+                    openAIFileId: fileRecord.openAIFileId ?? undefined,
+                    mimeType: fileRecord.mimeType ?? undefined,
+                  },
+                  metadata: {
+                    openaiSoraVideoId: videoCreationData.id,
+                  },
+                  triggerLLMRequest: true,
+                });
+              } else {
+                logger.debug("video content download failed:", contentRes.status);
+              }
+              return;
+            }
+            if (statusJson.status === "failed" || statusJson.status === "cancelled") {
+              logger.debug("video generation terminal:", statusJson.status);
+              return;
+            }
+            await sleep(5000);
+          } catch (err) {
+            logger.debug("video polling error:", err);
+            await sleep(5000);
+          }
+        }
+      })(),
+    );
+
+    return {
+      status: "queued",
+      message:
+        "The video generation has been queued. I will poll the API every 5 seconds and share the video as soon as it's ready.",
+      apiResponse: videoCreationData,
     };
   }
 

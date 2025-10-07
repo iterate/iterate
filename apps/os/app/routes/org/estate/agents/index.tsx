@@ -3,9 +3,9 @@ import { useNavigate } from "react-router";
 import { Bot, ChevronUp, ChevronDown, Search } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Badge } from "../components/ui/badge.tsx";
+import { Button } from "../../../../components/ui/button.tsx";
+import { Input } from "../../../../components/ui/input.tsx";
+import { Badge } from "../../../../components/ui/badge.tsx";
 import {
   Table,
   TableBody,
@@ -13,9 +13,9 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "../components/ui/table.tsx";
-import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
-import { useTRPC } from "../lib/trpc.ts";
+} from "../../../../components/ui/table.tsx";
+import { useEstateId, useEstateUrl } from "../../../../hooks/use-estate.ts";
+import { useTRPC } from "../../../../lib/trpc.ts";
 
 type SortField = "name" | "className" | "createdAt";
 type SortDirection = "asc" | "desc";

@@ -1,8 +1,8 @@
 import { CheckCircle, ArrowRight } from "lucide-react";
-import { Button } from "../components/ui/button.tsx";
-import { Badge } from "../components/ui/badge.tsx";
-import { useSlackConnection } from "../hooks/use-slack-connection.ts";
-import type { Route } from "./+types/home";
+import { Button } from "../../../components/ui/button.tsx";
+import { Badge } from "../../../components/ui/badge.tsx";
+import { useSlackConnection } from "../../../hooks/use-slack-connection.ts";
+import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

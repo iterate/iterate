@@ -6,7 +6,7 @@ if (!apiKey) {
 }
 
 const stripe = new Stripe(apiKey, {
-  apiVersion: "2025-08-27.basil",
+  apiVersion: "2025-09-30.clover",
 });
 
 export async function createCheckoutSession(
