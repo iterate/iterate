@@ -95,6 +95,7 @@ const mcpConnectRequestFields = {
     requiresParams: z.array(MCPParam).optional(),
     reconnect: z
       .object({
+        id: z.string(),
         oauthClientId: z.string(),
         oauthCode: z.string(),
       })
@@ -206,6 +207,7 @@ const mcpOAuthRequiredFields = {
     userId: z.string().optional(),
     integrationSlug: z.string(),
     oauthUrl: z.string(),
+    serverId: z.string(),
   }),
 };
 
@@ -350,6 +352,8 @@ export interface MCPSliceDeps {
   lazyConnectionDeps?: LazyConnectionDeps;
 }
 
+export type { MCPManagerCache } from "./mcp-event-hooks.ts";
+
 // ------------------------- Slice Definition -------------------------
 
 export const mcpSlice = defineAgentCoreSlice<{
@@ -476,7 +480,8 @@ export const mcpSlice = defineAgentCoreSlice<{
       }
 
       case "MCP:OAUTH_REQUIRED": {
-        const { connectionKey, serverUrl, mode, userId, integrationSlug, oauthUrl } = event.data;
+        const { connectionKey, serverUrl, mode, userId, integrationSlug, oauthUrl, serverId } =
+          event.data;
 
         if (!oauthUrl) {
           return {};
@@ -497,7 +502,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           mcpConnections: {
             ...state.mcpConnections,
             [connectionKey]: {
-              serverId: "",
+              serverId,
               serverUrl,
               mode,
               userId,

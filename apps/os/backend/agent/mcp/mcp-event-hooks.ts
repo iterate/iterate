@@ -2,7 +2,7 @@ import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
 import { eq, and } from "drizzle-orm";
 import * as R from "remeda";
-import { exhaustiveMatchingGuard, type Branded, type Result } from "../../utils/type-helpers.ts";
+import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import { logger } from "../../tag-logger.ts";
 import type { MergedStateForSlices } from "../agent-core.ts";
 import type { CoreAgentSlices } from "../iterate-agent.ts";
@@ -45,6 +45,7 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
+  cache: MCPManagerCache;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -55,19 +56,21 @@ interface MCPConnectionResult {
   events: MCPEventHookReturnEvent[];
 }
 
-type MCPManagerCacheKey = Branded<"MCPManagerCacheKey">;
-
-export function createCacheKey(
-  durableObjectId: string,
-  connectionKey: MCPConnectionKey,
-): MCPManagerCacheKey {
-  return `${durableObjectId}--${connectionKey}` as MCPManagerCacheKey;
+// Cache key is simply the connection key since cache is now instance-level per DO
+export function createCacheKey(connectionKey: MCPConnectionKey): MCPConnectionKey {
+  return connectionKey;
 }
 
-// Use MCPManagerCacheKey to make sure we are not sharing managers between different durable objects (true for local dev)
-export const mcpManagerCache = {
-  managers: new Map<MCPManagerCacheKey, MCPClientManager>(),
-};
+// Instance-level cache interface (to avoid sharing I/O objects across Durable Objects)
+export interface MCPManagerCache {
+  managers: Map<MCPConnectionKey, MCPClientManager>;
+}
+
+export function createMCPManagerCache(): MCPManagerCache {
+  return {
+    managers: new Map<MCPConnectionKey, MCPClientManager>(),
+  };
+}
 
 function getIntegrationSlugFromServerUrl(serverUrl: string) {
   try {
@@ -129,7 +132,7 @@ async function getMCPParamsCollectionURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObject, estateId } = params;
+  const { event, reducedState, agentDurableObject, estateId, cache } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const db = getDb();
   const auth = getAuth(db);
@@ -165,8 +168,8 @@ export async function handleMCPConnectRequest(
   const connectionKey = getConnectionKey({ serverUrl, mode, userId });
   const existingConnection = reducedState.mcpConnections[connectionKey];
 
-  const cacheKey = createCacheKey(agentDurableObject.durableObjectId, connectionKey);
-  const isRehydration = existingConnection?.connectedAt && !mcpManagerCache.managers.has(cacheKey);
+  const cacheKey = createCacheKey(connectionKey);
+  const isRehydration = existingConnection?.connectedAt && !cache.managers.has(cacheKey);
 
   if (existingConnection?.connectedAt && !isRehydration) {
     return events;
@@ -269,7 +272,7 @@ export async function handleMCPConnectRequest(
       },
       ...(reconnect && {
         reconnect: {
-          id: "cloudflare-requires-id",
+          id: reconnect.id,
           oauthClientId: reconnect.oauthClientId,
           oauthCode: reconnect.oauthCode,
         },
@@ -286,6 +289,8 @@ export async function handleMCPConnectRequest(
         );
       }),
     ]);
+    // Set the serverId on the provider for OAuth state preservation
+    oauthProvider.serverId = result.id;
   } catch (error) {
     oauthProvider?.resetClientAndTokens();
     events.push({
@@ -312,6 +317,7 @@ export async function handleMCPConnectRequest(
         userId: userId || undefined,
         integrationSlug: guaranteedIntegrationSlug,
         oauthUrl: result.authUrl,
+        serverId: result.id,
       },
       metadata: {},
       triggerLLMRequest: false,
@@ -319,7 +325,7 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
-  mcpManagerCache.managers.set(cacheKey, manager);
+  cache.managers.set(cacheKey, manager);
 
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
   if (!serverName) {
@@ -370,7 +376,7 @@ export async function handleMCPConnectRequest(
 async function handleMCPDisconnectRequest(
   params: MCPEventHandlerParams<MCPDisconnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObject } = params;
+  const { event, reducedState, cache } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const { connectionKey, serverUrl, userId } = event.data;
 
@@ -397,11 +403,11 @@ async function handleMCPDisconnectRequest(
     const connection = reducedState.mcpConnections[key];
     if (connection?.serverId) {
       try {
-        const cacheKey = createCacheKey(agentDurableObject.durableObjectId, key);
-        const manager = mcpManagerCache.managers.get(cacheKey);
+        const cacheKey = createCacheKey(key);
+        const manager = cache.managers.get(cacheKey);
         if (manager) {
           await manager.closeConnection(connection.serverId);
-          mcpManagerCache.managers.delete(cacheKey);
+          cache.managers.delete(cacheKey);
           const entry = connectionQueues.get(cacheKey);
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
             connectionQueues.delete(cacheKey);
@@ -442,11 +448,11 @@ interface ConnectionQueueEntry {
   controller: AbortController;
 }
 
-// One queue per cache key (durableObjectId--connectionKey), each with concurrency: 1
-// We include the durableObjectId in the cache key to ensure that we don't share queues between different durable objects (true for local dev)
-export const connectionQueues = new Map<MCPManagerCacheKey, ConnectionQueueEntry>();
+// One queue per cache key (connectionKey), each with concurrency: 1
+// Since the cache is now instance-level, we don't need to include durableObjectId
+export const connectionQueues = new Map<MCPConnectionKey, ConnectionQueueEntry>();
 
-export function getConnectionQueue(cacheKey: MCPManagerCacheKey): ConnectionQueueEntry {
+export function getConnectionQueue(cacheKey: MCPConnectionKey): ConnectionQueueEntry {
   let entry = connectionQueues.get(cacheKey);
   if (!entry) {
     entry = {
@@ -458,7 +464,7 @@ export function getConnectionQueue(cacheKey: MCPManagerCacheKey): ConnectionQueu
   return entry;
 }
 
-export function abortPendingConnections(cacheKey: MCPManagerCacheKey, reason: string) {
+export function abortPendingConnections(cacheKey: MCPConnectionKey, reason: string) {
   const entry = connectionQueues.get(cacheKey);
   if (entry) {
     entry.controller.abort(reason);
@@ -471,14 +477,15 @@ export async function getOrCreateMCPConnection(params: {
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
+  cache: MCPManagerCache;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
-  const { connectionKey, agentDurableObject } = params;
+  const { connectionKey, cache } = params;
 
-  const cacheKey = createCacheKey(agentDurableObject.durableObjectId, connectionKey);
-  const existingManager = mcpManagerCache.managers.get(cacheKey);
+  const cacheKey = createCacheKey(connectionKey);
+  const existingManager = cache.managers.get(cacheKey);
   if (existingManager) {
     return { success: true, data: { manager: existingManager, events: [] } };
   }
@@ -488,7 +495,7 @@ export async function getOrCreateMCPConnection(params: {
   const result = await queue.add(
     async ({ signal }): Promise<Result<MCPConnectionResult>> => {
       try {
-        const existingManager = mcpManagerCache.managers.get(cacheKey);
+        const existingManager = cache.managers.get(cacheKey);
         if (existingManager) {
           return { success: true, data: { manager: existingManager, events: [] } };
         }
@@ -500,6 +507,7 @@ export async function getOrCreateMCPConnection(params: {
           reducedState: params.reducedState,
           agentDurableObject: params.agentDurableObject,
           estateId: params.estateId,
+          cache,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
@@ -513,7 +521,7 @@ export async function getOrCreateMCPConnection(params: {
           abortPendingConnections(cacheKey, abortReason);
         }
 
-        const manager = mcpManagerCache.managers.get(cacheKey);
+        const manager = cache.managers.get(cacheKey);
         if (!manager) {
           return { success: true, data: { manager: undefined, events } };
         }
@@ -556,6 +564,7 @@ export async function rehydrateExistingMCPConnection(params: {
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
+  cache: MCPManagerCache;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;

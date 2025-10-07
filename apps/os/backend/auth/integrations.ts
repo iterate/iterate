@@ -153,6 +153,7 @@ export const integrationsPlugin = () =>
                   userId: state.userId,
                   integrationSlug: state.integrationSlug,
                   reconnect: {
+                    id: state.serverId,
                     oauthClientId: state.clientId,
                     oauthCode: code,
                   },
