@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createCacheKey, createMCPManagerCache, type MCPManagerCache } from "./mcp-event-hooks.ts";
+import {
+  createCacheKey,
+  createMCPManagerCache,
+  createMCPConnectionQueues,
+  type MCPManagerCache,
+  type MCPConnectionQueues,
+} from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import {
   computeToolMapping,
@@ -11,9 +17,10 @@ import {
 
 // mock the rehydration function since we're testing tool mapping, not connection management
 vi.mock("./mcp-event-hooks.ts", async () => {
-  const actual = await vi.importActual("./mcp-event-hooks.ts");
   return {
-    ...actual,
+    createCacheKey: (connectionKey: string) => connectionKey,
+    createMCPManagerCache: () => ({ managers: new Map() }),
+    createMCPConnectionQueues: () => new Map(),
     rehydrateExistingMCPConnection: vi.fn(),
   };
 });

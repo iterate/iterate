@@ -133,14 +133,7 @@ async function getMCPParamsCollectionURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const {
-    event,
-    reducedState,
-    agentDurableObject,
-    estateId,
-    mcpConnectionCache,
-    mcpConnectionQueues,
-  } = params;
+  const { event, reducedState, agentDurableObject, estateId, mcpConnectionCache } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const db = getDb();
   const auth = getAuth(db);
