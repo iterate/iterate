@@ -11,6 +11,7 @@ import {
   rehydrateExistingMCPConnection,
   createCacheKey,
   type MCPManagerCache,
+  type MCPConnectionQueues,
 } from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import type { MCPEventHookReturnEvent } from "./mcp-event-hooks.ts";
@@ -343,7 +344,8 @@ export interface LazyConnectionDeps {
   getDurableObjectInfo: () => AgentDurableObjectInfo;
   getEstateId: () => string;
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
-  cache: MCPManagerCache;
+  mcpConnectionCache: MCPManagerCache;
+  mcpConnectionQueues: MCPConnectionQueues;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -441,7 +443,7 @@ export function createRuntimeToolFromMCPTool(params: {
       }
 
       const cacheKey = createCacheKey(selectedConnectionKey);
-      let manager = params.lazyConnectionDeps.cache.managers.get(cacheKey);
+      let manager = params.lazyConnectionDeps.mcpConnectionCache.managers.get(cacheKey);
 
       if (!manager) {
         const reducedState = params.lazyConnectionDeps.getReducedState();
@@ -461,7 +463,8 @@ export function createRuntimeToolFromMCPTool(params: {
           agentDurableObject: params.lazyConnectionDeps.getDurableObjectInfo(),
           estateId: params.lazyConnectionDeps.getEstateId(),
           reducedState: reducedState,
-          cache: params.lazyConnectionDeps.cache,
+          mcpConnectionCache: params.lazyConnectionDeps.mcpConnectionCache,
+          mcpConnectionQueues: params.lazyConnectionDeps.mcpConnectionQueues,
           getFinalRedirectUrl: params.lazyConnectionDeps.getFinalRedirectUrl,
         });
 

@@ -693,10 +693,12 @@ describe("mcp-tool-mapping", () => {
     });
 
     let mockCache: MCPManagerCache;
+    let mockConnectionQueues: MCPConnectionQueues;
 
     beforeEach(() => {
       vi.clearAllMocks();
       mockCache = createMCPManagerCache();
+      mockConnectionQueues = createMCPConnectionQueues();
     });
 
     it("should create runtime tool for team connection", async () => {
@@ -786,7 +788,8 @@ describe("mcp-tool-mapping", () => {
         }),
         getEstateId: () => "test-estate-id",
         getReducedState: () => ({ mcpConnections: {} }) as any,
-        cache: mockCache,
+        mcpConnectionCache: mockCache,
+        mcpConnectionQueues: mockConnectionQueues,
       };
 
       const runtimeTool = createRuntimeToolFromMCPTool({

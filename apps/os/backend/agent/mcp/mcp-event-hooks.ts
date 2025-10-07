@@ -45,7 +45,8 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
-  cache: MCPManagerCache;
+  mcpConnectionCache: MCPManagerCache;
+  mcpConnectionQueues: MCPConnectionQueues;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -132,7 +133,14 @@ async function getMCPParamsCollectionURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObject, estateId, cache } = params;
+  const {
+    event,
+    reducedState,
+    agentDurableObject,
+    estateId,
+    mcpConnectionCache,
+    mcpConnectionQueues,
+  } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const db = getDb();
   const auth = getAuth(db);
@@ -169,7 +177,8 @@ export async function handleMCPConnectRequest(
   const existingConnection = reducedState.mcpConnections[connectionKey];
 
   const cacheKey = createCacheKey(connectionKey);
-  const isRehydration = existingConnection?.connectedAt && !cache.managers.has(cacheKey);
+  const isRehydration =
+    existingConnection?.connectedAt && !mcpConnectionCache.managers.has(cacheKey);
 
   if (existingConnection?.connectedAt && !isRehydration) {
     return events;
@@ -325,7 +334,7 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
-  cache.managers.set(cacheKey, manager);
+  mcpConnectionCache.managers.set(cacheKey, manager);
 
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
   if (!serverName) {
@@ -376,7 +385,7 @@ export async function handleMCPConnectRequest(
 async function handleMCPDisconnectRequest(
   params: MCPEventHandlerParams<MCPDisconnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, cache } = params;
+  const { event, reducedState, mcpConnectionCache, mcpConnectionQueues } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const { connectionKey, serverUrl, userId } = event.data;
 
@@ -404,13 +413,13 @@ async function handleMCPDisconnectRequest(
     if (connection?.serverId) {
       try {
         const cacheKey = createCacheKey(key);
-        const manager = cache.managers.get(cacheKey);
+        const manager = mcpConnectionCache.managers.get(cacheKey);
         if (manager) {
           await manager.closeConnection(connection.serverId);
-          cache.managers.delete(cacheKey);
-          const entry = connectionQueues.get(cacheKey);
+          mcpConnectionCache.managers.delete(cacheKey);
+          const entry = mcpConnectionQueues.get(cacheKey);
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
-            connectionQueues.delete(cacheKey);
+            mcpConnectionQueues.delete(cacheKey);
           }
           logger.log(`[MCP] Disconnected and removed manager for ${key}`);
         } else {
@@ -448,24 +457,34 @@ interface ConnectionQueueEntry {
   controller: AbortController;
 }
 
-// One queue per cache key (connectionKey), each with concurrency: 1
-// Since the cache is now instance-level, we don't need to include durableObjectId
-export const connectionQueues = new Map<MCPConnectionKey, ConnectionQueueEntry>();
+// Instance-level connection queues (one per DO, not module-level)
+export type MCPConnectionQueues = Map<MCPConnectionKey, ConnectionQueueEntry>;
 
-export function getConnectionQueue(cacheKey: MCPConnectionKey): ConnectionQueueEntry {
-  let entry = connectionQueues.get(cacheKey);
+export function createMCPConnectionQueues(): MCPConnectionQueues {
+  return new Map<MCPConnectionKey, ConnectionQueueEntry>();
+}
+
+export function getConnectionQueue(
+  mcpConnectionQueues: MCPConnectionQueues,
+  cacheKey: MCPConnectionKey,
+): ConnectionQueueEntry {
+  let entry = mcpConnectionQueues.get(cacheKey);
   if (!entry) {
     entry = {
       queue: new PQueue({ concurrency: 1 }),
       controller: new AbortController(),
     };
-    connectionQueues.set(cacheKey, entry);
+    mcpConnectionQueues.set(cacheKey, entry);
   }
   return entry;
 }
 
-export function abortPendingConnections(cacheKey: MCPConnectionKey, reason: string) {
-  const entry = connectionQueues.get(cacheKey);
+export function abortPendingConnections(
+  mcpConnectionQueues: MCPConnectionQueues,
+  cacheKey: MCPConnectionKey,
+  reason: string,
+) {
+  const entry = mcpConnectionQueues.get(cacheKey);
   if (entry) {
     entry.controller.abort(reason);
   }
@@ -477,25 +496,26 @@ export async function getOrCreateMCPConnection(params: {
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
-  cache: MCPManagerCache;
+  mcpConnectionCache: MCPManagerCache;
+  mcpConnectionQueues: MCPConnectionQueues;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
 }): Promise<Result<MCPConnectionResult>> {
-  const { connectionKey, cache } = params;
+  const { connectionKey, mcpConnectionCache, mcpConnectionQueues } = params;
 
   const cacheKey = createCacheKey(connectionKey);
-  const existingManager = cache.managers.get(cacheKey);
+  const existingManager = mcpConnectionCache.managers.get(cacheKey);
   if (existingManager) {
     return { success: true, data: { manager: existingManager, events: [] } };
   }
 
-  const { queue, controller } = getConnectionQueue(cacheKey);
+  const { queue, controller } = getConnectionQueue(mcpConnectionQueues, cacheKey);
 
   const result = await queue.add(
     async ({ signal }): Promise<Result<MCPConnectionResult>> => {
       try {
-        const existingManager = cache.managers.get(cacheKey);
+        const existingManager = mcpConnectionCache.managers.get(cacheKey);
         if (existingManager) {
           return { success: true, data: { manager: existingManager, events: [] } };
         }
@@ -507,7 +527,8 @@ export async function getOrCreateMCPConnection(params: {
           reducedState: params.reducedState,
           agentDurableObject: params.agentDurableObject,
           estateId: params.estateId,
-          cache,
+          mcpConnectionCache,
+          mcpConnectionQueues,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
@@ -518,17 +539,21 @@ export async function getOrCreateMCPConnection(params: {
           const abortReason = hasOAuthRequired
             ? "OAuth authorization required - aborting pending connection attempts"
             : "Connection failed - aborting pending connection attempts";
-          abortPendingConnections(cacheKey, abortReason);
+          abortPendingConnections(mcpConnectionQueues, cacheKey, abortReason);
         }
 
-        const manager = cache.managers.get(cacheKey);
+        const manager = mcpConnectionCache.managers.get(cacheKey);
         if (!manager) {
           return { success: true, data: { manager: undefined, events } };
         }
 
         return { success: true, data: { manager, events } };
       } catch (error) {
-        abortPendingConnections(cacheKey, `Connection error: ${String(error)}`);
+        abortPendingConnections(
+          mcpConnectionQueues,
+          cacheKey,
+          `Connection error: ${String(error)}`,
+        );
         return { success: false, error: String(error) };
       } finally {
         // Clean up empty queue after connection attempt.
@@ -536,9 +561,9 @@ export async function getOrCreateMCPConnection(params: {
         // is still being processed by the queue. The queue's internal state
         // (size and pending count) won't be updated until after our callback completes.
         setTimeout(() => {
-          const entry = connectionQueues.get(cacheKey);
+          const entry = mcpConnectionQueues.get(cacheKey);
           if (entry && entry.queue.size === 0 && entry.queue.pending === 0) {
-            connectionQueues.delete(cacheKey);
+            mcpConnectionQueues.delete(cacheKey);
           }
         }, 0); // Next tick is sufficient - just need to wait for queue to update its state
       }
@@ -564,7 +589,8 @@ export async function rehydrateExistingMCPConnection(params: {
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
-  cache: MCPManagerCache;
+  mcpConnectionCache: MCPManagerCache;
+  mcpConnectionQueues: MCPConnectionQueues;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
