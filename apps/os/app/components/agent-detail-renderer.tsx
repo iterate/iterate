@@ -16,6 +16,7 @@ import {
   Settings,
   Square,
   StopCircle,
+  User,
   Users,
   Wrench,
   X,
@@ -189,7 +190,7 @@ function MessageRenderer({
                       <Response>{contentItem.text}</Response>
                     </MessageContent>
                   </div>
-                  <MessageAvatar src="/user.svg" name="user" />
+                  <MessageAvatar icon={<User className="h-4 w-4" />} name="user" />
                 </Message>
               );
             }
@@ -250,7 +251,7 @@ function MessageRenderer({
                       <div className="text-sm opacity-75">[{label} content not rendered]</div>
                     </MessageContent>
                   </div>
-                  <MessageAvatar src="/user.svg" name="user" />
+                  <MessageAvatar icon={<User className="h-4 w-4" />} name="user" />
                 </Message>
               );
             }
@@ -895,7 +896,8 @@ function CoreEventRenderer({
               </div>
             </div>
             <MessageAvatar
-              src={isFromBot ? "/logo.svg" : ""}
+              src={isFromBot ? "/logo.svg" : undefined}
+              icon={isFromBot ? undefined : <User className="h-4 w-4" />}
               name={isFromBot ? "iterate" : userName}
             />
           </Message>
