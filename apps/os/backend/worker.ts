@@ -67,6 +67,7 @@ app.onError((err, c) => {
       const userId = c.get("session")?.user?.id || "anonymous";
 
       posthog.captureException(err, userId, {
+        environment: c.env.POSTHOG_ENVIRONMENT,
         path: c.req.path,
         method: c.req.method,
         url: c.req.url,
@@ -151,6 +152,7 @@ app.all("/api/trpc/*", (c) => {
             return;
           }
           posthog.captureException(error, userId, {
+            environment: c.env.POSTHOG_ENVIRONMENT,
             trpcPath: path,
             trpcType: type,
             trpcCode: error.code,
