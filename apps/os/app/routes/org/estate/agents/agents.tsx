@@ -26,46 +26,50 @@ import {
 import { useAgent } from "agents/react";
 import clsx from "clsx";
 import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import { useTRPC } from "../lib/trpc.ts";
-import { Button } from "../components/ui/button.tsx";
-import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
-import { Badge } from "../components/ui/badge.tsx";
-import { Alert, AlertDescription } from "../components/ui/alert.tsx";
+import { useTRPC } from "../../../../lib/trpc.ts";
+import { Button } from "../../../../components/ui/button.tsx";
+import { useEstateId, useEstateUrl } from "../../../../hooks/use-estate.ts";
+import { Badge } from "../../../../components/ui/badge.tsx";
+import { Alert, AlertDescription } from "../../../../components/ui/alert.tsx";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "../components/ui/collapsible.tsx";
-import { Label } from "../components/ui/label.tsx";
-import { Textarea } from "../components/ui/textarea.tsx";
-import { Checkbox } from "../components/ui/checkbox.tsx";
-import { Input } from "../components/ui/input.tsx";
+} from "../../../../components/ui/collapsible.tsx";
+import { Label } from "../../../../components/ui/label.tsx";
+import { Textarea } from "../../../../components/ui/textarea.tsx";
+import { Checkbox } from "../../../../components/ui/checkbox.tsx";
+import { Input } from "../../../../components/ui/input.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.tsx";
-import { Drawer, DrawerContent } from "../components/ui/drawer.tsx";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip.tsx";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.tsx";
+} from "../../../../components/ui/select.tsx";
+import { Drawer, DrawerContent } from "../../../../components/ui/drawer.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../../../components/ui/tooltip.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../../../components/ui/tabs.tsx";
 
 // AI elements imports
-import { Message, MessageContent, MessageAvatar } from "../components/ai-elements/message.tsx";
+import {
+  Message,
+  MessageContent,
+  MessageAvatar,
+} from "../../../../components/ai-elements/message.tsx";
 import {
   Tool,
   ToolHeader,
   ToolContent,
   ToolInput,
   ToolOutput,
-} from "../components/ai-elements/tool.tsx";
+} from "../../../../components/ai-elements/tool.tsx";
 import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
   ConversationScrollButton,
-} from "../components/ai-elements/conversation.tsx";
+} from "../../../../components/ai-elements/conversation.tsx";
 import {
   PromptInput,
   PromptInputBody,
@@ -79,27 +83,27 @@ import {
   PromptInputModelSelectContent,
   PromptInputModelSelectItem,
   PromptInputModelSelectValue,
-} from "../components/ai-elements/prompt-input.tsx";
+} from "../../../../components/ai-elements/prompt-input.tsx";
 import {
   Reasoning,
   ReasoningTrigger,
   ReasoningContent,
-} from "../components/ai-elements/reasoning.tsx";
-import { Response } from "../components/ai-elements/response.tsx";
-import { SerializedObjectCodeBlock } from "../components/serialized-object-code-block.tsx";
-import { AgentReducedState } from "../components/agent-reduced-state.tsx";
-import { PagerDialog } from "../components/pager-dialog.tsx";
-import type { IterateAgentState } from "../../backend/agent/iterate-agent.ts";
+} from "../../../../components/ai-elements/reasoning.tsx";
+import { Response } from "../../../../components/ai-elements/response.tsx";
+import { SerializedObjectCodeBlock } from "../../../../components/serialized-object-code-block.tsx";
+import { AgentReducedState } from "../../../../components/agent-reduced-state.tsx";
+import { PagerDialog } from "../../../../components/pager-dialog.tsx";
+import type { IterateAgentState } from "../../../../../backend/agent/iterate-agent.ts";
 import type {
   AgentCoreEvent,
   AgentCoreEventInput,
   CoreReducedState,
-} from "../../backend/agent/agent-core-schemas.ts";
-import type { SlackSliceEvent, SlackSliceState } from "../../backend/agent/slack-slice.ts";
-import { isThinking } from "../../backend/agent/agent-core-schemas.ts";
-import { fulltextSearchInObject } from "../../backend/utils/type-helpers.ts";
-import type { SlackWebhookPayload } from "../../backend/agent/slack.types.ts";
-import { resolveEmoji } from "../lib/emoji-mapping.ts";
+} from "../../../../../backend/agent/agent-core-schemas.ts";
+import type { SlackSliceEvent, SlackSliceState } from "../../../../../backend/agent/slack-slice.ts";
+import { isThinking } from "../../../../../backend/agent/agent-core-schemas.ts";
+import { fulltextSearchInObject } from "../../../../../backend/utils/type-helpers.ts";
+import type { SlackWebhookPayload } from "../../../../../backend/agent/slack.types.ts";
+import { resolveEmoji } from "../../../../lib/emoji-mapping.ts";
 
 // Types and interfaces
 interface FilterState {

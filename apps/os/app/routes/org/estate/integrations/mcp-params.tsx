@@ -4,8 +4,8 @@ import { useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { Shield, Eye, EyeOff } from "lucide-react";
 import { z } from "zod/v4";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
+import { Button } from "../../../../components/ui/button.tsx";
+import { Input } from "../../../../components/ui/input.tsx";
 import {
   Form,
   FormControl,
@@ -14,19 +14,19 @@ import {
   FormItem,
   FormLabel,
   FormMessage,
-} from "../components/ui/form.tsx";
+} from "../../../../components/ui/form.tsx";
 import {
   Card,
   CardContent,
   CardHeader,
   CardTitle,
   CardDescription,
-} from "../components/ui/card.tsx";
-import { Alert, AlertDescription } from "../components/ui/alert.tsx";
-import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "../hooks/use-estate.ts";
-import { AgentDurableObjectInfo } from "../../backend/auth/oauth-state-schemas.ts";
-import { MCPParam } from "../../backend/agent/tool-schemas.ts";
+} from "../../../../components/ui/card.tsx";
+import { Alert, AlertDescription } from "../../../../components/ui/alert.tsx";
+import { useTRPC } from "../../../../lib/trpc.ts";
+import { useEstateId } from "../../../../hooks/use-estate.ts";
+import { AgentDurableObjectInfo } from "../../../../../backend/auth/oauth-state-schemas.ts";
+import { MCPParam } from "../../../../../backend/agent/tool-schemas.ts";
 
 export function meta() {
   return [

@@ -1,10 +1,10 @@
 import { ArrowRight, Github, ChevronDown, ChevronRight, X } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Button } from "../components/ui/button.tsx";
-import { Badge } from "../components/ui/badge.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
+import { Button } from "../../../../components/ui/button.tsx";
+import { Badge } from "../../../../components/ui/badge.tsx";
+import { Input } from "../../../../components/ui/input.tsx";
+import { Label } from "../../../../components/ui/label.tsx";
 import {
   Dialog,
   DialogContent,
@@ -12,7 +12,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.tsx";
+} from "../../../../components/ui/dialog.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -22,30 +22,30 @@ import {
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
-} from "../components/ui/alert-dialog.tsx";
+} from "../../../../components/ui/alert-dialog.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.tsx";
+} from "../../../../components/ui/select.tsx";
 import {
   Collapsible,
   CollapsibleContent,
   CollapsibleTrigger,
-} from "../components/ui/collapsible.tsx";
+} from "../../../../components/ui/collapsible.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
   DropdownMenuSeparator,
-} from "../components/ui/dropdown-menu.tsx";
-import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "../hooks/use-estate.ts";
-import { useSlackConnection } from "../hooks/use-slack-connection.ts";
-import type { Route } from "./+types/integrations";
+} from "../../../../components/ui/dropdown-menu.tsx";
+import { useTRPC } from "../../../../lib/trpc.ts";
+import { useEstateId } from "../../../../hooks/use-estate.ts";
+import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
+import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

@@ -275,30 +275,37 @@ export const integrationsRouter = router({
     }),
   // Make it work
   // TODO: Make this good later
-  startGithubAppInstallFlow: estateProtectedProcedure.mutation(async ({ ctx, input }) => {
-    const state = generateRandomString(32);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-    const { estateId } = input;
+  startGithubAppInstallFlow: estateProtectedProcedure
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = generateRandomString(32);
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+      const { estateId, callbackURL } = input;
 
-    const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
-    const data = JSON.stringify({
-      userId: ctx.user.id,
-      estateId,
-      redirectUri,
-    });
+      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/github/callback`;
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        estateId,
+        redirectUri,
+        callbackURL,
+      });
 
-    await ctx.db.insert(schemas.verification).values({
-      identifier: state,
-      value: data,
-      expiresAt,
-    });
+      await ctx.db.insert(schemas.verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
 
-    const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
+      const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
 
-    return {
-      installationUrl,
-    };
-  }),
+      return {
+        installationUrl,
+      };
+    }),
   listAvailableGithubRepos: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
     const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);

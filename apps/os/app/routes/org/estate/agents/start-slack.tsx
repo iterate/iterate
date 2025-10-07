@@ -3,22 +3,22 @@ import { useNavigate } from "react-router";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { MessageSquarePlus, Search, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
-import { Textarea } from "../components/ui/textarea.tsx";
-import { Skeleton } from "../components/ui/skeleton.tsx";
-import { Alert, AlertDescription } from "../components/ui/alert.tsx";
+import { Button } from "../../../../components/ui/button.tsx";
+import { Input } from "../../../../components/ui/input.tsx";
+import { Label } from "../../../../components/ui/label.tsx";
+import { Textarea } from "../../../../components/ui/textarea.tsx";
+import { Skeleton } from "../../../../components/ui/skeleton.tsx";
+import { Alert, AlertDescription } from "../../../../components/ui/alert.tsx";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.tsx";
-import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
-import type { Route } from "./+types/agents.start-slack";
+} from "../../../../components/ui/select.tsx";
+import { useTRPC } from "../../../../lib/trpc.ts";
+import { useEstateId, useEstateUrl } from "../../../../hooks/use-estate.ts";
+import type { Route } from "./+types/start-slack.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [

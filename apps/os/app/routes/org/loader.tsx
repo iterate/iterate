@@ -1,95 +1,88 @@
-import { Outlet, redirect, isRouteErrorResponse, useRouteError, useParams } from "react-router";
-import { AlertCircle, Home } from "lucide-react";
+import {
+  Outlet,
+  redirect,
+  data,
+  isRouteErrorResponse,
+  useRouteError,
+  useParams,
+} from "react-router";
 import { useMutation } from "@tanstack/react-query";
-import { getDb } from "../../backend/db/client.ts";
-import { getAuth } from "../../backend/auth/auth.ts";
-import { getUserOrganizationAccess, getUserEstateAccess } from "../../backend/trpc/trpc.ts";
-import { DashboardLayout } from "../components/dashboard-layout.tsx";
-import { Button } from "../components/ui/button.tsx";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../components/ui/card.tsx";
-import { authClient } from "../lib/auth-client.ts";
-import { useTRPCClient } from "../lib/trpc.ts";
-import type { Route } from "./+types/org-layout";
+import { AlertCircle, Home } from "lucide-react";
+import { asc, eq } from "drizzle-orm";
+import { getDb } from "../../../backend/db/client.ts";
+import { getAuth } from "../../../backend/auth/auth.ts";
+import { estate } from "../../../backend/db/schema.ts";
+import { getUserOrganizationAccess } from "../../../backend/trpc/trpc.ts";
+import { Button } from "../../components/ui/button.tsx";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
+import { authClient } from "../../lib/auth-client.ts";
+import { useTRPCClient } from "../../lib/trpc.ts";
+import { DashboardLayout } from "../../components/dashboard-layout.tsx";
+import type { Route } from "./+types/loader.ts";
 
-// Server-side loader that checks organization and estate access
+// Server-side loader that checks organization access
 export async function loader({ request, params }: Route.LoaderArgs) {
-  const { organizationId, estateId } = params;
+  const { organizationId } = params;
+
+  // No idea why params aren't correctly typed here...
+  if (!organizationId) {
+    throw new Error("Organization ID is required");
+  }
 
   // Get the database and auth instances
   const db = getDb();
   const auth = getAuth(db);
 
-  // Get session using Better Auth
+  // Step 1: Check for session, redirect to login if no session
   const session = await auth.api.getSession({
     headers: request.headers,
   });
 
-  // If no session, redirect to login
   if (!session?.user?.id) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Validate organization ID exists
-  if (!organizationId) {
-    throw redirect("/");
-  }
+  // Step 3: Check if user has access to the organization
+  const { hasAccess: hasOrganizationAccess, organization } = await getUserOrganizationAccess(
+    db,
+    session.user.id,
+    organizationId,
+  );
 
-  // If this is an estate route, check estate access
-  if (estateId) {
-    const { hasAccess } = await getUserEstateAccess(db, session.user.id, estateId, organizationId);
-
-    if (!hasAccess) {
-      // Clear the invalid estate cookie by setting an expired cookie
-      const headers = new Headers();
-      headers.append(
-        "Set-Cookie",
-        "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
-      );
-
-      // Throw a 403 error
-      throw new Response("You don't have access to this estate", {
-        status: 403,
-        statusText: "Forbidden",
-        headers,
-      });
-    }
-
-    // User has access to estate, set the estate cookie for future use
-    const estateData = JSON.stringify({ organizationId, estateId });
-    const encodedData = encodeURIComponent(estateData);
-    const expires = new Date();
-    expires.setDate(expires.getDate() + 30);
-
-    return new Response(null, {
-      headers: {
-        "Set-Cookie": `iterate-selected-estate=${encodedData}; Path=/; Expires=${expires.toUTCString()}; SameSite=Lax`,
-      },
-    });
-  }
-
-  // For organization-level routes, just check organization access
-  const { hasAccess } = await getUserOrganizationAccess(db, session.user.id, organizationId);
-
-  if (!hasAccess) {
-    // Throw a 403 error
+  if (!hasOrganizationAccess || !organization) {
     throw new Response("You don't have access to this organization", {
       status: 403,
       statusText: "Forbidden",
     });
   }
 
-  return null;
-}
+  // Step 4: Check if organization is onboarded, redirect to onboarding if not
+  const requestUrl = new URL(request.url);
+  const onboardingPath = `/${organizationId}/onboarding`;
+  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
+  const isOnboarded = await isOrganizationOnboarded(db, organizationId);
 
-// The component just renders the outlet since access is already checked
-export default function OrganizationLayout() {
-  return (
-    <DashboardLayout>
-      <Outlet />
-    </DashboardLayout>
+  if (!isOnboardingRoute && !isOnboarded) {
+    throw redirect(onboardingPath);
+  }
+
+  const responseHeaders = new Headers({ "Content-Type": "application/json" });
+
+  return data(
+    {
+      organization,
+    },
+    {
+      headers: responseHeaders,
+    },
   );
 }
 
+export default function OrganizationLayout() {
+  return <Outlet />;
+}
+
+// Error boundary to display access errors nicely
 // Error boundary to display access errors nicely
 export function ErrorBoundary() {
   const error = useRouteError();
@@ -164,4 +157,17 @@ export function ErrorBoundary() {
       </div>
     </DashboardLayout>
   );
+}
+
+async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizationId: string) {
+  const firstEstate = await db.query.estate.findFirst({
+    where: eq(estate.organizationId, organizationId),
+    orderBy: asc(estate.createdAt),
+  });
+
+  if (!firstEstate) {
+    return false;
+  }
+
+  return Boolean(firstEstate.connectedRepoId);
 }

@@ -330,7 +330,7 @@ export const integrationsPlugin = () =>
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
 
           const { link, callbackUrl: callbackURL } = parsedState;
-          let estateId = parsedState.estateId;
+          const estateId = parsedState.estateId;
 
           const code = ctx.query.code;
 
@@ -431,42 +431,11 @@ export const integrationsPlugin = () =>
               });
             }
 
-            // When a user is created, an estate and organization is created automatically via hooks
-            // SO we can be sure that the user has only that estate
-            const memberships = await db.query.organizationUserMembership.findFirst({
-              where: eq(schema.organizationUserMembership.userId, user.id),
-              columns: {},
-              with: {
-                organization: {
-                  columns: {},
-                  with: {
-                    estates: {
-                      columns: {
-                        id: true,
-                      },
-                    },
-                  },
-                },
-              },
-            });
-
-            if (!memberships) {
-              // This should never happen
-              return ctx.json({
-                error: "Internal Error: Failed to get estate memberships, this should never happen",
-              });
-            }
-
             const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
             await setSessionCookie(ctx, {
               session,
               user,
             });
-
-            // If the estate id is not set, set it to the first estate in the organization
-            if (!estateId) {
-              estateId = memberships.organization.estates[0].id;
-            }
           } else {
             const linkedUser = await ctx.context.internalAdapter.findUserByEmail(link.email);
             if (!linkedUser) {
@@ -500,10 +469,17 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get account id" });
           }
 
-          if (!estateId) {
-            return ctx.json({ error: "Failed to get estate id" });
+          // For direct signup, just redirect and let the org-layout handle everything
+          if (!link) {
+            return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
           }
 
+          // For linking flow, we need an estateId
+          if (!estateId) {
+            return ctx.json({ error: "Failed to get estate id for linking" });
+          }
+
+          // For linking flow, connect everything now
           // Sync Slack users to the organization in the background
           waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
 
@@ -540,11 +516,7 @@ export const integrationsPlugin = () =>
               },
             });
 
-          if (!callbackURL) {
-            return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
-          }
-
-          return ctx.redirect(callbackURL);
+          return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
         },
       ),
     },

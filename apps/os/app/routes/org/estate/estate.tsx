@@ -18,17 +18,17 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { Button } from "../components/ui/button.tsx";
-import { Input } from "../components/ui/input.tsx";
-import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "../hooks/use-estate.ts";
+import { Button } from "../../../components/ui/button.tsx";
+import { Input } from "../../../components/ui/input.tsx";
+import { useTRPC } from "../../../lib/trpc.ts";
+import { useEstateId } from "../../../hooks/use-estate.ts";
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "../components/ui/select.tsx";
+} from "../../../components/ui/select.tsx";
 import {
   Dialog,
   DialogContent,
@@ -36,9 +36,9 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "../components/ui/dialog.tsx";
-import type { AppRouter } from "../../backend/trpc/root.ts";
-import { Badge } from "../components/ui/badge.tsx";
+} from "../../../components/ui/dialog.tsx";
+import type { AppRouter } from "../../../../backend/trpc/root.ts";
+import { Badge } from "../../../components/ui/badge.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
