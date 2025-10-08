@@ -1494,7 +1494,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
     const userRole = await this.getUserRole(input.onBehalfOfIterateUserId);
-    if (!userRole || userRole === "guest") {
+    if (!userRole || userRole === "guest" || userRole == "external") {
       return {
         success: false,
         error:
