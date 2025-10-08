@@ -76,7 +76,7 @@ jobs:
           echo "Using commit hash: $COMMIT_HASH"
 
           # Replace workspace:* with pkg.pr.new URL
-          sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate-com/iterate/@iterate-com/sdk@$COMMIT_HASH\"|g" package.json
+          sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@$COMMIT_HASH\"|g" package.json
 
           # Show the change
           echo "Updated package.json:"
@@ -97,6 +97,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes to sync"
           else
-            git commit -m "Sync from iterate-com/iterate@$COMMIT_HASH"
+            git commit -m "Sync from iterate/iterate@$COMMIT_HASH"
             git push
           fi
