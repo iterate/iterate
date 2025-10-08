@@ -11,6 +11,7 @@ import { permalink as getPermalink } from "braintrust/browser";
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
+import { toFile, type Uploadable } from "openai";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -32,7 +33,12 @@ export type AgentInitParams = {
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
-import { getFilePublicURL, uploadFile, uploadFileFromURL } from "../file-handlers.ts";
+import {
+  getFileContent,
+  getFilePublicURL,
+  uploadFile,
+  uploadFileFromURL,
+} from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
@@ -1701,113 +1707,170 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async generateVideo(input: Inputs["generateVideo"]) {
-    const videoCreationResponse = await fetch("https://api.openai.com/v1/videos", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${env.OPENAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        prompt: input.prompt,
-        model: input.model,
-        seconds: input.seconds,
-        size: input.size,
-        input_reference: input.input_reference,
-      }),
+    const openai = await openAIProvider({
+      env,
+      estateName: this.estate.name,
     });
 
-    if (!videoCreationResponse.ok) {
-      const errorText = await videoCreationResponse.text();
-      throw new Error(`Video creation failed: ${videoCreationResponse.status} ${errorText}`);
+    let inputReference: Uploadable | undefined;
+    if (input.inputReferenceFileId) {
+      const { content, fileRecord } = await getFileContent({
+        iterateFileId: input.inputReferenceFileId,
+        db: this.db,
+        estateId: this.databaseRecord.estateId,
+      });
+      inputReference = await toFile(content, fileRecord.filename ?? undefined, {
+        type: fileRecord.mimeType ?? undefined,
+      });
     }
 
-    const videoCreationData = (await videoCreationResponse.json()) as {
-      id: string;
-      status: string;
-    };
+    const video = await openai.videos.create({
+      prompt: input.prompt,
+      model: input.model,
+      seconds: input.seconds,
+      size: input.size,
+      input_reference: inputReference,
+    });
 
-    logger.debug("polling OpenAI video:", { videoId: videoCreationData.id });
-    void (async () => {
-      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-      while (true) {
-        try {
-          const statusRes = await fetch(
-            `https://api.openai.com/v1/videos/${videoCreationData.id}`,
-            {
-              method: "GET",
-              headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
-            },
-          );
-          if (!statusRes.ok) {
-            logger.debug("video status not ok:", statusRes.status);
-            await sleep(5000);
-            continue;
-          }
-          const statusJson = (await statusRes.json()) as { id: string; status: string };
-          logger.debug("video status:", statusJson);
-          if (statusJson.status === "completed") {
-            const contentRes = await fetch(
-              `https://api.openai.com/v1/videos/${videoCreationData.id}/content`,
-              {
-                method: "GET",
-                headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
-              },
-            );
-            if (contentRes.ok && contentRes.body) {
-              const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
-              const contentLengthHeader = contentRes.headers.get("content-length");
-              const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
-              logger.debug("uploading video to r2", { contentLength, contentType });
-              const fileRecord = await uploadFile({
-                stream: contentRes.body,
-                contentLength,
-                filename: `generated-video-${Date.now()}.mp4`,
-                contentType,
-                estateId: this.databaseRecord.estateId,
-                db: this.db,
-              });
-              logger.debug("video uploaded:", {
-                fileId: fileRecord.id,
-                publicURL: getFilePublicURL(fileRecord.id),
-              });
-
-              this.agentCore.addEvent({
-                type: "CORE:FILE_SHARED",
-                data: {
-                  direction: "from-agent-to-user",
-                  iterateFileId: fileRecord.id,
-                  openAIFileId: fileRecord.openAIFileId ?? undefined,
-                  mimeType: fileRecord.mimeType ?? undefined,
-                },
-                metadata: {
-                  openaiSoraVideoId: videoCreationData.id,
-                },
-                triggerLLMRequest: true,
-              });
-            } else {
-              logger.debug("video content download failed:", contentRes.status);
-            }
-            return;
-          }
-          if (statusJson.status === "failed" || statusJson.status === "cancelled") {
-            logger.debug("video generation terminal:", statusJson.status);
-            return;
-          }
-          await sleep(5000);
-        } catch (err) {
-          logger.debug("video polling error:", err);
-          await sleep(5000);
-        }
-      }
-    })();
+    logger.info("scheduling OpenAI video poll:", { videoId: video.id });
+    await this.schedule(10, "pollForVideoGeneration", {
+      videoId: video.id,
+      pollUntil: Date.now() + 10 * 60 * 1000, // Poll for at most 10 minutes
+    });
 
     return {
-      status: "queued",
+      status: video.status,
       message:
-        "The video generation has been queued. I will poll the API every 5 seconds and share the video as soon as it's ready.",
-      apiResponse: videoCreationData,
+        "The video generation has been queued. I will poll the API every 10 seconds and share the video as soon as it's ready.",
+      apiResponse: {
+        id: video.id,
+        status: video.status,
+        progress: video.progress,
+      },
     };
   }
+
+  async pollForVideoGeneration(data: { videoId: string; pollUntil: number }) {
+    // Helper function to add developer messages
+    const addDeveloperMessage = ({
+      text,
+      triggerLLMRequest,
+    }: {
+      text: string;
+      triggerLLMRequest: boolean;
+    }) => {
+      this.agentCore.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text,
+            },
+          ],
+        },
+        triggerLLMRequest,
+      });
+    };
+
+    // Check if we've exceeded the polling time limit
+    if (Date.now() > data.pollUntil) {
+      logger.info("video polling timeout reached:", { videoId: data.videoId });
+      addDeveloperMessage({
+        text: `Video generation polling timeout reached for video ${data.videoId}. The video generation is taking longer than expected (>10 minutes).`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    const openai = await openAIProvider({
+      env,
+      estateName: this.estate.name,
+    });
+
+    try {
+      const video = await openai.videos.retrieve(data.videoId);
+      logger.info("video status:", {
+        id: video.id,
+        status: video.status,
+        progress: video.progress,
+      });
+
+      // Add developer message about video progress
+      addDeveloperMessage({
+        text: `Video ${data.videoId} has status ${video.status} and is ${video.progress}% complete`,
+        triggerLLMRequest: false,
+      });
+
+      if (video.status === "failed") {
+        const errorMessage = video.error
+          ? `${video.error.code}: ${video.error.message}`
+          : "Unknown error";
+        addDeveloperMessage({
+          text: `Video generation failed for video ${data.videoId}: ${errorMessage}`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+
+      if (video.status === "completed") {
+        const contentRes = await openai.videos.downloadContent(data.videoId);
+        if (contentRes.ok && contentRes.body) {
+          const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
+          const contentLengthHeader = contentRes.headers.get("content-length");
+          const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+          logger.info("uploading video to r2", { contentLength, contentType });
+          const fileRecord = await uploadFile({
+            stream: contentRes.body,
+            contentLength,
+            filename: `generated-video-${Date.now()}.mp4`,
+            contentType,
+            estateId: this.databaseRecord.estateId,
+            db: this.db,
+          });
+          logger.info("video uploaded:", {
+            fileId: fileRecord.id,
+            publicURL: getFilePublicURL(fileRecord.id),
+          });
+
+          this.agentCore.addEvent({
+            type: "CORE:FILE_SHARED",
+            data: {
+              direction: "from-agent-to-user",
+              iterateFileId: fileRecord.id,
+              openAIFileId: fileRecord.openAIFileId ?? undefined,
+              mimeType: fileRecord.mimeType ?? undefined,
+            },
+            metadata: {
+              openaiSoraVideoId: data.videoId,
+            },
+            triggerLLMRequest: true,
+          });
+        } else {
+          throw new Error(`Video content download failed: ${contentRes.status}`);
+        }
+        return;
+      }
+
+      // For in_progress and queued statuses, continue polling
+    } catch (err) {
+      logger.error("video polling error:", err);
+      addDeveloperMessage({
+        text: `Video generation polling error for video ${data.videoId}: ${err}`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    // Schedule next poll
+    await this.schedule(10, "pollForVideoGeneration", {
+      videoId: data.videoId,
+      pollUntil: data.pollUntil,
+    });
+  }
+
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config

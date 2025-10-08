@@ -196,8 +196,8 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3
       openai:
-        specifier: ^6.1.0
-        version: 6.1.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11)
+        specifier: ^6.2.0
+        version: 6.2.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11)
       p-queue:
         specifier: ^9.0.0
         version: 9.0.0
@@ -7369,8 +7369,8 @@ packages:
       zod:
         optional: true
 
-  openai@6.1.0:
-    resolution: {integrity: sha512-5sqb1wK67HoVgGlsPwcH2bUbkg66nnoIYKoyV9zi5pZPqh7EWlmSrSDjAh4O5jaIg/0rIlcDKBtWvZBuacmGZg==}
+  openai@6.2.0:
+    resolution: {integrity: sha512-qqjzHls7F5xkXNGy9P1Ei1rorI5LWupUUFWP66zPU8FlZbiITX8SFcHMKNZg/NATJ0LpIZcMUFxSwQmdeQPwSw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -18897,7 +18897,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  openai@6.1.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11):
+  openai@6.2.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11):
     optionalDependencies:
       ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod: 4.1.11
