@@ -267,8 +267,7 @@ export async function syncSlackChannels(
 
     await db.transaction(async (tx) => {
       const channelMappings = channels.map((channel) => ({
-        providerId: "slack-bot" as const,
-        internalEstateId: estateId,
+        estateId: estateId,
         externalId: channel.id!,
         name: channel.name!,
         isShared: channel.is_shared ?? false,
@@ -280,13 +279,10 @@ export async function syncSlackChannels(
 
       if (channelMappings.length > 0) {
         await tx
-          .insert(schema.providerChannelMapping)
+          .insert(schema.slackChannel)
           .values(channelMappings)
           .onConflictDoUpdate({
-            target: [
-              schema.providerChannelMapping.providerId,
-              schema.providerChannelMapping.externalId,
-            ],
+            target: [schema.slackChannel.estateId, schema.slackChannel.externalId],
             set: {
               name: sql`excluded.name`,
               isShared: sql`excluded.is_shared`,

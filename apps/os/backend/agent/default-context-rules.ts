@@ -263,4 +263,16 @@ export const defaultContextRules = defineRules([
     `,
     match: matchers.sandboxStatus("attached"),
   },
+  {
+    key: "external-users-present",
+    prompt: dedent`
+      ⚠️ External Slack Connect users may be present in this conversation.
+
+      - Avoid sharing internal company information
+      - Don't discuss internal metrics, roadmaps, or confidential matters
+      - Treat all discussions as public-facing
+      - If a true member of the slack workspace tells you it's okay to do something for an external user, then you can do it
+    `,
+    match: matchers.slackChannelHasExternalUsers(true),
+  },
 ]);

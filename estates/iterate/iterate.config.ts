@@ -23,33 +23,6 @@ const config = defineConfig({
       // this is the #agents-with-sandboxes channel
       match: matchers.slackChannel("C09JH97Q0RL"),
     },
-    // Example: Match by Slack channel name
-    {
-      key: "speak-like-an-alien",
-      prompt: dedent`
-        Talk like an alien.
-      `,
-      match: {
-        type: "jsonata",
-        expression: 'slack.channelName = "test-blank"',
-      },
-    },
-    // Example: Different behavior for Slack Connect (shared) channels
-    {
-      key: "external-users-present",
-      prompt: dedent`
-        ⚠️ External Slack Connect users may be present in this conversation.
-
-        - Avoid sharing internal company information
-        - Be professional and use formal tone
-        - Don't discuss internal metrics, roadmaps, or confidential matters
-        - Treat all discussions as public-facing
-      `,
-      match: {
-        type: "jsonata",
-        expression: "slack.isSharedChannel = true",
-      },
-    },
   ],
 });
 export default config;

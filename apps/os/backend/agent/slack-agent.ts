@@ -143,22 +143,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
-      getRuleMatchData: (state: CoreReducedState) => {
-        const slackState = state as SlackSliceState;
-
-        return {
-          agentCoreState: state,
-          durableObjectClassName: this.constructor.name,
-          slack: {
-            channelId: slackState.slackChannelId || null,
-            channelName: slackState.slackChannel?.name || null,
-            threadId: slackState.slackThreadId || null,
-            isSharedChannel: slackState.slackChannel
-              ? slackState.slackChannel.isShared || slackState.slackChannel.isExtShared
-              : null,
-          },
-        };
-      },
       onEventAdded: (payload: {
         event: AgentCoreEvent;
         reducedState: CoreReducedState;
@@ -539,10 +523,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     let slackChannel: { name: string; isShared: boolean; isExtShared: boolean } | null = null;
 
     try {
-      const channelMapping = await this.db.query.providerChannelMapping.findFirst({
+      const channelMapping = await this.db.query.slackChannel.findFirst({
         where: and(
-          eq(schema.providerChannelMapping.providerId, "slack-bot"),
-          eq(schema.providerChannelMapping.externalId, channelId),
+          eq(schema.slackChannel.estateId, this.databaseRecord.estateId),
+          eq(schema.slackChannel.externalId, channelId),
         ),
         columns: {
           name: true,

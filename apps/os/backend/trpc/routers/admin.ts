@@ -319,9 +319,7 @@ export const adminRouter = router({
         });
       }
 
-      waitUntil(syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId));
-
-      return { success: true };
+      return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
     }),
   syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     const estates = await ctx.db.query.estate.findMany();

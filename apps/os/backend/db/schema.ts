@@ -160,7 +160,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
-  providerChannelMapping: many(providerChannelMapping),
+  slackChannels: many(slackChannel),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -248,12 +248,11 @@ export const providerEstateMappingRelations = relations(providerEstateMapping, (
   }),
 }));
 
-export const providerChannelMapping = pgTable(
-  "provider_channel_mapping",
+export const slackChannel = pgTable(
+  "slack_channel",
   (t) => ({
-    id: iterateId("pcm"),
-    providerId: t.text().notNull(),
-    internalEstateId: t
+    id: iterateId("slc"),
+    estateId: t
       .text()
       .notNull()
       .references(() => estate.id, { onDelete: "cascade" }),
@@ -266,16 +265,12 @@ export const providerChannelMapping = pgTable(
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
-  (t) => [
-    uniqueIndex().on(t.providerId, t.externalId),
-    index().on(t.internalEstateId),
-    index().on(t.name),
-  ],
+  (t) => [uniqueIndex().on(t.estateId, t.externalId), index().on(t.estateId), index().on(t.name)],
 );
 
-export const providerChannelMappingRelations = relations(providerChannelMapping, ({ one }) => ({
-  internalEstate: one(estate, {
-    fields: [providerChannelMapping.internalEstateId],
+export const slackChannelRelations = relations(slackChannel, ({ one }) => ({
+  estate: one(estate, {
+    fields: [slackChannel.estateId],
     references: [estate.id],
   }),
 }));

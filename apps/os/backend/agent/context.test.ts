@@ -179,13 +179,34 @@ describe("evaluateContextRuleMatchers", () => {
     // slackChannel matcher
     {
       description: "[slackChannel] matches exact channel ID",
-      state: { slackChannelId: "C08R1SMTZGD" },
+      matchAgainst: {
+        agentCoreState: {},
+        durableObjectClassName: "SlackAgent",
+        slackChannelId: "C08R1SMTZGD",
+        slackChannelName: "general",
+      },
       matchers: [matchers.slackChannel("C08R1SMTZGD")],
       expected: true,
     },
     {
+      description: "[slackChannel] matches channel name",
+      matchAgainst: {
+        agentCoreState: {},
+        durableObjectClassName: "SlackAgent",
+        slackChannelId: "C08R1SMTZGD",
+        slackChannelName: "general",
+      },
+      matchers: [matchers.slackChannel("general")],
+      expected: true,
+    },
+    {
       description: "[slackChannel] different channel returns false",
-      state: { slackChannelId: "C08R1SMTZGD" },
+      matchAgainst: {
+        agentCoreState: {},
+        durableObjectClassName: "SlackAgent",
+        slackChannelId: "C08R1SMTZGD",
+        slackChannelName: "general",
+      },
       matchers: [matchers.slackChannel("DIFFERENT_CHANNEL")],
       expected: false,
     },
