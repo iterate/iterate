@@ -2,7 +2,6 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
-import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -30,7 +29,6 @@ import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./sl
 import type {
   AgentCoreEvent,
   CoreReducedState,
-  LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
@@ -86,7 +84,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (!status) return;
 
     if (this.agentCore.llmRequestInProgress()) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
       return;
     }
 
@@ -96,23 +94,23 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         data: { status: null },
       },
     ]);
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(null));
+    void this.updateSlackStatusDebounced(null);
   }, 15000);
 
   private syncTypingIndicator() {
     const state = this.agentCore.state as SlackSliceState;
     const status = state.typingIndicatorStatus ?? null;
 
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(status));
+    void this.updateSlackStatusDebounced(status);
 
     if (status) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
     }
   }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
-    await super.initAfterConstructorBeforeOnStart(params);
+  async initIterateAgent(params: AgentInitParams) {
+    await super.initIterateAgent(params);
 
     if (params.record.durableObjectName.includes("mock_slack")) {
       this.slackAPI = createSlackAPIMock<WebClient>();
@@ -174,17 +172,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "CORE:FILE_SHARED": {
             const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
             if (fileSharedEvent.data.direction === "from-agent-to-user") {
-              this.ctx.waitUntil(
-                this.shareFileWithSlack({
-                  iterateFileId: fileSharedEvent.data.iterateFileId,
-                  originalFilename: fileSharedEvent.data.originalFilename,
-                }).catch((error) => {
-                  logger.warn(
-                    `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
-                    error,
-                  );
-                }),
-              );
+              void this.shareFileWithSlack({
+                iterateFileId: fileSharedEvent.data.iterateFileId,
+                originalFilename: fileSharedEvent.data.originalFilename,
+              }).catch((error) => {
+                logger.warn(
+                  `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
+                  error,
+                );
+              });
             }
             break;
           }
@@ -192,12 +188,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
-            waitUntil(
-              this.getAgentDebugURL().then((url) =>
-                this.sendSlackMessage({
-                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
-                }),
-              ),
+            void this.getAgentDebugURL().then((url) =>
+              this.sendSlackMessage({
+                text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
+              }),
             );
             break;
           }
@@ -214,6 +208,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
+        mcpConnectionCache: this.mcpManagerCache,
+        mcpConnectionQueues: this.mcpConnectionQueues,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();
         },
@@ -283,10 +279,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   /**
    * Fetches previous messages in a Slack thread and returns an LLM input item event
+   * Also processes any files that were shared in the thread history
    */
   public async getSlackThreadHistoryInputEvents(
     threadTs: string,
-  ): Promise<LlmInputItemEventInput[]> {
+    botUserId: string | undefined,
+  ): Promise<AgentCoreEventInput[]> {
     const timings: Record<string, number> = { startTime: performance.now() };
     const previousMessages = await this.db
       .select()
@@ -338,7 +336,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ],
     });
 
-    return [
+    const events: AgentCoreEventInput[] = [
       {
         type: "CORE:LLM_INPUT_ITEM",
         data: {
@@ -355,6 +353,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         metadata: { timings },
       },
     ];
+
+    // Process any files that were shared in the thread history
+    const fileEventsPromises = previousMessages.map(async (message) => {
+      const slackEvent = message.data as SlackEvent;
+      return await this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId);
+    });
+
+    const fileEventsArrays = await Promise.all(fileEventsPromises);
+    const fileEvents = fileEventsArrays.flat();
+
+    events.push(...fileEvents);
+
+    return events;
   }
 
   /**
@@ -725,7 +736,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         : Promise.resolve([]),
       this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId),
       !isSlackInitialized && !isThreadStarter
-        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs)
+        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs, botUserId)
         : Promise.resolve([]),
     ]);
     events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());

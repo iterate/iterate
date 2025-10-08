@@ -217,9 +217,7 @@ export const defaultContextRules = defineRules([
     prompt: dedent`
       When using Linear tools:
       - When displaying Linear issues, use: "<issue.url|issue.identifier>: title (_state_)".
-      - For bug tickets, gather: steps to reproduce, expected vs. actual behavior, and environment.
-      - For feature tickets, require: user story and success criteria.
-      - If information is missing, ask targeted questions; avoid using placeholders like "TBD".
+      - Make sure to link the slack thread URL to the linear issue
       - Tools that take a "limit" parameter can be slow if limit is > 10 so default to that
       - When using the linear_oauth_proxy_list_issues tool:
         - Active issues are recently (in the last 7 days) created or updated issues with state 'Up Next', 'In Progress' or 'In Review' 

@@ -153,11 +153,20 @@ slackApp.post("/webhook", async (c) => {
     threadTs: messageMetadata.threadTs,
   });
 
-  // look up in the database to get all the agents by routing key
+  // look up in the database to get all the agents by routing key (hydrate estate/org/config)
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
     where: eq(schema.agentInstanceRoute.routingKey, routingKey),
     with: {
-      agentInstance: true,
+      agentInstance: {
+        with: {
+          estate: {
+            with: {
+              organization: true,
+              iterateConfigs: true,
+            },
+          },
+        },
+      },
     },
   });
 
@@ -180,12 +189,21 @@ slackApp.post("/webhook", async (c) => {
     }
   }
 
-  const agentStub = await SlackAgent.getOrCreateStubByRoute({
-    db,
-    estateId,
-    route: routingKey,
-    reason: "Slack webhook received",
-  });
+  const agentStub = agentRoute?.agentInstance?.estate
+    ? await SlackAgent.getStub({
+        agentInitParams: {
+          record: agentRoute.agentInstance,
+          estate: agentRoute.agentInstance.estate,
+          organization: agentRoute.agentInstance.estate.organization!,
+          iterateConfig: agentRoute.agentInstance.estate.iterateConfigs?.[0]?.config ?? {},
+        },
+      })
+    : await SlackAgent.getOrCreateStubByRoute({
+        db,
+        estateId,
+        route: routingKey,
+        reason: "Slack webhook received",
+      });
 
   waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 

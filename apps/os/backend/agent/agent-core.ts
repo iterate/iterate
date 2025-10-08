@@ -131,7 +131,7 @@ export type CheckDepsConflict<T> =
 export interface AgentCoreDeps {
   /** Persist the full event array whenever it changes – safe to store by ref */
   storeEvents(events: ReadonlyArray<AgentCoreEvent>): void;
-  /** Run a background task (e.g. DurableObject ctx.waitUntil) */
+  /** Run a background task */
   background(fn: () => Promise<void>): void;
   /** Lazily construct an OpenAI client */
   getOpenAIClient(): Promise<OpenAI>;
