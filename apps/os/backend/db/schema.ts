@@ -4,6 +4,15 @@ import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
+// User's role within an organization (used in organizationUserMembership table)
+// Note: This is different from user.role which is for Better Auth's admin plugin
+//
+// Role definitions:
+// - member: Default role with standard access to organization resources
+// - admin: Elevated privileges; can manage organization settings and update member roles
+// - owner: Highest organization role; can manage members, admins, and delete organizations
+// - guest: Restricted access; typically for Slack restricted/ultra_restricted users; cannot perform privileged actions like connecting MCP servers
+// - external: For external users (e.g., Slack Connect users from other workspaces)
 export const UserRole = ["member", "admin", "owner", "guest", "external"] as const;
 export type UserRole = (typeof UserRole)[number];
 
