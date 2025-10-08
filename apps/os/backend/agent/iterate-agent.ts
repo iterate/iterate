@@ -398,7 +398,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     // No existing agent for this route, create one with route
-    const durableObjectName = typeid(`${this.name}-${route}`).toString();
+    const durableObjectName = `${this.name}-${route}-${typeid().toString()}`;
     const durableObjectId = this.getNamespace().idFromName(durableObjectName);
 
     const insertedId = await db.transaction(async (tx) => {
