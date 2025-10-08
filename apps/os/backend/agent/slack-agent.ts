@@ -108,8 +108,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
-    await super.initAfterConstructorBeforeOnStart(params);
+  async initIterateAgent(params: AgentInitParams) {
+    await super.initIterateAgent(params);
 
     if (params.record.durableObjectName.includes("mock_slack")) {
       this.slackAPI = createSlackAPIMock<WebClient>();

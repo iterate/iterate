@@ -26,6 +26,9 @@ export type AgentInitParams = {
   estate: typeof schema.estate.$inferSelect;
   organization: typeof schema.organization.$inferSelect;
   iterateConfig: IterateConfig;
+  // Optional props forwarded to PartyKit when setting the room name
+  // Used to pass initial metadata for the room/server initialisation
+  props?: Record<string, unknown>;
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
@@ -156,55 +159,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return env.ITERATE_AGENT;
   }
 
-  // Internal helper to get stub from existing database record
-  static async getStubFromDatabaseRecord(params: {
-    db: DB;
-    record: AgentInstanceDatabaseRecord;
-    options?: {
-      jurisdiction?: DurableObjectJurisdiction;
-      locationHint?: DurableObjectLocationHint;
-      props?: Record<string, unknown>;
-    };
+  // Get stub when the caller already has initialisation params
+  static async getStub(params: {
+    agentInitParams: AgentInitParams;
+    jurisdiction?: DurableObjectJurisdiction;
+    locationHint?: DurableObjectLocationHint;
   }) {
     // Stolen from agents SDK
     let namespace = this.getNamespace();
-    if (params.options?.jurisdiction) {
-      namespace = namespace.jurisdiction(params.options.jurisdiction);
+    if (params.jurisdiction) {
+      namespace = namespace.jurisdiction(params.jurisdiction);
     }
-    const stub = namespace.getByName(params.record.durableObjectName, params.options);
-
-    // Fetch related data needed for initialization in a single query
-    const estate = await params.db.query.estate.findFirst({
-      where: eq(schema.estate.id, params.record.estateId),
-      with: { organization: true, iterateConfigs: true },
-    });
-    if (!estate) {
-      throw new Error(`Estate ${params.record.estateId} not found for agent ${params.record.id}`);
-    }
-    const iterateConfig: IterateConfig = estate.iterateConfigs?.[0]?.config ?? {};
+    const options = {
+      ...(params.locationHint && { locationHint: params.locationHint }),
+    };
+    const stub = namespace.getByName(params.agentInitParams.record.durableObjectName, options);
 
     // right after the constructor runs we get in there and initialise all our stuff
     // (e.g. obtaining a slack access token in the case of a slack agent)
-    await stub.initAfterConstructorBeforeOnStart({
-      record: params.record,
-      estate,
-      organization: estate.organization!,
-      iterateConfig,
-    });
-
-    // only now do we do the agents sdk cruft where we hit fetch to initialise party server
-    // with a server name
-    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-    req.headers.set("x-partykit-room", params.record.durableObjectName);
-    if (params.options?.props) {
-      req.headers.set("x-partykit-props", JSON.stringify(params.options?.props));
-    }
-    await stub
-      .fetch(req)
-      .then((res) => res.text())
-      .catch((e) => {
-        logger.error("Could not set server name:", e);
-      });
+    await stub.initIterateAgent(params.agentInitParams);
 
     return stub;
   }
@@ -214,16 +187,36 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const { db, agentInstanceName } = params;
     const className = this.name;
 
-    const record = await db.query.agentInstance.findFirst({
+    const row = await db.query.agentInstance.findFirst({
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
       ),
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
     });
-    if (!record) {
+    if (!row) {
       throw new Error(`Agent instance ${agentInstanceName} not found`);
     }
-    return this.getStubFromDatabaseRecord({ db, record });
+    const { estate: estateJoined, ...record } = row;
+    if (!estateJoined) {
+      throw new Error(`Estate ${record.estateId} not found for agent ${record.id}`);
+    }
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
   }
 
   // Get stubs for agents by routing key (does not create)
@@ -235,7 +228,14 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       where: eq(agentInstanceRoute.routingKey, routingKey),
       with: {
         agentInstance: {
-          with: {},
+          with: {
+            estate: {
+              with: {
+                organization: true,
+                iterateConfigs: true,
+              },
+            },
+          },
         },
       },
     });
@@ -249,7 +249,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     const stubs = await Promise.all(
-      matchingAgents.map((record) => this.getStubFromDatabaseRecord({ db, record })),
+      matchingAgents.map(async (row) => {
+        const { estate: estateJoined, ...record } = row;
+        const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+        return this.getStub({
+          agentInitParams: {
+            record,
+            estate: estateJoined,
+            organization: estateJoined.organization!,
+            iterateConfig,
+          },
+        });
+      }),
     );
 
     return stubs as unknown[] as DurableObjectStub<IterateAgent>[];
@@ -265,84 +276,44 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     const { db, estateId, agentInstanceName, reason } = params;
     const className = this.name;
 
-    let record = await db.query.agentInstance.findFirst({
+    // Fast path: try to load everything in a single select
+    const existing = await db.query.agentInstance.findFirst({
       where: and(
         eq(agentInstance.durableObjectName, agentInstanceName),
         eq(agentInstance.className, className),
         eq(agentInstance.estateId, estateId),
       ),
-      with: {},
-    });
-
-    if (!record) {
-      const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
-      const [inserted] = await db
-        .insert(agentInstance)
-        .values({
-          estateId,
-          className,
-          durableObjectName: agentInstanceName,
-          durableObjectId: durableObjectId.toString(),
-          metadata: { reason },
-        })
-        .onConflictDoUpdate({
-          target: agentInstance.durableObjectId,
-          set: {
-            metadata: { reason },
-          },
-        })
-        .returning();
-
-      // Re-query to get the relations
-      record = await db.query.agentInstance.findFirst({
-        where: eq(agentInstance.id, inserted.id),
-        with: {},
-      });
-      if (!record) {
-        throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
-      }
-    } else {
-      if (record.estateId !== estateId) {
-        throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
-      }
-    }
-    return this.getStubFromDatabaseRecord({ db, record });
-  }
-
-  // Get or create stub by route
-  static async getOrCreateStubByRoute(params: {
-    db: DB;
-    estateId: string;
-    route: string;
-    reason?: string;
-  }) {
-    const { db, estateId, route, reason } = params;
-
-    // First check if an agent already exists for this route
-    const existingRoutes = await db.query.agentInstanceRoute.findMany({
-      where: eq(agentInstanceRoute.routingKey, route),
       with: {
-        agentInstance: true,
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
       },
     });
 
-    const existingAgent = existingRoutes
-      .map((r) => r.agentInstance)
-      .find((r) => r.className === this.name && r.estateId === estateId);
-
-    if (existingAgent) {
-      return this.getStubFromDatabaseRecord({ db, record: existingAgent });
+    if (existing) {
+      const { estate: estateJoined, ...record } = existing;
+      const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+      return this.getStub({
+        agentInitParams: {
+          record,
+          estate: estateJoined,
+          organization: estateJoined.organization!,
+          iterateConfig,
+        },
+      });
     }
 
-    // No existing agent for this route, create one with route
-    const durableObjectName = `SlackAgent-${route}-${crypto.randomUUID()}`;
-    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
+    // Create path: upsert then hydrate with a single joined select
+    const durableObjectId = this.getNamespace().idFromName(agentInstanceName);
     const [inserted] = await db
       .insert(agentInstance)
       .values({
         estateId,
-        className: this.name,
-        durableObjectName: durableObjectName,
+        className,
+        durableObjectName: agentInstanceName,
         durableObjectId: durableObjectId.toString(),
         metadata: { reason },
       })
@@ -354,23 +325,134 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       })
       .returning();
 
-    // Create the route association
-    await db
-      .insert(agentInstanceRoute)
-      .values({ agentInstanceId: inserted.id, routingKey: route })
-      .onConflictDoNothing();
-
-    // Re-query to get the relations
-    const record = await db.query.agentInstance.findFirst({
+    const row = await db.query.agentInstance.findFirst({
       where: eq(agentInstance.id, inserted.id),
-      with: {},
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
+    });
+    if (!row) {
+      throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
+    }
+    if (row.estateId !== estateId) {
+      throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
+    }
+    const { estate: estateJoined, ...record } = row;
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
+  }
+
+  // Get or create stub by route
+  static async getOrCreateStubByRoute(params: {
+    db: DB;
+    estateId: string;
+    route: string;
+    reason?: string;
+  }) {
+    const { db, estateId, route, reason } = params;
+
+    // First check if an agent already exists for this route (single joined query)
+    const existingRoutes = await db.query.agentInstanceRoute.findMany({
+      where: eq(agentInstanceRoute.routingKey, route),
+      with: {
+        agentInstance: {
+          with: {
+            estate: {
+              with: {
+                organization: true,
+                iterateConfigs: true,
+              },
+            },
+          },
+        },
+      },
     });
 
-    if (!record) {
+    const existingAgent = existingRoutes
+      .map((r) => r.agentInstance)
+      .find((r) => r.className === this.name && r.estateId === estateId);
+
+    if (existingAgent) {
+      const { estate: estateJoined, ...record } = existingAgent;
+      const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+      return this.getStub({
+        agentInitParams: {
+          record,
+          estate: estateJoined,
+          organization: estateJoined.organization!,
+          iterateConfig,
+        },
+      });
+    }
+
+    // No existing agent for this route, create one with route
+    const durableObjectName = typeid(`${this.name}-${route}`).toString();
+    const durableObjectId = this.getNamespace().idFromName(durableObjectName);
+
+    const insertedId = await db.transaction(async (tx) => {
+      const [inserted] = await tx
+        .insert(agentInstance)
+        .values({
+          estateId,
+          className: this.name,
+          durableObjectName: durableObjectName,
+          durableObjectId: durableObjectId.toString(),
+          metadata: { reason },
+        })
+        .onConflictDoUpdate({
+          target: agentInstance.durableObjectId,
+          set: {
+            metadata: { reason },
+          },
+        })
+        .returning();
+
+      await tx
+        .insert(agentInstanceRoute)
+        .values({ agentInstanceId: inserted.id, routingKey: route })
+        .onConflictDoNothing();
+
+      return inserted.id;
+    });
+
+    const row = await db.query.agentInstance.findFirst({
+      where: eq(agentInstance.id, insertedId),
+      with: {
+        estate: {
+          with: {
+            organization: true,
+            iterateConfigs: true,
+          },
+        },
+      },
+    });
+
+    if (!row) {
       throw new Error(`Failed to fetch created agent instance ${durableObjectName}`);
     }
 
-    return this.getStubFromDatabaseRecord({ db, record });
+    const { estate: estateJoined, ...record } = row;
+    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+    return this.getStub({
+      agentInitParams: {
+        record,
+        estate: estateJoined,
+        organization: estateJoined.organization!,
+        iterateConfig,
+      },
+    });
   }
 
   protected db: DB;
@@ -383,13 +465,51 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   // Instance-level MCP manager cache and connection queues to avoid sharing across DOs
   protected mcpManagerCache: MCPManagerCache;
   protected mcpConnectionQueues: MCPConnectionQueues;
+  _isInitialized = false;
 
-  // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
-  async initAfterConstructorBeforeOnStart(params: AgentInitParams) {
+  // This runs between the synchronous durable object constructor and the asynchronous onStart of the agents SDK
+  // It also performs the PartyKit set-name fetch internally to trigger onStart.
+  async initIterateAgent(params: AgentInitParams) {
+    if (this._isInitialized) return; // no-op if already initialised in this DO lifecycle
+
     this._databaseRecord = params.record;
     this._estate = params.estate;
     this._organization = params.organization;
     this._iterateConfig = params.iterateConfig;
+
+    // Store init params so onAlarm re-hydration can re-initialise without DB calls
+    this.ctx.storage.kv.put("agent-init-params", params);
+
+    // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
+    // These records (estate, organization, iterateConfig) change infrequently and callers
+    // typically already fetched them. This also helps when the DO is not colocated with
+    // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
+
+    // Perform the PartyKit set-name fetch internally so it triggers onStart inside this DO
+    try {
+      const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+      req.headers.set("x-partykit-room", params.record.durableObjectName);
+      if (params.props) {
+        req.headers.set("x-partykit-props", JSON.stringify(params.props));
+      }
+      const res = await this.fetch(req);
+      await res.text();
+    } catch (e) {
+      logger.error("Could not set server name:", e);
+    }
+
+    this._isInitialized = true;
+  }
+
+  override async onAlarm() {
+    logger.info("onAlarm - pulling init params from storage");
+    const params = this.ctx.storage.kv.get<AgentInitParams>("agent-init-params");
+    if (!params) {
+      logger.info("IterateAgent durable object constructed for the first time");
+      return;
+    }
+    await this.initIterateAgent(params);
+    super.onAlarm();
   }
 
   initialState = {
@@ -398,18 +518,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   get databaseRecord() {
     if (!this._databaseRecord) {
-      throw new Error("agent_instance database record not found");
+      throw new Error("this._databaseRecord not set in IterateAgent - this should never happen");
     }
     return this._databaseRecord;
   }
 
   get estate() {
-    if (!this._estate) throw new Error("Estate not initialized");
+    if (!this._estate)
+      throw new Error("this._estate not set in IterateAgent - this should never happen");
     return this._estate;
   }
 
   get organization() {
-    if (!this._organization) throw new Error("Organization not initialized");
+    if (!this._organization)
+      throw new Error("this._organization not set in IterateAgent - this should never happen");
     return this._organization;
   }
 
@@ -723,8 +845,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
    * Called after an agent object in constructed and the state has been loaded from the DO store.
    */
   async onStart(): Promise<void> {
-    // Call parent onStart to ensure persistence completes
-    await super.onStart();
     const event = this.getEvents();
     if (event.length === 0) {
       // new agent, fetch initial context rules, along with tool schemas etc.
@@ -1688,7 +1808,6 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       apiResponse: videoCreationData,
     };
   }
-
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config
