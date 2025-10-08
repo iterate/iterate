@@ -254,6 +254,406 @@ export const defaultContextRules = defineRules([
     match: matchers.sandboxStatus("starting"),
   },
   {
+    key: "google-gmail-tools",
+    prompt: dedent`
+      You have access to Gmail tools to send, read, reply to, and forward emails.
+
+      When sending emails:
+      - Use simple, plain text by default
+      - Only use HTML formatting when explicitly requested
+      - Keep emails concise and professional
+
+      When replying to emails:
+      - Use sendGmail with threadId and inReplyTo (messageId) from getGmailMessage
+      - This keeps the reply in the same thread
+
+      When forwarding emails:
+      - First use getGmailMessage to retrieve the original email
+      - Then use sendGmail with a formatted body including the original message details
+
+      When organizing emails:
+      - Use modifyGmailLabels to add/remove labels from messages
+      - Common system labels: STARRED (star), UNREAD/INBOX (mark unread/read), TRASH (trash), SPAM (mark as spam), IMPORTANT
+      - Use listGmailLabels to see all available labels including custom ones
+      - Use createGmailLabel to create new organizational labels
+
+      When reading emails:
+      - Use list tools with appropriate filters (e.g., is:unread, from:someone@example.com)
+      - Respect user privacy and only access what's needed
+    `,
+    match: matchers.forAgentClass("SlackAgent"),
+    tools: [
+      iterateAgentTool.sendGmail(),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listGmailMessages",
+        overrideDescription:
+          "List Gmail messages. Supports Gmail search syntax (e.g., 'is:unread', 'from:someone@example.com', 'subject:meeting')",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            queryParams: {
+              type: "object",
+              properties: {
+                q: {
+                  type: "string",
+                  description:
+                    "Search query using Gmail search syntax (e.g., 'is:unread', 'from:someone@example.com')",
+                },
+                maxResults: {
+                  type: "string",
+                  description: "Maximum number of messages to return (default: 10)",
+                },
+                labelIds: {
+                  type: "string",
+                  description: "Comma-separated label IDs (e.g., 'INBOX,UNREAD')",
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to list messages for",
+            },
+          },
+          required: ["userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/messages",
+          method: "GET",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.getGmailMessage(),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "modifyGmailLabels",
+        overrideDescription:
+          "Add or remove labels from a Gmail message. Use system labels (STARRED, TRASH, INBOX, UNREAD, SPAM, IMPORTANT) or custom label IDs from listGmailLabels.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                messageId: { type: "string", description: "The ID of the message to modify" },
+              },
+              required: ["messageId"],
+            },
+            body: {
+              type: "object",
+              properties: {
+                addLabelIds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Label IDs to add (e.g., ['STARRED', 'INBOX'])",
+                },
+                removeLabelIds: {
+                  type: "array",
+                  items: { type: "string" },
+                  description: "Label IDs to remove (e.g., ['UNREAD', 'INBOX'])",
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to modify messages for",
+            },
+          },
+          required: ["pathParams", "body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/messages/[messageId]/modify",
+          method: "POST",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listGmailLabels",
+        overrideDescription:
+          "List all Gmail labels including system labels (INBOX, STARRED, etc) and user-created labels. Returns label IDs and names.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            userId: {
+              type: "string",
+              description: "The ID of the user to list labels for",
+            },
+          },
+          required: ["userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels",
+          method: "GET",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "createGmailLabel",
+        overrideDescription: "Create a new custom Gmail label",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            body: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "The label name (e.g., 'Work/Important')" },
+                labelListVisibility: {
+                  type: "string",
+                  enum: ["labelShow", "labelShowIfUnread", "labelHide"],
+                  description: "Show label in label list (default: labelShow)",
+                },
+                messageListVisibility: {
+                  type: "string",
+                  enum: ["show", "hide"],
+                  description: "Show label in message list (default: show)",
+                },
+              },
+              required: ["name"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to create labels for",
+            },
+          },
+          required: ["body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels",
+          method: "POST",
+        },
+      }),
+      // requires unapproved scope: gmail.modify
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "deleteGmailLabel",
+        overrideDescription:
+          "Delete a custom Gmail label. Cannot delete system labels like INBOX, STARRED, etc.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                labelId: {
+                  type: "string",
+                  description: "The ID of the label to delete (from listGmailLabels)",
+                },
+              },
+              required: ["labelId"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to delete labels for",
+            },
+          },
+          required: ["pathParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/gmail/v1/users/me/labels/[labelId]",
+          method: "DELETE",
+        },
+      }),
+    ],
+  },
+  {
+    key: "google-calendar-tools",
+    prompt: dedent`
+      You have access to Google Calendar tools to create, read, and manage calendar events.
+
+      When creating events:
+      - Always specify a clear title and time
+      - Use ISO 8601 format for dates and times (e.g., '2024-12-25T10:00:00-08:00')
+      - Set reasonable defaults (e.g., 30 min duration if not specified)
+
+      When listing events:
+      - By default, recurring events are shown compactly with recurrence rules (saves tokens)
+      - Only set singleEvents="true" and orderBy="startTime" if you need each occurrence separately
+      - Use appropriate time ranges to avoid overwhelming results
+    `,
+    match: matchers.forAgentClass("SlackAgent"),
+    tools: [
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "createCalendarEvent",
+        overrideDescription: "Create a new event in Google Calendar",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            body: {
+              type: "object",
+              properties: {
+                summary: { type: "string", description: "Event title" },
+                description: { type: "string", description: "Event description" },
+                start: {
+                  type: "object",
+                  properties: {
+                    dateTime: {
+                      type: "string",
+                      description:
+                        "Start time in ISO 8601 format (e.g., '2024-12-25T10:00:00-08:00')",
+                    },
+                    timeZone: {
+                      type: "string",
+                      description: "Time zone (e.g., 'America/Los_Angeles')",
+                    },
+                  },
+                  required: ["dateTime"],
+                },
+                end: {
+                  type: "object",
+                  properties: {
+                    dateTime: {
+                      type: "string",
+                      description:
+                        "End time in ISO 8601 format (e.g., '2024-12-25T11:00:00-08:00')",
+                    },
+                    timeZone: {
+                      type: "string",
+                      description: "Time zone (e.g., 'America/Los_Angeles')",
+                    },
+                  },
+                  required: ["dateTime"],
+                },
+                attendees: {
+                  type: "array",
+                  items: {
+                    type: "object",
+                    properties: { email: { type: "string" } },
+                    required: ["email"],
+                  },
+                  description: "List of attendee emails",
+                },
+              },
+              required: ["summary", "start", "end"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to create events for",
+            },
+          },
+          required: ["body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events",
+          method: "POST",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "listCalendarEvents",
+        overrideDescription:
+          "List upcoming events from Google Calendar. IMPORTANT: Always set maxResults to a small number (5-20) to avoid overwhelming responses.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            queryParams: {
+              type: "object",
+              properties: {
+                timeMin: {
+                  type: "string",
+                  description: "Start time in ISO 8601 format (default: now)",
+                },
+                timeMax: { type: "string", description: "End time in ISO 8601 format" },
+                maxResults: {
+                  type: "string",
+                  description:
+                    "Maximum number of events to return. Use 5-20 to avoid overwhelming responses.",
+                },
+                q: { type: "string", description: "Free text search query" },
+                singleEvents: {
+                  type: "string",
+                  description:
+                    "Set to 'true' to expand recurring events into separate instances. Omit or use 'false' to show recurring events compactly with recurrence rules.",
+                },
+                orderBy: {
+                  type: "string",
+                  description:
+                    "Set to 'startTime' for chronological order (only works when singleEvents='true'). Otherwise omit.",
+                },
+              },
+              required: ["maxResults"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to list events for",
+            },
+          },
+          required: ["queryParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events",
+          method: "GET",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "updateCalendarEvent",
+        overrideDescription: "Update an existing calendar event",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                eventId: { type: "string", description: "The ID of the event to update" },
+              },
+              required: ["eventId"],
+            },
+            body: {
+              type: "object",
+              properties: {
+                summary: { type: "string", description: "New event title" },
+                description: { type: "string", description: "New event description" },
+                start: {
+                  type: "object",
+                  properties: {
+                    dateTime: { type: "string", description: "Start time in ISO 8601 format" },
+                  },
+                },
+                end: {
+                  type: "object",
+                  properties: {
+                    dateTime: { type: "string", description: "End time in ISO 8601 format" },
+                  },
+                },
+              },
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to update events for",
+            },
+          },
+          required: ["pathParams", "body", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
+          method: "PATCH",
+        },
+      }),
+      iterateAgentTool.callGoogleAPI({
+        overrideName: "deleteCalendarEvent",
+        overrideDescription: "Delete a calendar event",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {
+            pathParams: {
+              type: "object",
+              properties: {
+                eventId: { type: "string", description: "The ID of the event to delete" },
+              },
+              required: ["eventId"],
+            },
+            userId: {
+              type: "string",
+              description: "The ID of the user to delete events for",
+            },
+          },
+          required: ["pathParams", "userId"],
+        },
+        passThroughArgs: {
+          endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
+          method: "DELETE",
+        },
+      }),
+    ],
+  },
+  {
     key: "sandbox-attached",
     prompt: dedent`
       The sandbox is currently running and attached.

@@ -18,7 +18,7 @@ import { SlackAgent } from "../agent/slack-agent.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
-import { MCPOAuthState, SlackBotOAuthState } from "./oauth-state-schemas.ts";
+import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
   "app_mentions:read",
@@ -46,11 +46,21 @@ export const SLACK_BOT_SCOPES = [
 
 export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];
 
+export const GOOGLE_INTEGRATION_SCOPES = [
+  // approved scopes
+  "https://www.googleapis.com/auth/userinfo.email",
+  "https://www.googleapis.com/auth/userinfo.profile",
+  "openid",
+  "https://www.googleapis.com/auth/gmail.send",
+  "https://www.googleapis.com/auth/calendar",
+  // unapproved scopes
+  "https://www.googleapis.com/auth/gmail.modify",
+];
+
 export const integrationsPlugin = () =>
   ({
     id: "integrations",
     endpoints: {
-      // MCP OAuth callback endpoint
       callbackMCP: createAuthEndpoint(
         "/integrations/callback/mcp",
         {
@@ -294,6 +304,58 @@ export const integrationsPlugin = () =>
           return ctx.json({ url });
         },
       ),
+      linkGoogle: createAuthEndpoint(
+        "/integrations/link/google",
+        {
+          method: "POST",
+          body: z.object({
+            callbackURL: z.string(),
+          }),
+          use: [sessionMiddleware],
+        },
+        async (ctx) => {
+          const { callbackURL } = ctx.body;
+          const session = ctx.context.session;
+
+          const { env } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+
+          const state = generateRandomString(32);
+          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+          const data = JSON.stringify({
+            link: {
+              userId: session.user.id,
+            },
+            callbackUrl: callbackURL,
+          } satisfies GoogleOAuthState);
+
+          await ctx.context.internalAdapter.createVerificationValue({
+            expiresAt,
+            identifier: state,
+            value: data,
+          });
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/google`;
+          const url = await createAuthorizationURL({
+            id: "google",
+            options: {
+              clientId: env.GOOGLE_CLIENT_ID,
+              clientSecret: env.GOOGLE_CLIENT_SECRET,
+              redirectURI,
+            },
+            redirectURI,
+            authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
+            scopes: GOOGLE_INTEGRATION_SCOPES,
+            state,
+            additionalParams: {
+              access_type: "offline",
+              prompt: "consent",
+            },
+          });
+
+          return ctx.json({ url });
+        },
+      ),
       callbackSlack: createAuthEndpoint(
         "/integrations/callback/slack-bot",
         {
@@ -525,6 +587,160 @@ export const integrationsPlugin = () =>
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
+        },
+      ),
+      callbackGoogle: createAuthEndpoint(
+        "/integrations/callback/google",
+        {
+          method: "GET",
+          query: z.object({
+            error: z
+              .string()
+              .meta({
+                description: "The error message, if any",
+              })
+              .optional(),
+            error_description: z
+              .string()
+              .meta({
+                description: "The error description, if any",
+              })
+              .optional(),
+            code: z.string().meta({
+              description: "The OAuth2 code",
+            }),
+            state: z.string().meta({
+              description: "The state parameter from the OAuth2 request",
+            }),
+          }),
+        },
+        async (ctx) => {
+          const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
+
+          if (!value) {
+            return ctx.json({ error: "Invalid state" });
+          }
+
+          const parsedState = GoogleOAuthState.parse(JSON.parse(value.value));
+          const { link, callbackUrl: callbackURL, agentDurableObject } = parsedState;
+
+          const {
+            env,
+            var: { db },
+          } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+
+          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/google`;
+
+          const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams({
+              code: ctx.query.code,
+              client_id: env.GOOGLE_CLIENT_ID,
+              client_secret: env.GOOGLE_CLIENT_SECRET,
+              redirect_uri: redirectURI,
+              grant_type: "authorization_code",
+            }),
+          });
+
+          if (!tokenResponse.ok) {
+            return ctx.json({ error: "Failed to exchange code for tokens" });
+          }
+
+          const tokens = (await tokenResponse.json()) as {
+            access_token: string;
+            refresh_token?: string;
+            expires_in?: number;
+          };
+
+          if (!tokens.access_token) {
+            return ctx.json({ error: "Failed to get access token" });
+          }
+
+          const accessTokenExpiresAt = tokens.expires_in
+            ? new Date(Date.now() + tokens.expires_in * 1000)
+            : undefined;
+
+          const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+            headers: {
+              Authorization: `Bearer ${tokens.access_token}`,
+            },
+          });
+
+          if (!userInfoResponse.ok) {
+            return ctx.json({ error: "Failed to get user info" });
+          }
+
+          const userInfo = (await userInfoResponse.json()) as {
+            email: string;
+            id: string;
+            name?: string;
+            picture?: string;
+          };
+
+          if (!userInfo.id) {
+            return ctx.json({ error: "Failed to get user info" });
+          }
+
+          const existingAccount = await ctx.context.internalAdapter.findAccount(userInfo.id);
+
+          if (existingAccount) {
+            await ctx.context.internalAdapter.updateAccount(existingAccount.id, {
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              accessTokenExpiresAt,
+              scope: GOOGLE_INTEGRATION_SCOPES.join(" "),
+            });
+          } else {
+            const account = await ctx.context.internalAdapter.createAccount({
+              providerId: "google",
+              accountId: userInfo.id,
+              userId: link.userId,
+              accessToken: tokens.access_token,
+              refreshToken: tokens.refresh_token,
+              accessTokenExpiresAt,
+              scope: GOOGLE_INTEGRATION_SCOPES.join(" "),
+            });
+
+            if (!account) {
+              return ctx.json({ error: "Failed to create account" });
+            }
+          }
+
+          if (agentDurableObject) {
+            const params = {
+              db,
+              agentInstanceName: agentDurableObject.durableObjectName,
+            };
+            const agentStub =
+              agentDurableObject.className === "SlackAgent"
+                ? await SlackAgent.getStubByName(params)
+                : await IterateAgent.getStubByName(params);
+            await agentStub.addEvents([
+              {
+                type: "CORE:LLM_INPUT_ITEM",
+                data: {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: `The user with ID ${link.userId} has completed authorizing with Google.`,
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              },
+            ]);
+          }
+
+          if (!callbackURL) {
+            return ctx.redirect(import.meta.env.VITE_PUBLIC_URL);
+          }
+
+          return ctx.redirect(callbackURL);
         },
       ),
     },

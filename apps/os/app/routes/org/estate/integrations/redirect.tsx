@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "../../../../../backend/db/client.ts";
-import { MCPOAuthState } from "../../../../../backend/auth/oauth-state-schemas.ts";
+import { BaseOAuthState } from "../../../../../backend/auth/oauth-state-schemas.ts";
 import type { Route } from "./+types/redirect.ts";
 
 export async function loader({ request }: Route.LoaderArgs) {
@@ -18,8 +18,8 @@ export async function loader({ request }: Route.LoaderArgs) {
     return redirect("/");
   }
 
-  const parsedState = MCPOAuthState.parse(JSON.parse(state.value));
-  return redirect(parsedState.fullUrl);
+  const parsedState = BaseOAuthState.parse(JSON.parse(state.value));
+  return redirect(parsedState.fullUrl ?? "/");
 }
 
 export default function IntegrationsRedirect() {

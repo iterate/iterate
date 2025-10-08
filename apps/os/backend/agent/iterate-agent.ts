@@ -16,7 +16,7 @@ import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
-import type { JSONSerializable } from "../utils/type-helpers.ts";
+import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
 
 // Local imports
 import { agentInstance, agentInstanceRoute, files, UserRole } from "../db/schema.ts";
@@ -2065,6 +2065,196 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         stderr: resultExec.stderr,
       },
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
+    };
+  }
+
+  async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
+    const { endpoint, method, body, queryParams, pathParams, userId } = input;
+
+    if (!userId.startsWith("usr_")) {
+      return {
+        success: false,
+        error: dedent`
+          The user ID ${userId} is not a valid user ID.
+          It should start with "usr_".
+        `,
+      };
+    }
+
+    let accessToken: string;
+    try {
+      const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
+      accessToken = await getGoogleAccessTokenForUser(this.db, userId);
+    } catch (error) {
+      const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
+      const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
+        durableObjectInstanceName: this.databaseRecord.durableObjectName,
+      });
+      const url = await getGoogleOAuthURL({
+        db: this.db,
+        estateId: this.databaseRecord.estateId,
+        userId,
+        agentDurableObject: this.databaseRecord,
+        callbackUrl,
+      });
+      return {
+        success: false,
+        error: dedent`
+          Failed to get Google access token: ${error instanceof Error ? error.message : String(error)}. 
+          If the user is missing an auth token, you should provided them with the URL: ${url} to complete authorization. 
+          Remember to follow your instructions on formatting when providing the URL.
+          You will be automatically notified when the user has completed authorization.
+          You should not ask the user to notify you when they are done; instead, you notify them with confirmation, and continue.
+        `,
+      };
+    }
+
+    let finalEndpoint = endpoint;
+    if (pathParams) {
+      Object.entries(pathParams).forEach(([key, value]) => {
+        finalEndpoint = finalEndpoint.replace(`[${key}]`, value);
+      });
+    }
+
+    const url = new URL(`https://www.googleapis.com${finalEndpoint}`);
+    if (queryParams) {
+      Object.entries(queryParams).forEach(([key, value]) => {
+        url.searchParams.append(key, value);
+      });
+    }
+
+    const response = await fetch(url.toString(), {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        success: false,
+        error: `Google API request failed: ${response.status} ${response.statusText}. ${errorText}`,
+      };
+    }
+
+    const responseData = (await response.json()) as unknown;
+    return { success: true, data: responseData };
+  }
+
+  async sendGmail(input: Inputs["sendGmail"]): Promise<Result<unknown>> {
+    const { to, subject, body, cc, bcc, threadId, inReplyTo, userId } = input;
+
+    let emailContent = `To: ${to}\r\n`;
+    if (cc) emailContent += `Cc: ${cc}\r\n`;
+    if (bcc) emailContent += `Bcc: ${bcc}\r\n`;
+    emailContent += `Subject: ${subject}\r\n`;
+    if (inReplyTo) {
+      emailContent += `In-Reply-To: ${inReplyTo}\r\n`;
+      emailContent += `References: ${inReplyTo}\r\n`;
+    }
+    emailContent += `\r\n${body}`;
+
+    const encodedMessage = Buffer.from(emailContent)
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+
+    const requestBody: { raw: string; threadId?: string } = { raw: encodedMessage };
+    if (threadId) {
+      requestBody.threadId = threadId;
+    }
+
+    return this.callGoogleAPI({
+      endpoint: "/gmail/v1/users/me/messages/send",
+      method: "POST",
+      userId,
+      body: requestBody,
+    });
+  }
+
+  async getGmailMessage(input: Inputs["getGmailMessage"]): Promise<Result<unknown>> {
+    const { messageId, userId } = input;
+
+    const result = await this.callGoogleAPI({
+      endpoint: `/gmail/v1/users/me/messages/${messageId}`,
+      method: "GET",
+      userId,
+      queryParams: { format: "full" },
+    });
+
+    if (!result.success) {
+      return result;
+    }
+
+    const message = result.data as {
+      id: string;
+      threadId: string;
+      snippet: string;
+      payload?: {
+        headers?: Array<{ name: string; value: string }>;
+        body?: { data?: string };
+        parts?: Array<{ mimeType?: string; body?: { data?: string }; parts?: unknown }>;
+      };
+    };
+
+    const headers: Record<string, string> = {};
+    if (message.payload?.headers) {
+      for (const header of message.payload.headers) {
+        const name = header.name.toLowerCase();
+        if (
+          name === "from" ||
+          name === "to" ||
+          name === "subject" ||
+          name === "date" ||
+          name === "message-id"
+        ) {
+          headers[name] = header.value;
+        }
+      }
+    }
+
+    let textBody = "";
+
+    const decodeBase64 = (data: string) => {
+      return Buffer.from(data.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+    };
+
+    if (message.payload?.body?.data) {
+      textBody = decodeBase64(message.payload.body.data);
+    } else if (message.payload?.parts) {
+      for (const part of message.payload.parts) {
+        if (part.mimeType === "text/plain" && part.body?.data) {
+          textBody = decodeBase64(part.body.data);
+          break;
+        }
+      }
+      if (!textBody) {
+        for (const part of message.payload.parts) {
+          if (part.mimeType === "text/html" && part.body?.data) {
+            textBody = decodeBase64(part.body.data);
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        id: message.id,
+        threadId: message.threadId,
+        snippet: message.snippet,
+        from: headers.from,
+        to: headers.to,
+        subject: headers.subject,
+        date: headers.date,
+        messageId: headers["message-id"],
+        body: textBody,
+      },
     };
   }
 }
