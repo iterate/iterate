@@ -588,9 +588,9 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       logger,
       (methodName) => ({
         userId: undefined,
-        path: undefined,
+        path: "",
         method: methodName,
-        url: undefined,
+        url: "",
         requestId: typeid("req").toString(),
       }),
       posthogErrorTracking,

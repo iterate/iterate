@@ -29,6 +29,7 @@ import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger, type TagLogger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
+import { posthogErrorTracking } from "./posthog-error-tracker.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -46,23 +47,6 @@ export type Variables = {
   workerEntrypoint?: WorkerEntrypoint;
 };
 
-const posthogErrorTracking: TagLogger.ErrorTrackingFn = (error, metadata) => {
-  waitUntil(
-    (async () => {
-      const posthog = new PostHog(env.POSTHOG_PUBLIC_KEY, {
-        host: "https://eu.i.posthog.com",
-      });
-
-      posthog.captureException(error, metadata.userId, {
-        environment: env.POSTHOG_ENVIRONMENT,
-        ...metadata,
-      });
-
-      await posthog.shutdown();
-    })(),
-  );
-};
-
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
@@ -75,10 +59,14 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  // Sets up the logger with some basic request metadata
+  return next();
+});
+
+// Sets up the logger with request metadata
+app.use("*", async (c, next) => {
   await logger.runInContext(
     {
-      userId: session?.user?.id || undefined,
+      userId: c.var.session?.user?.id || undefined,
       path: c.req.path,
       method: c.req.method,
       url: c.req.url,

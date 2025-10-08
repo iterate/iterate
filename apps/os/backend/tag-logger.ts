@@ -10,9 +10,9 @@ export namespace TagLogger {
     level: TagLogger.Level;
     metadata: Record<string, unknown> & {
       userId: string | undefined;
-      path: string;
-      method: string;
-      url: string;
+      path?: string;
+      method?: string;
+      url?: string;
       requestId: string;
     };
     logs: Array<{ level: TagLogger.Level; timestamp: Date; args: unknown[] }>;
@@ -66,7 +66,7 @@ export class TagLogger {
     return TagLogger.levels[this.level];
   }
 
-  withMetadata(metadata: Partial<TagLogger.Context["metadata"]>) {
+  addMetadata(metadata: Partial<TagLogger.Context["metadata"]>) {
     this._storage.enterWith({
       ...this.context,
       metadata: { ...this.context.metadata, ...metadata },
@@ -120,6 +120,31 @@ export class TagLogger {
       : { level: "info", metadata, logs: [], errorTracking };
     return this._storage.run(newContext, fn);
   }
+
+  enterWith(metadata: TagLogger.Context["metadata"], errorTracking: TagLogger.ErrorTrackingFn) {
+    const existingContext = this._storage.getStore();
+    const newContext: TagLogger.Context = existingContext
+      ? { ...existingContext, metadata, errorTracking }
+      : { level: "info", metadata, logs: [], errorTracking };
+    this._storage.enterWith(newContext);
+  }
+
+  /** Check if we're currently in a context */
+  hasContext(): boolean {
+    return this._storage.getStore() !== undefined;
+  }
+
+  /** Run function, only creating context if one doesn't exist */
+  ensureContext<T>(
+    metadata: TagLogger.Context["metadata"],
+    errorTracking: TagLogger.ErrorTrackingFn,
+    fn: () => T,
+  ): T {
+    if (this.hasContext()) {
+      return fn();
+    }
+    return this.runInContext(metadata, errorTracking, fn);
+  }
   error(error: Error): void; // uses passed error
   error(message: string): void; // wraps with Error
   error(message: string, cause: unknown): void; // wraps with error and sets cause
@@ -142,6 +167,86 @@ export class TagLogger {
     this._log({ level: "error", args: [errorToLog] });
   }
 }
+<<<<<<< HEAD
+=======
+
+/**
+ * Creates a proxy that wraps all methods with logger context.
+ * Call this at the end of your constructor and return it.
+ *
+ * Example:
+ * ```typescript
+ * class MyDurableObject {
+ *   constructor() {
+ *     // ... initialization
+ *     return withLoggerContext(this, logger, (methodName, args) => ({
+ *       userId: undefined,
+ *       path: undefined,
+ *       method: methodName,
+ *       url: undefined,
+ *       requestId: typeid("req").toString(),
+ *     }), posthogErrorTracking);
+ *   }
+ * }
+ * ```
+ */
+export function withLoggerContext<T extends object>(
+  target: T,
+  loggerInstance: TagLogger,
+  getMetadata: (methodName: string, args: unknown[]) => TagLogger.Context["metadata"],
+  errorTracking: TagLogger.ErrorTrackingFn,
+): T {
+  return new Proxy(target, {
+    get(target, prop, receiver) {
+      const value = Reflect.get(target, prop, receiver);
+
+      // If it's not a function, return as-is
+      if (typeof value !== "function") {
+        return value;
+      }
+
+      // Wrap the function with logger context
+      return function (this: T, ...args: unknown[]) {
+        const metadata = getMetadata(String(prop), args);
+        return loggerInstance.ensureContext(metadata, errorTracking, () => {
+          return value.apply(this, args);
+        });
+      };
+    },
+  });
+}
+
+/**
+ * Creates a Hono middleware that wraps each request with logger context.
+ * This is an alternative to manually calling runInContext in middleware.
+ *
+ * Example:
+ * ```typescript
+ * import { createLoggerMiddleware } from "./tag-logger.ts";
+ * import { posthogErrorTracking } from "./posthog-error-tracker.ts";
+ *
+ * app.use("*", createLoggerMiddleware(logger, (c) => ({
+ *   userId: c.var.session?.user?.id || undefined,
+ *   path: c.req.path,
+ *   method: c.req.method,
+ *   url: c.req.url,
+ *   requestId: typeid("req").toString(),
+ * }), posthogErrorTracking));
+ * ```
+ */
+export function createLoggerMiddleware<Context>(
+  loggerInstance: TagLogger,
+  getMetadata: (context: Context) => TagLogger.Context["metadata"],
+  errorTracking: TagLogger.ErrorTrackingFn,
+) {
+  return async (c: Context, next: () => Promise<void>) => {
+    const metadata = getMetadata(c);
+    // Always create a new context for each request to ensure isolation
+    await loggerInstance.runInContext(metadata, errorTracking, next);
+  };
+}
+
+>>>>>>> 0298bbb (feat: Proxy durable object with logger context)
 function serializeError(error: unknown) {
   if (error instanceof Error) {
     const plain = {};

@@ -52,9 +52,13 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
       logger,
       (methodName) => ({
         userId: undefined,
+<<<<<<< HEAD
         path: undefined,
         method: methodName,
         url: undefined,
+=======
+        methodName,
+>>>>>>> 0298bbb (feat: Proxy durable object with logger context)
         requestId: typeid("req").toString(),
       }),
       posthogErrorTracking,
@@ -104,7 +108,7 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
       logger.error("Error getting session:", error); // something broke
       return new Response("Unauthorized", { status: 401 });
     }
-
+    logger.addMetadata({ userId: session.user.id });
     // Extract estate and organization from URL params
     const url = new URL(request.url);
     const estateId = url.searchParams.get("estateId");

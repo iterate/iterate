@@ -140,7 +140,7 @@ describe("metadata management", () => {
 
     logger.runInContext(baseMetadata, errorTracking, () => {
       logger.info("before");
-      logger.withMetadata({ customKey: "customValue", userId: "user-123" });
+      logger.addMetadata({ customKey: "customValue", userId: "user-123" });
       logger.info("after");
     });
 
@@ -476,7 +476,7 @@ describe("context independence", () => {
       logger.info("before");
 
       logger.runInContext({ ...baseMetadata, shared: "nested" }, errorTracking, () => {
-        logger.withMetadata({ shared: "modified-nested" });
+        logger.addMetadata({ shared: "modified-nested" });
         logger.info("nested");
       });
 
