@@ -180,10 +180,15 @@ describe("evaluateContextRuleMatchers", () => {
     {
       description: "[slackChannel] matches exact channel ID",
       matchAgainst: {
-        agentCoreState: {},
+        agentCoreState: {
+          slackChannelId: "C08R1SMTZGD",
+          slackChannel: {
+            name: "general",
+            isShared: false,
+            isExtShared: false,
+          },
+        },
         durableObjectClassName: "SlackAgent",
-        slackChannelId: "C08R1SMTZGD",
-        slackChannelName: "general",
       },
       matchers: [matchers.slackChannel("C08R1SMTZGD")],
       expected: true,
@@ -191,10 +196,15 @@ describe("evaluateContextRuleMatchers", () => {
     {
       description: "[slackChannel] matches channel name",
       matchAgainst: {
-        agentCoreState: {},
+        agentCoreState: {
+          slackChannelId: "C08R1SMTZGD",
+          slackChannel: {
+            name: "general",
+            isShared: false,
+            isExtShared: false,
+          },
+        },
         durableObjectClassName: "SlackAgent",
-        slackChannelId: "C08R1SMTZGD",
-        slackChannelName: "general",
       },
       matchers: [matchers.slackChannel("general")],
       expected: true,
@@ -202,10 +212,15 @@ describe("evaluateContextRuleMatchers", () => {
     {
       description: "[slackChannel] different channel returns false",
       matchAgainst: {
-        agentCoreState: {},
+        agentCoreState: {
+          slackChannelId: "C08R1SMTZGD",
+          slackChannel: {
+            name: "general",
+            isShared: false,
+            isExtShared: false,
+          },
+        },
         durableObjectClassName: "SlackAgent",
-        slackChannelId: "C08R1SMTZGD",
-        slackChannelName: "general",
       },
       matchers: [matchers.slackChannel("DIFFERENT_CHANNEL")],
       expected: false,

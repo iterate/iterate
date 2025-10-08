@@ -244,21 +244,31 @@ export async function syncSlackChannels(
 }> {
   try {
     const authedWebClient = new WebClient(botToken);
-    const channelsResponse = await authedWebClient.conversations.list({
-      types: "public_channel,private_channel",
-      exclude_archived: false,
-      limit: 200, // Max per page
-    });
 
-    if (!channelsResponse.ok || !channelsResponse.channels) {
-      logger.error(
-        "Failed to fetch Slack channels:",
-        channelsResponse.error || "No channels returned",
-      );
-      return { allChannels: [], sharedChannelIds: new Set() };
-    }
+    const accumulatedChannels = [];
+    let cursor: string | undefined;
 
-    const channels = channelsResponse.channels.filter((c) => c.id && c.name);
+    do {
+      const channelsResponse = await authedWebClient.conversations.list({
+        types: "public_channel,private_channel",
+        exclude_archived: false,
+        limit: 200, // Max per page
+        cursor,
+      });
+
+      if (!channelsResponse.ok || !channelsResponse.channels) {
+        logger.error(
+          "Failed to fetch Slack channels:",
+          channelsResponse.error || "No channels returned",
+        );
+        return { allChannels: [], sharedChannelIds: new Set() };
+      }
+
+      accumulatedChannels.push(...channelsResponse.channels);
+      cursor = channelsResponse.response_metadata?.next_cursor;
+    } while (cursor);
+
+    const channels = accumulatedChannels.filter((c) => c.id && c.name);
 
     if (channels.length === 0) {
       logger.info("No valid Slack channels to sync");

@@ -945,7 +945,7 @@ export class AgentCore<
       }
 
       case "CORE:PARTICIPANT_JOINED": {
-        const { internalUserId, email, displayName, externalUserMapping } = event.data;
+        const { internalUserId, email, displayName, externalUserMapping, role } = event.data;
         const participant = {
           internalUserId,
           joinedAt: event.createdAt,
@@ -953,6 +953,7 @@ export class AgentCore<
           email,
           displayName,
           externalUserMapping,
+          role,
         };
         next.participants = {
           ...next.participants,
@@ -971,7 +972,7 @@ export class AgentCore<
           content: [
             {
               type: "input_text",
-              text: `User ${displayName} (id: ${internalUserId}, email: ${email}) joined the conversation`,
+              text: `User ${displayName} (id: ${internalUserId}, email: ${email}, role: ${role}) joined the conversation`,
             },
           ],
         });
@@ -998,7 +999,7 @@ export class AgentCore<
       }
 
       case "CORE:PARTICIPANT_MENTIONED": {
-        const { internalUserId, email, displayName, externalUserMapping } = event.data;
+        const { internalUserId, email, displayName, externalUserMapping, role } = event.data;
         // Don't add if already an active participant
         if (next.participants[internalUserId]) {
           break;
@@ -1015,6 +1016,7 @@ export class AgentCore<
           email,
           displayName,
           externalUserMapping,
+          role,
         };
         next.mentionedParticipants = {
           ...next.mentionedParticipants,
