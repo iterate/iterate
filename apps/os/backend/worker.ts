@@ -9,7 +9,7 @@ import { PostHog } from "posthog-node";
 import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { waitUntil, type CloudflareEnv } from "../env.ts";
+import { waitUntil, env, type CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -27,8 +27,7 @@ import { OrganizationWebSocket } from "./durable-objects/organization-websocket.
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
-import { logger } from "./tag-logger.ts";
-import { posthogErrorTracking } from "./posthog-error-tracker.ts";
+import { logger, type TagLogger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 
 declare module "react-router" {
@@ -47,6 +46,23 @@ export type Variables = {
   workerEntrypoint?: WorkerEntrypoint;
 };
 
+const posthogErrorTracking: TagLogger.ErrorTrackingFn = (error, metadata) => {
+  waitUntil(
+    (async () => {
+      const posthog = new PostHog(env.POSTHOG_PUBLIC_KEY, {
+        host: "https://eu.i.posthog.com",
+      });
+
+      posthog.captureException(error, metadata.userId, {
+        environment: env.POSTHOG_ENVIRONMENT,
+        ...metadata,
+      });
+
+      await posthog.shutdown();
+    })(),
+  );
+};
+
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
@@ -59,14 +75,10 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  return next();
-});
-
-// Sets up the logger with request metadata
-app.use("*", async (c, next) => {
+  // Sets up the logger with some basic request metadata
   await logger.runInContext(
     {
-      userId: c.var.session?.user?.id || undefined,
+      userId: session?.user?.id || undefined,
       path: c.req.path,
       method: c.req.method,
       url: c.req.url,

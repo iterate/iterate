@@ -10,9 +10,9 @@ export namespace TagLogger {
     level: TagLogger.Level;
     metadata: Record<string, unknown> & {
       userId: string | undefined;
-      path?: string;
-      method?: string;
-      url?: string;
+      path: string;
+      method: string;
+      url: string;
       requestId: string;
     };
     logs: Array<{ level: TagLogger.Level; timestamp: Date; args: unknown[] }>;
@@ -33,11 +33,12 @@ export class TagLogger {
 
   get context(): TagLogger.Context {
     const store = this._storage.getStore();
-    if (!store) {
+    // In tests, provide a default context.
+    // We do not want to do this in production as it will cause logs to intermingle.
+    if (import.meta.env.MODE === "test" && !store)
       return {
         level: "info",
         metadata: {
-          defaultContext: true,
           userId: undefined,
           path: "",
           method: "",
@@ -47,7 +48,7 @@ export class TagLogger {
         logs: [],
         errorTracking: () => {},
       };
-    }
+    if (!store) throw new Error("No context found for logger");
     return store;
   }
 
@@ -115,51 +116,10 @@ export class TagLogger {
   ): T {
     const existingContext = this._storage.getStore();
     const newContext: TagLogger.Context = existingContext
-      ? {
-          ...existingContext,
-          metadata: { ...metadata, defaultContext: undefined },
-          logs: [],
-          errorTracking,
-        }
-      : {
-          level: "info",
-          metadata: { ...metadata, defaultContext: undefined },
-          logs: [],
-          errorTracking,
-        };
+      ? { ...existingContext, metadata, logs: [], errorTracking }
+      : { level: "info", metadata, logs: [], errorTracking };
     return this._storage.run(newContext, fn);
   }
-
-  enterWith(metadata: TagLogger.Context["metadata"], errorTracking: TagLogger.ErrorTrackingFn) {
-    const existingContext = this._storage.getStore();
-    const newContext: TagLogger.Context = existingContext
-      ? { ...existingContext, metadata: { ...metadata, defaultContext: undefined }, errorTracking }
-      : {
-          level: "info",
-          metadata: { ...metadata, defaultContext: undefined },
-          logs: [],
-          errorTracking,
-        };
-    this._storage.enterWith(newContext);
-  }
-
-  /** Check if we're currently in a context */
-  hasContext(): boolean {
-    return this._storage.getStore() !== undefined;
-  }
-
-  /** Run function, only creating context if one doesn't exist */
-  ensureContext<T>(
-    metadata: TagLogger.Context["metadata"],
-    errorTracking: TagLogger.ErrorTrackingFn,
-    fn: () => T,
-  ): T {
-    if (this.hasContext()) {
-      return fn();
-    }
-    return this.runInContext(metadata, errorTracking, fn);
-  }
-
   error(error: Error): void; // uses passed error
   error(message: string): void; // wraps with Error
   error(message: string, cause: unknown): void; // wraps with error and sets cause
@@ -168,13 +128,11 @@ export class TagLogger {
     if (args[0] instanceof Error) {
       // uses passed error
       errorToLog = args[0];
-    } else if (args.length === 1 && typeof args[0] === "string") {
+    } else if (args.length === 1) {
       // wrap with Error
-      errorToLog = new Error(args[0]);
-    } else if (args.length === 2 && typeof args[0] === "string" && args[1]) {
-      errorToLog = new Error(args[0], {
-        cause: args[1] instanceof Error ? args[1] : new Error(String(args[1])),
-      });
+      errorToLog = new Error(args[0] as string);
+    } else if (args.length === 2 && args[1] instanceof Error) {
+      errorToLog = new Error(args[0] as string, { cause: args[1] });
     } else {
       errorToLog = new Error(args.join(" "));
     }
