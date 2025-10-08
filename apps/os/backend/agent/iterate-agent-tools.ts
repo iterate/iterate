@@ -188,4 +188,53 @@ export const iterateAgentTools = defineDOTools({
         .describe("Output resolution formatted as width x height"),
     }),
   },
+  callGoogleAPI: {
+    description: "Call a Google API endpoint with automatic authentication and token refresh",
+    input: z.object({
+      endpoint: z
+        .string()
+        .describe(
+          "The API endpoint path (e.g., '/gmail/v1/users/me/messages/send' or '/calendar/v3/calendars/primary/events')",
+        ),
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("The HTTP method to use"),
+      body: z.any().optional().describe("The request body (will be JSON stringified)"),
+      queryParams: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe("Query parameters to append to the URL"),
+      pathParams: z
+        .record(z.string(), z.string())
+        .optional()
+        .describe(
+          "Path parameters to insert into the URL. Path parameters are placeholders in the endpoint path represented as [param] that are replaced with the values in this object.",
+        ),
+      userId: z.string().describe("The user ID to use for authentication"),
+    }),
+  },
+  sendGmail: {
+    description:
+      "Send an email via Gmail. Can also reply to emails by providing threadId and inReplyTo.",
+    input: z.object({
+      to: z.string().describe("Recipient email address"),
+      subject: z.string().describe("Email subject"),
+      body: z.string().describe("Email body (plain text)"),
+      cc: z.string().optional().describe("CC email addresses (comma-separated)"),
+      bcc: z.string().optional().describe("BCC email addresses (comma-separated)"),
+      threadId: z.string().optional().describe("Thread ID to reply to (from getGmailMessage)"),
+      inReplyTo: z
+        .string()
+        .optional()
+        .describe("Message ID to reply to (from getGmailMessage headers)"),
+      userId: z.string().describe("The user ID to use for authentication"),
+    }),
+  },
+  // requires unapproved scope: gmail.modify
+  getGmailMessage: {
+    description:
+      "Get the full content of a specific Gmail message by ID. Returns the email with decoded text body.",
+    input: z.object({
+      messageId: z.string().describe("The ID of the message to retrieve"),
+      userId: z.string().describe("The user ID to use for authentication"),
+    }),
+  },
 });

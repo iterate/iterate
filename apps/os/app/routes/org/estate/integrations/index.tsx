@@ -45,6 +45,7 @@ import {
 import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
+import { authClient } from "../../../../lib/auth-client.ts";
 import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -158,6 +159,11 @@ export default function Integrations() {
     } else if (integrationId === "slack-bot") {
       // Use the shared Slack connection logic
       await connectSlackBot("/integrations");
+    } else if (integrationId === "google") {
+      const result = await authClient.integrations.link.google({
+        callbackURL: window.location.pathname,
+      });
+      window.location.href = result.url.toString();
     }
     // TODO: Implement OAuth flow for other integrations
     // This would redirect to the auth provider's OAuth URL
