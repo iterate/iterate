@@ -44,7 +44,7 @@ jobs:
 
       - name: Generate version
         id: version
-        run: echo "VERSION=$(date +'%d%m%y')" >> $GITHUB_OUTPUT
+        run: echo "VERSION=$(date +'%d%m%y%H%M')" >> $GITHUB_OUTPUT
 
       - name: Build and push container
         env:
@@ -59,10 +59,12 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.VERSION }}"
           sed -i 's|"image": "registry.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/sandbox:[^"]*"|"image": "registry.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/sandbox:'$VERSION'"|g' apps/os/wrangler.jsonc
+          git add apps/os/wrangler.jsonc
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v7
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           commit-message: "Update sandbox container to version ${{ steps.version.outputs.VERSION }}"
           branch: update-sandbox-${{ steps.version.outputs.VERSION }}
           title: "Update sandbox container to version ${{ steps.version.outputs.VERSION }}"
