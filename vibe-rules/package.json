@@ -5,8 +5,7 @@
   "private": true,
   "type": "module",
   "exports": {
-    "./llms": "./llms.ts",
-    ".": "./index.ts"
+    "./llms": "./llms.ts"
   },
   "scripts": {
     "typecheck": "tsc --build"
