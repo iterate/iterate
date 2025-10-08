@@ -123,17 +123,19 @@ export class TagLogger {
 
   error(error: Error): void; // uses passed error
   error(message: string): void; // wraps with Error
-  error(message: string, cause: Error): void; // wraps with error and sets cause
+  error(message: string, cause: unknown): void; // wraps with error and sets cause
   error(...args: unknown[]): void {
     let errorToLog: Error;
     if (args[0] instanceof Error) {
       // uses passed error
       errorToLog = args[0];
-    } else if (args.length === 1) {
+    } else if (args.length === 1 && typeof args[0] === "string") {
       // wrap with Error
-      errorToLog = new Error(args[0] as string);
-    } else if (args.length === 2 && args[1] instanceof Error) {
-      errorToLog = new Error(args[0] as string, { cause: args[1] });
+      errorToLog = new Error(args[0]);
+    } else if (args.length === 2 && typeof args[0] === "string" && args[1]) {
+      errorToLog = new Error(args[0], {
+        cause: args[1] instanceof Error ? args[1] : new Error(String(args[1])),
+      });
     } else {
       errorToLog = new Error(args.join(" "));
     }
@@ -142,10 +144,26 @@ export class TagLogger {
   }
 }
 
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    const plain = {};
+
+    Object.getOwnPropertyNames(error).forEach((key) => {
+      // @ts-expect-error - we don't care about the type of the error
+      plain[key] = error[key];
+    });
+
+    return plain;
+  }
+  return error;
+}
+
+const replacer = (_: string, value: unknown) => serializeError(value);
+
 /* eslint-disable no-console -- this is the one place where we use console */
 export const logger = new TagLogger({
-  debug: ({ args, metadata }) => console.debug(JSON.stringify({ args, metadata }, null, 2)),
-  info: ({ args, metadata }) => console.info(JSON.stringify({ args, metadata }, null, 2)),
-  warn: ({ args, metadata }) => console.warn(JSON.stringify({ args, metadata }, null, 2)),
-  error: ({ args, metadata }) => console.error(JSON.stringify({ args, metadata }, null, 2)),
+  debug: ({ args, metadata }) => console.debug(JSON.stringify({ args, metadata }, replacer, 2)),
+  info: ({ args, metadata }) => console.info(JSON.stringify({ args, metadata }, replacer, 2)),
+  warn: ({ args, metadata }) => console.warn(JSON.stringify({ args, metadata }, replacer, 2)),
+  error: ({ args, metadata }) => console.error(JSON.stringify({ args, metadata }, replacer, 2)),
 });
