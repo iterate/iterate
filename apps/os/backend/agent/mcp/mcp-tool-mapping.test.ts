@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { mcpManagerCache, createCacheKey } from "./mcp-event-hooks.ts";
+import {
+  createCacheKey,
+  createMCPManagerCache,
+  createMCPConnectionQueues,
+  type MCPManagerCache,
+  type MCPConnectionQueues,
+} from "./mcp-event-hooks.ts";
 import { MCPConnectionKey, type MCPConnection, type MCPTool } from "./mcp-slice.ts";
 import {
   computeToolMapping,
@@ -9,14 +15,15 @@ import {
   processMCPContent,
 } from "./mcp-tool-mapping.ts";
 
-// mock the mcp manager cache
-vi.mock("./mcp-event-hooks.ts", () => ({
-  mcpManagerCache: {
-    managers: new Map(),
-  },
-  createCacheKey: (durableObjectId: string, connectionKey: string) =>
-    `${durableObjectId}--${connectionKey}`,
-}));
+// mock the rehydration function since we're testing tool mapping, not connection management
+vi.mock("./mcp-event-hooks.ts", async () => {
+  return {
+    createCacheKey: (connectionKey: string) => connectionKey,
+    createMCPManagerCache: () => ({ managers: new Map() }),
+    createMCPConnectionQueues: () => new Map(),
+    rehydrateExistingMCPConnection: vi.fn(),
+  };
+});
 
 describe("mcp-tool-mapping", () => {
   // shared test helpers
@@ -692,9 +699,13 @@ describe("mcp-tool-mapping", () => {
       },
     });
 
+    let mockCache: MCPManagerCache;
+    let mockConnectionQueues: MCPConnectionQueues;
+
     beforeEach(() => {
       vi.clearAllMocks();
-      mcpManagerCache.managers.clear();
+      mockCache = createMCPManagerCache();
+      mockConnectionQueues = createMCPConnectionQueues();
     });
 
     it("should create runtime tool for team connection", async () => {
@@ -764,8 +775,8 @@ describe("mcp-tool-mapping", () => {
       const mockUploadFile = createMockUploadFile();
       const connectionKey = MCPConnectionKey.parse("https://mcp.github.com/mcp::company");
 
-      const cacheKey = createCacheKey("test-durable-object-id", connectionKey);
-      mcpManagerCache.managers.set(cacheKey, mockManager as any);
+      const cacheKey = createCacheKey(connectionKey);
+      mockCache.managers.set(cacheKey, mockManager as any);
 
       const tool = createMockTool("search_repos");
       const connections = {
@@ -784,6 +795,8 @@ describe("mcp-tool-mapping", () => {
         }),
         getEstateId: () => "test-estate-id",
         getReducedState: () => ({ mcpConnections: {} }) as any,
+        mcpConnectionCache: mockCache,
+        mcpConnectionQueues: mockConnectionQueues,
       };
 
       const runtimeTool = createRuntimeToolFromMCPTool({

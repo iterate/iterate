@@ -165,6 +165,9 @@ importers:
       expect-type:
         specifier: ^1.2.2
         version: 1.2.2
+      fflate:
+        specifier: ^0.8.2
+        version: 0.8.2
       glob:
         specifier: ^11.0.3
         version: 11.0.3
@@ -193,8 +196,8 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3
       openai:
-        specifier: ^6.1.0
-        version: 6.1.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11)
+        specifier: ^6.2.0
+        version: 6.2.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11)
       p-queue:
         specifier: ^9.0.0
         version: 9.0.0
@@ -623,6 +626,13 @@ importers:
         version: 1.0.1
 
   vibe-rules:
+    dependencies:
+      glob:
+        specifier: ^11.0.3
+        version: 11.0.3
+      yaml:
+        specifier: ^2.8.1
+        version: 2.8.1
     devDependencies:
       dedent:
         specifier: ^1.7.0
@@ -5874,6 +5884,9 @@ packages:
   fflate@0.4.8:
     resolution: {integrity: sha512-FJqqoDBR00Mdj9ppamLa/Y7vxm+PRmNWA67N846RvsoYVMKB4q3y/de5PA7gUmRMYK/8CMz2GDZQmCRN1wBcWA==}
 
+  fflate@0.8.2:
+    resolution: {integrity: sha512-cPJU47OaAoCbg0pBvzsgpTPhmhqI5eJjh/JIu8tPj5q+T7iLvW/JAYUqmE7KOB4R1ZyEhzBaIQpQpardBF5z8A==}
+
   fft.js@4.0.4:
     resolution: {integrity: sha512-f9c00hphOgeQTlDyavwTtu6RiK8AIFjD6+jvXkNkpeQ7rirK3uFWVpalkoS4LAwbdX7mfZ8aoBfFVQX1Re/8aw==}
 
@@ -7356,8 +7369,8 @@ packages:
       zod:
         optional: true
 
-  openai@6.1.0:
-    resolution: {integrity: sha512-5sqb1wK67HoVgGlsPwcH2bUbkg66nnoIYKoyV9zi5pZPqh7EWlmSrSDjAh4O5jaIg/0rIlcDKBtWvZBuacmGZg==}
+  openai@6.2.0:
+    resolution: {integrity: sha512-qqjzHls7F5xkXNGy9P1Ei1rorI5LWupUUFWP66zPU8FlZbiITX8SFcHMKNZg/NATJ0LpIZcMUFxSwQmdeQPwSw==}
     hasBin: true
     peerDependencies:
       ws: ^8.18.0
@@ -17102,6 +17115,8 @@ snapshots:
 
   fflate@0.4.8: {}
 
+  fflate@0.8.2: {}
+
   fft.js@4.0.4: {}
 
   file-entry-cache@8.0.0:
@@ -18882,7 +18897,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  openai@6.1.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11):
+  openai@6.2.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.11):
     optionalDependencies:
       ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod: 4.1.11

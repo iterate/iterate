@@ -26,6 +26,7 @@ export const MCPOAuthState = BaseOAuthState.extend({
   clientId: z.string(),
   fullUrl: z.string(),
   agentDurableObject: AgentDurableObjectInfo,
+  serverId: z.string(),
 });
 
 export const SlackDirectLoginState = BaseOAuthState.extend({});

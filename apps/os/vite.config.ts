@@ -32,14 +32,14 @@ export default defineConfig({
           const targetURL = new URL(publicURL);
           if (
             req.headers.host.split(":")[0] !== targetURL.hostname &&
-            !req.headers.host.startsWith("localhost")
+            !targetURL.host.startsWith("localhost")
           ) {
             const redirectURL = `${targetURL.origin}${req.url}`;
-            res.writeHead(301, { Location: redirectURL });
+            res.writeHead(302, { Location: redirectURL });
             res.end();
             return;
           }
-          next();
+          return next();
         });
       },
     },
