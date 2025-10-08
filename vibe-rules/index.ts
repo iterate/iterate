@@ -18,20 +18,23 @@ export function vibeRulesFromFiles(pattern: string): PackageRuleItem[] {
       const fullPath = join(moduleDir, filePath);
       const content = readFileSync(fullPath, "utf-8");
 
-      const parts = content.split("---");
-
       let frontmatter: Record<string, unknown> = {};
       let body = content;
 
-      if (parts.length >= 3) {
-        const frontmatterSection = parts[1]?.trim();
-        body = parts.slice(2).join("---").trim();
+      // Only parse frontmatter if the content starts with "---"
+      if (content.trim().startsWith("---")) {
+        const parts = content.split("---");
 
-        if (frontmatterSection) {
-          try {
-            frontmatter = parseYaml(frontmatterSection) || {};
-          } catch (error) {
-            console.warn(`Failed to parse YAML frontmatter in ${filePath}:`, error);
+        if (parts.length >= 3) {
+          const frontmatterSection = parts[1]?.trim();
+          body = parts.slice(2).join("---").trim();
+
+          if (frontmatterSection) {
+            try {
+              frontmatter = parseYaml(frontmatterSection) || {};
+            } catch (error) {
+              console.warn(`Failed to parse YAML frontmatter in ${filePath}:`, error);
+            }
           }
         }
       }
