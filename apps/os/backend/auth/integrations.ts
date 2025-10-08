@@ -481,47 +481,48 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get account id" });
           }
 
-          // For linking flow, we need an estateId
-          if (!estateId) {
-            return ctx.json({ error: "Failed to get estate id for linking" });
-          }
+          // Link estate if we have an ID
+          // TODO(rahul): figure out if there are any edge cases
+          // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
+          // So we can skip this step for them
+          if (estateId) {
+            // For linking flow, connect everything now
+            // Sync Slack users to the organization in the background
+            waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
 
-          // For linking flow, connect everything now
-          // Sync Slack users to the organization in the background
-          waitUntil(syncSlackUsersInBackground(db, tokens.access_token, estateId));
+            await db
+              .insert(schema.estateAccountsPermissions)
+              .values({
+                accountId: botAccount.id,
+                estateId,
+              })
+              .onConflictDoNothing();
 
-          await db
-            .insert(schema.estateAccountsPermissions)
-            .values({
-              accountId: botAccount.id,
-              estateId,
-            })
-            .onConflictDoNothing();
-
-          await db
-            .insert(schema.providerEstateMapping)
-            .values({
-              internalEstateId: estateId,
-              externalId: tokens.team?.id,
-              providerId: "slack-bot",
-              providerMetadata: {
-                botUserId,
-                team: tokens.team,
-              },
-            })
-            .onConflictDoUpdate({
-              target: [
-                schema.providerEstateMapping.providerId,
-                schema.providerEstateMapping.externalId,
-              ],
-              set: {
-                internalEstateId: estateId, // We may want to require a confirmation to change the estate
+            await db
+              .insert(schema.providerEstateMapping)
+              .values({
+                internalEstateId: estateId,
+                externalId: tokens.team?.id,
+                providerId: "slack-bot",
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
                 },
-              },
-            });
+              })
+              .onConflictDoUpdate({
+                target: [
+                  schema.providerEstateMapping.providerId,
+                  schema.providerEstateMapping.externalId,
+                ],
+                set: {
+                  internalEstateId: estateId, // We may want to require a confirmation to change the estate
+                  providerMetadata: {
+                    botUserId,
+                    team: tokens.team,
+                  },
+                },
+              });
+          }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);
         },
