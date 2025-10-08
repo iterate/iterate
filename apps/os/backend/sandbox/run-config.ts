@@ -128,7 +128,7 @@ async function runConfigInSandboxInternal(
     logger.error(
       JSON.stringify({
         message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
-        result: resultInit,
+        result: resultBuild,
       }),
     );
   }

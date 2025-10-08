@@ -12,7 +12,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
-import { logger } from "../tag-logger.ts";
+import { logger, withLoggerContext } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -41,6 +41,7 @@ import {
 } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import { posthogErrorTracking } from "../posthog-error-tracker.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -573,6 +574,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+
+    return withLoggerContext(
+      this,
+      logger,
+      (methodName) => ({
+        userId: undefined,
+        path: undefined,
+        method: methodName,
+        url: undefined,
+        requestId: typeid("req").toString(),
+      }),
+      posthogErrorTracking,
+    );
   }
 
   /**
