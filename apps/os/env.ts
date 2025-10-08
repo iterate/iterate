@@ -30,6 +30,9 @@ export type CloudflareEnv = Env & {
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICING_PLAN_ID: string;
 
+  // Service authentication token for server-to-server communication with user impersonation
+  SERVICE_AUTH_TOKEN: string;
+
   // Comma-separated list of hostnames. If a user with a verified email using that hostname signs up,
   // they get user.role=admin set. This is particularly useful for testing in development when
   // you want to test with one admin and one non-admin user over and over

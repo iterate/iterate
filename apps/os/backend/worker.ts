@@ -90,9 +90,64 @@ app.onError((err, c) => {
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const session = await auth.api.getSession({
-    headers: c.req.raw.headers,
-  });
+
+  let session: AuthSession | null = null;
+
+  // Check for service auth token for impersonation
+  const serviceAuthToken = c.req.header("X-Service-Auth-Token");
+  const impersonateUserId = c.req.header("X-Impersonate-User-Id");
+
+  if (serviceAuthToken && impersonateUserId) {
+    // Validate service auth token
+    if (serviceAuthToken === c.env.SERVICE_AUTH_TOKEN) {
+      // Fetch the user to impersonate
+      const userToImpersonate = await db.query.user.findFirst({
+        where: (users, { eq }) => eq(users.id, impersonateUserId),
+      });
+
+      if (userToImpersonate) {
+        // Create a synthetic session for the impersonated user
+        // Convert nullable fields to match AuthSession expectations
+        session = {
+          user: {
+            ...userToImpersonate,
+            debugMode: userToImpersonate.debugMode ?? false,
+            banned: userToImpersonate.banned ?? undefined,
+            banReason: userToImpersonate.banReason ?? undefined,
+            banExpires: userToImpersonate.banExpires ?? undefined,
+            role: userToImpersonate.role ?? undefined,
+            image: userToImpersonate.image ?? undefined,
+          },
+          session: {
+            id: `service_impersonate_${impersonateUserId}`,
+            userId: userToImpersonate.id,
+            expiresAt: new Date(Date.now() + 1000 * 60 * 60), // 1 hour from now
+            token: `service_token_${Date.now()}`,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          },
+        };
+        logger.info("Service authentication: impersonating user", {
+          userId: impersonateUserId,
+          userEmail: userToImpersonate.email,
+        });
+      } else {
+        logger.error("Service authentication: user not found for impersonation", {
+          userId: impersonateUserId,
+        });
+      }
+    } else {
+      logger.error("Service authentication: invalid service auth token provided");
+    }
+  }
+
+  // If no service auth session was created, use normal authentication
+  if (!session) {
+    session = await auth.api.getSession({
+      headers: c.req.raw.headers,
+    });
+  }
+
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
