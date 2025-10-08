@@ -28,7 +28,6 @@ import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./sl
 import type {
   AgentCoreEvent,
   CoreReducedState,
-  LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
