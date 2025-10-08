@@ -5,6 +5,7 @@ import pDebounce from "p-suite/p-debounce";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import * as schema from "../db/schema.ts";
 import {
   slackWebhookEvent,
   providerUserMapping,
@@ -394,6 +395,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         userId: user.id,
         userEmail: user.email,
         userName: user.name,
+        orgRole: organizationUserMembership.role,
         slackUserId: providerUserMapping.externalId,
         providerMetadata: providerUserMapping.providerMetadata,
       })
@@ -440,6 +442,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
+          role: userInfo.orgRole,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
@@ -490,49 +493,90 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return [];
     }
 
-    const userMappings = await this.db.query.providerUserMapping.findMany({
-      where: and(
-        eq(providerUserMapping.providerId, "slack-bot"),
-        inArray(providerUserMapping.externalId, newMentionedUserIds),
-      ),
-      with: {
-        internalUser: true,
-      },
-    });
+    const estateId = this.databaseRecord.estateId;
 
-    return userMappings
-      .filter((userMapping) => userMapping.internalUser != null)
-      .map((userMapping): ParticipantMentionedEventInput => {
-        const { internalUser, externalId, providerMetadata } = userMapping;
-        return {
-          type: "CORE:PARTICIPANT_MENTIONED",
-          data: {
-            internalUserId: internalUser!.id,
-            email: internalUser!.email,
-            displayName: internalUser!.name,
-            externalUserMapping: {
-              slack: {
-                integrationSlug: "slack",
-                externalUserId: externalId,
-                internalUserId: internalUser.id,
-                email: internalUser.email,
-                rawUserInfo: providerMetadata as Record<string, unknown>,
-              },
+    const userMappings = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          inArray(providerUserMapping.externalId, newMentionedUserIds),
+          eq(estate.id, estateId),
+        ),
+      );
+
+    return userMappings.map((userMapping): ParticipantMentionedEventInput => {
+      return {
+        type: "CORE:PARTICIPANT_MENTIONED",
+        data: {
+          internalUserId: userMapping.userId,
+          email: userMapping.userEmail,
+          displayName: userMapping.userName,
+          role: userMapping.orgRole,
+          externalUserMapping: {
+            slack: {
+              integrationSlug: "slack",
+              externalUserId: userMapping.slackUserId,
+              internalUserId: userMapping.userId,
+              email: userMapping.userEmail,
+              rawUserInfo: userMapping.providerMetadata as Record<string, unknown>,
             },
           },
-          triggerLLMRequest: false,
-          metadata: {},
-        };
-      });
+        },
+        triggerLLMRequest: false,
+        metadata: {},
+      };
+    });
   }
 
   public async initSlack(channelId: string, threadTs: string) {
     const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
+
+    // Query database for channel info to populate state
+    let slackChannel: { name: string; isShared: boolean; isExtShared: boolean } | null = null;
+
+    try {
+      const channelMapping = await this.db.query.slackChannel.findFirst({
+        where: and(
+          eq(schema.slackChannel.estateId, this.databaseRecord.estateId),
+          eq(schema.slackChannel.externalId, channelId),
+        ),
+        columns: {
+          name: true,
+          isShared: true,
+          isExtShared: true,
+        },
+      });
+
+      if (channelMapping) {
+        slackChannel = {
+          name: channelMapping.name,
+          isShared: channelMapping.isShared,
+          isExtShared: channelMapping.isExtShared,
+        };
+      }
+    } catch (error) {
+      logger.warn(`Failed to fetch channel info during initialization for ${channelId}:`, error);
+    }
+
     events.push({
       type: "SLACK:UPDATE_SLICE_STATE",
       data: {
         slackChannelId: channelId,
         slackThreadId: threadTs,
+        slackChannel,
       },
       triggerLLMRequest: false,
     });

@@ -678,6 +678,29 @@ function CoreEventRenderer({
               <div>User ID: {event.data.internalUserId}</div>
               {event.data.email && <div>Email: {event.data.email}</div>}
               {event.data.displayName && <div>Name: {event.data.displayName}</div>}
+              {event.data.role && (
+                <div className="flex items-center gap-2">
+                  <span>Role:</span>
+                  <Badge
+                    variant="outline"
+                    className={clsx(
+                      "text-xs",
+                      event.data.role === "admin" &&
+                        "bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200",
+                      event.data.role === "owner" &&
+                        "bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-200",
+                      event.data.role === "guest" &&
+                        "bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200",
+                      event.data.role === "external" &&
+                        "bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-200",
+                      event.data.role === "member" &&
+                        "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200",
+                    )}
+                  >
+                    {event.data.role}
+                  </Badge>
+                </div>
+              )}
               <div className="text-xs text-muted-foreground">
                 User has joined the agent conversation
               </div>

@@ -6,7 +6,7 @@ import { parseRouter, type AnyRouter } from "trpc-cli";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
-import { syncSlackUsersInBackground } from "../../integrations/slack/slack.ts";
+import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import {
   stripeClient,
@@ -319,9 +319,7 @@ export const adminRouter = router({
         });
       }
 
-      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, input.estateId));
-
-      return { success: true };
+      return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
     }),
   syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     const estates = await ctx.db.query.estate.findMany();
@@ -333,7 +331,7 @@ export const adminRouter = router({
         continue;
       }
 
-      waitUntil(syncSlackUsersInBackground(ctx.db, slackToken, estate.id));
+      waitUntil(syncSlackForEstateInBackground(ctx.db, slackToken, estate.id));
     }
 
     return {

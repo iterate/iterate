@@ -33,9 +33,13 @@ export function hasParticipant(searchString: string) {
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
-export function slackChannel(channelId: string) {
-  // Construct JSONata expression that checks if slackChannelId matches the provided channel ID
-  const expression = `agentCoreState.slackChannelId = "${channelId}"`;
+export function slackChannel(channelIdOrName: string) {
+  const expression = `agentCoreState.slackChannelId = "${channelIdOrName}" or agentCoreState.slackChannel.name = "${channelIdOrName}"`;
+  return { type: "jsonata", expression } satisfies ContextRuleMatcher;
+}
+
+export function slackChannelHasExternalUsers(hasExternalUsers: boolean) {
+  const expression = `agentCoreState.slackChannel.isShared = ${hasExternalUsers} or agentCoreState.slackChannel.isExtShared = ${hasExternalUsers}`;
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
@@ -99,6 +103,7 @@ export const matchers = {
   jsonata,
   hasParticipant,
   slackChannel,
+  slackChannelHasExternalUsers,
   contextContains,
   hasTool,
   hasMCPConnection,
