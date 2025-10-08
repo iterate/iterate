@@ -1,12 +1,15 @@
 import { redirect } from "react-router";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { waitUntil } from "cloudflare:workers";
+import { WebClient } from "@slack/web-api";
 import { GlobalLoading } from "../components/global-loading.tsx";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
 import * as schema from "../../backend/db/schema.ts";
 import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
+import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
+import { logger } from "../../backend/tag-logger.ts";
 import type { Route } from "./+types/redirect";
 
 // Server-side business logic for determining where to redirect
@@ -43,6 +46,81 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
         // Error is already logged in the helper function
       }),
     );
+
+    // If the user has a Slack bot account, automatically connect it to the new estate
+    // and sync Slack users to the organization
+    if (newOrgAndEstate.estate) {
+      const estateId = newOrgAndEstate.estate.id;
+      waitUntil(
+        (async () => {
+          const slackBotAccount = await db.query.account.findFirst({
+            where: and(
+              eq(schema.account.userId, userId),
+              eq(schema.account.providerId, "slack-bot"),
+            ),
+          });
+
+          if (slackBotAccount?.accessToken) {
+            // Connect the bot account to the estate
+            await db
+              .insert(schema.estateAccountsPermissions)
+              .values({
+                accountId: slackBotAccount.id,
+                estateId,
+              })
+              .onConflictDoNothing();
+
+            // Get team info from Slack API to create provider-estate mapping
+            try {
+              const slackClient = new WebClient(slackBotAccount.accessToken);
+              const authTest = await slackClient.auth.test();
+
+              if (authTest.ok && authTest.team_id) {
+                await db
+                  .insert(schema.providerEstateMapping)
+                  .values({
+                    internalEstateId: estateId,
+                    externalId: authTest.team_id,
+                    providerId: "slack-bot",
+                    providerMetadata: {
+                      botUserId: slackBotAccount.accountId,
+                      team: {
+                        id: authTest.team_id,
+                        name: authTest.team,
+                      },
+                    },
+                  })
+                  .onConflictDoUpdate({
+                    target: [
+                      schema.providerEstateMapping.providerId,
+                      schema.providerEstateMapping.externalId,
+                    ],
+                    set: {
+                      internalEstateId: estateId,
+                      providerMetadata: {
+                        botUserId: slackBotAccount.accountId,
+                        team: {
+                          id: authTest.team_id,
+                          name: authTest.team,
+                        },
+                      },
+                    },
+                  });
+              }
+            } catch (error) {
+              logger.error("Failed to create provider-estate mapping for Slack", error);
+              // Continue even if this fails - the main thing is syncing users
+            }
+
+            // Sync Slack users to the organization
+            await syncSlackUsersInBackground(db, slackBotAccount.accessToken, estateId);
+            logger.info(`Auto-connected Slack bot to estate ${estateId} and synced users`);
+          }
+        })().catch((error) => {
+          logger.error("Failed to auto-connect Slack bot to new estate", error);
+        }),
+      );
+    }
 
     return `/${newOrgAndEstate.organization.id}/${newOrgAndEstate.estate?.id}`;
   }
