@@ -14,7 +14,7 @@ export default function SiteHeader() {
             <Navigation />
             <div className="flex items-center gap-2">
               <a
-                href="https://github.com/iterate-com/iterate"
+                href="https://github.com/iterate/iterate"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-gray-600 hover:text-gray-900 transition-colors"
