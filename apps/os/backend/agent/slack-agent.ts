@@ -28,7 +28,6 @@ import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./sl
 import type {
   AgentCoreEvent,
   CoreReducedState,
-  LlmInputItemEventInput,
   ParticipantJoinedEventInput,
   ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
@@ -279,10 +278,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   /**
    * Fetches previous messages in a Slack thread and returns an LLM input item event
+   * Also processes any files that were shared in the thread history
    */
   public async getSlackThreadHistoryInputEvents(
     threadTs: string,
-  ): Promise<LlmInputItemEventInput[]> {
+    botUserId: string | undefined,
+  ): Promise<AgentCoreEventInput[]> {
     const timings: Record<string, number> = { startTime: performance.now() };
     const previousMessages = await this.db
       .select()
@@ -334,7 +335,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ],
     });
 
-    return [
+    const events: AgentCoreEventInput[] = [
       {
         type: "CORE:LLM_INPUT_ITEM",
         data: {
@@ -351,6 +352,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         metadata: { timings },
       },
     ];
+
+    // Process any files that were shared in the thread history
+    const fileEventsPromises = previousMessages.map(async (message) => {
+      const slackEvent = message.data as SlackEvent;
+      return await this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId);
+    });
+
+    const fileEventsArrays = await Promise.all(fileEventsPromises);
+    const fileEvents = fileEventsArrays.flat();
+
+    events.push(...fileEvents);
+
+    return events;
   }
 
   /**
@@ -678,7 +692,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         : Promise.resolve([]),
       this.convertSlackSharedFilesToIterateFileSharedEvents(slackEvent, botUserId),
       !isSlackInitialized && !isThreadStarter
-        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs)
+        ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs, botUserId)
         : Promise.resolve([]),
     ]);
     events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());
