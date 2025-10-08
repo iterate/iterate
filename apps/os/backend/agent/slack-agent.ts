@@ -2,7 +2,6 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
-import { waitUntil } from "cloudflare:workers";
 import { createAuthorizationURL } from "better-auth/oauth2";
 import { generateRandomString } from "better-auth/crypto";
 import { env as _env, env } from "../../env.ts";
