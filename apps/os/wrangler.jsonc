@@ -38,7 +38,7 @@
   "containers": [
     {
       "class_name": "Sandbox",
-      "image": "registry.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/sandbox:081025",
+      "image": "registry.cloudflare.com/04b3b57291ef2626c6a8daa9d47065a7/sandbox:0810251458",
       "instance_type": "standard-4",
       "max_instances": 10,
       "rollout_active_grace_period": 900,
