@@ -134,7 +134,8 @@ export default defineConfig([
       "no-new-func": "error",
 
       // React rules
-      ...reactHooks.configs.recommended.rules,
+      // @ts-expect-error plugin typing mismatch in flat config context
+      ...reactHooks.configs?.recommended?.rules,
       "react-hooks/exhaustive-deps": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
@@ -197,6 +198,82 @@ export default defineConfig([
                         "Avoid using publicProcedure unless the procedure truly must be publicly accessible - prefer one of the authenticated procedures instead",
                     });
                   }
+                },
+              };
+            },
+          },
+          "no-ctx-storage-get-put": {
+            meta: {
+              docs: {
+                description:
+                  "In Durable Objects, use this.ctx.storage.kv.get/put instead of this.ctx.storage.get/put",
+              },
+              hasSuggestions: true,
+              type: "problem",
+            },
+            create: (context) => {
+              // Return property chain for a MemberExpression like a.b.c -> ["a","b","c"].
+              function getMemberChain(node) {
+                /** @type {string[]} */
+                const parts = [];
+                /** @type {any} */
+                let current = node;
+                while (current && current.type === "MemberExpression") {
+                  const prop = current.property;
+                  if (current.computed) return [];
+                  if (prop && prop.type === "Identifier") {
+                    parts.unshift(prop.name);
+                  } else {
+                    return [];
+                  }
+                  current = current.object;
+                }
+                if (current?.type === "Identifier") {
+                  parts.unshift(current.name);
+                } else if (current?.type === "ThisExpression") {
+                  parts.unshift("this");
+                }
+                return parts;
+              }
+
+              // Whether the callee looks like ctx.storage.get/put (not .storage.kv.get/put)
+              function isForbiddenStorageCall(/** @type {any} */ callee) {
+                const chain = getMemberChain(callee);
+                if (chain.length < 4) return false;
+                const last = chain[chain.length - 1];
+                const secondLast = chain[chain.length - 2];
+                const thirdLast = chain[chain.length - 3];
+                const first = chain[0];
+                const second = chain[1];
+                const isGetOrPut = last === "get" || last === "put";
+                const isDirectFromStorage = secondLast === "storage";
+                const isAlreadyKv = thirdLast === "kv"; // e.g. storage.kv.get
+                const looksLikeDO = first === "this" && second === "ctx";
+                return looksLikeDO && isGetOrPut && isDirectFromStorage && !isAlreadyKv;
+              }
+
+              return {
+                CallExpression(/** @type {any} */ node) {
+                  const callee = node.callee;
+                  if (!callee || callee.type !== "MemberExpression") return;
+                  if (!isForbiddenStorageCall(callee)) return;
+
+                  // @ts-expect-error getText exists on sourceCode
+                  const source = context.sourceCode.getText(callee);
+                  const suggested = source.replace(/\.storage\.(get|put)$/, ".storage.kv.$1");
+
+                  context.report({
+                    node: callee.property,
+                    message:
+                      "Use this.ctx.storage.kv.{{method}} instead of this.ctx.storage.{{method}} in Durable Objects",
+                    data: { method: callee.property.type === "Identifier" ? callee.property.name : "get/put" },
+                    suggest: [
+                      {
+                        desc: "Change to .storage.kv.<method>",
+                        fix: (fixer) => fixer.replaceText(callee, suggested),
+                      },
+                    ],
+                  });
                 },
               };
             },
@@ -311,6 +388,7 @@ export default defineConfig([
       "iterate/prefer-const": "error",
       "iterate/side-effect-imports-first": "warn",
       "iterate/zod-schema-naming": "error",
+      "iterate/no-ctx-storage-get-put": "error",
     },
   },
   ...vibeRules.flatMap((rule) => {
