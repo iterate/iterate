@@ -10,6 +10,10 @@
   "scripts": {
     "typecheck": "tsc --build"
   },
+  "dependencies": {
+    "glob": "^11.0.3",
+    "yaml": "^2.8.1"
+  },
   "devDependencies": {
     "dedent": "^1.7.0",
     "typescript": "^5.9.3",
