@@ -10,7 +10,6 @@ import { permalink as getPermalink } from "braintrust/browser";
 // Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
-import { waitUntil } from "cloudflare:workers";
 import Replicate from "replicate";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
@@ -526,7 +525,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
 
       background: (fn: () => Promise<void>) => {
-        waitUntil(fn());
+        void fn();
       },
 
       getOpenAIClient: async () => {
@@ -595,16 +594,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
             const model = this.agentCore.state.modelOpts.model;
 
             if (stripeCustomerId) {
-              waitUntil(
-                (async () => {
-                  await trackTokenUsageInStripe({
-                    stripeCustomerId,
-                    model,
-                    inputTokens: input_tokens,
-                    outputTokens: output_tokens,
-                  });
-                })(),
-              );
+              void trackTokenUsageInStripe({
+                stripeCustomerId,
+                model,
+                inputTokens: input_tokens,
+                outputTokens: output_tokens,
+              });
             } else {
               logger.warn("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
@@ -629,45 +624,38 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
         if (mcpRelevantEvents.includes(event.type as string as MCPRelevantEvent)) {
           const mcpEvent = event as Extract<typeof event, { type: MCPRelevantEvent }>; // ideally typescript would narrow this for us but `.includes(...)` is annoying/badly implemented. ts-reset might help
-          waitUntil(
-            (async () => {
-              if (reducedState.mcpConnections) {
-                const eventsToAdd = await runMCPEventHooks({
-                  event: mcpEvent,
-                  reducedState,
-                  agentDurableObject: this.hydrationInfo,
-                  estateId: this.databaseRecord.estateId,
-                  mcpConnectionCache: this.mcpManagerCache,
-                  mcpConnectionQueues: this.mcpConnectionQueues,
-                  getFinalRedirectUrl: deps.getFinalRedirectUrl!,
-                });
-
-                for (const eventToAdd of eventsToAdd) {
-                  this.agentCore.addEvent(eventToAdd);
-                }
+          if (reducedState.mcpConnections) {
+            void runMCPEventHooks({
+              event: mcpEvent,
+              reducedState,
+              agentDurableObject: this.hydrationInfo,
+              estateId: this.databaseRecord.estateId,
+              mcpConnectionCache: this.mcpManagerCache,
+              mcpConnectionQueues: this.mcpConnectionQueues,
+              getFinalRedirectUrl: deps.getFinalRedirectUrl!,
+            }).then((eventsToAdd) => {
+              for (const eventToAdd of eventsToAdd) {
+                this.agentCore.addEvent(eventToAdd);
               }
-            })(),
-          );
+            });
+          }
         }
 
         if (event.type === "CORE:LLM_REQUEST_END") {
           // fairly arbitrarily, refresh context rules after each LLM request so the agent will have updated instructions by next time
           // but we shouldn't rely on this - we listen for relevant webhooks and refresh events when they actually change
           // https://docs.slack.dev/reference/events/user_typing/ might also be an interesting source of events to trigger this that doesn't require additional dependencies/webhooks/polling
-          waitUntil(this.refreshContextRules());
+          void this.refreshContextRules();
         }
 
-        this.ctx.waitUntil(
-          (async () => {
-            const posthog = await posthogClient();
-            return await processPosthogAgentCoreEvent({
-              posthog,
-              data: {
-                event,
-                reducedState,
-              },
-            });
-          })(),
+        void posthogClient().then((posthog) =>
+          processPosthogAgentCoreEvent({
+            posthog,
+            data: {
+              event,
+              reducedState,
+            },
+          }),
         );
       },
       lazyConnectionDeps: {
@@ -851,11 +839,11 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return result[0]?.role;
   }
 
-  async addEvent(event: MergedEventInputForSlices<Slices>): Promise<{ eventIndex: number }[]> {
+  addEvent(event: MergedEventInputForSlices<Slices>): { eventIndex: number }[] {
     return this.agentCore.addEvent(event);
   }
 
-  async addEvents(events: MergedEventInputForSlices<Slices>[]): Promise<{ eventIndex: number }[]> {
+  addEvents(events: MergedEventInputForSlices<Slices>[]): { eventIndex: number }[] {
     return this.agentCore.addEvents(events);
   }
 
@@ -868,7 +856,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   /*
    * Get the reduced state at a specific event index
    */
-  async getReducedStateAtEventIndex(eventIndex: number): Promise<AugmentedCoreReducedState> {
+  getReducedStateAtEventIndex(eventIndex: number): AugmentedCoreReducedState {
     return this.agentCore.getReducedStateAtEventIndex(eventIndex);
   }
 
@@ -1619,81 +1607,79 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     };
 
     logger.debug("polling OpenAI video:", { videoId: videoCreationData.id });
-    waitUntil(
-      (async () => {
-        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-        while (true) {
-          try {
-            const statusRes = await fetch(
-              `https://api.openai.com/v1/videos/${videoCreationData.id}`,
+    void (async () => {
+      const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+      while (true) {
+        try {
+          const statusRes = await fetch(
+            `https://api.openai.com/v1/videos/${videoCreationData.id}`,
+            {
+              method: "GET",
+              headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
+            },
+          );
+          if (!statusRes.ok) {
+            logger.debug("video status not ok:", statusRes.status);
+            await sleep(5000);
+            continue;
+          }
+          const statusJson = (await statusRes.json()) as { id: string; status: string };
+          logger.debug("video status:", statusJson);
+          if (statusJson.status === "completed") {
+            const contentRes = await fetch(
+              `https://api.openai.com/v1/videos/${videoCreationData.id}/content`,
               {
                 method: "GET",
                 headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
               },
             );
-            if (!statusRes.ok) {
-              logger.debug("video status not ok:", statusRes.status);
-              await sleep(5000);
-              continue;
-            }
-            const statusJson = (await statusRes.json()) as { id: string; status: string };
-            logger.debug("video status:", statusJson);
-            if (statusJson.status === "completed") {
-              const contentRes = await fetch(
-                `https://api.openai.com/v1/videos/${videoCreationData.id}/content`,
-                {
-                  method: "GET",
-                  headers: { Authorization: `Bearer ${env.OPENAI_API_KEY}` },
-                },
-              );
-              if (contentRes.ok && contentRes.body) {
-                const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
-                const contentLengthHeader = contentRes.headers.get("content-length");
-                const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
-                logger.debug("uploading video to r2", { contentLength, contentType });
-                const fileRecord = await uploadFile({
-                  stream: contentRes.body,
-                  contentLength,
-                  filename: `generated-video-${Date.now()}.mp4`,
-                  contentType,
-                  estateId: this.databaseRecord.estateId,
-                  db: this.db,
-                });
-                logger.debug("video uploaded:", {
-                  fileId: fileRecord.id,
-                  publicURL: getFilePublicURL(fileRecord.id),
-                });
+            if (contentRes.ok && contentRes.body) {
+              const contentType = contentRes.headers.get("content-type") ?? "video/mp4";
+              const contentLengthHeader = contentRes.headers.get("content-length");
+              const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+              logger.debug("uploading video to r2", { contentLength, contentType });
+              const fileRecord = await uploadFile({
+                stream: contentRes.body,
+                contentLength,
+                filename: `generated-video-${Date.now()}.mp4`,
+                contentType,
+                estateId: this.databaseRecord.estateId,
+                db: this.db,
+              });
+              logger.debug("video uploaded:", {
+                fileId: fileRecord.id,
+                publicURL: getFilePublicURL(fileRecord.id),
+              });
 
-                this.agentCore.addEvent({
-                  type: "CORE:FILE_SHARED",
-                  data: {
-                    direction: "from-agent-to-user",
-                    iterateFileId: fileRecord.id,
-                    openAIFileId: fileRecord.openAIFileId ?? undefined,
-                    mimeType: fileRecord.mimeType ?? undefined,
-                  },
-                  metadata: {
-                    openaiSoraVideoId: videoCreationData.id,
-                  },
-                  triggerLLMRequest: true,
-                });
-              } else {
-                logger.debug("video content download failed:", contentRes.status);
-              }
-              return;
+              this.agentCore.addEvent({
+                type: "CORE:FILE_SHARED",
+                data: {
+                  direction: "from-agent-to-user",
+                  iterateFileId: fileRecord.id,
+                  openAIFileId: fileRecord.openAIFileId ?? undefined,
+                  mimeType: fileRecord.mimeType ?? undefined,
+                },
+                metadata: {
+                  openaiSoraVideoId: videoCreationData.id,
+                },
+                triggerLLMRequest: true,
+              });
+            } else {
+              logger.debug("video content download failed:", contentRes.status);
             }
-            if (statusJson.status === "failed" || statusJson.status === "cancelled") {
-              logger.debug("video generation terminal:", statusJson.status);
-              return;
-            }
-            await sleep(5000);
-          } catch (err) {
-            logger.debug("video polling error:", err);
-            await sleep(5000);
+            return;
           }
+          if (statusJson.status === "failed" || statusJson.status === "cancelled") {
+            logger.debug("video generation terminal:", statusJson.status);
+            return;
+          }
+          await sleep(5000);
+        } catch (err) {
+          logger.debug("video polling error:", err);
+          await sleep(5000);
         }
-      })(),
-    );
+      }
+    })();
 
     return {
       status: "queued",
@@ -1836,35 +1822,33 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
     if (sandboxState.status !== "healthy") {
-      waitUntil(
-        sandbox
-          .startAndWaitForPorts(3000) // default sandbox port
-          .then(execInSandbox)
-          .then((resultExec) => {
-            // Inject a tool call event that will be processed by the agent
-            // TODO: this doesn't work
-            (this as any).addEvent({
-              type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
-              data: {
-                call: {
-                  type: "function_call",
-                  call_id: `exec-result-${Date.now()}`,
-                  name: "sendSlackMessage",
-                  arguments: JSON.stringify({
-                    text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
-                    endTurn: true,
-                  }),
-                  status: "completed", // ← Changed from "pending"
-                },
-                result: {
-                  success: resultExec.success,
-                  output: {},
-                },
+      void sandbox
+        .startAndWaitForPorts(3000) // default sandbox port
+        .then(execInSandbox)
+        .then((resultExec) => {
+          // Inject a tool call event that will be processed by the agent
+          // TODO: this doesn't work
+          (this as any).addEvent({
+            type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
+            data: {
+              call: {
+                type: "function_call",
+                call_id: `exec-result-${Date.now()}`,
+                name: "sendSlackMessage",
+                arguments: JSON.stringify({
+                  text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
+                  endTurn: true,
+                }),
+                status: "completed", // ← Changed from "pending"
               },
-              triggerLLMRequest: false,
-            });
-          }),
-      );
+              result: {
+                success: resultExec.success,
+                output: {},
+              },
+            },
+            triggerLLMRequest: false,
+          });
+        });
 
       // TODO: this doesn't work
       return {

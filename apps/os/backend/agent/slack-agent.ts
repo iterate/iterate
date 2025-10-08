@@ -2,7 +2,6 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
-import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -85,7 +84,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (!status) return;
 
     if (this.agentCore.llmRequestInProgress()) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
       return;
     }
 
@@ -95,17 +94,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         data: { status: null },
       },
     ]);
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(null));
+    void this.updateSlackStatusDebounced(null);
   }, 15000);
 
   private syncTypingIndicator() {
     const state = this.agentCore.state as SlackSliceState;
     const status = state.typingIndicatorStatus ?? null;
 
-    this.ctx.waitUntil(this.updateSlackStatusDebounced(status));
+    void this.updateSlackStatusDebounced(status);
 
     if (status) {
-      this.ctx.waitUntil(this.checkAndClearTypingIndicator());
+      void this.checkAndClearTypingIndicator();
     }
   }
 
@@ -173,17 +172,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "CORE:FILE_SHARED": {
             const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
             if (fileSharedEvent.data.direction === "from-agent-to-user") {
-              this.ctx.waitUntil(
-                this.shareFileWithSlack({
-                  iterateFileId: fileSharedEvent.data.iterateFileId,
-                  originalFilename: fileSharedEvent.data.originalFilename,
-                }).catch((error) => {
-                  logger.warn(
-                    `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
-                    error,
-                  );
-                }),
-              );
+              void this.shareFileWithSlack({
+                iterateFileId: fileSharedEvent.data.iterateFileId,
+                originalFilename: fileSharedEvent.data.originalFilename,
+              }).catch((error) => {
+                logger.warn(
+                  `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
+                  error,
+                );
+              });
             }
             break;
           }
@@ -191,12 +188,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
-            waitUntil(
-              this.getAgentDebugURL().then((url) =>
-                this.sendSlackMessage({
-                  text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
-                }),
-              ),
+            void this.getAgentDebugURL().then((url) =>
+              this.sendSlackMessage({
+                text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
+              }),
             );
             break;
           }
