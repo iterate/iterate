@@ -266,7 +266,10 @@ export default defineConfig([
                     node: callee.property,
                     message:
                       "Use this.ctx.storage.kv.{{method}} instead of this.ctx.storage.{{method}} in Durable Objects",
-                    data: { method: callee.property.type === "Identifier" ? callee.property.name : "get/put" },
+                    data: {
+                      method:
+                        callee.property.type === "Identifier" ? callee.property.name : "get/put",
+                    },
                     suggest: [
                       {
                         desc: "Change to .storage.kv.<method>",

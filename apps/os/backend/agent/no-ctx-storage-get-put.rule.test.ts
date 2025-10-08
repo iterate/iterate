@@ -7,7 +7,9 @@ async function runEslintOn(code: string) {
     overrideConfigFile: "/workspace/eslint.config.js",
     fix: false,
   } as any);
-  const results = await eslint.lintText(code, { filePath: "/workspace/apps/os/backend/agent/dummy.ts" });
+  const results = await eslint.lintText(code, {
+    filePath: "/workspace/apps/os/backend/agent/dummy.ts",
+  });
   return results[0];
 }
 
@@ -56,4 +58,3 @@ describe("iterate/no-ctx-storage-get-put", () => {
     expect(messages.length).toBe(0);
   });
 });
-
