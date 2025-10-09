@@ -78,6 +78,9 @@
       "new_sqlite_classes": ["Sandbox"],
     },
   ],
+  "triggers": {
+    "crons": ["0 0 * * *"],
+  },
   "services": [{ "binding": "SELF", "service": "os" }],
 
   /**
