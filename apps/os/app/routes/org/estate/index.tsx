@@ -3,7 +3,7 @@ import { useNavigate } from "react-router";
 import { Bot, Search, ArrowUpDown, Copy, Check, Eye } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Item, ItemContent } from "../../../components/ui/item.tsx";
+import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
 import {
   Table,
@@ -148,8 +148,8 @@ export default function Home() {
   return (
     <div className="p-6 space-y-6">
       {/* Welcome Section */}
-      <Item className="bg-muted/30">
-        <ItemContent className="py-8">
+      <Card variant="muted">
+        <CardContent>
           <div className="space-y-4">
             <div className="space-y-2">
               <h1 className="text-3xl font-bold text-foreground">Welcome!</h1>
@@ -162,12 +162,12 @@ export default function Home() {
               Message @iterate on Slack
             </Button>
           </div>
-        </ItemContent>
-      </Item>
+        </CardContent>
+      </Card>
 
       {/* Agents Table */}
-      <Item>
-        <ItemContent>
+      <Card variant="muted">
+        <CardContent>
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Active Agents</h2>
             <Badge variant="secondary">
@@ -278,8 +278,8 @@ export default function Home() {
               </Table>
             </div>
           )}
-        </ItemContent>
-      </Item>
+        </CardContent>
+      </Card>
     </div>
   );
 }
