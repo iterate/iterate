@@ -225,6 +225,9 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
 
   async saveCodeVerifier(verifier: string): Promise<void> {
     // Don't save the code verifier during reconnect - we need to retrieve the existing one
+    // The cloudflare agents SDK assumes that saveCodeVerifier is idempotent.
+    // If we didn't have this check, it would not be safe to call it multiple times, and that previously caused this
+    // issue: https://iterate-com.slack.com/archives/C08R1SMTZGD/p1760015580775959?thread_ts=1760015520.934349&cid=C08R1SMTZGD
     if (this.isReconnecting) {
       return;
     }
