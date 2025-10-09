@@ -28,7 +28,7 @@ export default function SlackNotificationPage() {
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <>
       <div>
         <h2 className="text-2xl font-bold">Test Slack Notifications</h2>
         <p className="text-muted-foreground">Send test messages to iterate's Slack workspace</p>
@@ -64,6 +64,6 @@ export default function SlackNotificationPage() {
           {sendNotification.isPending ? "Sending..." : "Send Notification"}
         </Button>
       </div>
-    </div>
+    </>
   );
 }

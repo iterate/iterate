@@ -279,16 +279,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <OrganizationSwitcher />
           </SidebarHeader>
           <SidebarContent>
-            {/* Debug Mode Badge */}
-            {user.debugMode && (
-              <div className="px-3 pb-2">
-                <Badge variant="secondary" className="text-xs">
-                  <Bug className="mr-1 h-3 w-3" />
-                  DEBUG MODE
-                </Badge>
-              </div>
-            )}
-
             {/* Estate Navigation - One section per estate */}
             {estates?.map((estate: Estate) => (
               <SidebarGroup key={estate.id}>
@@ -369,18 +359,27 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 <span className="text-sm text-muted-foreground">Websocket connecting...</span>
               </div>
             )}
+            {user.debugMode && (
+              <Badge
+                variant="secondary"
+                className="text-xs bg-muted text-muted-foreground border-muted-foreground/20"
+              >
+                <Bug className="mr-1 h-3 w-3" />
+                DEBUG MODE
+              </Badge>
+            )}
             <ThemeSwitcher />
             <UserSwitcher />
           </SidebarFooter>
         </Sidebar>
 
         <SidebarInset>
-          <header className="flex h-16 items-center gap-4 border-b px-6">
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />
             {/* TODO Breadcrumbs */}
           </header>
 
-          <main className="max-w-[1100px]">{children}</main>
+          <main className="flex flex-1 flex-col gap-4 p-6 max-w-5xl">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>
