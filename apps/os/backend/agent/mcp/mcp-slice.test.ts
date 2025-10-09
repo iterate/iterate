@@ -837,8 +837,7 @@ describe("mcp-slice", () => {
         // Should not create connection or add messages when oauthUrl is empty
         const state = h.agentCore.state as any;
         expect(state.mcpConnections).toEqual({});
-        // No new messages beyond initialization developer message
-        expect(state.inputItems.length).toBeGreaterThanOrEqual(1);
+        expect(state.inputItems).toHaveLength(0);
       });
 
       test6("should use existing transport type from connection", async ({ h }) => {
