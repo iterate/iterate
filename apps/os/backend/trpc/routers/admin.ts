@@ -307,7 +307,7 @@ export const adminRouter = router({
       results,
     };
   }),
-  syncSlackUsersForEstate: adminProcedure
+  syncSlackForEstate: adminProcedure
     .input(z.object({ estateId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const slackToken = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
@@ -321,21 +321,55 @@ export const adminRouter = router({
 
       return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
     }),
-  syncSlackUsersForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
+  syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     const estates = await ctx.db.query.estate.findMany();
 
-    for (const estate of estates) {
-      const slackToken = await getSlackAccessTokenForEstate(ctx.db, estate.id);
+    const syncPromises = estates.map(async (estate) => {
+      try {
+        const slackToken = await getSlackAccessTokenForEstate(ctx.db, estate.id);
 
-      if (!slackToken) {
-        continue;
+        if (!slackToken) {
+          return {
+            estateId: estate.id,
+            estateName: estate.name,
+            success: false,
+            error: "No Slack token found",
+          };
+        }
+
+        const result = await syncSlackForEstateInBackground(ctx.db, slackToken, estate.id);
+
+        return {
+          estateId: estate.id,
+          estateName: estate.name,
+          success: true,
+          data: result,
+        };
+      } catch (error) {
+        return {
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
       }
+    });
 
-      waitUntil(syncSlackForEstateInBackground(ctx.db, slackToken, estate.id));
-    }
+    const results = await Promise.allSettled(syncPromises);
 
     return {
       total: estates.length,
+      results: results.map((result) => {
+        if (result.status === "fulfilled") {
+          return result.value;
+        }
+        return {
+          estateId: "unknown",
+          estateName: "unknown",
+          success: false,
+          error: result.reason instanceof Error ? result.reason.message : "Promise rejected",
+        };
+      }),
     };
   }),
   // Create Stripe customer for an organization (admin only)

@@ -1,5 +1,6 @@
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { MoreVertical } from "lucide-react";
+import { useState } from "react";
 import { useTRPC, useTRPCClient } from "../../lib/trpc.ts";
 import { authClient } from "../../lib/auth-client.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -17,11 +18,19 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/dialog.tsx";
 
 export default function AdminEstatesPage() {
   const trpc = useTRPC();
   const trpcClient = useTRPCClient();
   const { data: estates } = useSuspenseQuery(trpc.admin.listAllEstates.queryOptions());
+  const [showSyncResultsDialog, setShowSyncResultsDialog] = useState(false);
 
   const impersonateMutation = useMutation({
     mutationFn: async (userId: string) => {
@@ -44,15 +53,18 @@ export default function AdminEstatesPage() {
     },
   });
 
-  const syncSlackUsersMutation = useMutation({
+  const syncSlackMutation = useMutation({
     mutationFn: async (estateId: string) => {
-      return trpcClient.admin.syncSlackUsersForEstate.mutate({ estateId });
+      return trpcClient.admin.syncSlackForEstate.mutate({ estateId });
     },
   });
 
-  const syncAllSlackUsersMutation = useMutation({
+  const syncAllSlackMutation = useMutation({
     mutationFn: async () => {
-      return trpcClient.admin.syncSlackUsersForAllEstates.mutate();
+      return trpcClient.admin.syncSlackForAllEstates.mutate();
+    },
+    onSuccess: () => {
+      setShowSyncResultsDialog(true);
     },
   });
 
@@ -82,15 +94,15 @@ export default function AdminEstatesPage() {
     }
   };
 
-  const handleSyncSlackUsers = (estateId: string, estateName: string) => {
-    if (confirm(`Sync Slack users for estate "${estateName}"?`)) {
-      syncSlackUsersMutation.mutate(estateId);
+  const handleSyncSlack = (estateId: string, estateName: string) => {
+    if (confirm(`Sync Slack for estate "${estateName}"?`)) {
+      syncSlackMutation.mutate(estateId);
     }
   };
 
-  const handleSyncAllSlackUsers = () => {
-    if (confirm(`Sync Slack users for ALL ${estates.length} estates? This may take a while.`)) {
-      syncAllSlackUsersMutation.mutate();
+  const handleSyncAllSlack = () => {
+    if (confirm(`Sync Slack for ALL ${estates.length} estates? This may take a while.`)) {
+      syncAllSlackMutation.mutate();
     }
   };
 
@@ -105,11 +117,11 @@ export default function AdminEstatesPage() {
         </div>
         <div className="flex gap-2">
           <Button
-            onClick={handleSyncAllSlackUsers}
+            onClick={handleSyncAllSlack}
             variant="outline"
-            disabled={syncAllSlackUsersMutation.isPending}
+            disabled={syncAllSlackMutation.isPending}
           >
-            {syncAllSlackUsersMutation.isPending ? "Syncing..." : "Sync All Slack Users"}
+            {syncAllSlackMutation.isPending ? "Syncing..." : "Sync Slack"}
           </Button>
           <Button
             onClick={handleRebuildAll}
@@ -120,17 +132,6 @@ export default function AdminEstatesPage() {
           </Button>
         </div>
       </div>
-
-      {syncAllSlackUsersMutation.isSuccess && (
-        <div className="p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
-          <div className="font-semibold text-green-900 dark:text-green-100">
-            Sync All Slack Users Started
-          </div>
-          <div className="text-sm text-green-800 dark:text-green-200 mt-1">
-            {syncAllSlackUsersMutation.data.total} estates queued for syncing in background
-          </div>
-        </div>
-      )}
 
       {rebuildAllMutation.isSuccess && (
         <div className="p-4 bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-md">
@@ -227,10 +228,10 @@ export default function AdminEstatesPage() {
                         Rebuild
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        onClick={() => handleSyncSlackUsers(estate.id, estate.name)}
-                        disabled={syncSlackUsersMutation.isPending}
+                        onClick={() => handleSyncSlack(estate.id, estate.name)}
+                        disabled={syncSlackMutation.isPending}
                       >
-                        Sync Slack Users
+                        Sync Slack
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenu>
@@ -240,6 +241,80 @@ export default function AdminEstatesPage() {
           </TableBody>
         </Table>
       </div>
+
+      <Dialog open={showSyncResultsDialog} onOpenChange={setShowSyncResultsDialog}>
+        <DialogContent className="max-w-7xl">
+          <DialogHeader>
+            <DialogTitle>Slack Sync Results</DialogTitle>
+            <DialogDescription>
+              {syncAllSlackMutation.data
+                ? `Synced ${syncAllSlackMutation.data.total} estates`
+                : "Loading..."}
+            </DialogDescription>
+          </DialogHeader>
+          {syncAllSlackMutation.data && (
+            <div className="max-h-[60vh] overflow-y-auto border rounded-md">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="w-[200px]">Estate Name</TableHead>
+                    <TableHead className="w-[120px]">Estate ID</TableHead>
+                    <TableHead className="w-[100px]">Status</TableHead>
+                    <TableHead>Details</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {syncAllSlackMutation.data.results.map((result) => (
+                    <TableRow key={result.estateId}>
+                      <TableCell className="font-medium">{result.estateName}</TableCell>
+                      <TableCell
+                        className="text-xs text-muted-foreground font-mono truncate max-w-[120px]"
+                        title={result.estateId}
+                      >
+                        {result.estateId}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {result.success ? (
+                          <span className="text-green-600">✓ Success</span>
+                        ) : (
+                          <span className="text-red-600">✗ Failed</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-sm">
+                        {result.success ? (
+                          "data" in result && result.data ? (
+                            <div className="space-y-1">
+                              <div>
+                                Channels: {result.data.channels.count} (
+                                {result.data.channels.sharedCount} shared)
+                              </div>
+                              <div>
+                                Users: {result.data.users.internalCount} internal,{" "}
+                                {result.data.users.externalCount} external
+                              </div>
+                              {result.data.errors.length > 0 && (
+                                <div className="text-yellow-600">
+                                  Warnings: {result.data.errors.length}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            "Synced successfully"
+                          )
+                        ) : (
+                          <span className="text-red-600 break-words">
+                            {"error" in result ? result.error : "Unknown error"}
+                          </span>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
