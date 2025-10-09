@@ -1,5 +1,5 @@
 import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
-import { eq, and } from "drizzle-orm";
+import { eq, and, like } from "drizzle-orm";
 import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { logger } from "../../tag-logger.ts";
@@ -41,6 +41,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   authUrl: string | undefined;
 
   private baseUrl: string;
+  private isReconnecting = false;
 
   constructor(
     private params: {
@@ -52,9 +53,11 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       serverUrl: string;
       callbackUrl: string | undefined;
       agentDurableObject: AgentDurableObjectInfo;
+      isReconnecting?: boolean;
     },
   ) {
     this.baseUrl = import.meta.env.VITE_PUBLIC_URL;
+    this.isReconnecting = params.isReconnecting ?? false;
   }
 
   private get providerId() {
@@ -78,6 +81,9 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           eq(schema.dynamicClientInfo.providerId, this.providerId),
         ),
       );
+    await this.params.db
+      .delete(schema.verification)
+      .where(like(schema.verification.identifier, `mcp-verifier-${this.providerId}-%`));
   }
 
   async tokens() {
@@ -207,6 +213,11 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {
+    // Don't save the code verifier during reconnect - we need to retrieve the existing one
+    if (this.isReconnecting) {
+      return;
+    }
+
     const clientInformation = await this.clientInformation();
     if (!clientInformation) {
       throw new Error("Cannot save code verifier without client information");
