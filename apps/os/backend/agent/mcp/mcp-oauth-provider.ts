@@ -1,5 +1,5 @@
 import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
-import { eq, and, like } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
 import { logger } from "../../tag-logger.ts";
