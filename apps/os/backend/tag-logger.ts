@@ -219,11 +219,11 @@ export function withLoggerContext<T extends object>(
       }
 
       // Wrap the function with logger context
-      return function (this: T, ...args: unknown[]) {
+      return (...args: unknown[]) => {
         const metadata = getMetadata(String(prop), args);
-        return loggerInstance.ensureContext(metadata, errorTracking, () => {
-          return value.apply(this, args);
-        });
+        return loggerInstance.ensureContext(metadata, errorTracking, () =>
+          value.apply(target, args),
+        );
       };
     },
   });
