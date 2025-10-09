@@ -3,6 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate, useOutletContext } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
+import type { OrgContext } from "../route-contexts.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,7 +13,6 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
-import type { OrgContext } from "../route-contexts.ts";
 
 export function OrganizationSwitcher() {
   const trpc = useTRPC();
