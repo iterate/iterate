@@ -67,17 +67,27 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     });
   }
 
+  // External users cannot access organization routes
+  if (currentOrgMembership.role === "external") {
+    throw new Response("External users cannot access this organization", {
+      status: 403,
+      statusText: "Forbidden",
+    });
+  }
+
   const organization = currentOrgMembership.organization;
 
-  // Serialize dates to match TRPC output format
-  const organizations = userOrganizations.map(({ organization: org, role }) => ({
-    id: org.id,
-    name: org.name,
-    role: role as UserRole,
-    stripeCustomerId: org.stripeCustomerId,
-    createdAt: org.createdAt.toISOString(),
-    updatedAt: org.updatedAt.toISOString(),
-  }));
+  // Serialize dates to match TRPC output format and filter out external organizations
+  const organizations = userOrganizations
+    .filter(({ role }) => role !== "external")
+    .map(({ organization: org, role }) => ({
+      id: org.id,
+      name: org.name,
+      role: role as UserRole,
+      stripeCustomerId: org.stripeCustomerId,
+      createdAt: org.createdAt.toISOString(),
+      updatedAt: org.updatedAt.toISOString(),
+    }));
 
   const serializedOrganization = {
     id: organization.id,
