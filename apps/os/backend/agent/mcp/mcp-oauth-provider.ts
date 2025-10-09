@@ -65,6 +65,13 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async resetClientAndTokens() {
+    const dynamicClientInfo = await this.params.db.query.dynamicClientInfo.findFirst({
+      where: and(
+        eq(schema.dynamicClientInfo.userId, this.params.userId),
+        eq(schema.dynamicClientInfo.providerId, this.providerId),
+      ),
+    });
+
     await this.params.db
       .delete(schema.account)
       .where(
@@ -81,9 +88,13 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           eq(schema.dynamicClientInfo.providerId, this.providerId),
         ),
       );
-    await this.params.db
-      .delete(schema.verification)
-      .where(like(schema.verification.identifier, `mcp-verifier-${this.providerId}-%`));
+
+    if (dynamicClientInfo?.clientId) {
+      const verificationKey = `mcp-verifier-${this.providerId}-${dynamicClientInfo.clientId}`;
+      await this.params.db
+        .delete(schema.verification)
+        .where(eq(schema.verification.identifier, verificationKey));
+    }
   }
 
   async tokens() {
