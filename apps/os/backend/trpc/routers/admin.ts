@@ -13,6 +13,7 @@ import {
   createStripeCustomerAndSubscriptionForOrganization,
 } from "../../integrations/stripe/stripe.ts";
 import { logger } from "../../tag-logger.ts";
+import type { DB } from "../../db/client.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -322,45 +323,7 @@ export const adminRouter = router({
       return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
     }),
   syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
-    const estates = await ctx.db.query.estate.findMany();
-
-    const syncPromises = estates.map(async (estate) => {
-      try {
-        const slackToken = await getSlackAccessTokenForEstate(ctx.db, estate.id);
-
-        if (!slackToken) {
-          return {
-            estateId: estate.id,
-            estateName: estate.name,
-            success: false,
-            error: "No Slack token found",
-          };
-        }
-
-        const result = await syncSlackForEstateInBackground(ctx.db, slackToken, estate.id);
-
-        return {
-          estateId: estate.id,
-          estateName: estate.name,
-          success: true,
-          data: result,
-        };
-      } catch (error) {
-        return {
-          estateId: estate.id,
-          estateName: estate.name,
-          success: false,
-          error: error instanceof Error ? error.message : "Unknown error",
-        };
-      }
-    });
-
-    const results = await Promise.all(syncPromises);
-
-    return {
-      total: estates.length,
-      results,
-    };
+    return await syncSlackForAllEstatesHelper(ctx.db);
   }),
   // Create Stripe customer for an organization (admin only)
   createStripeCustomer: adminProcedure
@@ -419,3 +382,49 @@ export const adminRouter = router({
       };
     }),
 });
+
+/**
+ * Helper function to sync Slack data for all estates
+ * Used by both the tRPC procedure and the scheduled cron job
+ */
+export async function syncSlackForAllEstatesHelper(db: DB) {
+  const estates = await db.query.estate.findMany();
+
+  const syncPromises = estates.map(async (estate) => {
+    try {
+      const slackToken = await getSlackAccessTokenForEstate(db, estate.id);
+
+      if (!slackToken) {
+        return {
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: "No Slack token found",
+        };
+      }
+
+      const result = await syncSlackForEstateInBackground(db, slackToken, estate.id);
+
+      return {
+        estateId: estate.id,
+        estateName: estate.name,
+        success: true,
+        data: result,
+      };
+    } catch (error) {
+      return {
+        estateId: estate.id,
+        estateName: estate.name,
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  });
+
+  const results = await Promise.all(syncPromises);
+
+  return {
+    total: estates.length,
+    results,
+  };
+}
