@@ -5,6 +5,7 @@ import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
+import { getUserOrganizations } from "./trpc/trpc.ts";
 
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
@@ -18,17 +19,14 @@ export const createUserOrganizationAndEstate = async (
   organization: typeof schema.organization.$inferSelect;
   estate?: typeof schema.estate.$inferSelect;
 }> => {
-  const existingMembership = await db.query.organizationUserMembership.findFirst({
-    where: (membership, { eq }) => eq(membership.userId, user.id),
-    with: {
-      organization: true,
-    },
-  });
+  // Check if user already has a non-external organization
+  const existingMemberships = await getUserOrganizations(db, user.id);
 
   // Only create organization and estate for new users
-  if (existingMembership) {
+  // External users should get a new organization created
+  if (existingMemberships.length > 0) {
     return {
-      organization: existingMembership.organization,
+      organization: existingMemberships[0].organization,
     };
   }
 
