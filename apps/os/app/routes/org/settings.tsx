@@ -1,11 +1,13 @@
 import { useState, Suspense } from "react";
 import { Loader2, Save } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useOutletContext } from "react-router";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Label } from "../../components/ui/label.tsx";
 import { Card, CardContent } from "../../components/ui/card.tsx";
+import type { OrgContext } from "../../route-contexts.ts";
 import type { Route } from "./+types/settings.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -17,9 +19,11 @@ export function meta(_args: Route.MetaArgs) {
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const { data: organization } = useSuspenseQuery(
-    trpc.organization.get.queryOptions({ organizationId }),
-  );
+  const { organization: loaderOrganization } = useOutletContext<OrgContext>();
+  const { data: organization } = useSuspenseQuery({
+    ...trpc.organization.get.queryOptions({ organizationId }),
+    initialData: loaderOrganization,
+  });
 
   const [organizationName, setOrganizationName] = useState(organization.name);
   const [error, setError] = useState<string | null>(null);

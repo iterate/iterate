@@ -11,8 +11,7 @@ import { AlertCircle, Home } from "lucide-react";
 import { asc, eq } from "drizzle-orm";
 import { getDb } from "../../../backend/db/client.ts";
 import { getAuth } from "../../../backend/auth/auth.ts";
-import { estate } from "../../../backend/db/schema.ts";
-import { getUserOrganizationAccess } from "../../../backend/trpc/trpc.ts";
+import { estate, organizationUserMembership, type UserRole } from "../../../backend/db/schema.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { authClient } from "../../lib/auth-client.ts";
@@ -42,25 +41,51 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Step 3: Check if user has access to the organization
-  const { hasAccess: hasOrganizationAccess, organization } = await getUserOrganizationAccess(
-    db,
-    session.user.id,
-    organizationId,
-  );
+  // Step 3: Load all organizations and check onboarding status in parallel
+  // This is more efficient than separate queries since we need all orgs anyway
+  const requestUrl = new URL(request.url);
+  const onboardingPath = `/${organizationId}/onboarding`;
+  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
 
-  if (!hasOrganizationAccess || !organization) {
+  const [userOrganizations, isOnboarded] = await Promise.all([
+    db.query.organizationUserMembership.findMany({
+      where: eq(organizationUserMembership.userId, session.user.id),
+      with: {
+        organization: true,
+      },
+    }),
+    isOnboardingRoute ? Promise.resolve(true) : isOrganizationOnboarded(db, organizationId),
+  ]);
+
+  // Check if user has access to the requested organization
+  const currentOrgMembership = userOrganizations.find((m) => m.organization.id === organizationId);
+
+  if (!currentOrgMembership) {
     throw new Response("You don't have access to this organization", {
       status: 403,
       statusText: "Forbidden",
     });
   }
 
-  // Step 4: Check if organization is onboarded, redirect to onboarding if not
-  const requestUrl = new URL(request.url);
-  const onboardingPath = `/${organizationId}/onboarding`;
-  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
-  const isOnboarded = await isOrganizationOnboarded(db, organizationId);
+  const organization = currentOrgMembership.organization;
+
+  // Serialize dates to match TRPC output format
+  const organizations = userOrganizations.map(({ organization: org, role }) => ({
+    id: org.id,
+    name: org.name,
+    role: role as UserRole,
+    stripeCustomerId: org.stripeCustomerId,
+    createdAt: org.createdAt.toISOString(),
+    updatedAt: org.updatedAt.toISOString(),
+  }));
+
+  const serializedOrganization = {
+    id: organization.id,
+    name: organization.name,
+    stripeCustomerId: organization.stripeCustomerId,
+    createdAt: organization.createdAt.toISOString(),
+    updatedAt: organization.updatedAt.toISOString(),
+  };
 
   if (!isOnboardingRoute && !isOnboarded) {
     throw redirect(onboardingPath);
@@ -70,7 +95,8 @@ export async function loader({ request, params }: Route.LoaderArgs) {
 
   return data(
     {
-      organization,
+      organization: serializedOrganization,
+      organizations,
     },
     {
       headers: responseHeaders,
@@ -78,8 +104,15 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   );
 }
 
-export default function OrganizationLayout() {
-  return <Outlet />;
+export default function OrganizationLayout({ loaderData }: Route.ComponentProps) {
+  return (
+    <Outlet
+      context={{
+        organization: loaderData.organization,
+        organizations: loaderData.organizations,
+      }}
+    />
+  );
 }
 
 // Error boundary to display access errors nicely

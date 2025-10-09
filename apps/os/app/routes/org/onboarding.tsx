@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react";
 import { ArrowRight, ArrowLeft, CheckCircle, ChevronDown } from "lucide-react";
-import { redirect, useLoaderData, useNavigate, useParams } from "react-router";
+import { redirect, useLoaderData, useNavigate, useParams, useOutletContext } from "react-router";
 import { asc, eq } from "drizzle-orm";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -33,6 +33,7 @@ import {
   AlertDialogTrigger,
 } from "../../components/ui/alert-dialog.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
+import type { OrgContext } from "../../route-contexts.ts";
 import type { Route } from "./+types/onboarding.ts";
 
 export async function loader({ params }: Route.LoaderArgs) {
@@ -139,9 +140,11 @@ function SetupIterateRepoStep({ goTo, goBack }: StepProps) {
 
 function OrganizationNameStep({ organizationId, goTo }: StepProps) {
   const trpc = useTRPC();
+  const { organization: loaderOrganization } = useOutletContext<OrgContext>();
   const orgQuery = trpc.organization.get.queryOptions({ organizationId });
   const { data: organization } = useSuspenseQuery({
     ...orgQuery,
+    initialData: loaderOrganization,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnMount: false,
