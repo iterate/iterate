@@ -28,6 +28,7 @@ import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { posthogErrorTracking } from "./posthog-error-tracker.ts";
+import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -251,6 +252,29 @@ app.all("*", (c) => {
 export default class extends WorkerEntrypoint {
   fetch(request: Request) {
     return app.fetch(request, this.env, this.ctx);
+  }
+
+  async scheduled(controller: ScheduledController) {
+    switch (controller.cron) {
+      case "0 0 * * *": {
+        const db = getDb();
+
+        try {
+          logger.info("Running scheduled Slack sync for all estates");
+          const result = await syncSlackForAllEstatesHelper(db);
+          logger.info("Scheduled Slack sync completed", {
+            total: result.total,
+            successful: result.results.filter((r) => r.success).length,
+            failed: result.results.filter((r) => !r.success).length,
+          });
+        } catch (error) {
+          logger.error("Scheduled Slack sync failed:", error);
+        }
+        break;
+      }
+      default:
+        logger.error("Unknown cron pattern:", controller.cron);
+    }
   }
 }
 
