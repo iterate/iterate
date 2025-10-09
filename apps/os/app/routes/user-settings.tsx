@@ -15,6 +15,17 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog.tsx";
 import type { Route } from "./+types/user-settings";
 
 export function meta(_args: Route.MetaArgs) {
@@ -220,6 +231,38 @@ function UserSettingsContent() {
                 )}
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Danger Zone</CardTitle>
+            <CardDescription>
+              Permanently delete your user account and all associated data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive">Permanently delete user</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete user account?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This action cannot be undone. Deleting your user will also remove every
+                    organization and estate you own and delete the Stripe customer and billing
+                    relationship associated with your account.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+                    Delete user
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </CardContent>
         </Card>
       </div>
