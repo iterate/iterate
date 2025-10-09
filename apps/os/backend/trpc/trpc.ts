@@ -177,15 +177,34 @@ export async function notifyOrganizationFromContext(
   }
 }
 
+// Helper to create the non-external organization filter
+function getNonExternalOrganizationFilter(userId: string) {
+  return and(
+    eq(organizationUserMembership.userId, userId),
+    ne(organizationUserMembership.role, "external"),
+  );
+}
+
 // Helper function to get user's non-external organizations
 export async function getUserOrganizations(db: DB, userId: string) {
   return db.query.organizationUserMembership.findMany({
-    where: and(
-      eq(organizationUserMembership.userId, userId),
-      ne(organizationUserMembership.role, "external"),
-    ),
+    where: getNonExternalOrganizationFilter(userId),
     with: {
       organization: true,
+    },
+  });
+}
+
+// Helper function to get user's non-external organizations with estates
+export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
+  return db.query.organizationUserMembership.findMany({
+    where: getNonExternalOrganizationFilter(userId),
+    with: {
+      organization: {
+        with: {
+          estates: true,
+        },
+      },
     },
   });
 }

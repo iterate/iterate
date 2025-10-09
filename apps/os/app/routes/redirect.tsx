@@ -5,6 +5,7 @@ import { WebClient } from "@slack/web-api";
 import { GlobalLoading } from "../components/global-loading.tsx";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
+import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
 import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
@@ -16,17 +17,8 @@ import type { Route } from "./+types/redirect";
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
   const db = getDb();
 
-  // Get user's estates from the database
-  const userOrganizations = await db.query.organizationUserMembership.findMany({
-    where: eq(schema.organizationUserMembership.userId, userId),
-    with: {
-      organization: {
-        with: {
-          estates: true,
-        },
-      },
-    },
-  });
+  // Get user's estates from the database (excluding external orgs)
+  const userOrganizations = await getUserOrganizationsWithEstates(db, userId);
 
   if (userOrganizations.length === 0) {
     // No organizations, do first time setup
