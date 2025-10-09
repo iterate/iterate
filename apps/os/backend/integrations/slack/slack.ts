@@ -4,6 +4,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
+import type { SlackEvent } from "@slack/types";
 import { type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
@@ -24,6 +25,82 @@ import type { AgentCoreEventInput } from "../../agent/agent-core.ts";
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
+// Slack User type (subset of fields we use)
+type SlackUser = {
+  id?: string;
+  name?: string;
+  real_name?: string;
+  deleted?: boolean;
+  is_restricted?: boolean;
+  is_ultra_restricted?: boolean;
+  profile?: {
+    email?: string;
+    image_192?: string;
+  };
+};
+
+// Slack Channel type (subset of fields we use)
+type SlackChannel = {
+  id?: string;
+  name?: string;
+  is_shared?: boolean;
+  is_ext_shared?: boolean;
+  is_private?: boolean;
+  is_archived?: boolean;
+};
+
+// Event type definitions
+type TeamJoinEvent = SlackEvent & {
+  type: "team_join";
+  user: SlackUser;
+};
+
+type UserChangeEvent = SlackEvent & {
+  type: "user_change";
+  user: SlackUser;
+};
+
+type MemberJoinedChannelEvent = SlackEvent & {
+  type: "member_joined_channel";
+  user: string;
+  channel: string;
+  channel_type: string;
+  team: string;
+};
+
+type ChannelCreatedEvent = SlackEvent & {
+  type: "channel_created";
+  channel: SlackChannel;
+};
+
+type ChannelArchiveEvent = SlackEvent & {
+  type: "channel_archive";
+  channel: string;
+};
+
+type ChannelUnarchiveEvent = SlackEvent & {
+  type: "channel_unarchive";
+  channel: string;
+};
+
+type ChannelRenameEvent = SlackEvent & {
+  type: "channel_rename";
+  channel: SlackChannel & {
+    id: string;
+    name: string;
+  };
+};
+
+type ChannelSharedEvent = SlackEvent & {
+  type: "channel_shared";
+  channel: string;
+};
+
+type ChannelUnsharedEvent = SlackEvent & {
+  type: "channel_unshared";
+  channel: string;
+};
+
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
 async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string }) {
@@ -41,6 +118,518 @@ async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string })
     .limit(1);
 
   return result[0]?.estateId ?? null;
+}
+
+/**
+ * Sync a single Slack user (internal workspace member)
+ */
+async function syncSingleSlackUser(
+  tx: DB | Parameters<Parameters<DB["transaction"]>[0]>[0],
+  estateId: string,
+  slackUser: SlackUser,
+) {
+  // Get organization ID
+  const estate = await tx.query.estate.findFirst({
+    where: eq(schema.estate.id, estateId),
+    columns: { organizationId: true },
+  });
+
+  if (!estate) {
+    logger.error(`Estate ${estateId} not found`);
+    return;
+  }
+
+  const email = slackUser.profile?.email;
+  if (!email) {
+    logger.warn(`Slack user ${slackUser.id} has no email, skipping`);
+    return;
+  }
+
+  // Create user if doesn't exist
+  try {
+    await tx
+      .insert(schema.user)
+      .values({
+        name: slackUser.real_name || slackUser.name || "",
+        email: email,
+        image: slackUser.profile?.image_192,
+        emailVerified: false,
+      })
+      .onConflictDoNothing();
+  } catch (error) {
+    logger.error("Error creating user:", error);
+  }
+
+  // Get user
+  const dbUser = await tx.query.user.findFirst({
+    where: eq(schema.user.email, email),
+  });
+
+  if (!dbUser) {
+    logger.error(`User not found after insert for email ${email}`);
+    return;
+  }
+
+  // Upsert provider mapping
+  await tx
+    .insert(schema.providerUserMapping)
+    .values({
+      providerId: "slack-bot" as const,
+      internalUserId: dbUser.id,
+      externalId: slackUser.id!,
+      providerMetadata: slackUser,
+    })
+    .onConflictDoUpdate({
+      target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+      set: {
+        providerMetadata: sql`excluded.provider_metadata`,
+      },
+    });
+
+  // Determine role based on Slack restrictions
+  const role = slackUser.is_ultra_restricted || slackUser.is_restricted ? "guest" : "member";
+
+  // Upsert organization membership
+  await tx
+    .insert(schema.organizationUserMembership)
+    .values({
+      organizationId: estate.organizationId,
+      userId: dbUser.id,
+      role: role as "guest" | "member",
+    })
+    .onConflictDoNothing();
+}
+
+/**
+ * Check if a Slack user ID is an internal workspace member
+ */
+async function isInternalUser(db: DB, estateId: string, slackUserId: string): Promise<boolean> {
+  const estate = await db.query.estate.findFirst({
+    where: eq(schema.estate.id, estateId),
+    columns: { organizationId: true },
+  });
+
+  if (!estate) return false;
+
+  const mapping = await db.query.providerUserMapping.findFirst({
+    where: and(
+      eq(schema.providerUserMapping.providerId, "slack-bot"),
+      eq(schema.providerUserMapping.externalId, slackUserId),
+    ),
+    with: {
+      internalUser: {
+        with: {
+          organizationUserMembership: {
+            where: and(
+              eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+              // Not external - they're internal workspace members
+              inArray(schema.organizationUserMembership.role, [
+                "member",
+                "admin",
+                "owner",
+                "guest",
+              ]),
+            ),
+          },
+        },
+      },
+    },
+  });
+
+  return !!mapping?.internalUser.organizationUserMembership.length;
+}
+
+/**
+ * Check if a channel is shared (Slack Connect)
+ */
+async function isChannelShared(db: DB, estateId: string, channelId: string): Promise<boolean> {
+  const channel = await db.query.slackChannel.findFirst({
+    where: and(
+      eq(schema.slackChannel.estateId, estateId),
+      eq(schema.slackChannel.externalId, channelId),
+    ),
+    columns: {
+      isShared: true,
+      isExtShared: true,
+    },
+  });
+
+  return channel ? channel.isShared || channel.isExtShared : false;
+}
+
+/**
+ * Sync a single external Slack Connect user
+ */
+async function syncSingleExternalUser(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  slackUserId: string,
+  discoveredInChannel: string,
+): Promise<void> {
+  const slackAPI = new WebClient(botToken);
+
+  try {
+    // Fetch user info from Slack
+    const userInfoResponse = await slackAPI.users.info({ user: slackUserId });
+
+    if (!userInfoResponse.ok || !userInfoResponse.user) {
+      logger.error(`Failed to fetch user info for ${slackUserId}: ${userInfoResponse.error}`);
+      return;
+    }
+
+    const userInfo = userInfoResponse.user;
+
+    await db.transaction(async (tx) => {
+      const estate = await tx.query.estate.findFirst({
+        where: eq(schema.estate.id, estateId),
+        columns: { organizationId: true },
+      });
+
+      if (!estate) {
+        throw new Error(`Estate ${estateId} not found`);
+      }
+
+      // Create synthetic email for external user
+      const email =
+        userInfo.profile?.email || `slack-connect-${slackUserId}@external.slack.iterate.com`;
+
+      // Create or get user
+      await tx
+        .insert(schema.user)
+        .values({
+          name: userInfo.real_name || userInfo.name || "External User",
+          email: email,
+          emailVerified: false,
+          image: userInfo.profile?.image_192,
+        })
+        .onConflictDoNothing();
+
+      // Get the user
+      const user = await tx.query.user.findFirst({
+        where: eq(schema.user.email, email),
+      });
+
+      if (!user) {
+        logger.error(`User not found after insert for email ${email}`);
+        return;
+      }
+
+      // Check if provider mapping already exists to preserve discoveredInChannels
+      const existingMapping = await tx.query.providerUserMapping.findFirst({
+        where: and(
+          eq(schema.providerUserMapping.providerId, "slack-bot"),
+          eq(schema.providerUserMapping.externalId, slackUserId),
+        ),
+      });
+
+      const existingChannels =
+        (existingMapping?.providerMetadata as any)?.discoveredInChannels || [];
+      const updatedChannels = Array.from(new Set([...existingChannels, discoveredInChannel]));
+
+      // Upsert provider mapping
+      await tx
+        .insert(schema.providerUserMapping)
+        .values({
+          providerId: "slack-bot",
+          internalUserId: user.id,
+          externalId: slackUserId,
+          providerMetadata: {
+            ...userInfo,
+            isSlackConnect: true,
+            discoveredInChannels: updatedChannels,
+          },
+        })
+        .onConflictDoUpdate({
+          target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+          set: {
+            providerMetadata: sql`excluded.provider_metadata`,
+          },
+        });
+
+      // Create organization membership with "external" role
+      await tx
+        .insert(schema.organizationUserMembership)
+        .values({
+          organizationId: estate.organizationId,
+          userId: user.id,
+          role: "external",
+        })
+        .onConflictDoNothing(); // Don't override if already exists
+
+      logger.info(
+        `Synced external user ${slackUserId} (${user.email}) discovered in channel ${discoveredInChannel}`,
+      );
+    });
+  } catch (error) {
+    logger.error(
+      `Error syncing external user ${slackUserId}:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * Sync all external users in a specific shared channel
+ */
+async function syncExternalUsersInChannel(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  channelId: string,
+): Promise<void> {
+  const slackAPI = new WebClient(botToken);
+
+  try {
+    // Fetch all members of the channel
+    const membersResponse = await slackAPI.conversations.members({
+      channel: channelId,
+      limit: 1000,
+    });
+
+    if (!membersResponse.ok || !membersResponse.members) {
+      logger.error(`Failed to fetch members for channel ${channelId}: ${membersResponse.error}`);
+      return;
+    }
+
+    // Check each member to see if they're external
+    for (const memberId of membersResponse.members) {
+      const isInternal = await isInternalUser(db, estateId, memberId);
+
+      if (!isInternal) {
+        // This is an external user - sync them
+        await syncSingleExternalUser(db, botToken, estateId, memberId, channelId);
+      }
+    }
+  } catch (error) {
+    logger.error(
+      `Error syncing external users in channel ${channelId}:`,
+      error instanceof Error ? error.message : error,
+    );
+  }
+}
+
+/**
+ * Upsert a channel with proper types
+ */
+async function upsertChannel(db: DB, estateId: string, channel: SlackChannel) {
+  await db
+    .insert(schema.slackChannel)
+    .values({
+      estateId,
+      externalId: channel.id!,
+      name: channel.name!,
+      isShared: channel.is_shared ?? false,
+      isExtShared: channel.is_ext_shared ?? false,
+      isPrivate: channel.is_private ?? false,
+      isArchived: channel.is_archived ?? false,
+      providerMetadata: channel,
+    })
+    .onConflictDoUpdate({
+      target: [schema.slackChannel.estateId, schema.slackChannel.externalId],
+      set: {
+        name: sql`excluded.name`,
+        isShared: sql`excluded.is_shared`,
+        isExtShared: sql`excluded.is_ext_shared`,
+        isPrivate: sql`excluded.is_private`,
+        isArchived: sql`excluded.is_archived`,
+        providerMetadata: sql`excluded.provider_metadata`,
+      },
+    });
+}
+
+/**
+ * Handle team_join event - new user joins workspace
+ */
+async function handleTeamJoin(db: DB, estateId: string, event: TeamJoinEvent) {
+  await db.transaction(async (tx) => {
+    await syncSingleSlackUser(tx, estateId, event.user);
+  });
+}
+
+/**
+ * Handle user_change event - user profile/email changes
+ */
+async function handleUserChange(db: DB, estateId: string, event: UserChangeEvent) {
+  if (event.user.deleted) return;
+
+  await db.transaction(async (tx) => {
+    const mapping = await tx.query.providerUserMapping.findFirst({
+      where: and(
+        eq(schema.providerUserMapping.providerId, "slack-bot"),
+        eq(schema.providerUserMapping.externalId, event.user.id!),
+      ),
+      with: {
+        internalUser: true,
+      },
+    });
+
+    if (mapping) {
+      const updates: { email?: string; name?: string; image?: string } = {};
+
+      if (event.user.profile?.email) {
+        updates.email = event.user.profile.email;
+      }
+      if (event.user.real_name || event.user.name) {
+        updates.name = event.user.real_name || event.user.name || mapping.internalUser.name;
+      }
+      if (event.user.profile?.image_192) {
+        updates.image = event.user.profile.image_192;
+      }
+
+      if (Object.keys(updates).length > 0) {
+        await tx.update(schema.user).set(updates).where(eq(schema.user.id, mapping.internalUserId));
+      }
+
+      await tx
+        .update(schema.providerUserMapping)
+        .set({ providerMetadata: event.user })
+        .where(eq(schema.providerUserMapping.id, mapping.id));
+    } else {
+      await syncSingleSlackUser(tx, estateId, event.user);
+    }
+  });
+}
+
+/**
+ * Handle member_joined_channel event
+ */
+async function handleMemberJoinedChannel(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  event: MemberJoinedChannelEvent,
+) {
+  // Check if the channel is shared
+  const channelIsShared = await isChannelShared(db, estateId, event.channel);
+
+  if (!channelIsShared) {
+    // Not a shared channel, no need to check for external users
+    return;
+  }
+
+  // Check if the user is internal or external
+  const userIsInternal = await isInternalUser(db, estateId, event.user);
+
+  if (!userIsInternal) {
+    // External user joined a shared channel - sync them
+    logger.info(`External user ${event.user} joined shared channel ${event.channel}, syncing...`);
+    await syncSingleExternalUser(db, botToken, estateId, event.user, event.channel);
+  }
+}
+
+/**
+ * Handle channel_created event
+ */
+async function handleChannelCreated(db: DB, estateId: string, event: ChannelCreatedEvent) {
+  await upsertChannel(db, estateId, event.channel);
+}
+
+/**
+ * Handle channel_archive/channel_unarchive events
+ */
+async function handleChannelArchive(
+  db: DB,
+  estateId: string,
+  channelId: string,
+  isArchived: boolean,
+) {
+  await db
+    .update(schema.slackChannel)
+    .set({ isArchived })
+    .where(
+      and(
+        eq(schema.slackChannel.estateId, estateId),
+        eq(schema.slackChannel.externalId, channelId),
+      ),
+    );
+}
+
+/**
+ * Handle channel_rename event
+ */
+async function handleChannelRename(db: DB, estateId: string, event: ChannelRenameEvent) {
+  await db
+    .update(schema.slackChannel)
+    .set({
+      name: event.channel.name,
+      providerMetadata: event.channel,
+    })
+    .where(
+      and(
+        eq(schema.slackChannel.estateId, estateId),
+        eq(schema.slackChannel.externalId, event.channel.id),
+      ),
+    );
+}
+
+/**
+ * Handle channel_shared event
+ */
+async function handleChannelShared(db: DB, botToken: string, estateId: string, channelId: string) {
+  const slackAPI = new WebClient(botToken);
+
+  try {
+    const channelInfo = await slackAPI.conversations.info({ channel: channelId });
+
+    if (channelInfo.ok && channelInfo.channel) {
+      await db
+        .update(schema.slackChannel)
+        .set({
+          isShared: channelInfo.channel.is_shared ?? false,
+          isExtShared: channelInfo.channel.is_ext_shared ?? false,
+          providerMetadata: channelInfo.channel,
+        })
+        .where(
+          and(
+            eq(schema.slackChannel.estateId, estateId),
+            eq(schema.slackChannel.externalId, channelId),
+          ),
+        );
+    }
+
+    // Now sync all external users in this newly-shared channel
+    logger.info(`Channel ${channelId} became shared, syncing external users...`);
+    await syncExternalUsersInChannel(db, botToken, estateId, channelId);
+  } catch (error) {
+    logger.error("Failed to handle channel_shared event:", error);
+  }
+}
+
+/**
+ * Handle channel_unshared event
+ */
+async function handleChannelUnshared(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  channelId: string,
+) {
+  const slackAPI = new WebClient(botToken);
+
+  try {
+    const channelInfo = await slackAPI.conversations.info({ channel: channelId });
+
+    if (channelInfo.ok && channelInfo.channel) {
+      await db
+        .update(schema.slackChannel)
+        .set({
+          isShared: channelInfo.channel.is_shared ?? false,
+          isExtShared: channelInfo.channel.is_ext_shared ?? false,
+          providerMetadata: channelInfo.channel,
+        })
+        .where(
+          and(
+            eq(schema.slackChannel.estateId, estateId),
+            eq(schema.slackChannel.externalId, channelId),
+          ),
+        );
+
+      logger.info(`Channel ${channelId} unshared, updated status in DB`);
+    }
+  } catch (error) {
+    logger.error("Failed to handle channel_unshared event:", error);
+  }
 }
 
 slackApp.post("/webhook", async (c) => {
@@ -116,6 +705,71 @@ slackApp.post("/webhook", async (c) => {
           botUserId,
         }),
       );
+    }
+  }
+
+  // Handle administrative events (user and channel lifecycle)
+  const slackEvent = body.event;
+  if (slackEvent) {
+    const slackToken = await getSlackAccessTokenForEstate(db, estateId);
+
+    switch (slackEvent.type) {
+      case "team_join":
+        waitUntil(handleTeamJoin(db, estateId, slackEvent as TeamJoinEvent));
+        break;
+
+      case "user_change":
+        waitUntil(handleUserChange(db, estateId, slackEvent as UserChangeEvent));
+        break;
+
+      case "member_joined_channel":
+        if (slackToken) {
+          waitUntil(
+            handleMemberJoinedChannel(
+              db,
+              slackToken,
+              estateId,
+              slackEvent as MemberJoinedChannelEvent,
+            ),
+          );
+        }
+        break;
+
+      case "channel_created":
+        waitUntil(handleChannelCreated(db, estateId, slackEvent as ChannelCreatedEvent));
+        break;
+
+      case "channel_archive":
+        {
+          const event = slackEvent as ChannelArchiveEvent;
+          waitUntil(handleChannelArchive(db, estateId, event.channel, true));
+        }
+        break;
+
+      case "channel_unarchive":
+        {
+          const event = slackEvent as ChannelUnarchiveEvent;
+          waitUntil(handleChannelArchive(db, estateId, event.channel, false));
+        }
+        break;
+
+      case "channel_rename":
+        waitUntil(handleChannelRename(db, estateId, slackEvent as ChannelRenameEvent));
+        break;
+
+      case "channel_shared":
+        if (slackToken) {
+          const event = slackEvent as ChannelSharedEvent;
+          waitUntil(handleChannelShared(db, slackToken, estateId, event.channel));
+        }
+        break;
+
+      case "channel_unshared":
+        if (slackToken) {
+          const event = slackEvent as ChannelUnsharedEvent;
+          waitUntil(handleChannelUnshared(db, slackToken, estateId, event.channel));
+        }
+        break;
     }
   }
 
