@@ -12,7 +12,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
-import { logger } from "../tag-logger.ts";
+import { logger, withLoggerContext } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -42,6 +42,7 @@ import {
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
+import { posthogErrorTracking } from "../posthog-error-tracker.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -285,6 +286,19 @@ export class IterateAgent<
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+
+    return withLoggerContext(
+      this,
+      logger,
+      (methodName) => ({
+        userId: undefined,
+        path: undefined,
+        method: methodName,
+        url: undefined,
+        requestId: typeid("req").toString(),
+      }),
+      posthogErrorTracking,
+    );
   }
 
   /**
@@ -1752,10 +1766,12 @@ export class IterateAgent<
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
-        logger.error({
-          message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
-          result: resultInit,
-        });
+        logger.error(
+          JSON.stringify({
+            message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+            result: resultInit,
+          }),
+        );
       }
 
       // ------------------------------------------------------------------------
@@ -1768,10 +1784,12 @@ export class IterateAgent<
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!_resultExec.success) {
-        logger.error({
-          message: `Error running \`${commandExec}\` in sandbox`,
-          result: _resultExec,
-        });
+        logger.error(
+          JSON.stringify({
+            message: `Error running \`${commandExec}\` in sandbox`,
+            result: _resultExec,
+          }),
+        );
       }
 
       return _resultExec;
