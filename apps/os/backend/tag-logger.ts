@@ -33,12 +33,11 @@ export class TagLogger {
 
   get context(): TagLogger.Context {
     const store = this._storage.getStore();
-    // In tests, provide a default context.
-    // We do not want to do this in production as it will cause logs to intermingle.
-    if (import.meta.env.MODE === "test" && !store)
+    if (!store) {
       return {
         level: "info",
         metadata: {
+          defaultContext: true,
           userId: undefined,
           path: "",
           method: "",
@@ -48,7 +47,7 @@ export class TagLogger {
         logs: [],
         errorTracking: () => {},
       };
-    if (!store) throw new Error("No context found for logger");
+    }
     return store;
   }
 
@@ -116,16 +115,31 @@ export class TagLogger {
   ): T {
     const existingContext = this._storage.getStore();
     const newContext: TagLogger.Context = existingContext
-      ? { ...existingContext, metadata, logs: [], errorTracking }
-      : { level: "info", metadata, logs: [], errorTracking };
+      ? {
+          ...existingContext,
+          metadata: { ...metadata, defaultContext: undefined },
+          logs: [],
+          errorTracking,
+        }
+      : {
+          level: "info",
+          metadata: { ...metadata, defaultContext: undefined },
+          logs: [],
+          errorTracking,
+        };
     return this._storage.run(newContext, fn);
   }
 
   enterWith(metadata: TagLogger.Context["metadata"], errorTracking: TagLogger.ErrorTrackingFn) {
     const existingContext = this._storage.getStore();
     const newContext: TagLogger.Context = existingContext
-      ? { ...existingContext, metadata, errorTracking }
-      : { level: "info", metadata, logs: [], errorTracking };
+      ? { ...existingContext, metadata: { ...metadata, defaultContext: undefined }, errorTracking }
+      : {
+          level: "info",
+          metadata: { ...metadata, defaultContext: undefined },
+          logs: [],
+          errorTracking,
+        };
     this._storage.enterWith(newContext);
   }
 
