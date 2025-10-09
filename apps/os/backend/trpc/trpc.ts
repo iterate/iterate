@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import { prettifyError, z, ZodError } from "zod";
-import { and, eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
@@ -175,6 +175,19 @@ export async function notifyOrganizationFromContext(
       },
     );
   }
+}
+
+// Helper function to get user's non-external organizations
+export async function getUserOrganizations(db: DB, userId: string) {
+  return db.query.organizationUserMembership.findMany({
+    where: and(
+      eq(organizationUserMembership.userId, userId),
+      ne(organizationUserMembership.role, "external"),
+    ),
+    with: {
+      organization: true,
+    },
+  });
 }
 
 // Helper function to get user's organization access
