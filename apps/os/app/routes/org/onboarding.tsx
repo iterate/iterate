@@ -3,6 +3,7 @@ import { ArrowRight, ArrowLeft, CheckCircle, ChevronDown } from "lucide-react";
 import { redirect, useLoaderData, useNavigate, useParams } from "react-router";
 import { asc, eq } from "drizzle-orm";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { getDb } from "../../../backend/db/client.ts";
 import { estate } from "../../../backend/db/schema.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -314,7 +315,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   });
   const [repoBranch, setRepoBranch] = useState(() => githubRepo?.branch ?? "main");
   const [repoPath, setRepoPath] = useState(() => githubRepo?.path ?? "/");
-  const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
@@ -323,7 +323,7 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   const setGithubRepo = useMutation(
     trpc.integrations.setGithubRepoForEstate.mutationOptions({
       onSuccess: (_data, variables) => {
-        setFeedback("GitHub repository connected");
+        toast.success("GitHub repository connected");
         setError(null);
         setSelectedRepoId(String(variables.repoId));
         setRepoBranch(variables.branch ?? "main");
@@ -338,7 +338,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
         goTo("5");
       },
       onError: (mutationError) => {
-        setFeedback(null);
         setError(mutationError.message);
       },
     }),
@@ -346,7 +345,7 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   const disconnectGithubRepo = useMutation(
     trpc.integrations.disconnectGithubRepo.mutationOptions({
       onSuccess: () => {
-        setFeedback("GitHub connection removed");
+        toast.success("GitHub connection removed");
         setError(null);
         setSelectedRepoId("");
         setRepoBranch("main");
@@ -359,14 +358,12 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
         });
       },
       onError: (mutationError) => {
-        setFeedback(null);
         setError(mutationError.message);
       },
     }),
   );
 
   const saveGithubConfiguration = async () => {
-    setFeedback(null);
     setError(null);
 
     if (!selectedRepoId) {
@@ -489,7 +486,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
       )}
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
-      {feedback ? <p className="text-sm text-muted-foreground">{feedback}</p> : null}
       <div className="flex justify-between items-center pt-4">
         {isConnected ? (
           <>

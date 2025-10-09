@@ -1,6 +1,5 @@
 import React, { useState } from "react";
 import {
-  Github,
   ArrowRight,
   Edit2,
   Loader2,
@@ -11,7 +10,6 @@ import {
   RefreshCw,
   Hammer,
   Clock,
-  Info,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -37,12 +35,12 @@ import {
 } from "../../../components/ui/dialog.tsx";
 import type { AppRouter } from "../../../../backend/trpc/root.ts";
 import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "../../../components/ui/item.tsx";
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card.tsx";
 import {
   Empty,
   EmptyDescription,
@@ -265,26 +263,34 @@ function EstateContent() {
       {/* Top Row - Two Cards Side by Side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Git Repository Explanation */}
-        <Item variant="muted" className="items-start">
-          <ItemMedia variant="icon">
-            <Info className="h-5 w-5" />
-          </ItemMedia>
-          <ItemContent>
-            <ItemTitle>About Git Repository</ItemTitle>
-            <ItemDescription>
-              Your Git repository serves as the central hub for all agent context, configurations,
-              and data persistence. It stores your context rules, memories and ensures your AI
-              estate remains consistent across deployments.
-            </ItemDescription>
-          </ItemContent>
-        </Item>
+        <Card variant="muted">
+          <CardHeader>
+            <CardTitle>Your iterate repo</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <CardDescription className="space-y-2">
+              <p>
+                You can control every aspect of the @iterate bot's behaviour using this git repo.
+                Think of it as ".cursorrules for the whole company".
+              </p>
+              <p>
+                The entry point to everything is your iterate.config.ts file. Try [editing it] to
+                change the behaviour of the @iterate bot.
+              </p>
+              <p>
+                Soon the iterate bot itself will be able to update the repo for you and improve
+                automatically over time.
+              </p>
+            </CardDescription>
+          </CardContent>
+        </Card>
 
         {/* Repository Configuration */}
-        <Item variant="muted" className="items-start">
-          <ItemMedia variant="icon">
-            <Github className="h-5 w-5" />
-          </ItemMedia>
-          <ItemContent>
+        <Card variant="muted">
+          <CardHeader>
+            <CardTitle>Repository Configuration</CardTitle>
+          </CardHeader>
+          <CardContent>
             {connectedRepo && !isEditingRepo ? (
               <>
                 <div className="space-y-2">
@@ -402,7 +408,7 @@ function EstateContent() {
               </>
             ) : (
               <>
-                <ItemDescription>GitHub not connected</ItemDescription>
+                <CardDescription>GitHub not connected</CardDescription>
                 <Button
                   onClick={handleConnectGitHub}
                   disabled={startGithubAppInstallFlowMutation.isPending}
@@ -422,16 +428,16 @@ function EstateContent() {
                 </Button>
               </>
             )}
-          </ItemContent>
-        </Item>
+          </CardContent>
+        </Card>
       </div>
 
       {/* Build History */}
       {connectedRepo && (
-        <Item variant="muted">
-          <ItemContent className="w-full">
-            <div className="flex items-center justify-between mb-4">
-              <ItemTitle>Build History</ItemTitle>
+        <Card variant="muted">
+          <CardHeader>
+            <div className="flex items-center justify-between">
+              <CardTitle>Build History</CardTitle>
               <Button
                 onClick={() => {
                   setIsRebuildDialogOpen(true);
@@ -444,7 +450,8 @@ function EstateContent() {
                 Trigger Rebuild
               </Button>
             </div>
-
+          </CardHeader>
+          <CardContent>
             {buildsLoading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="h-8 w-8 animate-spin text-gray-500" />
@@ -551,8 +558,8 @@ function EstateContent() {
                 </EmptyHeader>
               </Empty>
             )}
-          </ItemContent>
-        </Item>
+          </CardContent>
+        </Card>
       )}
 
       {/* Rebuild Dialog */}
