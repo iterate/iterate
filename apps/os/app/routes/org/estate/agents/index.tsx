@@ -16,6 +16,12 @@ import {
 } from "../../../../components/ui/table.tsx";
 import { useEstateId, useEstateUrl } from "../../../../hooks/use-estate.ts";
 import { useTRPC } from "../../../../lib/trpc.ts";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyMedia,
+  EmptyTitle,
+} from "../../../../components/ui/empty.tsx";
 
 type SortField = "name" | "className" | "createdAt";
 type SortDirection = "asc" | "desc";
@@ -85,13 +91,13 @@ function AgentInstancesTable() {
 
   if (agents.length === 0) {
     return (
-      <div className="text-center py-8">
-        <Bot className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-        <p className="text-muted-foreground">No agent instances found</p>
-        <p className="text-sm text-muted-foreground mt-1">
-          Create your first agent using the form above
-        </p>
-      </div>
+      <Empty>
+        <EmptyMedia variant="icon">
+          <Bot className="h-12 w-12" />
+        </EmptyMedia>
+        <EmptyTitle>No agent instances found</EmptyTitle>
+        <EmptyDescription>Mention @iterate in Slack to start your first agent.</EmptyDescription>
+      </Empty>
     );
   }
 
