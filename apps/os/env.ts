@@ -29,6 +29,7 @@ export type CloudflareEnv = Env & {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICING_PLAN_ID: string;
+  SERVICE_AUTH_TOKEN: string;
 
   // Comma-separated list of hostnames. If a user with a verified email using that hostname signs up,
   // they get user.role=admin set. This is particularly useful for testing in development when
@@ -38,6 +39,9 @@ export type CloudflareEnv = Env & {
   // Comma-separated list of regex patterns used to detect test users.
   // Matching is case-insensitive substring across user name, email, and organization name.
   TEST_USER_PATTERNS?: string;
+
+  // JSON object with seed data for test users
+  TEST_SEED_DATA?: string;
 };
 
 export const env = _env as CloudflareEnv;
