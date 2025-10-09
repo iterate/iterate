@@ -79,6 +79,12 @@ githubApp.get(
       },
     });
     if (!userAccessTokenRes.ok) {
+      logger.error(
+        "Failed to get user access token",
+        new Error(await userAccessTokenRes.text(), {
+          cause: { status: userAccessTokenRes.status, statusText: userAccessTokenRes.statusText },
+        }),
+      );
       return c.json({ error: "Failed to get user access token" }, 400);
     }
     let userAccessTokenData;
@@ -86,7 +92,10 @@ githubApp.get(
     try {
       userAccessTokenData = UserAccessTokenResponse.parse(data);
     } catch (error) {
-      logger.log("Failed to parse user access token", data, error);
+      logger.error(
+        "Failed to parse user access token",
+        new Error(JSON.stringify(data), { cause: error }),
+      );
       return c.json({ error: "Failed to get user access token" }, 400);
     }
 
