@@ -66,6 +66,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected slackAPI!: WebClient;
 
+  // Track Slack message timestamps for MCP connection status buttons
+  // Maps from serverId or connectionKey to message timestamp
+  private mcpConnectionMessages = new Map<string, string>();
+
   private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
@@ -150,7 +154,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       }) => {
         deps?.onEventAdded?.(payload);
 
-        const event = payload.event as AgentCoreEvent;
+        const event = payload.event as any; // Type is broader than AgentCoreEvent to include MCP events
         switch (event.type) {
           case "CORE:LLM_REQUEST_START":
             this.agentCore.addEvents([
@@ -193,6 +197,175 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
               }),
             );
+            break;
+          }
+          case "MCP:OAUTH_REQUIRED": {
+            const { integrationSlug, oauthUrl, serverId, connectionKey } = event.data;
+
+            void this.slackAPI.chat
+              .postMessage({
+                channel: this.agentCore.state.slackChannelId as string,
+                thread_ts: this.agentCore.state.slackThreadId as string,
+                text: `🔐 Authorization required for ${integrationSlug}`,
+                blocks: [
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `🔐 Authorization required for *${integrationSlug}*`,
+                    },
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: "Authorize",
+                        },
+                        url: oauthUrl,
+                        style: "primary",
+                      },
+                    ],
+                  },
+                ],
+              })
+              .then((result) => {
+                if (result.ok && result.ts) {
+                  this.mcpConnectionMessages.set(serverId, result.ts);
+                  this.mcpConnectionMessages.set(connectionKey, result.ts);
+                }
+              });
+            break;
+          }
+          case "MCP:PARAMS_REQUIRED": {
+            const { integrationSlug, paramsCollectionUrl, connectionKey } = event.data;
+
+            void this.slackAPI.chat
+              .postMessage({
+                channel: this.agentCore.state.slackChannelId as string,
+                thread_ts: this.agentCore.state.slackThreadId as string,
+                text: `⚙️ Additional inputs required for ${integrationSlug}`,
+                blocks: [
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `⚙️ Additional inputs required for *${integrationSlug}*`,
+                    },
+                  },
+                  {
+                    type: "actions",
+                    elements: [
+                      {
+                        type: "button",
+                        text: {
+                          type: "plain_text",
+                          text: "Add Inputs",
+                        },
+                        url: paramsCollectionUrl,
+                        style: "primary",
+                      },
+                    ],
+                  },
+                ],
+              })
+              .then((result) => {
+                if (result.ok && result.ts) {
+                  this.mcpConnectionMessages.set(connectionKey, result.ts);
+                }
+              });
+            break;
+          }
+          case "MCP:CONNECT_REQUEST": {
+            const { serverUrl, integrationSlug } = event.data;
+            const connectionKey = event.data.serverUrl; // Use serverUrl as key for lookup
+
+            // Check if we have a pending message for this connection
+            const messageTs = this.mcpConnectionMessages.get(connectionKey);
+            if (messageTs) {
+              void this.slackAPI.chat.update({
+                channel: this.agentCore.state.slackChannelId as string,
+                ts: messageTs,
+                text: `🔄 Connecting to ${integrationSlug || serverUrl}...`,
+                blocks: [
+                  {
+                    type: "section",
+                    text: {
+                      type: "mrkdwn",
+                      text: `🔄 Connecting to *${integrationSlug || serverUrl}*...`,
+                    },
+                  },
+                ],
+              });
+            }
+            break;
+          }
+          case "MCP:CONNECTION_ESTABLISHED": {
+            const { integrationSlug, serverId, connectionKey, tools } = event.data;
+
+            // Check both serverId and connectionKey
+            const messageTs =
+              this.mcpConnectionMessages.get(serverId) ||
+              this.mcpConnectionMessages.get(connectionKey);
+
+            if (messageTs) {
+              void this.slackAPI.chat
+                .update({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  ts: messageTs,
+                  text: `✅ Connected to ${integrationSlug}`,
+                  blocks: [
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: `✅ Connected to *${integrationSlug}*\n${tools.length} ${tools.length === 1 ? "tool" : "tools"} available`,
+                      },
+                    },
+                  ],
+                })
+                .then(() => {
+                  // Clean up the tracking
+                  this.mcpConnectionMessages.delete(serverId);
+                  this.mcpConnectionMessages.delete(connectionKey);
+                });
+            }
+            break;
+          }
+          case "MCP:CONNECTION_ERROR": {
+            const { connectionKey, serverUrl, error } = event.data;
+
+            // Check for message using connectionKey or serverUrl
+            const messageTs =
+              (connectionKey && this.mcpConnectionMessages.get(connectionKey)) ||
+              this.mcpConnectionMessages.get(serverUrl);
+
+            if (messageTs) {
+              void this.slackAPI.chat
+                .update({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  ts: messageTs,
+                  text: `❌ Connection failed`,
+                  blocks: [
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: `❌ *Connection failed*\n${error}`,
+                      },
+                    },
+                  ],
+                })
+                .then(() => {
+                  // Clean up the tracking
+                  if (connectionKey) {
+                    this.mcpConnectionMessages.delete(connectionKey);
+                  }
+                  this.mcpConnectionMessages.delete(serverUrl);
+                });
+            }
             break;
           }
         }

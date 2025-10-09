@@ -48,7 +48,7 @@ export default function MCPParams() {
   const mode = searchParams.get("mode") || "personal";
   const connectionKey = searchParams.get("connectionKey") || "";
   const requiredParamsStr = searchParams.get("requiredParams") || "[]";
-  const agentDurableObject = searchParams.get("agentDurableObject") || "{}";
+  const agentDurableObjectStr = searchParams.get("agentDurableObject");
   const integrationSlug = searchParams.get("integrationSlug") || "";
   const finalRedirectUrl = searchParams.get("finalRedirectUrl") || undefined;
 
@@ -56,10 +56,17 @@ export default function MCPParams() {
     () => z.array(MCPParam).parse(JSON.parse(requiredParamsStr)),
     [requiredParamsStr],
   );
-  const durableObject = useMemo(
-    () => AgentDurableObjectInfo.parse(JSON.parse(agentDurableObject)),
-    [agentDurableObject],
-  );
+  const durableObject = useMemo(() => {
+    if (!agentDurableObjectStr) {
+      return null;
+    }
+    const parseResult = AgentDurableObjectInfo.safeParse(JSON.parse(agentDurableObjectStr));
+    if (!parseResult.success) {
+      console.error("Failed to parse agentDurableObject:", parseResult.error);
+      return null;
+    }
+    return parseResult.data;
+  }, [agentDurableObjectStr]);
 
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};
@@ -98,11 +105,7 @@ export default function MCPParams() {
         })),
       });
 
-      if (
-        durableObject.durableObjectName &&
-        durableObject.durableObjectId &&
-        durableObject.className
-      ) {
+      if (durableObject) {
         await reconnect({
           estateId,
           agentDurableObject: durableObject,
@@ -126,6 +129,23 @@ export default function MCPParams() {
   const toggleSensitive = (key: string) => {
     setShowSensitive((prev) => ({ ...prev, [key]: !prev[key] }));
   };
+
+  // Show error if required parameters are missing
+  if (!serverUrl || requiredParams.length === 0) {
+    return (
+      <div className="p-6">
+        <Alert variant="destructive">
+          <AlertDescription>
+            Missing required configuration parameters. This page should be accessed through the MCP
+            connection flow.
+          </AlertDescription>
+        </Alert>
+        <div className="mt-4">
+          <Button onClick={() => navigate(-1)}>Go Back</Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6">

@@ -493,7 +493,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           content: [
             {
               type: "input_text",
-              text: `Authorization needed to access ${integrationSlug}. URL to authorize: ${oauthUrl}. Connection will proceed automatically once authorization is complete.`,
+              text: `User is being prompted to authorize ${integrationSlug}. Connection will continue automatically once authorized.`,
             },
           ],
         } satisfies ResponseInputItem;
@@ -519,8 +519,7 @@ export const mcpSlice = defineAgentCoreSlice<{
       }
 
       case "MCP:PARAMS_REQUIRED": {
-        const { connectionKey, serverUrl, mode, userId, integrationSlug, paramsCollectionUrl } =
-          event.data;
+        const { connectionKey, serverUrl, mode, userId, integrationSlug } = event.data;
 
         const paramsRequiredMessage = {
           type: "message",
@@ -528,7 +527,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           content: [
             {
               type: "input_text",
-              text: `Additional inputs are required to connect to ${integrationSlug}. Send the user this URL to add inputs: ${paramsCollectionUrl}. Connection will proceed automatically once inputs are added.`,
+              text: `User is being prompted to provide additional inputs for ${integrationSlug}. Connection will continue automatically once inputs are added.`,
             },
           ],
         } satisfies ResponseInputItem;
