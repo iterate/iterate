@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { UserCog, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTRPC } from "../../lib/trpc.ts";
 import {
@@ -68,25 +68,20 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   };
 
   return (
-    <div className="p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-4">Team Members</h1>
+    <div className="p-6 space-y-6">
+      <div>
+        <h1 className="text-3xl font-bold mb-2">Team Members</h1>
         <p className="text-muted-foreground text-lg">
           Manage your organization team members and their roles
         </p>
       </div>
 
-      <Card>
+      <Card variant="muted">
         <CardHeader>
-          <div className="flex items-center gap-3">
-            <UserCog className="h-6 w-6 text-muted-foreground" />
-            <div>
-              <CardTitle>Members</CardTitle>
-              <CardDescription>
-                {members.length} {members.length === 1 ? "member" : "members"}
-              </CardDescription>
-            </div>
-          </div>
+          <CardTitle>Members</CardTitle>
+          <CardDescription>
+            {members.length} {members.length === 1 ? "member" : "members"}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>

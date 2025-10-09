@@ -1,5 +1,5 @@
 import { useState, Suspense } from "react";
-import { Settings, Loader2, Save, User, Shield, ArrowLeft } from "lucide-react";
+import { Loader2, Save, Shield, ArrowLeft } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
@@ -157,16 +157,13 @@ function UserSettingsContent() {
   return (
     <div className="container mx-auto py-8 max-w-4xl">
       {/* Header with back button */}
-      <div className="flex items-center gap-4 mb-6">
-        <Button variant="ghost" size="sm" onClick={handleGoBack}>
+      <div className="space-y-4 mb-6">
+        <Button variant="ghost" size="sm" onClick={handleGoBack} className="pl-0">
           <ArrowLeft className="h-4 w-4 mr-2" />
           Back
         </Button>
         <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Settings className="h-8 w-8" />
-            User Settings
-          </h1>
+          <h1 className="text-3xl font-bold">User Settings</h1>
           <p className="text-muted-foreground">
             Manage your profile information and account preferences
           </p>
@@ -175,16 +172,7 @@ function UserSettingsContent() {
 
       <div className="grid gap-6">
         {/* Profile Information */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="h-5 w-5" />
-              Profile Information
-            </CardTitle>
-            <CardDescription>
-              Update your personal information and display preferences
-            </CardDescription>
-          </CardHeader>
+        <Card variant="muted">
           <CardContent className="space-y-6">
             <form onSubmit={handleSubmit} className="space-y-6">
               {/* Avatar and User ID */}
@@ -281,7 +269,7 @@ function UserSettingsContent() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card variant="muted">
           <CardHeader>
             <CardTitle>Danger Zone</CardTitle>
             <CardDescription>
@@ -358,16 +346,13 @@ export default function UserSettings() {
       fallback={
         <div className="container mx-auto py-8 max-w-4xl">
           {/* Header with back button - same as main content */}
-          <div className="flex items-center gap-4 mb-6">
-            <Button variant="ghost" size="sm" onClick={handleGoBack}>
+          <div className="space-y-4 mb-6">
+            <Button variant="ghost" size="sm" onClick={handleGoBack} className="pl-0">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
             </Button>
             <div>
-              <h1 className="text-3xl font-bold flex items-center gap-2">
-                <Settings className="h-8 w-8" />
-                User Settings
-              </h1>
+              <h1 className="text-3xl font-bold">User Settings</h1>
               <p className="text-muted-foreground">
                 Manage your profile information and account preferences
               </p>

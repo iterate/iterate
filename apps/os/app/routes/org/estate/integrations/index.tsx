@@ -50,6 +50,7 @@ import {
   TableHeader,
   TableRow,
 } from "../../../../components/ui/table.tsx";
+import { Card, CardContent } from "../../../../components/ui/card.tsx";
 import {
   Item,
   ItemContent,
@@ -385,8 +386,8 @@ export default function Integrations() {
       <div className="space-y-4">
         <h2 className="text-xl font-semibold">Remote MCP Server Connections</h2>
         {mcpConnections.length > 0 ? (
-          <Item variant="muted">
-            <ItemContent className="w-full">
+          <Card variant="muted">
+            <CardContent className="w-full">
               {/* Tabs - only show if there are connections in multiple modes */}
               {personalCount > 0 && companyCount > 0 && (
                 <div className="border-b mb-4">
@@ -438,11 +439,11 @@ export default function Integrations() {
                 estateId={estateId}
                 onUpdate={refetch}
               />
-            </ItemContent>
-          </Item>
+            </CardContent>
+          </Card>
         ) : (
-          <Item variant="muted">
-            <ItemContent className="w-full">
+          <Card variant="muted">
+            <CardContent className="w-full">
               <Empty>
                 <EmptyMedia variant="icon">
                   <Puzzle className="h-12 w-12" />
@@ -453,8 +454,8 @@ export default function Integrations() {
                   and manage the connection here
                 </EmptyDescription>
               </Empty>
-            </ItemContent>
-          </Item>
+            </CardContent>
+          </Card>
         )}
       </div>
     </div>
