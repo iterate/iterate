@@ -1026,25 +1026,26 @@ export class AgentCore<
       }
 
       case "CORE:INITIALIZED_WITH_EVENTS": {
-        // Add a developer message to inform about initialization/hibernation behavior
-        const developerText = renderPromptFragment([
-          `Agent started at ${event.createdAt}.`,
-          "Agents get hibernated after periods of inactivity.",
-          "If this happens right after a function tool call, it means this agent probably crashed",
-        ]);
+        // Only add a developer message if this isn't the first event (woke up after hibernation)
+        if (event.eventIndex > 0) {
+          const developerText = renderPromptFragment([
+            "Agent woke up after hibernation.",
+            "If this happens unexpectedly shortly after another event, it means the agent probably crashed",
+          ]);
 
-        const developerMessage = {
-          type: "message" as const,
-          role: "developer" as const,
-          content: [
-            {
-              type: "input_text" as const,
-              text: developerText,
-            },
-          ],
-        };
+          const developerMessage = {
+            type: "message" as const,
+            role: "developer" as const,
+            content: [
+              {
+                type: "input_text" as const,
+                text: developerText,
+              },
+            ],
+          };
 
-        next.inputItems = [...next.inputItems, developerMessage];
+          next.inputItems = [...next.inputItems, developerMessage];
+        }
         break;
       }
 

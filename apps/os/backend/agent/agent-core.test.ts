@@ -1981,7 +1981,12 @@ describe("CORE:FILE_SHARED event handling", () => {
 
     // Should add an input_image item to state (plus the init developer message)
     const inputItems = h.agentCore.state.inputItems.filter(
-      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      (i) =>
+        !(
+          i.type === "message" &&
+          i.role === "developer" &&
+          JSON.stringify(i).includes("Agent started at ")
+        ),
     );
     expect(inputItems).toHaveLength(2);
 
@@ -2060,7 +2065,12 @@ describe("CORE:FILE_SHARED event handling", () => {
 
     // Should have both files as input items (each file should have a user message and a developer one)
     const inputItems = h.agentCore.state.inputItems.filter(
-      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      (i) =>
+        !(
+          i.type === "message" &&
+          i.role === "developer" &&
+          JSON.stringify(i).includes("Agent started at ")
+        ),
     );
     expect(inputItems).toHaveLength(4);
 
@@ -2269,7 +2279,12 @@ describe("CORE:FILE_SHARED event handling", () => {
 
     // Should add a user message with input_image item and a developer message to state
     const inputItems = h.agentCore.state.inputItems.filter(
-      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      (i) =>
+        !(
+          i.type === "message" &&
+          i.role === "developer" &&
+          JSON.stringify(i).includes("Agent started at ")
+        ),
     );
     expect(inputItems).toHaveLength(2);
 
@@ -2321,7 +2336,12 @@ describe("CORE:FILE_SHARED event handling", () => {
 
       // All should be treated as images
       const inputItems = h.agentCore.state.inputItems.filter(
-        (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+        (i) =>
+          !(
+            i.type === "message" &&
+            i.role === "developer" &&
+            JSON.stringify(i).includes("Agent started at ")
+          ),
       );
       expect(inputItems).toHaveLength(imageExtensions.length * 2);
 
@@ -2678,7 +2698,12 @@ describe("AgentCore ephemeralPromptFragments", () => {
 
       // Verify that input messages no longer contain the ephemeral context items
       const inputMessages = callArgs.input.filter(
-        (i: any) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+        (i: any) =>
+          !(
+            i.type === "message" &&
+            i.role === "developer" &&
+            JSON.stringify(i).includes("Agent started at ")
+          ),
       );
       expect(inputMessages).toHaveLength(1); // Only the user message
       expect(inputMessages[0]).toEqual({
@@ -2753,7 +2778,12 @@ describe("AgentCore ephemeralPromptFragments", () => {
 
     // Verify that input messages only contain the user message
     const inputMessages = callArgs.input.filter(
-      (i: any) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      (i: any) =>
+        !(
+          i.type === "message" &&
+          i.role === "developer" &&
+          JSON.stringify(i).includes("Agent started at ")
+        ),
     );
     expect(inputMessages).toHaveLength(1); // Only the user message
     expect(inputMessages[0]).toEqual({

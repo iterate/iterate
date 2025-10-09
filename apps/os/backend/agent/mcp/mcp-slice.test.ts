@@ -384,14 +384,12 @@ describe("mcp-slice", () => {
           isConnected: true,
         });
 
-        // Should add developer message about connection (ignore the init developer message)
-        const connectionDevMessage = (state.inputItems as any[]).find(
-          (item) =>
-            item.type === "message" &&
-            item.role === "developer" &&
-            JSON.stringify(item).toLowerCase().includes("connected to github"),
+        // Should add developer message
+        const devMessages = state.inputItems.filter(
+          (item: any) => item.type === "message" && item.role === "developer",
         );
-        expect(connectionDevMessage).toBeDefined();
+        expect(devMessages).toHaveLength(1);
+        expect(devMessages[0].content[0].text).toContain("connected to github");
 
         // Should call generateRuntimeToolsFromConnections
         expect(generateRuntimeToolsFromConnections).toHaveBeenCalled();
@@ -718,8 +716,10 @@ describe("mcp-slice", () => {
         const devMessages = state.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        const errorDevMessage = devMessages.find((m: any) =>
-          JSON.stringify(m).includes("Failed to connect") && JSON.stringify(m).includes("Authentication failed"),
+        const errorDevMessage = devMessages.find(
+          (m: any) =>
+            JSON.stringify(m).includes("Failed to connect") &&
+            JSON.stringify(m).includes("Authentication failed"),
         );
         expect(errorDevMessage).toBeDefined();
       });
@@ -811,9 +811,10 @@ describe("mcp-slice", () => {
         const devMessages = state.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        const oauthDevMessage = devMessages.find((m: any) =>
-          JSON.stringify(m).includes("Authorization needed to access") &&
-          JSON.stringify(m).includes("https://github.com/oauth/authorize"),
+        const oauthDevMessage = devMessages.find(
+          (m: any) =>
+            JSON.stringify(m).includes("Authorization needed to access") &&
+            JSON.stringify(m).includes("https://github.com/oauth/authorize"),
         );
         expect(oauthDevMessage).toBeDefined();
       });
@@ -1100,7 +1101,9 @@ describe("mcp-slice", () => {
         const devMessages = finalState.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        const hasError = devMessages.some((m: any) => JSON.stringify(m).includes("Failed to connect"));
+        const hasError = devMessages.some((m: any) =>
+          JSON.stringify(m).includes("Failed to connect"),
+        );
         const hasSuccess = devMessages.some((m: any) =>
           JSON.stringify(m).toLowerCase().includes("connected to github"),
         );
