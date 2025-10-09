@@ -257,6 +257,7 @@ export async function handleMCPConnectRequest(
     serverUrl: modifiedServerUrl,
     callbackUrl: finalRedirectUrl,
     agentDurableObject,
+    isReconnecting: !!reconnect,
   });
 
   const manager = new MCPClientManager("iterate-agent", "1.0.0");

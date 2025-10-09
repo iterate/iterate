@@ -41,6 +41,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   authUrl: string | undefined;
 
   private baseUrl: string;
+  private isReconnecting = false;
 
   constructor(
     private params: {
@@ -52,9 +53,11 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       serverUrl: string;
       callbackUrl: string | undefined;
       agentDurableObject: AgentDurableObjectInfo;
+      isReconnecting?: boolean;
     },
   ) {
     this.baseUrl = import.meta.env.VITE_PUBLIC_URL;
+    this.isReconnecting = params.isReconnecting ?? false;
   }
 
   private get providerId() {
@@ -62,6 +65,13 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async resetClientAndTokens() {
+    const dynamicClientInfo = await this.params.db.query.dynamicClientInfo.findFirst({
+      where: and(
+        eq(schema.dynamicClientInfo.userId, this.params.userId),
+        eq(schema.dynamicClientInfo.providerId, this.providerId),
+      ),
+    });
+
     await this.params.db
       .delete(schema.account)
       .where(
@@ -78,6 +88,13 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           eq(schema.dynamicClientInfo.providerId, this.providerId),
         ),
       );
+
+    if (dynamicClientInfo?.clientId) {
+      const verificationKey = `mcp-verifier-${this.providerId}-${dynamicClientInfo.clientId}`;
+      await this.params.db
+        .delete(schema.verification)
+        .where(eq(schema.verification.identifier, verificationKey));
+    }
   }
 
   async tokens() {
@@ -207,6 +224,14 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
   }
 
   async saveCodeVerifier(verifier: string): Promise<void> {
+    // Don't save the code verifier during reconnect - we need to retrieve the existing one
+    // The cloudflare agents SDK assumes that saveCodeVerifier is idempotent.
+    // If we didn't have this check, it would not be safe to call it multiple times, and that previously caused this
+    // issue: https://iterate-com.slack.com/archives/C08R1SMTZGD/p1760015580775959?thread_ts=1760015520.934349&cid=C08R1SMTZGD
+    if (this.isReconnecting) {
+      return;
+    }
+
     const clientInformation = await this.clientInformation();
     if (!clientInformation) {
       throw new Error("Cannot save code verifier without client information");
