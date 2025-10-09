@@ -11,7 +11,8 @@ import { AlertCircle, Home } from "lucide-react";
 import { asc, eq } from "drizzle-orm";
 import { getDb } from "../../../backend/db/client.ts";
 import { getAuth } from "../../../backend/auth/auth.ts";
-import { estate, organizationUserMembership, type UserRole } from "../../../backend/db/schema.ts";
+import { getUserOrganizations } from "../../../backend/trpc/trpc.ts";
+import { estate, type UserRole } from "../../../backend/db/schema.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { authClient } from "../../lib/auth-client.ts";
@@ -48,16 +49,12 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
 
   const [userOrganizations, isOnboarded] = await Promise.all([
-    db.query.organizationUserMembership.findMany({
-      where: eq(organizationUserMembership.userId, session.user.id),
-      with: {
-        organization: true,
-      },
-    }),
+    getUserOrganizations(db, session.user.id),
     isOnboardingRoute ? Promise.resolve(true) : isOrganizationOnboarded(db, organizationId),
   ]);
 
   // Check if user has access to the requested organization
+  // Note: External users are already filtered out at query level
   const currentOrgMembership = userOrganizations.find((m) => m.organization.id === organizationId);
 
   if (!currentOrgMembership) {
@@ -67,27 +64,18 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     });
   }
 
-  // External users cannot access organization routes
-  if (currentOrgMembership.role === "external") {
-    throw new Response("External users cannot access this organization", {
-      status: 403,
-      statusText: "Forbidden",
-    });
-  }
-
   const organization = currentOrgMembership.organization;
 
-  // Serialize dates to match TRPC output format and filter out external organizations
-  const organizations = userOrganizations
-    .filter(({ role }) => role !== "external")
-    .map(({ organization: org, role }) => ({
-      id: org.id,
-      name: org.name,
-      role: role as UserRole,
-      stripeCustomerId: org.stripeCustomerId,
-      createdAt: org.createdAt.toISOString(),
-      updatedAt: org.updatedAt.toISOString(),
-    }));
+  // Serialize dates to match TRPC output format
+  // External orgs already filtered at query level
+  const organizations = userOrganizations.map(({ organization: org, role }) => ({
+    id: org.id,
+    name: org.name,
+    role: role as UserRole,
+    stripeCustomerId: org.stripeCustomerId,
+    createdAt: org.createdAt.toISOString(),
+    updatedAt: org.updatedAt.toISOString(),
+  }));
 
   const serializedOrganization = {
     id: organization.id,

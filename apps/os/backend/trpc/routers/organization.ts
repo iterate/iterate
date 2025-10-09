@@ -2,19 +2,20 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { waitUntil } from "cloudflare:workers";
-import { protectedProcedure, router, orgProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
+import {
+  protectedProcedure,
+  router,
+  orgProtectedProcedure,
+  orgAdminProcedure,
+  getUserOrganizations,
+} from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 
 export const organizationRouter = router({
-  // List all organizations the user has access to
+  // List all organizations the user has access to (excluding external)
   list: protectedProcedure.query(async ({ ctx }) => {
-    const userOrganizations = await ctx.db.query.organizationUserMembership.findMany({
-      where: eq(schema.organizationUserMembership.userId, ctx.user.id),
-      with: {
-        organization: true,
-      },
-    });
+    const userOrganizations = await getUserOrganizations(ctx.db, ctx.user.id);
 
     return userOrganizations.map(({ organization, role }) => ({
       id: organization.id,
