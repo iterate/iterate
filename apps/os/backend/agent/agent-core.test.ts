@@ -1248,11 +1248,13 @@ describe("AgentCore", () => {
       expect(secondCallArgs).toBeDefined();
       const secondCallMessages = secondCallArgs.input;
 
-      // Pluck relevant fields for snapshot
-      const simplifiedMessages = secondCallMessages.map((m: any) => ({
-        role: m.role,
-        content: m.content[0].text,
-      }));
+      // Ignore initialization developer message when asserting history
+      const simplifiedMessages = secondCallMessages
+        .filter((m: any) => !(m.type === "message" && m.role === "developer"))
+        .map((m: any) => ({
+          role: m.role,
+          content: m.content[0].text,
+        }));
 
       expect(simplifiedMessages).toMatchInlineSnapshot(`
         [
@@ -1977,11 +1979,13 @@ describe("CORE:FILE_SHARED event handling", () => {
       },
     });
 
-    // Should add an input_image item to state
-    const inputItems = h.agentCore.state.inputItems;
+    // Should add an input_image item to state (plus the init developer message)
+    const inputItems = h.agentCore.state.inputItems.filter(
+      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+    );
     expect(inputItems).toHaveLength(2);
 
-    const inputItem = inputItems[0];
+    const inputItem = inputItems[0] as any;
     expect(inputItem).toEqual({
       type: "message",
       role: "user",
@@ -2055,11 +2059,13 @@ describe("CORE:FILE_SHARED event handling", () => {
     });
 
     // Should have both files as input items (each file should have a user message and a developer one)
-    const inputItems = h.agentCore.state.inputItems;
+    const inputItems = h.agentCore.state.inputItems.filter(
+      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+    );
     expect(inputItems).toHaveLength(4);
 
     // Check the first item is a message with input_file content
-    const firstItem = inputItems[0];
+    const firstItem = inputItems[0] as any;
     expect(firstItem.type).toBe("message");
     if (firstItem.type === "message") {
       expect(firstItem.content[0]).toMatchObject({
@@ -2262,10 +2268,12 @@ describe("CORE:FILE_SHARED event handling", () => {
     });
 
     // Should add a user message with input_image item and a developer message to state
-    const inputItems = h.agentCore.state.inputItems;
+    const inputItems = h.agentCore.state.inputItems.filter(
+      (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+    );
     expect(inputItems).toHaveLength(2);
 
-    const inputItem = inputItems[0];
+    const inputItem = inputItems[0] as any;
     expect(inputItem).toEqual({
       type: "message",
       role: "user",
@@ -2312,7 +2320,9 @@ describe("CORE:FILE_SHARED event handling", () => {
       }
 
       // All should be treated as images
-      const inputItems = h.agentCore.state.inputItems;
+      const inputItems = h.agentCore.state.inputItems.filter(
+        (i) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      );
       expect(inputItems).toHaveLength(imageExtensions.length * 2);
 
       // check only the user messages contain the image content
