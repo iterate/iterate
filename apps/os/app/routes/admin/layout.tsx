@@ -99,18 +99,6 @@ export default function AdminLayout() {
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton size="lg" asChild>
-                  <Link to="/">
-                    <div className="bg-black flex aspect-square size-8 items-center justify-center rounded-lg">
-                      <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
-                    </div>
-                    <div className="grid flex-1 text-left leading-tight">
-                      <span className="truncate font-medium">iterate</span>
-                    </div>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton size="lg" asChild>
                   <Link to="/admin">
                     <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary">
                       <Shield className="size-4 text-primary-foreground" />
@@ -159,11 +147,12 @@ export default function AdminLayout() {
         </Sidebar>
 
         <SidebarInset>
-          <header className="flex h-16 items-center gap-4 border-b px-6">
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />
+            {/* TODO Breadcrumbs */}
           </header>
 
-          <main>
+          <main className="flex flex-1 flex-col gap-4 p-6 max-w-5xl">
             <Outlet />
           </main>
         </SidebarInset>

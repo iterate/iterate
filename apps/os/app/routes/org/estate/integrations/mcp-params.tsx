@@ -1,28 +1,18 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
-import { useForm } from "react-hook-form";
-import { Shield, Eye, EyeOff } from "lucide-react";
 import { z } from "zod/v4";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
+import { Card, CardContent } from "../../../../components/ui/card.tsx";
 import {
-  Form,
-  FormControl,
-  FormDescription,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "../../../../components/ui/form.tsx";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-  CardDescription,
-} from "../../../../components/ui/card.tsx";
-import { Alert, AlertDescription } from "../../../../components/ui/alert.tsx";
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "../../../../components/ui/field.tsx";
 import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { AgentDurableObjectInfo } from "../../../../../backend/auth/oauth-state-schemas.ts";
@@ -64,17 +54,26 @@ export default function MCPParams() {
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};
     requiredParams.forEach((param) => {
-      values[param.key] = "";
+      // Prefill authorization fields with 'Bearer '
+      values[param.key] = param.key.toLowerCase().includes("authorization") ? "Bearer " : "";
     });
     return values;
   }, [requiredParams]);
-
-  const [showSensitive, setShowSensitive] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
 
-  const form = useForm<Record<string, string>>({
-    defaultValues: initialValues,
-  });
+  const [formValues, setFormValues] = useState<Record<string, string>>(initialValues);
+
+  const firstAuthInputRef = useRef<HTMLInputElement>(null);
+
+  // Focus the first authorization input field on mount
+  useEffect(() => {
+    const firstAuthParam = requiredParams.find((param) =>
+      param.key.toLowerCase().includes("authorization"),
+    );
+    if (firstAuthParam && firstAuthInputRef.current) {
+      firstAuthInputRef.current.focus();
+    }
+  }, [requiredParams]);
 
   const { mutateAsync: saveParams, isPending } = useMutation(
     trpc.integrations.saveMCPConnectionParams.mutationOptions({}),
@@ -84,8 +83,18 @@ export default function MCPParams() {
     trpc.integrations.reconnectMCPServer.mutationOptions({}),
   );
 
-  const handleSubmit = async (values: Record<string, string>) => {
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
     setError(null);
+
+    // Check if all required fields are filled
+    const missingFields = requiredParams.filter((param) => !formValues[param.key]?.trim());
+    if (missingFields.length > 0) {
+      setError(
+        `Please fill in all required fields: ${missingFields.map((p) => p.description).join(", ")}`,
+      );
+      return;
+    }
 
     try {
       await saveParams({
@@ -93,7 +102,7 @@ export default function MCPParams() {
         connectionKey,
         params: requiredParams.map((param) => ({
           key: param.key,
-          value: values[param.key],
+          value: formValues[param.key],
           type: param.type,
         })),
       });
@@ -123,105 +132,93 @@ export default function MCPParams() {
     }
   };
 
-  const toggleSensitive = (key: string) => {
-    setShowSensitive((prev) => ({ ...prev, [key]: !prev[key] }));
+  const handleValueChange = (key: string, value: string) => {
+    setFormValues((prev) => ({ ...prev, [key]: value }));
   };
 
   return (
-    <div className="p-6">
-      <div className="mb-8">
+    <div>
+      <div className="mb-8 max-w-2xl">
         <h1 className="text-3xl font-bold mb-2">Configure MCP Server</h1>
         <p className="text-muted-foreground text-lg">
           Enter the required authentication parameters for {serverUrl}
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Authentication Parameters</CardTitle>
-          <CardDescription>
-            These parameters will be securely stored and used to authenticate with the MCP server.
-          </CardDescription>
-        </CardHeader>
-
+      <Card className="max-w-2xl">
         <CardContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-              {requiredParams.map((param) => (
-                <FormField
-                  key={param.key}
-                  control={form.control}
-                  name={param.key}
-                  rules={{ required: "This field is required" }}
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel className="flex items-center gap-2">
-                        {param.description}
-                        {param.sensitive && <Shield className="w-3 h-3 text-muted-foreground" />}
-                      </FormLabel>
+          <form onSubmit={handleSubmit}>
+            <FieldSet>
+              <FieldLegend>Authentication Parameters</FieldLegend>
+              <FieldDescription>
+                These parameters will be securely stored and used to authenticate with the MCP
+                server.
+              </FieldDescription>
+              <FieldGroup>
+                {requiredParams.map((param, index) => {
+                  const isFirstAuth =
+                    param.key.toLowerCase().includes("authorization") &&
+                    requiredParams
+                      .slice(0, index)
+                      .every((p) => !p.key.toLowerCase().includes("authorization"));
 
-                      <FormControl>
-                        <div className="relative">
-                          <Input
-                            type={
-                              param.sensitive && !showSensitive[param.key] ? "password" : "text"
-                            }
-                            placeholder={param.placeholder}
-                            className="pr-10"
-                            {...field}
-                          />
+                  return (
+                    <Field key={param.key}>
+                      <FieldLabel>{param.description}</FieldLabel>
+                      <Input
+                        ref={isFirstAuth ? firstAuthInputRef : undefined}
+                        type="text"
+                        placeholder={param.placeholder}
+                        value={formValues[param.key] || ""}
+                        onChange={(e) => handleValueChange(param.key, e.target.value)}
+                        disabled={isPending}
+                      />
+                      <FieldDescription
+                        className={
+                          param.key.toLowerCase().includes("authorization") &&
+                          formValues[param.key]?.trim() &&
+                          !formValues[param.key].startsWith("Bearer ")
+                            ? "text-destructive"
+                            : ""
+                        }
+                      >
+                        {param.key.toLowerCase().includes("authorization") &&
+                        formValues[param.key]?.trim() &&
+                        !formValues[param.key].startsWith("Bearer ")
+                          ? 'Unless you know what you\'re doing, you want this field to start with "Bearer "'
+                          : param.type === "header"
+                            ? "This will be sent as 'Authorization' HTTP header and should almost always start with 'Bearer'"
+                            : param.type === "query_param"
+                              ? "This will be added to the server URL as a query parameter"
+                              : ""}
+                      </FieldDescription>
+                    </Field>
+                  );
+                })}
 
-                          {param.sensitive && (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              className="absolute right-0 top-0 h-full px-3"
-                              onClick={() => toggleSensitive(param.key)}
-                            >
-                              {showSensitive[param.key] ? (
-                                <EyeOff className="w-4 h-4" />
-                              ) : (
-                                <Eye className="w-4 h-4" />
-                              )}
-                            </Button>
-                          )}
-                        </div>
-                      </FormControl>
+                {error && (
+                  <div className="bg-destructive/15 text-destructive px-3 py-2 rounded-md text-sm">
+                    {error}
+                  </div>
+                )}
 
-                      <FormDescription>
-                        {param.type === "header" && "This will be sent as an HTTP header"}
-                        {param.type === "query_param" &&
-                          "This will be added to the server URL as a query parameter"}
-                      </FormDescription>
-
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              ))}
-
-              {error && (
-                <Alert variant="destructive">
-                  <AlertDescription>{error}</AlertDescription>
-                </Alert>
-              )}
-
-              <div className="flex gap-3">
-                <Button type="submit" disabled={isPending} className="flex-1">
-                  {isPending ? "Saving..." : "Save and Connect"}
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => navigate(-1)}
-                  disabled={isPending}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </form>
-          </Form>
+                <div className="flex gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => navigate(-1)}
+                    disabled={isPending}
+                    className="flex-1"
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={isPending} className="flex-1">
+                    {isPending ? "Saving..." : "Save and Connect"}
+                  </Button>
+                </div>
+              </FieldGroup>
+            </FieldSet>
+          </form>
         </CardContent>
       </Card>
     </div>
