@@ -1025,8 +1025,30 @@ export class AgentCore<
         break;
       }
 
+      case "CORE:INITIALIZED_WITH_EVENTS": {
+        // Add a developer message to inform about initialization/hibernation behavior
+        const developerText = renderPromptFragment([
+          `Agent started at ${event.createdAt}.`,
+          "Agents get hibernated after periods of inactivity.",
+          "If this happens right after a function tool call, it means this agent probably crashed",
+        ]);
+
+        const developerMessage = {
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: developerText,
+            },
+          ],
+        };
+
+        next.inputItems = [...next.inputItems, developerMessage];
+        break;
+      }
+
       case "CORE:INTERNAL_ERROR":
-      case "CORE:INITIALIZED_WITH_EVENTS":
       case "CORE:LOG":
         // Just log, no state change needed
         break;

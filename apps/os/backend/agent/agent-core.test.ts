@@ -1285,9 +1285,10 @@ describe("AgentCore", () => {
         await h.initializeAgent();
         await h2.initializeAgent();
 
-        // Sanity-check: both agents start with empty inputItems arrays
-        expect(h.agentCore.state.inputItems).toHaveLength(0);
-        expect(h2.agentCore.state.inputItems).toHaveLength(0);
+        // Record baseline lengths (includes initialization developer message)
+        const baseLen1 = h.agentCore.state.inputItems.length;
+        const baseLen2 = h2.agentCore.state.inputItems.length;
+        expect(baseLen1).toBe(baseLen2);
 
         // Add a user message only to the first agent
         await h.agentCore.addEvent(makeUserInputTextEvent("Hello, Agent 1!"));
@@ -1296,10 +1297,10 @@ describe("AgentCore", () => {
         await h.waitUntilThinking();
 
         // Verify the first agent's state changed
-        expect(h.agentCore.state.inputItems.length).toBeGreaterThan(0);
+        expect(h.agentCore.state.inputItems.length).toBeGreaterThan(baseLen1);
 
-        // The second agent must remain unaffected – this would fail if the array was shared
-        expect(h2.agentCore.state.inputItems).toHaveLength(0);
+        // The second agent must remain unaffected – its length remains at baseline
+        expect(h2.agentCore.state.inputItems.length).toBe(baseLen2);
 
         // Also ensure the arrays are not the same reference
         expect(h.agentCore.state.inputItems).not.toBe(h2.agentCore.state.inputItems);
