@@ -18,10 +18,10 @@ export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
   const currentOrganizationId = useOrganizationId();
-  const { organizations: loaderOrganizations } = useOutletContext<OrgContext>();
+  const context = useOutletContext<OrgContext | undefined>();
   const { data: organizations } = useSuspenseQuery({
     ...trpc.organization.list.queryOptions(),
-    initialData: loaderOrganizations,
+    initialData: context?.organizations,
   });
 
   const currentOrganization = organizations.find((org) => org.id === currentOrganizationId);
