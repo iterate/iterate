@@ -2677,7 +2677,9 @@ describe("AgentCore ephemeralPromptFragments", () => {
       `);
 
       // Verify that input messages no longer contain the ephemeral context items
-      const inputMessages = callArgs.input;
+      const inputMessages = callArgs.input.filter(
+        (i: any) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+      );
       expect(inputMessages).toHaveLength(1); // Only the user message
       expect(inputMessages[0]).toEqual({
         content: [
@@ -2750,7 +2752,9 @@ describe("AgentCore ephemeralPromptFragments", () => {
     expect(callArgs.instructions).toMatchInlineSnapshot(`"You are a helpful assistant."`);
 
     // Verify that input messages only contain the user message
-    const inputMessages = callArgs.input;
+    const inputMessages = callArgs.input.filter(
+      (i: any) => !(i.type === "message" && i.role === "developer" && JSON.stringify(i).includes("Agent started at ")),
+    );
     expect(inputMessages).toHaveLength(1); // Only the user message
     expect(inputMessages[0]).toEqual({
       content: [

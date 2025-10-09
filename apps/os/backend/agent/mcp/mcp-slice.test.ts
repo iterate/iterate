@@ -716,10 +716,10 @@ describe("mcp-slice", () => {
         const devMessages = state.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        // Expect at least one developer message about the error
-        expect(devMessages.length).toBeGreaterThanOrEqual(1);
-        expect(devMessages[0].content[0].text).toContain("Failed to connect");
-        expect(devMessages[0].content[0].text).toContain("Authentication failed");
+        const errorDevMessage = devMessages.find((m: any) =>
+          JSON.stringify(m).includes("Failed to connect") && JSON.stringify(m).includes("Authentication failed"),
+        );
+        expect(errorDevMessage).toBeDefined();
       });
 
       test5("should trigger LLM when no pending connections remain after error", async ({ h }) => {
@@ -809,9 +809,11 @@ describe("mcp-slice", () => {
         const devMessages = state.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        expect(devMessages.length).toBeGreaterThanOrEqual(1);
-        expect(devMessages[0].content[0].text).toContain("Authorization needed to access");
-        expect(devMessages[0].content[0].text).toContain("https://github.com/oauth/authorize");
+        const oauthDevMessage = devMessages.find((m: any) =>
+          JSON.stringify(m).includes("Authorization needed to access") &&
+          JSON.stringify(m).includes("https://github.com/oauth/authorize"),
+        );
+        expect(oauthDevMessage).toBeDefined();
       });
 
       test6("should handle missing oauthUrl gracefully", async ({ h }) => {
@@ -1092,13 +1094,16 @@ describe("mcp-slice", () => {
         const finalState = h.agentCore.state as any;
         expect(finalState.mcpConnections).toHaveProperty("https://github.com/mcp::company");
 
-        // Should have error message and success message
+        // Should have error message and success message (plus init developer message)
         const devMessages = finalState.inputItems.filter(
           (item: any) => item.type === "message" && item.role === "developer",
         );
-        expect(devMessages).toHaveLength(2);
-        expect(devMessages[0].content[0].text).toContain("Failed to connect");
-        expect(devMessages[1].content[0].text).toContain("connected to github");
+        const hasError = devMessages.some((m: any) => JSON.stringify(m).includes("Failed to connect"));
+        const hasSuccess = devMessages.some((m: any) =>
+          JSON.stringify(m).toLowerCase().includes("connected to github"),
+        );
+        expect(hasError).toBe(true);
+        expect(hasSuccess).toBe(true);
       });
     });
 
