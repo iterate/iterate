@@ -78,14 +78,14 @@ function SetupIterateRepoStep({ goTo, goBack }: StepProps) {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">Step 2 of 4</p>
-        <h2 className="text-lg font-semibold">Set up your iterate repo in GitHub</h2>
+    <div className="space-y-8">
+      <div className="space-y-3">
+        <p className="text-muted-foreground">Step 2 of 3</p>
+        <h2 className="text-2xl font-semibold">Set up your iterate repo in GitHub</h2>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <div className="space-y-4 text-sm text-muted-foreground">
+      <div className="grid gap-8 md:grid-cols-2">
+        <div className="space-y-4 text-muted-foreground">
           <p>
             This repo will contain company-wide rules, tools, workflows, memories that your new AI
             coworker will follow.
@@ -100,18 +100,18 @@ function SetupIterateRepoStep({ goTo, goBack }: StepProps) {
         <img
           src="/clone-estate-template.gif"
           alt="Create from template animation"
-          className="w-full rounded border bg-background"
+          className="w-full rounded border"
         />
       </div>
 
-      <div className="flex justify-between items-center">
-        <Button variant="ghost" onClick={goBack} className="text-muted-foreground" size="lg">
+      <div className="flex justify-between items-center pt-4">
+        <Button variant="ghost" onClick={goBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
         <AlertDialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
           <AlertDialogTrigger asChild>
-            <Button size="lg" className="min-w-[120px]">
+            <Button>
               Clone template repo
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
@@ -163,7 +163,7 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
 
   return (
     <form
-      className="space-y-6"
+      className="space-y-8"
       onSubmit={async (event) => {
         event.preventDefault();
         setError(null);
@@ -175,13 +175,13 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
         await updateOrganization.mutateAsync({ organizationId, name: trimmedName });
       }}
     >
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">Step 1 of 3</p>
-        <h2 className="text-lg font-semibold">What is your organization called?</h2>
+      <div className="space-y-3">
+        <p className="text-muted-foreground">Step 1 of 3</p>
+        <h2 className="text-2xl font-semibold">What is your organization called?</h2>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2">
-        <div className="space-y-4 text-sm text-muted-foreground">
+      <div className="grid gap-8 md:grid-cols-2">
+        <div className="text-muted-foreground">
           <p>
             If you're just playing around or planning to use @iterate alone, just leave this as is.
           </p>
@@ -203,13 +203,8 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
           {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
       </div>
-      <div className="flex justify-end">
-        <Button
-          type="submit"
-          disabled={updateOrganization.isPending}
-          size="lg"
-          className="min-w-[120px]"
-        >
+      <div className="flex justify-end pt-4">
+        <Button type="submit" disabled={updateOrganization.isPending}>
           {updateOrganization.isPending ? (
             <>
               Confirming
@@ -250,21 +245,24 @@ function ConnectGithubAppStep({ estateId, organizationId, goBack }: StepProps) {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">Step 3 of 3</p>
-        <h2 className="text-lg font-semibold">Give us access to the git repo</h2>
+    <div className="space-y-8">
+      <div className="space-y-3">
+        <p className="text-muted-foreground">Step 3 of 3</p>
+        <h2 className="text-2xl font-semibold">Give us access to the git repo</h2>
       </div>
 
-      <div className="space-y-4 text-sm text-muted-foreground">
-        <p>On the next page, select the organization you created the repo in.</p>
-        <p>Then select "Only select repositories" and choose the iterate repo you created.</p>
+      <div className="grid gap-8 md:grid-cols-2">
+        <div className="space-y-4 text-muted-foreground">
+          <p>On the next page, select the organization you created the repo in.</p>
+          <p>Then select "Only select repositories" and choose the iterate repo you created.</p>
+        </div>
+        <div />
       </div>
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
-      <div className="flex justify-between items-center">
-        <Button variant="ghost" onClick={goBack} className="text-muted-foreground" size="lg">
+      <div className="flex justify-between items-center pt-4">
+        <Button variant="ghost" onClick={goBack}>
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
@@ -272,8 +270,6 @@ function ConnectGithubAppStep({ estateId, organizationId, goBack }: StepProps) {
           onClick={handleStartGithubInstall}
           disabled={startGithubInstall.isPending}
           autoFocus
-          size="lg"
-          className="min-w-[120px]"
         >
           {startGithubInstall.isPending ? (
             <>
@@ -400,30 +396,33 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
     : "";
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <p className="text-xs text-muted-foreground">Step 3 of 3</p>
-        <h2 className="text-lg font-semibold">Give us access to the git repo</h2>
+    <div className="space-y-8">
+      <div className="space-y-3">
+        <p className="text-muted-foreground">Step 3 of 3</p>
+        <h2 className="text-2xl font-semibold">Give us access to the git repo</h2>
       </div>
 
       {isConnected ? (
-        <div className="space-y-2 text-sm text-muted-foreground">
-          <div className="flex items-center gap-2">
-            <CheckCircle className="h-4 w-4 text-green-600" />
-            <span>Connected to {repoLabel}</span>
+        <div className="grid gap-8 md:grid-cols-2">
+          <div className="space-y-3 text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="h-5 w-5 text-green-600" />
+              <span>Connected to {repoLabel}</span>
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <span>
+                Branch: <span className="font-mono">{githubRepo?.branch ?? "main"}</span>
+              </span>
+              <span>
+                Path: <span className="font-mono">{githubRepo?.path ?? "/"}</span>
+              </span>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-4">
-            <span>
-              Branch: <span className="font-mono">{githubRepo?.branch ?? "main"}</span>
-            </span>
-            <span>
-              Path: <span className="font-mono">{githubRepo?.path ?? "/"}</span>
-            </span>
-          </div>
+          <div />
         </div>
       ) : (
-        <div className="grid gap-6 md:grid-cols-2">
-          <div className="space-y-4 text-sm text-muted-foreground">
+        <div className="grid gap-8 md:grid-cols-2">
+          <div className="text-muted-foreground">
             <p>Select the iterate repository you created from the dropdown on the right.</p>
           </div>
 
@@ -457,7 +456,7 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
                   </Button>
                 </CollapsibleTrigger>
                 <CollapsibleContent className="space-y-4 mt-4">
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-sm text-muted-foreground">
                     These settings are not normally necessary. Most projects work with the default
                     branch (main) and root path (/).
                   </p>
@@ -491,11 +490,11 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
 
       {error ? <p className="text-sm text-destructive">{error}</p> : null}
       {feedback ? <p className="text-sm text-muted-foreground">{feedback}</p> : null}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center pt-4">
         {isConnected ? (
           <>
             <div className="flex gap-2">
-              <Button variant="ghost" onClick={goBack} className="text-muted-foreground" size="lg">
+              <Button variant="ghost" onClick={goBack}>
                 <ArrowLeft className="mr-2 h-4 w-4" />
                 Back
               </Button>
@@ -503,20 +502,19 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
                 variant="outline"
                 onClick={handleDisconnect}
                 disabled={disconnectGithubRepo.isPending}
-                size="lg"
               >
                 {disconnectGithubRepo.isPending ? <Spinner className="mr-2" /> : null}
                 Disconnect
               </Button>
             </div>
-            <Button onClick={() => goTo("5")} autoFocus size="lg" className="min-w-[120px]">
+            <Button onClick={() => goTo("5")} autoFocus>
               Next: Connect Slack
               <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </>
         ) : (
           <>
-            <Button variant="ghost" onClick={goBack} className="text-muted-foreground" size="lg">
+            <Button variant="ghost" onClick={goBack}>
               <ArrowLeft className="mr-2 h-4 w-4" />
               Back
             </Button>
@@ -524,8 +522,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
               onClick={() => void saveGithubConfiguration()}
               disabled={setGithubRepo.isPending || !selectedRepoId}
               autoFocus
-              size="lg"
-              className="min-w-[120px]"
             >
               {setGithubRepo.isPending ? (
                 <>
@@ -552,24 +548,27 @@ function SlackStep() {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="space-y-2">
-        <h2 className="text-xl font-semibold">You're all set!</h2>
+    <div className="space-y-8">
+      <div className="space-y-3">
+        <h2 className="text-3xl font-semibold">You're all set!</h2>
       </div>
-      <div className="space-y-4">
-        <div className="space-y-2 text-sm text-muted-foreground">
-          <p>
+      <div className="grid gap-8 md:grid-cols-2">
+        <div className="space-y-6">
+          <p className="text-muted-foreground">
             You can now ask
             <Badge variant="secondary" className="mx-2 font-mono">
               @iterate
             </Badge>
             to onboard you in slack.
           </p>
-          <Button className="mt-4" variant="outline" onClick={handleOpenSlack} size="lg">
-            <img src="/slack.svg" alt="Slack" className="h-4 w-4" />
-            Open Slack
-          </Button>
+          <div>
+            <Button variant="outline" onClick={handleOpenSlack}>
+              <img src="/slack.svg" alt="Slack" className="h-4 w-4" />
+              Open Slack
+            </Button>
+          </div>
         </div>
+        <div />
       </div>
     </div>
   );
@@ -607,8 +606,8 @@ export default function OrganizationOnboarding() {
 
   return (
     <>
-      <main className="min-h-screen w-full flex justify-center p-6">
-        <div className="w-full max-w-2xl pt-16 md:pt-8 lg:pt-24">
+      <main className="min-h-screen w-full flex justify-center p-8">
+        <div className="w-full max-w-4xl py-16">
           <ActiveStep
             organizationId={organizationId}
             estateId={estateId}
