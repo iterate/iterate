@@ -1248,13 +1248,11 @@ describe("AgentCore", () => {
       expect(secondCallArgs).toBeDefined();
       const secondCallMessages = secondCallArgs.input;
 
-      // Ignore initialization developer message when asserting history
-      const simplifiedMessages = secondCallMessages
-        .filter((m: any) => !(m.type === "message" && m.role === "developer"))
-        .map((m: any) => ({
-          role: m.role,
-          content: m.content[0].text,
-        }));
+      // Pluck relevant fields for snapshot
+      const simplifiedMessages = secondCallMessages.map((m: any) => ({
+        role: m.role,
+        content: m.content[0].text,
+      }));
 
       expect(simplifiedMessages).toMatchInlineSnapshot(`
         [
@@ -1979,15 +1977,8 @@ describe("CORE:FILE_SHARED event handling", () => {
       },
     });
 
-    // Should add an input_image item to state (plus the init developer message)
-    const inputItems = h.agentCore.state.inputItems.filter(
-      (i) =>
-        !(
-          i.type === "message" &&
-          i.role === "developer" &&
-          JSON.stringify(i).includes("Agent started at ")
-        ),
-    );
+    // Should add an input_image item to state
+    const inputItems = h.agentCore.state.inputItems;
     expect(inputItems).toHaveLength(2);
 
     const inputItem = inputItems[0] as any;
@@ -2064,14 +2055,7 @@ describe("CORE:FILE_SHARED event handling", () => {
     });
 
     // Should have both files as input items (each file should have a user message and a developer one)
-    const inputItems = h.agentCore.state.inputItems.filter(
-      (i) =>
-        !(
-          i.type === "message" &&
-          i.role === "developer" &&
-          JSON.stringify(i).includes("Agent started at ")
-        ),
-    );
+    const inputItems = h.agentCore.state.inputItems;
     expect(inputItems).toHaveLength(4);
 
     // Check the first item is a message with input_file content
@@ -2278,14 +2262,7 @@ describe("CORE:FILE_SHARED event handling", () => {
     });
 
     // Should add a user message with input_image item and a developer message to state
-    const inputItems = h.agentCore.state.inputItems.filter(
-      (i) =>
-        !(
-          i.type === "message" &&
-          i.role === "developer" &&
-          JSON.stringify(i).includes("Agent started at ")
-        ),
-    );
+    const inputItems = h.agentCore.state.inputItems;
     expect(inputItems).toHaveLength(2);
 
     const inputItem = inputItems[0] as any;
@@ -2697,14 +2674,7 @@ describe("AgentCore ephemeralPromptFragments", () => {
       `);
 
       // Verify that input messages no longer contain the ephemeral context items
-      const inputMessages = callArgs.input.filter(
-        (i: any) =>
-          !(
-            i.type === "message" &&
-            i.role === "developer" &&
-            JSON.stringify(i).includes("Agent started at ")
-          ),
-      );
+      const inputMessages = callArgs.input;
       expect(inputMessages).toHaveLength(1); // Only the user message
       expect(inputMessages[0]).toEqual({
         content: [
@@ -2777,14 +2747,7 @@ describe("AgentCore ephemeralPromptFragments", () => {
     expect(callArgs.instructions).toMatchInlineSnapshot(`"You are a helpful assistant."`);
 
     // Verify that input messages only contain the user message
-    const inputMessages = callArgs.input.filter(
-      (i: any) =>
-        !(
-          i.type === "message" &&
-          i.role === "developer" &&
-          JSON.stringify(i).includes("Agent started at ")
-        ),
-    );
+    const inputMessages = callArgs.input;
     expect(inputMessages).toHaveLength(1); // Only the user message
     expect(inputMessages[0]).toEqual({
       content: [
