@@ -1,3 +1,6 @@
+> [!IMPORTANT]
+> Remember to go back to the iterate website to grant the bot access to your repository.
+
 # Welcome to your iterate repo!
 
 Use `iterate.config.ts` to configure your @iterate agent.
