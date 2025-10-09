@@ -479,13 +479,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   async initIterateAgent(params: AgentInitParams) {
     if (this._isInitialized) return; // no-op if already initialised in this DO lifecycle
 
-    this._databaseRecord = params.record;
-    this._estate = params.estate;
-    this._organization = params.organization;
-    this._iterateConfig = params.iterateConfig;
-
-    // Store init params so onAlarm re-hydration can re-initialise without DB calls
-    this.ctx.storage.kv.put("agent-init-params", params);
+    await this.persistInitParams(params);
 
     // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
     // These records (estate, organization, iterateConfig) change infrequently and callers
@@ -506,6 +500,20 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     }
 
     this._isInitialized = true;
+  }
+
+  /**
+   * Persist agent init params to both in-memory fields and DO storage.
+   * Can be reused after DB updates that return the updated agent instance record.
+   */
+  private async persistInitParams(params: AgentInitParams) {
+    this._databaseRecord = params.record;
+    this._estate = params.estate;
+    this._organization = params.organization;
+    this._iterateConfig = params.iterateConfig;
+
+    // Store init params so onAlarm re-hydration can re-initialise without DB calls
+    this.ctx.storage.kv.put("agent-init-params", params);
   }
 
   override async onAlarm() {
@@ -664,6 +672,10 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
         } catch (error) {
           logger.warn("Failed to broadcast events:", error);
         }
+
+        // Update the agent_instance row in the background after events are added
+        // and refresh the DO-stored init params with the returned record
+        void this.updateAgentInstanceAfterEvents(events);
       },
 
       background: (fn: () => Promise<void>) => {
@@ -838,6 +850,40 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       durableObjectName: this.databaseRecord.durableObjectName,
       className: this.constructor.name,
     };
+  }
+
+  /**
+   * Update the agent_instance row with latest event metadata and refresh DO-stored init params
+   * Uses a background voided promise from storeEvents.
+   */
+  private async updateAgentInstanceAfterEvents(events: ReadonlyArray<AgentCoreEvent>) {
+    try {
+      if (!events.length) return;
+      const last = events[events.length - 1];
+      const newMetadata: Record<string, unknown> = {
+        ...(this.databaseRecord.metadata ?? {}),
+        lastEventAt: last.createdAt ?? new Date().toISOString(),
+        lastEventType: last.type,
+        lastEventIndex: last.eventIndex,
+      };
+
+      const [updated] = await this.db
+        .update(agentInstance)
+        .set({ metadata: newMetadata })
+        .where(eq(agentInstance.id, this.databaseRecord.id))
+        .returning();
+
+      if (updated) {
+        await this.persistInitParams({
+          record: updated,
+          estate: this.estate,
+          organization: this.organization,
+          iterateConfig: this.iterateConfig,
+        });
+      }
+    } catch (error) {
+      logger.warn("Failed to update agent_instance after events:", error);
+    }
   }
 
   async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {

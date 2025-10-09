@@ -2,7 +2,6 @@ import { Link, useLocation, useParams } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
-  Users,
   Github,
   LogOut,
   Building2,
@@ -16,6 +15,7 @@ import {
   CreditCard,
   User,
   Bug,
+  Puzzle,
 } from "lucide-react";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -54,9 +54,8 @@ import { OrganizationSwitcher } from "./organization-switcher.tsx";
 
 const estateNavigation: NavigationItem[] = [
   { title: "Home", icon: HomeIcon, path: "" },
-  { title: "Git repository", icon: Github, path: "estate" },
-  { title: "Integrations", icon: Settings, path: "integrations" },
-  { title: "Manage Agents", icon: Users, path: "agents" },
+  { title: "Git repository", icon: Github, path: "repo" },
+  { title: "Connectors", icon: Puzzle, path: "integrations" },
 ];
 
 const organizationNavigation: NavigationItem[] = [
@@ -381,7 +380,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             {/* TODO Breadcrumbs */}
           </header>
 
-          <main>{children}</main>
+          <main className="max-w-[1100px]">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>

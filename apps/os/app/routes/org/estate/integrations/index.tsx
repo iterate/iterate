@@ -1,4 +1,4 @@
-import { ArrowRight, Github, ChevronDown, ChevronRight, X } from "lucide-react";
+import { ArrowRight, Github, ChevronDown, ChevronRight, X, Puzzle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../../../../components/ui/button.tsx";
@@ -42,6 +42,27 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "../../../../components/ui/dropdown-menu.tsx";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../../components/ui/table.tsx";
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "../../../../components/ui/item.tsx";
+import {
+  Empty,
+  EmptyDescription,
+  EmptyMedia,
+  EmptyTitle,
+} from "../../../../components/ui/empty.tsx";
 import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
@@ -50,10 +71,10 @@ import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [
-    { title: "Integrations - Iterate Dashboard" },
+    { title: "Iterate Connectors" },
     {
       name: "description",
-      content: "Connect your accounts to enable integrations across the platform",
+      content: "Connect your iterate bot to third parties",
     },
   ];
 }
@@ -210,24 +231,18 @@ export default function Integrations() {
   if (isLoading) {
     return (
       <div className="p-6">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {[...Array(2)].map((_, i) => (
-            <div key={i} className="animate-pulse border rounded-lg p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
-                <div>
-                  <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-32"></div>
-                </div>
-              </div>
-              <div className="h-8 bg-gray-200 rounded w-full"></div>
-            </div>
+            <Item key={i} variant="muted" className="animate-pulse items-start">
+              <ItemMedia variant="icon">
+                <div className="w-8 h-8 bg-muted rounded-sm"></div>
+              </ItemMedia>
+              <ItemContent>
+                <div className="h-4 bg-muted rounded w-20 mb-2"></div>
+                <div className="h-3 bg-muted rounded w-32 mb-4"></div>
+                <div className="h-8 bg-muted rounded w-full"></div>
+              </ItemContent>
+            </Item>
           ))}
         </div>
       </div>
@@ -237,79 +252,51 @@ export default function Integrations() {
   if (error) {
     return (
       <div className="p-6">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
-        <div className="text-red-500">Error loading integrations: {error.message}</div>
+        <div className="text-red-500">Error loading connectors: {error.message}</div>
       </div>
     );
   }
 
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-        <p className="text-muted-foreground text-lg">
-          Connect your accounts to enable integrations across the platform
-        </p>
-      </div>
-
-      {/* OAuth Integration Cards (GitHub, Slack, Google) */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Core Integrations</h2>
+    <div className="p-6 space-y-6">
+      {/* Integrations Section */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Built-in Connectors</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
           {integrations.map((integration: any) => (
-            <div key={integration.id} className="relative border rounded-lg">
-              <div className="p-6 pb-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    {integration.icon === "github" ? (
-                      <div className="w-12 h-12 rounded-lg bg-gray-900 flex items-center justify-center">
-                        <Github className="w-6 h-6 text-white" />
-                      </div>
-                    ) : integration.icon === "slack" ? (
-                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
-                        <img src="/slack.svg" alt={integration.name} className="w-6 h-6" />
-                      </div>
-                    ) : integration.icon === "google" ? (
-                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
-                        <svg className="w-6 h-6" viewBox="0 0 24 24">
-                          <path
-                            fill="#4285F4"
-                            d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                          />
-                          <path
-                            fill="#34A853"
-                            d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                          />
-                          <path
-                            fill="#FBBC05"
-                            d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
-                          />
-                          <path
-                            fill="#EA4335"
-                            d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
-                          />
-                        </svg>
-                      </div>
-                    ) : (
-                      <div className="w-12 h-12 rounded-lg bg-gray-200 flex items-center justify-center">
-                        <span className="text-xs">{integration.name[0]}</span>
-                      </div>
-                    )}
-                    <div>
-                      <div className="text-lg font-semibold">{integration.name}</div>
-                      <div className="text-sm text-muted-foreground">{integration.description}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+            <Item key={integration.id} variant="muted" className="relative items-start">
+              <ItemMedia variant="icon">
+                {integration.icon === "github" ? (
+                  <Github className="w-6 h-6" />
+                ) : integration.icon === "slack" ? (
+                  <img src="/slack.svg" alt={integration.name} className="w-6 h-6" />
+                ) : integration.icon === "google" ? (
+                  <svg className="w-6 h-6" viewBox="0 0 24 24">
+                    <path
+                      fill="#4285F4"
+                      d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
+                    />
+                    <path
+                      fill="#34A853"
+                      d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
+                    />
+                    <path
+                      fill="#FBBC05"
+                      d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"
+                    />
+                    <path
+                      fill="#EA4335"
+                      d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
+                    />
+                  </svg>
+                ) : (
+                  <span className="text-xs">{integration.name[0]}</span>
+                )}
+              </ItemMedia>
+              <ItemContent>
+                <ItemTitle>{integration.name}</ItemTitle>
+                <ItemDescription>{integration.description}</ItemDescription>
 
-              <div className="px-6 pb-6">
                 {integration.isConnected && (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
                     {integration.isEstateWide && (
@@ -388,71 +375,88 @@ export default function Integrations() {
                     Connected on {new Date(integration.connectedAt).toLocaleDateString()}
                   </p>
                 )}
-              </div>
-            </div>
+              </ItemContent>
+            </Item>
           ))}
         </div>
       </div>
 
-      {/* MCP Connections Table */}
-      {mcpConnections.length > 0 && (
-        <div>
-          <div className="mb-4">
-            <h2 className="text-xl font-semibold mb-2">MCP Servers</h2>
-          </div>
+      {/* MCP Connections Section - Always Visible */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-semibold">Remote MCP Server Connections</h2>
+        {mcpConnections.length > 0 ? (
+          <Item variant="muted">
+            <ItemContent className="w-full">
+              {/* Tabs - only show if there are connections in multiple modes */}
+              {personalCount > 0 && companyCount > 0 && (
+                <div className="border-b mb-4">
+                  <div className="flex gap-4">
+                    <button
+                      className={`pb-2 px-1 border-b-2 transition-colors ${
+                        activeTab === "personal"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => setActiveTab("personal")}
+                    >
+                      Personal
+                      <Badge variant="secondary" className="ml-2">
+                        {personalCount}
+                      </Badge>
+                    </button>
+                    <button
+                      className={`pb-2 px-1 border-b-2 transition-colors ${
+                        activeTab === "company"
+                          ? "border-primary text-primary"
+                          : "border-transparent text-muted-foreground hover:text-foreground"
+                      }`}
+                      onClick={() => setActiveTab("company")}
+                    >
+                      Estate-wide
+                      <Badge variant="secondary" className="ml-2">
+                        {companyCount}
+                      </Badge>
+                    </button>
+                  </div>
+                </div>
+              )}
 
-          {/* Tabs - only show if there are connections in multiple modes */}
-          {personalCount > 0 && companyCount > 0 && (
-            <div className="border-b mb-4">
-              <div className="flex gap-4">
-                <button
-                  className={`pb-2 px-1 border-b-2 transition-colors ${
-                    activeTab === "personal"
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveTab("personal")}
-                >
-                  Personal
-                  <Badge variant="secondary" className="ml-2">
-                    {personalCount}
-                  </Badge>
-                </button>
-                <button
-                  className={`pb-2 px-1 border-b-2 transition-colors ${
-                    activeTab === "company"
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveTab("company")}
-                >
-                  Estate-wide
-                  <Badge variant="secondary" className="ml-2">
-                    {companyCount}
-                  </Badge>
-                </button>
-              </div>
-            </div>
-          )}
+              {/* Show mode label if only one type exists */}
+              {(personalCount > 0 || companyCount > 0) &&
+                !(personalCount > 0 && companyCount > 0) && (
+                  <div className="mb-4">
+                    <Badge variant="outline" className="text-sm">
+                      {personalCount > 0 ? "Personal" : "Estate-wide"}
+                    </Badge>
+                  </div>
+                )}
 
-          {/* Show mode label if only one type exists */}
-          {(personalCount > 0 || companyCount > 0) && !(personalCount > 0 && companyCount > 0) && (
-            <div className="mb-4">
-              <Badge variant="outline" className="text-sm">
-                {personalCount > 0 ? "Personal" : "Estate-wide"}
-              </Badge>
-            </div>
-          )}
-
-          {/* MCP Connections Table */}
-          <MCPConnectionsTable
-            connections={filteredMCPConnections}
-            onDisconnect={handleDisconnectMCP}
-            estateId={estateId}
-            onUpdate={refetch}
-          />
-        </div>
-      )}
+              {/* MCP Connections Table */}
+              <MCPConnectionsTable
+                connections={filteredMCPConnections}
+                onDisconnect={handleDisconnectMCP}
+                estateId={estateId}
+                onUpdate={refetch}
+              />
+            </ItemContent>
+          </Item>
+        ) : (
+          <Item variant="muted">
+            <ItemContent className="w-full">
+              <Empty>
+                <EmptyMedia variant="icon">
+                  <Puzzle className="h-12 w-12" />
+                </EmptyMedia>
+                <EmptyTitle>No MCP servers connected</EmptyTitle>
+                <EmptyDescription>
+                  Just ask @iterate to connect to an MCP server - afterwards you'll be able to see
+                  and manage the connection here
+                </EmptyDescription>
+              </Empty>
+            </ItemContent>
+          </Item>
+        )}
+      </div>
     </div>
   );
 }
@@ -518,53 +522,45 @@ function MCPConnectionsTable({
     }
   }, [connectionDetails]);
 
-  if (connections.length === 0) {
-    return (
-      <div className="border rounded-lg p-8 text-center text-muted-foreground">
-        No MCP servers connected
-      </div>
-    );
-  }
-
   return (
     <>
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="text-left p-4 font-medium">Server</th>
-              <th className="text-left p-4 font-medium">Type</th>
-              <th className="text-left p-4 font-medium">Connected</th>
-              <th className="text-right p-4 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
+      <div className="rounded-md border">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="h-12 px-4">Server</TableHead>
+              <TableHead className="h-12 px-4">Type</TableHead>
+              <TableHead className="h-12 px-4">Connected</TableHead>
+              <TableHead className="h-12 px-4 w-[100px]"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {connections.map((connection) => (
-              <tr
+              <TableRow
                 key={connection.id}
-                className="hover:bg-muted/30 cursor-pointer"
+                className="hover:bg-muted/50 cursor-pointer"
                 onClick={() => handleRowClick(connection)}
               >
-                <td className="p-4">
+                <TableCell className="px-4 py-3">
                   <code className="text-sm">
                     {connection.type === "mcp-params"
                       ? connection.serverUrl
                       : connection.providerId}
                   </code>
-                </td>
-                <td className="p-4">
+                </TableCell>
+                <TableCell className="px-4 py-3">
                   <Badge variant="outline">
                     {connection.type === "mcp-oauth" ? "OAuth" : "Params"}
                   </Badge>
-                </td>
-                <td className="p-4 text-sm text-muted-foreground">
+                </TableCell>
+                <TableCell className="px-4 py-3 text-sm text-muted-foreground">
                   {connection.connectedAt &&
                     new Date(connection.connectedAt).toLocaleString(undefined, {
                       dateStyle: "medium",
                       timeStyle: "short",
                     })}
-                </td>
-                <td className="p-4 text-right">
+                </TableCell>
+                <TableCell className="px-4 py-3">
                   <Button
                     variant="destructive"
                     size="sm"
@@ -575,11 +571,11 @@ function MCPConnectionsTable({
                   >
                     Disconnect
                   </Button>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       {/* Connection Details Dialog */}

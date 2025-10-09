@@ -9,14 +9,17 @@ import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
   db: DB,
-  userId: string,
-  userName: string,
+  user: {
+    id: string;
+    name: string;
+    email: string;
+  },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
   estate?: typeof schema.estate.$inferSelect;
 }> => {
   const existingMembership = await db.query.organizationUserMembership.findFirst({
-    where: (membership, { eq }) => eq(membership.userId, userId),
+    where: (membership, { eq }) => eq(membership.userId, user.id),
     with: {
       organization: true,
     },
@@ -34,7 +37,7 @@ export const createUserOrganizationAndEstate = async (
   // If the auth layer wraps this in a transaction, these operations will be part of it.
   const organizationResult = await db
     .insert(schema.organization)
-    .values({ name: `${userName}'s Organization` })
+    .values({ name: `${user.email}'s Organization` })
     .returning();
 
   const organization = organizationResult[0];
@@ -45,14 +48,16 @@ export const createUserOrganizationAndEstate = async (
 
   await db.insert(schema.organizationUserMembership).values({
     organizationId: organization.id,
-    userId: userId,
+    userId: user.id,
     role: "owner",
   });
 
   const [estate] = await db
     .insert(schema.estate)
     .values({
-      name: `${userName}'s Estate`,
+      // For now we don't allow people to make more estates or edit theirs and never show this anywhere
+      // But in the future users will be able to create multiple estates in one organization
+      name: `Primary`,
       organizationId: organization.id,
     })
     .returning();
@@ -66,8 +71,8 @@ export const createUserOrganizationAndEstate = async (
   // Send Slack notification to our own slack instance, unless suppressed for test users
   // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id
   if (env.ITERATE_NOTIFICATION_ESTATE_ID) {
-    const userRecord = await db.query.user.findFirst({ where: (u, { eq }) => eq(u.id, userId) });
-    const shouldSuppress = isTestSignup(userName, userRecord?.email, organization.name);
+    const userRecord = await db.query.user.findFirst({ where: (u, { eq }) => eq(u.id, user.id) });
+    const shouldSuppress = isTestSignup(user.name, userRecord?.email, organization.name);
 
     if (!shouldSuppress) {
       waitUntil(
