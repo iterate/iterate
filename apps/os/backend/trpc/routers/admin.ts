@@ -1,19 +1,15 @@
 import { z } from "zod/v4";
 import { and, eq, desc } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { waitUntil } from "cloudflare:workers";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { protectedProcedure, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
-import {
-  stripeClient,
-  createStripeCustomerAndSubscriptionForOrganization,
-} from "../../integrations/stripe/stripe.ts";
-import { logger } from "../../tag-logger.ts";
+import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 import type { DB } from "../../db/client.ts";
+import { deleteUserAccount } from "./user.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -86,69 +82,7 @@ const deleteUserByEmail = adminProcedure
       });
     }
 
-    // Use a transaction to ensure all deletions are atomic
-    const result = await ctx.db.transaction(async (tx) => {
-      // Find all organizations where the user is the owner
-      const ownedOrganizations = await tx.query.organizationUserMembership.findMany({
-        where: eq(schema.organizationUserMembership.userId, user.id),
-        with: {
-          organization: {
-            with: {
-              estates: true,
-            },
-          },
-        },
-      });
-
-      const ownerOrganizations = ownedOrganizations.filter(
-        (membership) => membership.role === "owner",
-      );
-      const deletedOrganizations: string[] = [];
-      const deletedEstates: string[] = [];
-      const stripeCustomerIds: string[] = [];
-
-      // Delete organizations the user owns; estates and related records will cascade
-      for (const membership of ownerOrganizations) {
-        const org = membership.organization;
-        // Collect estate ids for return value before deletion cascades
-        for (const e of org.estates) deletedEstates.push(e.id);
-        // Collect stripe customer IDs for background deletion
-        if (org.stripeCustomerId) {
-          stripeCustomerIds.push(org.stripeCustomerId);
-        }
-        await tx.delete(schema.organization).where(eq(schema.organization.id, org.id));
-        deletedOrganizations.push(org.id);
-      }
-
-      // Finally, delete the user; related rows (accounts, sessions, mappings, memberships, client info) will cascade
-      await tx.delete(schema.user).where(eq(schema.user.id, user.id));
-
-      return {
-        success: true,
-        deletedUser: user.id,
-        deletedOrganizations,
-        deletedEstates,
-        stripeCustomerIds,
-      };
-    });
-
-    // Delete Stripe customers in the background
-    if (result.stripeCustomerIds.length > 0) {
-      waitUntil(
-        Promise.all(
-          result.stripeCustomerIds.map(async (customerId) => {
-            try {
-              await stripeClient.customers.del(customerId);
-            } catch (error) {
-              // Log error but don't fail the deletion
-              logger.error(`Failed to delete Stripe customer ${customerId}`, error);
-            }
-          }),
-        ),
-      );
-    }
-
-    return result;
+    return deleteUserAccount({ db: ctx.db, user });
   });
 
 const allProcedureInputs = adminProcedure.query(async () => {
