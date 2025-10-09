@@ -1508,7 +1508,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
   async connectMCPServer(input: Inputs["connectMCPServer"]) {
     const userRole = await this.getUserRole(input.onBehalfOfIterateUserId);
-    if (!userRole || userRole === "guest") {
+    if (!userRole || userRole === "guest" || userRole === "external") {
       return {
         success: false,
         error:
@@ -2096,6 +2096,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
           The user ID ${userId} is not a valid user ID.
           It should start with "usr_".
         `,
+      };
+    }
+
+    const userRole = await this.getUserRole(userId);
+    if (!userRole || userRole === "guest" || userRole === "external") {
+      return {
+        success: false,
+        error:
+          "This user doesn't have permission to call Google API because they are a guest in this Slack workspace. Tell the user that their request is not possible in one line. Do not suggest user to upgrade their access.",
       };
     }
 
