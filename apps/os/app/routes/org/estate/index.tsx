@@ -1,10 +1,40 @@
 import { useState, useMemo } from "react";
 import { useNavigate } from "react-router";
-import { Bot, Search, ArrowUpDown, Copy, Check, Eye } from "lucide-react";
+import {
+  Bot,
+  Search,
+  ArrowUpDown,
+  Copy,
+  Check,
+  Eye,
+  MessageSquarePlus,
+  Archive,
+  AlertCircle,
+} from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useSuspenseQuery, useQuery, useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "../../../components/ui/dialog.tsx";
+import { Label } from "../../../components/ui/label.tsx";
+import { Textarea } from "../../../components/ui/textarea.tsx";
+import { Skeleton } from "../../../components/ui/skeleton.tsx";
+import { Alert, AlertDescription } from "../../../components/ui/alert.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select.tsx";
 import {
   Table,
   TableBody,
@@ -84,8 +114,42 @@ export default function Home() {
   const [filter, setFilter] = useState("");
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [agentName, setAgentName] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [channel, setChannel] = useState("");
+  const [firstMessage, setFirstMessage] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   const { data: agents } = useSuspenseQuery(trpc.agents.list.queryOptions({ estateId }));
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+
+  // Fetch Slack channels for the dialog
+  const {
+    data: channelsData,
+    isLoading: channelsLoading,
+    error: channelsError,
+  } = useQuery({
+    ...trpc.integrations.listSlackChannels.queryOptions({
+      estateId: estateId,
+      types: "public_channel,private_channel",
+      excludeArchived: true,
+    }),
+    enabled: dialogOpen, // Only fetch when dialog is open
+  });
+
+  const startThreadMutation = useMutation({
+    ...trpc.integrations.startThreadWithAgent.mutationOptions({}),
+    onSuccess: () => {
+      toast.success("Slack thread started successfully!");
+      setDialogOpen(false);
+      setChannel("");
+      setFirstMessage("");
+      setSearchTerm("");
+    },
+    onError: (error) => {
+      toast.error(`Failed to start Slack thread: ${error.message}`);
+    },
+  });
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -94,6 +158,32 @@ export default function Home() {
       setSortField(field);
       setSortDirection("desc");
     }
+  };
+
+  const handleCreateAgent = () => {
+    if (agentName.trim()) {
+      navigate(getEstateUrl(`/agents/IterateAgent/${agentName.trim()}`));
+    }
+  };
+
+  const handleStartConversation = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    if (!channel.trim()) {
+      toast.error("Please select a Slack channel");
+      return;
+    }
+
+    if (!firstMessage.trim()) {
+      toast.error("Please enter a first message");
+      return;
+    }
+
+    startThreadMutation.mutate({
+      estateId: estateId,
+      channel: channel.trim(),
+      firstMessage: firstMessage.trim(),
+    });
   };
 
   const sortedAndFilteredAgents = useMemo(() => {
@@ -146,7 +236,7 @@ export default function Home() {
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <>
       {/* Welcome Section */}
       <Card variant="muted">
         <CardContent>
@@ -164,6 +254,198 @@ export default function Home() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Debug Features */}
+      {user.debugMode && (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card variant="muted">
+            <CardContent>
+              <div className="mb-4">
+                <div className="text-lg font-semibold">Create New Agent</div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  You can also chat with your agents <i>outside</i> of Slack!
+                </p>
+              </div>
+              <div className="flex gap-2 relative">
+                <div className="relative flex-1">
+                  <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
+                    <Bot size={16} className="text-muted-foreground" />
+                  </div>
+                  <Input
+                    value={agentName}
+                    onChange={(e) => setAgentName(e.target.value)}
+                    placeholder="Enter agent durable object instance name"
+                    className="flex-1 pl-10"
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        handleCreateAgent();
+                      }
+                    }}
+                  />
+                </div>
+                <Button onClick={handleCreateAgent} disabled={!agentName.trim()}>
+                  Go
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card variant="muted">
+            <CardContent>
+              <div className="mb-4">
+                <div className="text-lg font-semibold">View Offline Archive</div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Upload and inspect exported agent traces
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                onClick={() => navigate(getEstateUrl("/agents/offline"))}
+                className="w-full"
+              >
+                <Archive className="h-4 w-4 mr-2" />
+                Open Offline Viewer
+              </Button>
+            </CardContent>
+          </Card>
+
+          <Card variant="muted">
+            <CardContent>
+              <div className="mb-4">
+                <div className="text-lg font-semibold">Start Slack Conversation</div>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Start a new thread in a Slack channel with an Iterate AI agent
+                </p>
+              </div>
+              <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="outline" className="w-full">
+                    <MessageSquarePlus className="h-4 w-4 mr-2" />
+                    Start Conversation
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[500px]">
+                  <DialogHeader>
+                    <DialogTitle>Start Slack Conversation with Agent</DialogTitle>
+                    <DialogDescription>
+                      Start a new thread in a Slack channel with an Iterate AI agent.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form onSubmit={handleStartConversation} className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="channel">Slack Channel</Label>
+                      {channelsLoading ? (
+                        <Skeleton className="h-10 w-full" />
+                      ) : channelsError ? (
+                        <Alert variant="destructive">
+                          <AlertCircle className="h-4 w-4" />
+                          <AlertDescription>
+                            Failed to load Slack channels. Make sure Slack is properly connected.
+                          </AlertDescription>
+                        </Alert>
+                      ) : (
+                        <Select
+                          value={channel}
+                          onValueChange={setChannel}
+                          disabled={startThreadMutation.isPending}
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a channel..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <div className="flex items-center px-3 pb-2">
+                              <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
+                              <Input
+                                placeholder="Search channels..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="h-8 w-full bg-transparent focus-visible:ring-0 focus-visible:ring-offset-0 border-0"
+                                onClick={(e) => e.stopPropagation()}
+                              />
+                            </div>
+                            {(() => {
+                              const channels = channelsData?.channels || [];
+                              const filteredChannels = channels
+                                .filter((channel) => {
+                                  const channelName =
+                                    typeof channel.name === "string"
+                                      ? channel.name.toLowerCase()
+                                      : "";
+                                  const search = searchTerm.toLowerCase();
+                                  return channelName.includes(search);
+                                })
+                                .sort((a, b) => a.name?.localeCompare(b.name ?? "") ?? 0);
+
+                              return filteredChannels.length === 0 ? (
+                                <div className="py-2 px-3 text-sm text-muted-foreground">
+                                  {searchTerm
+                                    ? "No channels found matching your search"
+                                    : "No channels found"}
+                                </div>
+                              ) : (
+                                filteredChannels.map((channel) => (
+                                  <SelectItem
+                                    key={channel.id}
+                                    value={channel.id ?? channel.name ?? ""}
+                                  >
+                                    <div className="flex items-center gap-2">
+                                      <span className="font-mono text-sm">
+                                        {channel.is_private ? "🔒" : "#"}
+                                        {channel.name}
+                                      </span>
+                                      {channel.is_general && (
+                                        <span className="text-xs text-muted-foreground">
+                                          (general)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </SelectItem>
+                                ))
+                              );
+                            })()}
+                          </SelectContent>
+                        </Select>
+                      )}
+                      <p className="text-sm text-muted-foreground">
+                        Select the Slack channel where the conversation will be started
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <Label htmlFor="firstMessage">First Message</Label>
+                      <Textarea
+                        id="firstMessage"
+                        value={firstMessage}
+                        onChange={(e) => setFirstMessage(e.target.value)}
+                        placeholder="Enter the first message to send..."
+                        className="min-h-[100px]"
+                        disabled={startThreadMutation.isPending}
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        The initial message that will start the conversation thread
+                      </p>
+                    </div>
+
+                    <div className="flex justify-end space-x-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => setDialogOpen(false)}
+                        disabled={startThreadMutation.isPending}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={startThreadMutation.isPending}>
+                        {startThreadMutation.isPending ? "Starting..." : "Start Conversation"}
+                      </Button>
+                    </div>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </CardContent>
+          </Card>
+        </div>
+      )}
 
       {/* Agents Table */}
       <Card variant="muted">
@@ -198,7 +480,7 @@ export default function Home() {
               </EmptyDescription>
             </Empty>
           ) : (
-            <div className="rounded-md border">
+            <div className="rounded-md border bg-background">
               <Table>
                 <TableHeader>
                   <TableRow className="hover:bg-transparent">
@@ -280,6 +562,6 @@ export default function Home() {
           )}
         </CardContent>
       </Card>
-    </div>
+    </>
   );
 }

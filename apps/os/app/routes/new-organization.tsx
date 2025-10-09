@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Loader2 } from "lucide-react";
-import { useMutation } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
@@ -25,8 +26,29 @@ export function meta(_args: Route.MetaArgs) {
 export default function NewOrganization() {
   const navigate = useNavigate();
   const trpc = useTRPC();
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
   const [organizationName, setOrganizationName] = useState("");
-  const [error, setError] = useState<string | null>(null);
+
+  // Only allow debugMode users to create organizations
+  if (!user.debugMode) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Access Denied</CardTitle>
+            <CardDescription>
+              Organization creation is currently restricted to debug mode users only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => navigate("/")} className="w-full">
+              Go Back
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const createOrganization = useMutation(
     trpc.organization.create.mutationOptions({
@@ -35,17 +57,16 @@ export default function NewOrganization() {
         navigate(`/${data.organization.id}/${data.estate.id}`);
       },
       onError: (error) => {
-        setError(error.message);
+        toast.error(error.message);
       },
     }),
   );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
 
     if (!organizationName.trim()) {
-      setError("Organization name is required");
+      toast.error("Organization name is required");
       return;
     }
 
@@ -74,12 +95,10 @@ export default function NewOrganization() {
               />
             </div>
 
-            {error && <div className="text-sm text-destructive">{error}</div>}
-
             <Button type="submit" className="w-full" disabled={createOrganization.isPending}>
               {createOrganization.isPending ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <Spinner className="mr-2 h-4 w-4" />
                   Creating...
                 </>
               ) : (

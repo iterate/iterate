@@ -151,16 +151,14 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
   });
 
   const [organizationName, setOrganizationName] = useState(() => organization.name);
-  const [error, setError] = useState<string | null>(null);
 
   const updateOrganization = useMutation(
     trpc.organization.updateName.mutationOptions({
       onSuccess: () => {
-        setError(null);
         goTo("2");
       },
       onError: (mutationError) => {
-        setError(mutationError.message);
+        toast.error(mutationError.message);
       },
     }),
   );
@@ -170,10 +168,9 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
       className="space-y-8"
       onSubmit={async (event) => {
         event.preventDefault();
-        setError(null);
         const trimmedName = organizationName.trim();
         if (!trimmedName) {
-          setError("Organization name is required");
+          toast.error("Organization name is required");
           return;
         }
         await updateOrganization.mutateAsync({ organizationId, name: trimmedName });
@@ -196,7 +193,6 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
             value={organizationName}
             onChange={(event) => {
               setOrganizationName(event.target.value);
-              setError(null);
             }}
             disabled={updateOrganization.isPending}
             autoFocus
@@ -204,7 +200,6 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
               event.currentTarget.select();
             }}
           />
-          {error ? <p className="text-sm text-destructive">{error}</p> : null}
         </div>
       </div>
       <div className="flex justify-end pt-4">
@@ -228,18 +223,16 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
 
 function ConnectGithubAppStep({ estateId, organizationId, goBack }: StepProps) {
   const trpc = useTRPC();
-  const [error, setError] = useState<string | null>(null);
 
   const startGithubInstall = useMutation(
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({
       onError: (mutationError) => {
-        setError(mutationError.message);
+        toast.error(mutationError.message);
       },
     }),
   );
 
   const handleStartGithubInstall = async () => {
-    setError(null);
     const callbackURL = `/${organizationId}/onboarding/4`;
     const { installationUrl } = await startGithubInstall.mutateAsync({
       estateId,
@@ -262,8 +255,6 @@ function ConnectGithubAppStep({ estateId, organizationId, goBack }: StepProps) {
         </div>
         <div />
       </div>
-
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
 
       <div className="flex justify-between items-center pt-4">
         <Button variant="ghost" onClick={goBack}>
@@ -318,7 +309,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   });
   const [repoBranch, setRepoBranch] = useState(() => githubRepo?.branch ?? "main");
   const [repoPath, setRepoPath] = useState(() => githubRepo?.path ?? "/");
-  const [error, setError] = useState<string | null>(null);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
   const repoOptions = useMemo(() => availableRepos ?? [], [availableRepos]);
@@ -327,7 +317,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
     trpc.integrations.setGithubRepoForEstate.mutationOptions({
       onSuccess: (_data, variables) => {
         toast.success("GitHub repository connected");
-        setError(null);
         setSelectedRepoId(String(variables.repoId));
         setRepoBranch(variables.branch ?? "main");
         setRepoPath(variables.path ?? "/");
@@ -341,7 +330,7 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
         goTo("5");
       },
       onError: (mutationError) => {
-        setError(mutationError.message);
+        toast.error(mutationError.message);
       },
     }),
   );
@@ -349,7 +338,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
     trpc.integrations.disconnectGithubRepo.mutationOptions({
       onSuccess: () => {
         toast.success("GitHub connection removed");
-        setError(null);
         setSelectedRepoId("");
         setRepoBranch("main");
         setRepoPath("/");
@@ -361,16 +349,14 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
         });
       },
       onError: (mutationError) => {
-        setError(mutationError.message);
+        toast.error(mutationError.message);
       },
     }),
   );
 
   const saveGithubConfiguration = async () => {
-    setError(null);
-
     if (!selectedRepoId) {
-      setError("Select a repository to continue");
+      toast.error("Select a repository to continue");
       return;
     }
 
@@ -488,7 +474,6 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
         </div>
       )}
 
-      {error ? <p className="text-sm text-destructive">{error}</p> : null}
       <div className="flex justify-between items-center pt-4">
         {isConnected ? (
           <>
