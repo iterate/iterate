@@ -65,13 +65,13 @@ function UserSettingsContent() {
     }),
   );
 
-  const deleteUser = useMutation(trpc.admin.deleteUserByEmail.mutationOptions({}));
+  const deleteUser = useMutation(trpc.user.deleteAccount.mutationOptions({}));
 
   const handleDeleteUser = async () => {
     setDeleteError(null);
 
     try {
-      await deleteUser.mutateAsync({ email: user.email });
+      await deleteUser.mutateAsync();
     } catch (mutationError) {
       setDeleteError(
         mutationError instanceof Error ? mutationError.message : "Failed to delete user",
