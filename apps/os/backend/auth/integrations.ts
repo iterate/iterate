@@ -42,6 +42,7 @@ export const SLACK_BOT_SCOPES = [
   "users:read",
   "users:read.email",
   "assistant:write",
+  "conversations.connect:write",
 ];
 
 export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];
@@ -468,7 +469,7 @@ export const integrationsPlugin = () =>
                 }
               }
 
-              const newOrgAndEstate = await createUserOrganizationAndEstate(db, user.id, user.name);
+              const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
               waitUntil(
                 createStripeCustomerAndSubscriptionForOrganization(
                   db,

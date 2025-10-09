@@ -36,7 +36,7 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
     if (!user) {
       throw new Error(`User ${userId} not found - this should never happen.`);
     }
-    const newOrgAndEstate = await createUserOrganizationAndEstate(db, userId, user.name);
+    const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
     waitUntil(
       createStripeCustomerAndSubscriptionForOrganization(
         db,
