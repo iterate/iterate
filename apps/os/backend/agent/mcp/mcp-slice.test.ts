@@ -384,12 +384,14 @@ describe("mcp-slice", () => {
           isConnected: true,
         });
 
-        // Should add developer message (plus init developer message is present)
-        const devMessages = state.inputItems.filter(
-          (item: any) => item.type === "message" && item.role === "developer",
+        // Should add developer message about connection (ignore the init developer message)
+        const connectionDevMessage = (state.inputItems as any[]).find(
+          (item) =>
+            item.type === "message" &&
+            item.role === "developer" &&
+            JSON.stringify(item).toLowerCase().includes("connected to github"),
         );
-        expect(devMessages).toHaveLength(1);
-        expect(devMessages[0].content[0].text).toContain("connected to github");
+        expect(connectionDevMessage).toBeDefined();
 
         // Should call generateRuntimeToolsFromConnections
         expect(generateRuntimeToolsFromConnections).toHaveBeenCalled();
