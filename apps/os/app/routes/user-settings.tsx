@@ -3,6 +3,7 @@ import { Settings, Loader2, Save, User, Shield, ArrowLeft } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
+import { authClient } from "../lib/auth-client.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { Label } from "../components/ui/label.tsx";
@@ -15,6 +16,17 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "../components/ui/alert-dialog.tsx";
 import type { Route } from "./+types/user-settings";
 
 export function meta(_args: Route.MetaArgs) {
@@ -33,6 +45,8 @@ function UserSettingsContent() {
   const [debugMode, setDebugMode] = useState(user.debugMode || false);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const updateUser = useMutation(
     trpc.user.updateProfile.mutationOptions({
@@ -50,6 +64,50 @@ function UserSettingsContent() {
       },
     }),
   );
+
+  const deleteUser = useMutation(trpc.admin.deleteUserByEmail.mutationOptions({}));
+
+  const handleDeleteUser = async () => {
+    setDeleteError(null);
+
+    try {
+      await deleteUser.mutateAsync({ email: user.email });
+    } catch (mutationError) {
+      setDeleteError(
+        mutationError instanceof Error ? mutationError.message : "Failed to delete user",
+      );
+      return;
+    }
+
+    setIsDeleteDialogOpen(false);
+
+    let hasRedirected = false;
+
+    try {
+      await authClient.signOut({
+        fetchOptions: {
+          onSuccess: () => {
+            hasRedirected = true;
+            window.location.href = "/login";
+          },
+        },
+      });
+    } catch (_signOutError) {
+      // Ignore sign out errors and fall back to a manual redirect below.
+    }
+
+    if (!hasRedirected) {
+      window.location.href = "/login";
+    }
+  };
+
+  const handleDeleteDialogChange = (open: boolean) => {
+    if (deleteUser.isPending) {
+      return;
+    }
+
+    setIsDeleteDialogOpen(open);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -220,6 +278,62 @@ function UserSettingsContent() {
                 )}
               </Button>
             </form>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Danger Zone</CardTitle>
+            <CardDescription>
+              Permanently delete your user account and all associated data.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <AlertDialog open={isDeleteDialogOpen} onOpenChange={handleDeleteDialogChange}>
+              <AlertDialogTrigger asChild>
+                <Button
+                  variant="destructive"
+                  onClick={() => {
+                    setDeleteError(null);
+                  }}
+                  disabled={deleteUser.isPending}
+                >
+                  Permanently delete user
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Delete user account?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    This action cannot be undone. Deleting your user will also remove every
+                    organization and estate you own and delete the Stripe customer and billing
+                    relationship associated with your account.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deleteUser.isPending}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={handleDeleteUser}
+                    disabled={deleteUser.isPending}
+                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  >
+                    {deleteUser.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      "Delete user"
+                    )}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            {deleteError && (
+              <div className="mt-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                {deleteError}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
