@@ -355,21 +355,11 @@ export const adminRouter = router({
       }
     });
 
-    const results = await Promise.allSettled(syncPromises);
+    const results = await Promise.all(syncPromises);
 
     return {
       total: estates.length,
-      results: results.map((result) => {
-        if (result.status === "fulfilled") {
-          return result.value;
-        }
-        return {
-          estateId: "unknown",
-          estateName: "unknown",
-          success: false,
-          error: result.reason instanceof Error ? result.reason.message : "Promise rejected",
-        };
-      }),
+      results,
     };
   }),
   // Create Stripe customer for an organization (admin only)
