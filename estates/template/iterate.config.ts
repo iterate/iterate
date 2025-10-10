@@ -23,7 +23,7 @@ const config = defineConfig({
       key: "standup-channel",
       prompt:
         "When mentioned in the standup channel, check what the users' tasks for the day are and ask them for a status update.",
-      match: matchers.slackChannel("C01234567"), // Use the actual Slack channel ID here
+      match: matchers.slackChannel("some-channel"),
     },
 
     // You can also use mathcers.and, matchers.or and matchers.not
