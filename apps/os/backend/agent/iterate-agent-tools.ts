@@ -8,7 +8,7 @@ export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;
 export const iterateAgentTools = defineDOTools({
   ping: {
     description: "Simple ping method that returns a pong response",
-    statusIndicatorText: "🏓 Pinging...",
+    statusIndicatorText: "pinging... 🏓",
   },
   flexibleTestTool: {
     description:
@@ -42,7 +42,7 @@ export const iterateAgentTools = defineDOTools({
   doNothing: {
     description:
       "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
-    statusIndicatorText: "🙈 Ignoring you...",
+    statusIndicatorText: "ignoring you... 🙈",
     input: z.object({
       reason: z
         .string()
@@ -54,7 +54,7 @@ export const iterateAgentTools = defineDOTools({
   getAgentDebugURL: {
     description:
       "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
-    statusIndicatorText: "🔗 Getting debug URL...",
+    statusIndicatorText: "getting debug url... 🔗",
   },
   remindMyselfLater: {
     input: z.object({
@@ -76,16 +76,16 @@ export const iterateAgentTools = defineDOTools({
     }),
     description:
       "Set a reminder for yourself to receive at a future time or on a recurring basis. You will receive the message string verbatim. So phrase it in a way that's addressed to yourself. E.g. 'You should now ask the user if they need anything else' etc",
-    statusIndicatorText: "⏰ Setting reminder...",
+    statusIndicatorText: "setting reminder... ⏰",
   },
   listMyReminders: {
     description: "List all active reminders that have been set.",
-    statusIndicatorText: "📋 Listing reminders...",
+    statusIndicatorText: "listing reminders... 📋",
     input: z.object({}),
   },
   cancelReminder: {
     description: "Cancel a previously set reminder by its ID.",
-    statusIndicatorText: "🚫 Canceling reminder...",
+    statusIndicatorText: "canceling reminder... 🚫",
     input: z.object({ iterateReminderId: z.string() }),
   },
   connectMCPServer: {
@@ -93,7 +93,7 @@ export const iterateAgentTools = defineDOTools({
       Connect to a remote MCP (Model Context Protocol) server.
       This will make additional tools available to you.
     `,
-    statusIndicatorText: "🔌 Connecting to MCP server...",
+    statusIndicatorText: "connecting to mcp server... 🔌",
     input: z.object({
       serverUrl: z.string().describe("The URL of the MCP server"),
       mode: IntegrationMode.default("personal").describe(
@@ -122,7 +122,7 @@ export const iterateAgentTools = defineDOTools({
   },
   getURLContent: {
     description: "Get the content of a URL, including Slack message threads",
-    statusIndicatorText: "🌐 Visiting URL...",
+    statusIndicatorText: "visiting url... 🌐",
     input: z.object({
       url: z.string(),
       includeScreenshotOfPage: z
@@ -143,7 +143,7 @@ export const iterateAgentTools = defineDOTools({
   },
   searchWeb: {
     description: "Search the web using exa (think of it like a better google)",
-    statusIndicatorText: "🔍 Searching the web...",
+    statusIndicatorText: "searching the web... 🔍",
     input: z.object({
       query: z.string(),
       numResults: z.number().optional().default(10),
@@ -152,7 +152,7 @@ export const iterateAgentTools = defineDOTools({
   generateImage: {
     description:
       "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
-    statusIndicatorText: "🎨 Generating image...",
+    statusIndicatorText: "generating image... 🎨",
     input: z.object({
       prompt: z.string(),
       inputImages: z.array(z.string()).default([]),
@@ -171,7 +171,7 @@ export const iterateAgentTools = defineDOTools({
   },
   exec: {
     description: "Execute a shell in a sandbox.",
-    statusIndicatorText: "⚙️ Running command...",
+    statusIndicatorText: "running command... ⚙️",
     input: z.object({
       command: z.string(),
       env: z.record(z.string(), z.string()).optional(),
@@ -180,7 +180,7 @@ export const iterateAgentTools = defineDOTools({
   generateVideo: {
     description:
       "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
-    statusIndicatorText: "🎬 Generating video...",
+    statusIndicatorText: "generating video... 🎬",
     input: z.object({
       prompt: z.string().describe("Text prompt that describes the video to generate"),
       inputReferenceFileId: z
@@ -202,7 +202,7 @@ export const iterateAgentTools = defineDOTools({
   },
   callGoogleAPI: {
     description: "Call a Google API endpoint with automatic authentication and token refresh",
-    statusIndicatorText: "📞 Calling Google API...",
+    statusIndicatorText: "calling google api... 📞",
     input: z.object({
       endpoint: z
         .string()
@@ -227,7 +227,7 @@ export const iterateAgentTools = defineDOTools({
   sendGmail: {
     description:
       "Send an email via Gmail. Can also reply to emails by providing threadId and inReplyTo.",
-    statusIndicatorText: "📧 Sending email...",
+    statusIndicatorText: "sending email... 📧",
     input: z.object({
       to: z.string().describe("Recipient email address"),
       subject: z.string().describe("Email subject"),
@@ -246,7 +246,7 @@ export const iterateAgentTools = defineDOTools({
   getGmailMessage: {
     description:
       "Get the full content of a specific Gmail message by ID. Returns the email with decoded text body.",
-    statusIndicatorText: "📬 Fetching email...",
+    statusIndicatorText: "fetching email... 📬",
     input: z.object({
       messageId: z.string().describe("The ID of the message to retrieve"),
       userId: z.string().describe("The user ID to use for authentication"),

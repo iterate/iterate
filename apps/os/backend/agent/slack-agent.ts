@@ -67,16 +67,132 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected slackAPI!: WebClient;
 
-  protected _lastTypingStatus: string | null = null;
+  protected _lastTypingStatus: string | null | undefined;
 
-  private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
+  // ---------------------------------------------------------------------------
+  // Slack status indicator queue
+  // ---------------------------------------------------------------------------
+  // Requirements:
+  // - First incoming call should update immediately (no initial delay)
+  // - Show every unique status received, in arrival order (drop only immediate duplicates)
+  // - Space Slack API calls by at least STATUS_API_MIN_GAP_MS
+  // - If called with null, delay clearing briefly (NULL_STAGE1_DELAY_MS then check again at
+  //   NULL_CHECK_AT_MS) and only clear if there is still no LLM request in progress
+  // - On DO boot, we set status to null immediately (handled in onStart)
+
+  // Configurable timings local to this file (choice 1A)
+  private readonly STATUS_API_MIN_GAP_MS = 100;
+  private readonly NULL_STAGE1_DELAY_MS = 30;
+  private readonly NULL_CHECK_AT_MS = 50;
+
+  // Internal queue state
+  // Queue items: { status: string | null; onlyIfEmpty?: boolean }
+  private _statusQueue: Array<{ status: string | null; onlyIfEmpty?: boolean }> = [];
+  private _queueRunning = false;
+  private _lastSentAtMs = 0;
+  private _lastEnqueuedStatus: string | null | undefined = undefined;
+  private _pendingNullStage1Timer?: ReturnType<typeof setTimeout>;
+  private _pendingNullStage2Timer?: ReturnType<typeof setTimeout>;
+
+  private updateSlackStatusDebounced = (
+    status: string | null,
+    options?: { forceImmediate?: boolean; onlyIfEmptyStatus?: boolean },
+  ) => {
+    // Special handling for null per choice 3A: delay and re-check for active LLM
+    if (status === null) {
+      // If explicitly asked to force immediate, bypass the delay logic and prioritize now
+      if (options?.forceImmediate) {
+        // Cancel all timers, clear queue, and enqueue as highest priority (still respecting min-gap)
+        if (this._pendingNullStage1Timer) clearTimeout(this._pendingNullStage1Timer);
+        if (this._pendingNullStage2Timer) clearTimeout(this._pendingNullStage2Timer);
+        this._statusQueue.length = 0;
+        this._lastEnqueuedStatus = undefined;
+        this._enqueueStatus(null, false);
+        return;
+      }
+
+      // Cancel any prior pending null timers and schedule the two-stage check
+      if (this._pendingNullStage1Timer) clearTimeout(this._pendingNullStage1Timer);
+      if (this._pendingNullStage2Timer) clearTimeout(this._pendingNullStage2Timer);
+
+      this._pendingNullStage1Timer = setTimeout(() => {
+        // After stage 1, schedule the final check at NULL_CHECK_AT_MS from the original call
+        const remaining = Math.max(0, this.NULL_CHECK_AT_MS - this.NULL_STAGE1_DELAY_MS);
+        this._pendingNullStage2Timer = setTimeout(() => {
+          // Only clear if no LLM request is currently in progress
+          if (!this.agentCore.llmRequestInProgress()) {
+            this._enqueueStatus(null, false);
+          }
+        }, remaining);
+      }, this.NULL_STAGE1_DELAY_MS);
+
+      return;
+    }
+
+    // Non-null status: cancel any pending null timers since we are active again
+    if (this._pendingNullStage1Timer) clearTimeout(this._pendingNullStage1Timer);
+    if (this._pendingNullStage2Timer) clearTimeout(this._pendingNullStage2Timer);
+
+    // If forceImmediate: prioritize this status now (clear queue and push to front logically)
+    if (options?.forceImmediate) {
+      this._statusQueue.length = 0;
+      this._lastEnqueuedStatus = undefined;
+      this._enqueueStatus(status, !!options?.onlyIfEmptyStatus);
+      return;
+    }
+
+    this._enqueueStatus(status, !!options?.onlyIfEmptyStatus);
+  };
+
+  private _enqueueStatus(status: string | null, onlyIfEmpty: boolean) {
+    // Choice 5A: ignore if same as most recent enqueued status
+    if (status === this._lastEnqueuedStatus) {
+      return;
+    }
+    this._lastEnqueuedStatus = status;
+    this._statusQueue.push({ status, onlyIfEmpty: onlyIfEmpty || undefined });
+    if (!this._queueRunning) {
+      this._queueRunning = true;
+      void this._drainStatusQueue();
+    }
+  }
+
+  private async _drainStatusQueue() {
+    try {
+      while (this._statusQueue.length > 0) {
+        const now = Date.now();
+        const elapsed = now - this._lastSentAtMs;
+        if (this._lastSentAtMs !== 0 && elapsed < this.STATUS_API_MIN_GAP_MS) {
+          await new Promise((resolve) => setTimeout(resolve, this.STATUS_API_MIN_GAP_MS - elapsed));
+        }
+
+        const next = this._statusQueue.shift()!;
+
+        // If this status should only be applied when Slack currently shows nothing, and
+        // either (a) there is already a non-null status shown, or
+        // (b) there are more updates queued after this one,
+        // then skip this update.
+        if (next.onlyIfEmpty && (this._lastTypingStatus != null || this._statusQueue.length > 0)) {
+          continue;
+        }
+
+        await this._sendStatusToSlack(next.status);
+        this._lastSentAtMs = Date.now();
+      }
+    } finally {
+      this._queueRunning = false;
+    }
+  }
+
+  private async _sendStatusToSlack(status: string | null) {
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
 
-    try {
-      if (status === this._lastTypingStatus) return;
-      this._lastTypingStatus = status;
+    // If this is the same as the last value sent to Slack, skip the API call
+    if (status === this._lastTypingStatus) return;
+    this._lastTypingStatus = status;
 
+    try {
       void this.slackAPI.assistant.threads.setStatus({
         channel_id: slackChannelId,
         thread_ts: slackThreadId,
@@ -105,7 +221,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       // log error but don't crash DO
       logger.error("Failed to update Slack status:", error);
     }
-  }, 300);
+  }
 
   private checkAndClearTypingIndicator = pDebounce(async () => {
     const state = this.agentCore.state as SlackSliceState;
@@ -169,6 +285,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     };
   }
 
+  override async onStart(): Promise<void> {
+    await super.onStart();
+
+    // On DO boot, set Slack status to null straight away if we already know the thread context
+    // (a subsequent LLM request may set it to something else)
+    const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
+    if (slackChannelId && slackThreadId) {
+      this.updateSlackStatusDebounced(null, { forceImmediate: true });
+    }
+  }
+
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
       onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
@@ -198,12 +325,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         const event = payload.event as AgentCoreEvent;
         switch (event.type) {
           case "CORE:LLM_REQUEST_START":
-            this.agentCore.addEvents([
-              {
-                type: "SLACK:UPDATE_TYPING_STATUS",
-                data: { status: "is thinking..." },
-              },
-            ]);
+            // Do not set a default "is thinking..." status anymore
             break;
 
           case "CORE:LLM_REQUEST_CANCEL":
