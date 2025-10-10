@@ -122,8 +122,11 @@ test(
         },
       });
 
-      const { user, organization, estate, hasSeedData } =
-        await adminTrpc.admin.setupTestOnboardingUser.mutate();
+      const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
+      if (!testData) {
+        throw new Error("Failed to setup test user with organization and estate");
+      }
+      const { user, organization, estate, hasSeedData } = testData;
 
       console.log(`Created test user: ${user.email} (${user.id})`);
       console.log(`Created organization: ${organization.name} (${organization.id})`);

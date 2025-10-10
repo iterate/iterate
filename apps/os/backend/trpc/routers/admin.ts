@@ -158,33 +158,40 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
             accessToken: seedData.github.accessToken,
           },
         ])
+        .onConflictDoNothing()
         .returning();
 
-      await ctx.db.insert(schema.providerEstateMapping).values([
-        {
-          providerId: "slack-bot",
-          internalEstateId: estate.id,
-          externalId: seedData.slack.teamId,
-          providerMetadata: {
-            botUserId: seedData.slack.bot.id,
+      await ctx.db
+        .insert(schema.providerEstateMapping)
+        .values([
+          {
+            providerId: "slack-bot",
+            internalEstateId: estate.id,
+            externalId: seedData.slack.teamId,
+            providerMetadata: {
+              botUserId: seedData.slack.bot.id,
+            },
           },
-        },
-      ]);
+        ])
+        .onConflictDoNothing();
 
-      await ctx.db.insert(schema.estateAccountsPermissions).values([
-        {
-          accountId: botAccount.id,
-          estateId: estate.id,
-        },
-        {
-          accountId: githubAccount.id,
-          estateId: estate.id,
-        },
-      ]);
+      await ctx.db
+        .insert(schema.estateAccountsPermissions)
+        .values([
+          {
+            accountId: botAccount.id,
+            estateId: estate.id,
+          },
+          {
+            accountId: githubAccount.id,
+            estateId: estate.id,
+          },
+        ])
+        .onConflictDoNothing();
 
       hasSeedData = true;
     } catch (error) {
-      logger.error(`Failed to parse test seed data: ${error}`);
+      logger.error(`Failed to setup test onboarding user: ${error}`);
     }
   }
 
