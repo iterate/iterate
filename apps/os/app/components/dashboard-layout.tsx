@@ -251,7 +251,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   // Only connect websocket if we're in an estate context
-  const ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
+  const _ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
 
   const getEstateUrl = (estateId: string, path: string) => {
     return `/${organizationId}/${estateId}${path ? `/${path}` : ""}`;
@@ -353,12 +353,15 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter>
-            {!ws.isConnected && (
-              <div className="flex items-center gap-2 mb-3 px-3">
-                <div className={`size-2 rounded-full bg-orange-500`}></div>
-                <span className="text-sm text-muted-foreground">Websocket connecting...</span>
-              </div>
-            )}
+            {/* Connection indicator temporarily disabled until fixed */}
+            {/**
+             * {!ws.isConnected && (
+             *   <div className="flex items-center gap-2 mb-3 px-3">
+             *     <div className={`size-2 rounded-full bg-orange-500`}></div>
+             *     <span className="text-sm text-muted-foreground">Websocket connecting...</span>
+             *   </div>
+             * )}
+             */}
             {user.debugMode && (
               <Badge
                 variant="secondary"

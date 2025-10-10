@@ -15,6 +15,7 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "../../components/ui/accordion.tsx";
+import { Separator } from "../../components/ui/separator.tsx";
 import type { Route } from "./+types/team.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -97,7 +98,13 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   // Left column: owner, admin, member (internal roles)
   const leftColumnMembers = members
     .filter((member) => ["owner", "admin", "member"].includes(member.role) && !member.isBot)
-    .filter(filterMember);
+    .filter(filterMember)
+    .sort((a, b) => {
+      // Current user always first
+      if (a.userId === currentUser.id) return -1;
+      if (b.userId === currentUser.id) return 1;
+      return 0;
+    });
   const leftColumnBots = members
     .filter((member) => ["owner", "admin", "member"].includes(member.role) && member.isBot)
     .filter(filterMember);
@@ -234,7 +241,9 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
                         {leftColumnMembers.map((member, index) => (
                           <div key={member.id}>
                             <MemberItem member={member} />
-                            {index !== leftColumnMembers.length - 1 && <div className="my-2" />}
+                            {index !== leftColumnMembers.length - 1 && (
+                              <Separator className="my-2" />
+                            )}
                           </div>
                         ))}
                       </ItemGroup>
@@ -250,7 +259,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
                         {leftColumnBots.map((bot, index) => (
                           <div key={bot.id}>
                             <MemberItem member={bot} />
-                            {index !== leftColumnBots.length - 1 && <div className="my-2" />}
+                            {index !== leftColumnBots.length - 1 && <Separator className="my-2" />}
                           </div>
                         ))}
                       </ItemGroup>
@@ -298,7 +307,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
                         {guestMembers.map((member, index) => (
                           <div key={member.id}>
                             <MemberItem member={member} />
-                            {index !== guestMembers.length - 1 && <div className="my-2" />}
+                            {index !== guestMembers.length - 1 && <Separator className="my-2" />}
                           </div>
                         ))}
                       </ItemGroup>
@@ -316,7 +325,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
                         {externalMembers.map((member, index) => (
                           <div key={member.id}>
                             <MemberItem member={member} />
-                            {index !== externalMembers.length - 1 && <div className="my-2" />}
+                            {index !== externalMembers.length - 1 && <Separator className="my-2" />}
                           </div>
                         ))}
                       </ItemGroup>
@@ -334,7 +343,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
                         {rightColumnBots.map((bot, index) => (
                           <div key={bot.id}>
                             <MemberItem member={bot} />
-                            {index !== rightColumnBots.length - 1 && <div className="my-2" />}
+                            {index !== rightColumnBots.length - 1 && <Separator className="my-2" />}
                           </div>
                         ))}
                       </ItemGroup>
