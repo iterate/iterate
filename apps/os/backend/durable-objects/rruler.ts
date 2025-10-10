@@ -49,7 +49,9 @@ export class RRuler extends DurableObject<CloudflareEnv> {
             typeof body === "object" && body !== null && "key" in body
               ? (body as { key?: unknown }).key
               : undefined;
-          const parsed = DeleteStateInput.safeParse({ key: keyFromBody ?? searchParams.get("key") });
+          const parsed = DeleteStateInput.safeParse({
+            key: keyFromBody ?? searchParams.get("key"),
+          });
           if (!parsed.success) return this.json({ error: "Missing key" }, 400);
           this.ctx.storage.kv.delete(parsed.data.key);
           return this.json({ ok: true });
