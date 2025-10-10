@@ -1,9 +1,9 @@
 import { ChevronsUpDown, Plus } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useNavigate, useOutletContext } from "react-router";
+import { useNavigate, useRouteLoaderData } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
-import type { OrgContext } from "../route-contexts.ts";
+import type { loader as orgLoader } from "../routes/org/loader.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -17,10 +17,10 @@ export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
   const currentOrganizationId = useOrganizationId();
-  const context = useOutletContext<OrgContext | undefined>();
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
   const { data: allOrganizations } = useSuspenseQuery({
     ...trpc.organization.list.queryOptions(),
-    initialData: context?.organizations,
+    initialData: loaderData?.organizations,
   });
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
