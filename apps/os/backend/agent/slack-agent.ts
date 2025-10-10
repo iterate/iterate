@@ -43,6 +43,24 @@ import {
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
+
+function summarizeEventsBetween(
+  events: AgentCoreEvent[],
+  startIndex: number,
+  endIndex: number,
+): string {
+  if (startIndex < 0 || endIndex <= startIndex) return "added 0 events";
+  const between = events.slice(startIndex + 1, endIndex);
+  const toolCalls = between.filter((e) => e.type === "CORE:LOCAL_FUNCTION_TOOL_CALL");
+  if (toolCalls.length === 1) {
+    const name = (toolCalls[0] as any).data?.call?.name;
+    return name ? `called ${name}` : "called 1 tool";
+  }
+  if (toolCalls.length > 1) {
+    return `called ${toolCalls.length} tools`;
+  }
+  return `added ${between.length} events`;
+}
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -70,13 +88,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
 
-    const state = this.agentCore.state as SlackSliceState;
-    const loadingMessagesFromState = state.slackLoadingMessages || [];
-    const loadingMessages = loadingMessagesFromState.length
-      ? loadingMessagesFromState
-      : status
-        ? [status]
-        : [];
+    const loadingMessages = status ? [status] : [];
 
     await this.slackAPI.apiCall("assistant.threads.setStatus", {
       channel_id: slackChannelId,
@@ -162,14 +174,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
         const event = payload.event as AgentCoreEvent;
         switch (event.type) {
-          case "CORE:LLM_REQUEST_START":
-            this.agentCore.addEvents([
-              {
-                type: "SLACK:UPDATE_TYPING_STATUS",
-                data: { status: "is typing..." },
-              },
-            ]);
+          case "CORE:LLM_REQUEST_START": {
+            const current = (this.agentCore.state as SlackSliceState).typingIndicatorStatus;
+            if (current == null) {
+              this.agentCore.addEvents([
+                {
+                  type: "SLACK:UPDATE_TYPING_STATUS",
+                  data: { status: "is thinking..." },
+                },
+              ]);
+            }
             break;
+          }
 
           case "CORE:LLM_REQUEST_CANCEL":
             this.agentCore.addEvents([
@@ -179,6 +195,26 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               },
             ]);
             break;
+          case "CORE:LLM_REQUEST_END": {
+            // Summarize events between the start and this end event
+            const endIndex = (payload.event as AgentCoreEvent).eventIndex;
+            const startIndex = (() => {
+              for (let i = endIndex - 1; i >= 0; i--) {
+                const e = this.agentCore.events[i] as AgentCoreEvent;
+                if (e.type === "CORE:LLM_REQUEST_START") return i;
+              }
+              return -1;
+            })();
+            const summary = summarizeEventsBetween(
+              this.agentCore.events as AgentCoreEvent[],
+              startIndex,
+              endIndex,
+            );
+            this.agentCore.addEvents([
+              { type: "SLACK:UPDATE_TYPING_STATUS", data: { status: summary } },
+            ]);
+            break;
+          }
           case "CORE:FILE_SHARED": {
             const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
             if (fileSharedEvent.data.direction === "from-agent-to-user") {

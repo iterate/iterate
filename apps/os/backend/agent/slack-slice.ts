@@ -114,11 +114,6 @@ export interface SlackSliceState {
   } | null;
   botUserId?: string;
   typingIndicatorStatus?: string | null;
-  /**
-   * Loading messages shown in Slack's assistant thread status UI.
-   * When empty, the Slack agent will default to using the current typing status.
-   */
-  slackLoadingMessages?: string[];
 }
 
 export interface SlackSliceDeps {}
@@ -138,13 +133,9 @@ export const slackSlice = defineAgentCoreSlice<{
     slackChannel: undefined,
     botUserId: undefined,
     typingIndicatorStatus: null,
-    slackLoadingMessages: [],
   },
   reduce(state, _deps, event) {
     const next = { ...state };
-
-    // By default, clear loading messages; set them explicitly on function tool calls below
-    next.slackLoadingMessages = [];
 
     switch (event.type) {
       case "SLACK:UPDATE_SLICE_STATE": {
@@ -165,14 +156,7 @@ export const slackSlice = defineAgentCoreSlice<{
         break;
       }
 
-      // Update loading messages when a local function tool is called
-      case "CORE:LOCAL_FUNCTION_TOOL_CALL": {
-        // The event here is a core event; cast to the precise type to access fields
-        const functionEvent = event as import("./agent-core-schemas.ts").LocalFunctionToolCallEvent;
-        const functionName = functionEvent.data.call.name;
-        next.slackLoadingMessages = [`calling function ${functionName}`];
-        break;
-      }
+      
 
       case "SLACK:WEBHOOK_EVENT_RECEIVED": {
         const payload = event.data.payload as SlackWebhookPayload;
