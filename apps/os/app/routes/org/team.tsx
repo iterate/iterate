@@ -16,6 +16,7 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "../../components/ui/avatar.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../components/ui/empty.tsx";
 import type { Route } from "./+types/team.ts";
+import { sortMembersWithCurrentFirst } from "./team-utils.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [
@@ -66,6 +67,9 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   // Group members by role
   const internalMembers = members.filter((member) => member.role !== "external");
   const externalMembers = members.filter((member) => member.role === "external");
+
+  // Ensure current user is shown first in internal members while preserving other order
+  const sortedInternalMembers = sortMembersWithCurrentFirst(internalMembers, currentUser.id);
 
   const MemberItem = ({ member }: { member: (typeof members)[number] }) => {
     const isCurrentUser = member.userId === currentUser.id;
@@ -126,7 +130,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
             They are able to access this dashboard.
           </p>
 
-          {internalMembers.length === 0 ? (
+          {sortedInternalMembers.length === 0 ? (
             <Empty>
               <EmptyMedia variant="icon">
                 <Users className="h-12 w-12" />
@@ -138,10 +142,10 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
             </Empty>
           ) : (
             <ItemGroup>
-              {internalMembers.map((member, index) => (
+              {sortedInternalMembers.map((member, index) => (
                 <div key={member.id}>
                   <MemberItem member={member} />
-                  {index !== internalMembers.length - 1 && <div className="my-2" />}
+                  {index !== sortedInternalMembers.length - 1 && <div className="my-2" />}
                 </div>
               ))}
             </ItemGroup>
