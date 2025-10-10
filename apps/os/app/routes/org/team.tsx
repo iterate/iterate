@@ -16,7 +16,6 @@ import {
 import { Avatar, AvatarFallback, AvatarImage } from "../../components/ui/avatar.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../components/ui/empty.tsx";
 import type { Route } from "./+types/team.ts";
-import { sortMembersWithCurrentFirst } from "./team-utils.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [
@@ -199,4 +198,15 @@ export default function OrganizationTeam({ params }: Route.ComponentProps) {
   }
 
   return <OrganizationTeamContent organizationId={organizationId} />;
+}
+
+function sortMembersWithCurrentFirst<T extends { userId: string }>(
+  members: T[],
+  currentUserId: string,
+): T[] {
+  return [...members].sort((a, b) => {
+    if (a.userId === currentUserId && b.userId !== currentUserId) return -1;
+    if (b.userId === currentUserId && a.userId !== currentUserId) return 1;
+    return 0;
+  });
 }
