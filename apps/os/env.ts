@@ -41,7 +41,7 @@ export type CloudflareEnv = Env & {
   TEST_USER_PATTERNS?: string;
 
   // JSON object with seed data for test users
-  TEST_SEED_DATA?: string;
+  ONBOARDING_E2E_TEST_SETUP_PARAMS?: string;
 };
 
 export const env = _env as CloudflareEnv;

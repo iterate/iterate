@@ -5,6 +5,7 @@ import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
 import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
+import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 /**
  * End-to-End Onboarding Test
@@ -22,62 +23,43 @@ import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trp
  *
  * Prerequisites:
  * - GitHub App must be installed for the test organization
- * - TEST_SEED_DATA must include valid GitHub installation credentials
+ * - ONBOARDING_E2E_TEST_SETUP_PARAMS must include valid GitHub installation credentials
  * - Slack bot must be installed in the test workspace
- * - TEST_SEED_DATA must include valid Slack bot and user tokens
+ * - ONBOARDING_E2E_TEST_SETUP_PARAMS must include valid Slack bot and user tokens
  */
 
 // Environment variables schema
 const TestEnv = z.object({
   VITE_PUBLIC_URL: z.string().url().default("http://localhost:5173"),
   SERVICE_AUTH_TOKEN: z.string().optional(),
-  TEST_SEED_DATA: z.string().transform((val) => JSON.parse(val)),
+  ONBOARDING_E2E_TEST_SETUP_PARAMS: z.string().transform((val) => JSON.parse(val)),
 });
 
-const TestSeedData = z.object({
-  github: z.object({
-    accessToken: z.string(),
-    installationId: z.string(),
-  }),
-  slack: z.object({
-    targetChannelId: z.string(),
-    teamId: z.string(),
-    user: z.object({
-      id: z.string(),
-      accessToken: z.string(),
-    }),
-    bot: z.object({
-      id: z.string(),
-      accessToken: z.string(),
-    }),
-  }),
-});
-
-type TestSeedData = z.infer<typeof TestSeedData>;
-
-// Parse and validate environment
-const env = TestEnv.parse({
-  VITE_PUBLIC_URL: process.env.VITE_PUBLIC_URL,
-  SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
-  TEST_SEED_DATA: process.env.TEST_SEED_DATA,
-});
-
-const testSeedData: TestSeedData = TestSeedData.parse(env.TEST_SEED_DATA);
+type E2ETestParams = z.infer<typeof E2ETestParams>;
 
 // Helper to generate unique test repository name
 function generateRepoName() {
   return `estate-test-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 }
 
-test(
+test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
   "end-to-end onboarding flow",
   {
     timeout: 15 * 60 * 1000, // 15 minutes total timeout
   },
   async () => {
+    // Parse and validate environment
+    const env = TestEnv.parse({
+      VITE_PUBLIC_URL: process.env.VITE_PUBLIC_URL,
+      SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
+      ONBOARDING_E2E_TEST_SETUP_PARAMS: process.env.ONBOARDING_E2E_TEST_SETUP_PARAMS,
+    });
+
+    const testSeedData = E2ETestParams.parse(env.ONBOARDING_E2E_TEST_SETUP_PARAMS);
     const repoName = generateRepoName();
     let createdRepoFullName: string | null = null;
-
+    let createdUserEmail: string | null = null;
+    let adminTrpc: ReturnType<typeof makeVitestTrpcClient> | null = null;
     try {
       // Step 1: Create authenticated TRPC client using service auth
       console.log("Step 1: Authenticating with service auth token...");
@@ -115,7 +97,7 @@ test(
       // Step 2: Setup test onboarding user (create organization and estate)
       console.log("Step 2: Setting up test user with organization and estate...");
 
-      const adminTrpc = makeVitestTrpcClient({
+      adminTrpc = makeVitestTrpcClient({
         url: `${env.VITE_PUBLIC_URL}/api/trpc`,
         headers: {
           cookie: sessionCookies,
@@ -127,7 +109,7 @@ test(
         throw new Error("Failed to setup test user with organization and estate");
       }
       const { user, organization, estate, hasSeedData } = testData;
-
+      createdUserEmail = user.email;
       console.log(`Created test user: ${user.email} (${user.id})`);
       console.log(`Created organization: ${organization.name} (${organization.id})`);
       console.log(`Created estate: ${estate.name} (${estate.id})`);
@@ -362,6 +344,11 @@ test(
         } catch (error) {
           console.error(`Failed to delete repository: ${error}`);
           // Don't fail the test if cleanup fails
+        }
+        if (createdUserEmail && adminTrpc) {
+          console.log(`Cleaning up: Deleting user ${createdUserEmail}...`);
+          await adminTrpc.admin.deleteUserByEmail.mutate({ email: createdUserEmail });
+          console.log(`User ${createdUserEmail} deleted successfully`);
         }
       }
     }

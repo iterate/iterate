@@ -13,6 +13,7 @@ import type { DB } from "../../db/client.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
+import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
 import { deleteUserAccount } from "./user.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
@@ -112,29 +113,9 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
   }
 
   let hasSeedData = false;
-  if (ctx.env.TEST_SEED_DATA) {
+  if (ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS) {
     try {
-      const seedData = z
-        .object({
-          github: z.object({
-            installationId: z.string(),
-            accessToken: z.string(),
-            branch: z.string().default("main"),
-            path: z.string().default("/"),
-          }),
-          slack: z.object({
-            teamId: z.string(),
-            user: z.object({
-              id: z.string(),
-              accessToken: z.string(),
-            }),
-            bot: z.object({
-              id: z.string(),
-              accessToken: z.string(),
-            }),
-          }),
-        })
-        .parse(JSON.parse(ctx.env.TEST_SEED_DATA));
+      const seedData = E2ETestParams.parse(JSON.parse(ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS));
 
       const [_userAccount, botAccount, githubAccount] = await ctx.db
         .insert(schema.account)
