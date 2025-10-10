@@ -67,6 +67,9 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   const internalMembers = members.filter((member) => member.role !== "external");
   const externalMembers = members.filter((member) => member.role === "external");
 
+  // Ensure current user is shown first in internal members while preserving other order
+  const sortedInternalMembers = sortMembersWithCurrentFirst(internalMembers, currentUser.id);
+
   const MemberItem = ({ member }: { member: (typeof members)[number] }) => {
     const isCurrentUser = member.userId === currentUser.id;
 
@@ -126,7 +129,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
             They are able to access this dashboard.
           </p>
 
-          {internalMembers.length === 0 ? (
+          {sortedInternalMembers.length === 0 ? (
             <Empty>
               <EmptyMedia variant="icon">
                 <Users className="h-12 w-12" />
@@ -138,10 +141,10 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
             </Empty>
           ) : (
             <ItemGroup>
-              {internalMembers.map((member, index) => (
+              {sortedInternalMembers.map((member, index) => (
                 <div key={member.id}>
                   <MemberItem member={member} />
-                  {index !== internalMembers.length - 1 && <div className="my-2" />}
+                  {index !== sortedInternalMembers.length - 1 && <div className="my-2" />}
                 </div>
               ))}
             </ItemGroup>
@@ -154,7 +157,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
         <Card variant="muted">
           <CardContent>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Guests in your Slack</h2>
+              <h2 className="text-lg font-semibold">Slack connect users</h2>
               <span className="text-sm text-muted-foreground">
                 {externalMembers.length} {externalMembers.length === 1 ? "user" : "users"}
               </span>
@@ -195,4 +198,31 @@ export default function OrganizationTeam({ params }: Route.ComponentProps) {
   }
 
   return <OrganizationTeamContent organizationId={organizationId} />;
+}
+
+function sortMembersWithCurrentFirst<T extends { userId: string }>(
+  members: T[],
+  currentUserId: string,
+): T[] {
+  const rolePriority: Record<string, number> = {
+    owner: 0,
+    admin: 1,
+    member: 2,
+    guest: 3,
+    external: 4,
+  };
+
+  // Filter out the current user
+  const currentUser = members.find((member) => member.userId === currentUserId);
+  const otherMembers = members.filter((member) => member.userId !== currentUserId);
+
+  // Sort other members by role
+  const sortedOtherMembers = otherMembers.sort((a: any, b: any) => {
+    const aRolePriority = rolePriority[a.role as string] ?? 99;
+    const bRolePriority = rolePriority[b.role as string] ?? 99;
+    return aRolePriority - bRolePriority;
+  });
+
+  if (currentUser) sortedOtherMembers.unshift(currentUser);
+  return sortedOtherMembers;
 }
