@@ -184,11 +184,13 @@ function UserSettingsContent() {
                       <AvatarImage src={user.image || undefined} alt={user.name} />
                       <AvatarFallback className="text-lg">{userInitials}</AvatarFallback>
                     </Avatar>
-                    <div>
+                    <div className="flex-1 min-w-0">
                       <FieldLabel className="text-sm font-medium text-muted-foreground">
                         User ID
                       </FieldLabel>
-                      <p className="font-mono text-sm bg-muted px-2 py-1 rounded">{user.id}</p>
+                      <p className="font-mono text-sm bg-muted px-2 py-1 rounded w-full truncate">
+                        {user.id}
+                      </p>
                     </div>
                   </div>
 
