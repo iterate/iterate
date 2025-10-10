@@ -157,7 +157,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
         <Card variant="muted">
           <CardContent>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-lg font-semibold">Guests in your Slack</h2>
+              <h2 className="text-lg font-semibold">Slack connect users</h2>
               <span className="text-sm text-muted-foreground">
                 {externalMembers.length} {externalMembers.length === 1 ? "user" : "users"}
               </span>
@@ -204,9 +204,23 @@ function sortMembersWithCurrentFirst<T extends { userId: string }>(
   members: T[],
   currentUserId: string,
 ): T[] {
-  return [...members].sort((a, b) => {
-    if (a.userId === currentUserId && b.userId !== currentUserId) return -1;
-    if (b.userId === currentUserId && a.userId !== currentUserId) return 1;
+  const rolePriority: Record<string, number> = {
+    owner: 0,
+    admin: 1,
+    member: 2,
+    guest: 3,
+    external: 4,
+  };
+
+  return [...members].sort((a: any, b: any) => {
+    const aIsCurrent = a.userId === currentUserId;
+    const bIsCurrent = b.userId === currentUserId;
+    if (aIsCurrent !== bIsCurrent) return aIsCurrent ? -1 : 1;
+
+    const aRolePriority = rolePriority[a.role as string] ?? 99;
+    const bRolePriority = rolePriority[b.role as string] ?? 99;
+    if (aRolePriority !== bRolePriority) return aRolePriority - bRolePriority;
+
     return 0;
   });
 }
