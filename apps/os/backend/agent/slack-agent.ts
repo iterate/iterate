@@ -2,6 +2,7 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -66,15 +67,44 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected slackAPI!: WebClient;
 
+  protected _lastTypingStatus: string | null = null;
+
   private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
 
-    await this.slackAPI.assistant.threads.setStatus({
-      channel_id: slackChannelId,
-      thread_ts: slackThreadId,
-      status: status || "",
-    });
+    try {
+      if (status === this._lastTypingStatus) return;
+      this._lastTypingStatus = status;
+
+      void this.slackAPI.assistant.threads.setStatus({
+        channel_id: slackChannelId,
+        thread_ts: slackThreadId,
+        status: status || "",
+        // Slack's weird new API that cycles between each of several strings
+        // Some stuff I learned
+        // - newlines are NOT supported (just turn into spaces)
+        // - emoji are fine
+        // - they are cycled IN ORDER, so you can do animations if you want
+        // - only 10 elements allowed
+        // - multiple spaces are collapsed into one
+        // - no markdown allowed
+        // - on Rahul's phone emojis don't show but the unicode animations do and it makes the UI jump around when we spam the API
+        // - the API can be used a lot. I used it to send a request every 50ms and it let me. But the elements arrive out of order
+        // -
+        // loading_messages: ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"],
+        // loading_messages: ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        // loading_messages: ["█", "██", "███", "████", "█████", "██████", "███████", "████████", "█████████", "██████████"]
+        // loading_messages: ["👶____🦖", "👶___🦖_", "👶__🦖__", "👶_🦖___", "👶🦖____", "💥______", "☠️______"]
+
+        // For now, we just use the same string as the typing status indicator
+        // @ts-expect-error - the slack API client types haven't been updated to include this, yet
+        loading_messages: [status],
+      });
+    } catch (error) {
+      // log error but don't crash DO
+      logger.error("Failed to update Slack status:", error);
+    }
   }, 300);
 
   private checkAndClearTypingIndicator = pDebounce(async () => {
@@ -141,6 +171,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
+      onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
+        deps?.onLLMStreamResponseStreamingChunk?.(chunk);
+        if (chunk.type === "response.output_item.added" && chunk.item.type === "function_call") {
+          this.updateSlackStatusDebounced(`🛠️ ${chunk.item.name}...`);
+        }
+      },
       onEventAdded: (payload: {
         event: AgentCoreEvent;
         reducedState: CoreReducedState;
@@ -156,7 +192,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             this.agentCore.addEvents([
               {
                 type: "SLACK:UPDATE_TYPING_STATUS",
-                data: { status: "is typing..." },
+                data: { status: "is thinking..." },
               },
             ]);
             break;
