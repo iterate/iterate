@@ -70,10 +70,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
     if (!slackChannelId || !slackThreadId) return;
 
-    await this.slackAPI.assistant.threads.setStatus({
+    const state = this.agentCore.state as SlackSliceState;
+    const loadingMessagesFromState = state.slackLoadingMessages || [];
+    const loadingMessages = loadingMessagesFromState.length
+      ? loadingMessagesFromState
+      : status
+        ? [status]
+        : [];
+
+    await this.slackAPI.apiCall("assistant.threads.setStatus", {
       channel_id: slackChannelId,
       thread_ts: slackThreadId,
       status: status || "",
+      // New param to surface current activity in Slack UI
+      loading_messages: loadingMessages,
     });
   }, 300);
 
