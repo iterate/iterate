@@ -30,6 +30,10 @@ export const getAuth = (db: DB) =>
           type: "boolean",
           defaultValue: false,
         },
+        isBot: {
+          type: "boolean",
+          defaultValue: false,
+        },
       },
     },
     account: {

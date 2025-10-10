@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { waitUntil } from "cloudflare:workers";
 import {
@@ -124,6 +124,74 @@ export const organizationRouter = router({
       },
     });
 
+    // Get estate for this organization to fetch slack channels
+    const estate = await ctx.db.query.estate.findFirst({
+      where: eq(schema.estate.organizationId, ctx.organization.id),
+    });
+
+    // Fetch slack channels and metadata for all users
+    const channelsByUser = new Map<string, string[]>();
+
+    if (estate && members.length > 0) {
+      // Fetch provider mappings for all users to get Slack usernames
+      const providerMappings = await ctx.db.query.providerUserMapping.findMany({
+        where: inArray(
+          schema.providerUserMapping.internalUserId,
+          members.map((m) => m.user.id),
+        ),
+      });
+
+      // Fetch all slack channels for this estate
+      const slackChannels = await ctx.db.query.slackChannel.findMany({
+        where: eq(schema.slackChannel.estateId, estate.id),
+      });
+
+      const channelMap = new Map(slackChannels.map((c) => [c.externalId, c.name]));
+
+      // Extract channel names and user metadata for each external user
+      const userMetadataMap = new Map<string, { slackUsername?: string; slackRealName?: string }>();
+
+      for (const mapping of providerMappings) {
+        const metadata = mapping.providerMetadata as any;
+        const discoveredChannels = metadata?.discoveredInChannels as string[] | undefined;
+
+        // Extract Slack username and real name
+        userMetadataMap.set(mapping.internalUserId, {
+          slackUsername: metadata?.name,
+          slackRealName: metadata?.profile?.real_name || metadata?.real_name,
+        });
+
+        if (discoveredChannels && Array.isArray(discoveredChannels)) {
+          const channelNames = discoveredChannels
+            .map((channelId) => channelMap.get(channelId))
+            .filter((name): name is string => name !== undefined);
+
+          if (channelNames.length > 0) {
+            channelsByUser.set(mapping.internalUserId, channelNames);
+          }
+        }
+      }
+
+      return members.map((m) => {
+        const isGuestOrExternal = ["external", "guest"].includes(m.role);
+        const userMetadata = userMetadataMap.get(m.user.id);
+        return {
+          id: m.id,
+          userId: m.user.id,
+          name: m.user.name,
+          email: m.user.email,
+          image: m.user.image,
+          role: m.role,
+          isBot: m.user.isBot,
+          createdAt: m.createdAt,
+          discoveredInChannels: isGuestOrExternal ? channelsByUser.get(m.user.id) || [] : undefined,
+          slackUsername: userMetadata?.slackUsername,
+          slackRealName: userMetadata?.slackRealName,
+        };
+      });
+    }
+
+    // If no estate found, return basic member info without Slack metadata
     return members.map((m) => ({
       id: m.id,
       userId: m.user.id,
@@ -131,7 +199,11 @@ export const organizationRouter = router({
       email: m.user.email,
       image: m.user.image,
       role: m.role,
+      isBot: m.user.isBot,
       createdAt: m.createdAt,
+      discoveredInChannels: undefined,
+      slackUsername: undefined,
+      slackRealName: undefined,
     }));
   }),
 

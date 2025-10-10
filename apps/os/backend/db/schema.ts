@@ -43,6 +43,7 @@ export const user = pgTable("user", (t) => ({
   banned: t.boolean(),
   banReason: t.text(),
   banExpires: t.timestamp(),
+  isBot: t.boolean().default(false).notNull(),
   ...withTimestamps,
 }));
 export const userRelations = relations(user, ({ many }) => ({
