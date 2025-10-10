@@ -20,8 +20,7 @@ const config = defineConfig({
         - Use exec tool for running shell commands in sandbox
       `,
       tools: [tools.exec()],
-      // this is the #agents-with-sandboxes channel
-      match: matchers.slackChannel("agents-with-sandboxes"),
+      match: matchers.slackChannel("#agents-with-sandboxes"),
     },
   ],
 });

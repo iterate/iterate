@@ -1,12 +1,13 @@
 import { useState, Suspense } from "react";
-import { Settings, Loader2, Save, User, Shield, ArrowLeft } from "lucide-react";
+import { Save, ArrowLeft } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
+import { toast } from "sonner";
+import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Input } from "../components/ui/input.tsx";
-import { Label } from "../components/ui/label.tsx";
 import { Switch } from "../components/ui/switch.tsx";
 import { Avatar, AvatarImage, AvatarFallback } from "../components/ui/avatar.tsx";
 import {
@@ -16,6 +17,15 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "../components/ui/field.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -44,34 +54,30 @@ function UserSettingsContent() {
   const [userName, setUserName] = useState(user.name);
   const [debugMode, setDebugMode] = useState(user.debugMode || false);
   const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const updateUser = useMutation(
     trpc.user.updateProfile.mutationOptions({
       onSuccess: (data) => {
-        setSuccessMessage("User settings updated successfully");
+        toast.success("User settings updated successfully");
         setUserName(data.name);
         setDebugMode(data.debugMode || false);
         setError(null);
-        // Clear success message after 3 seconds
-        setTimeout(() => setSuccessMessage(null), 3000);
       },
       onError: (error) => {
         setError(error.message);
-        setSuccessMessage(null);
       },
     }),
   );
 
-  const deleteUser = useMutation(trpc.admin.deleteUserByEmail.mutationOptions({}));
+  const deleteUser = useMutation(trpc.user.deleteAccount.mutationOptions({}));
 
   const handleDeleteUser = async () => {
     setDeleteError(null);
 
     try {
-      await deleteUser.mutateAsync({ email: user.email });
+      await deleteUser.mutateAsync();
     } catch (mutationError) {
       setDeleteError(
         mutationError instanceof Error ? mutationError.message : "Failed to delete user",
@@ -112,7 +118,6 @@ function UserSettingsContent() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setSuccessMessage(null);
 
     if (!userName.trim()) {
       setError("Name is required");
@@ -155,133 +160,114 @@ function UserSettingsContent() {
     .toUpperCase();
 
   return (
-    <div className="container mx-auto py-8 max-w-4xl">
+    <div className="container mx-auto p-4 max-w-3xl">
       {/* Header with back button */}
-      <div className="flex items-center gap-4 mb-6">
-        <Button variant="ghost" size="sm" onClick={handleGoBack}>
-          <ArrowLeft className="h-4 w-4 mr-2" />
-          Back
-        </Button>
-        <div>
-          <h1 className="text-3xl font-bold flex items-center gap-2">
-            <Settings className="h-8 w-8" />
-            User Settings
-          </h1>
-          <p className="text-muted-foreground">
-            Manage your profile information and account preferences
-          </p>
-        </div>
-      </div>
+      <Button variant="ghost" size="sm" onClick={handleGoBack} className="mb-2">
+        <ArrowLeft className="h-4 w-4 mr-2" />
+        Back to dashboard
+      </Button>
 
       <div className="grid gap-6">
         {/* Profile Information */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <User className="h-5 w-5" />
-              Profile Information
-            </CardTitle>
-            <CardDescription>
-              Update your personal information and display preferences
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Avatar and User ID */}
-              <div className="flex items-center gap-4">
-                <Avatar className="h-16 w-16">
-                  <AvatarImage src={user.image || undefined} alt={user.name} />
-                  <AvatarFallback className="text-lg">{userInitials}</AvatarFallback>
-                </Avatar>
-                <div>
-                  <Label className="text-sm font-medium text-muted-foreground">User ID</Label>
-                  <p className="font-mono text-sm bg-muted px-2 py-1 rounded">{user.id}</p>
-                </div>
-              </div>
-
-              {/* Name Input */}
-              <div className="space-y-2">
-                <Label htmlFor="name">Full Name</Label>
-                <Input
-                  id="name"
-                  value={userName}
-                  onChange={(e) => {
-                    setUserName(e.target.value);
-                    setError(null);
-                    setSuccessMessage(null);
-                  }}
-                  disabled={updateUser.isPending}
-                />
-              </div>
-
-              {/* Email (Read-only) */}
-              <div className="space-y-2">
-                <Label htmlFor="email">Email Address</Label>
-                <Input id="email" value={user.email} disabled className="bg-muted" />
-                <p className="text-xs text-muted-foreground">
-                  Email cannot be changed. Contact support if you need to update your email.
-                </p>
-              </div>
-
-              {/* Debug Mode Toggle */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="flex items-center gap-2">
-                      <Shield className="h-4 w-4" />
-                      Debug Mode
-                    </Label>
-                    <p className="text-sm text-muted-foreground">
-                      Enable additional debugging information and developer features
-                    </p>
+        <Card variant="muted">
+          <CardContent>
+            <form onSubmit={handleSubmit}>
+              <FieldSet>
+                <FieldLegend>Profile Information</FieldLegend>
+                <FieldDescription>
+                  Manage your profile information and account preferences
+                </FieldDescription>
+                <FieldGroup>
+                  {/* Avatar and User ID */}
+                  <div className="flex items-center gap-4">
+                    <Avatar className="h-16 w-16">
+                      <AvatarImage src={user.image || undefined} alt={user.name} />
+                      <AvatarFallback className="text-lg">{userInitials}</AvatarFallback>
+                    </Avatar>
+                    <div className="flex-1 min-w-0">
+                      <FieldLabel className="text-sm font-medium text-muted-foreground">
+                        User ID
+                      </FieldLabel>
+                      <p className="font-mono text-sm bg-muted px-2 py-1 rounded w-full truncate">
+                        {user.id}
+                      </p>
+                    </div>
                   </div>
-                  <Switch
-                    checked={debugMode}
-                    onCheckedChange={(checked) => {
-                      setDebugMode(checked);
-                      setError(null);
-                      setSuccessMessage(null);
-                    }}
-                    disabled={updateUser.isPending}
-                  />
-                </div>
-              </div>
 
-              {/* Error/Success Messages */}
-              {error && (
-                <div className="bg-destructive/15 text-destructive px-3 py-2 rounded-md text-sm">
-                  {error}
-                </div>
-              )}
-              {successMessage && (
-                <div className="bg-green-50 text-green-700 px-3 py-2 rounded-md text-sm border border-green-200">
-                  {successMessage}
-                </div>
-              )}
+                  {/* Name Input */}
+                  <Field>
+                    <FieldLabel htmlFor="name">Full Name</FieldLabel>
+                    <Input
+                      id="name"
+                      value={userName}
+                      onChange={(e) => {
+                        setUserName(e.target.value);
+                        setError(null);
+                      }}
+                      disabled={updateUser.isPending}
+                    />
+                  </Field>
 
-              {/* Submit Button */}
-              <Button
-                type="submit"
-                disabled={!hasChanges || updateUser.isPending}
-                className="w-full sm:w-auto"
-              >
-                {updateUser.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="mr-2 h-4 w-4" />
-                    Save Changes
-                  </>
-                )}
-              </Button>
+                  {/* Email (Read-only) */}
+                  <Field>
+                    <FieldLabel htmlFor="email">Email Address</FieldLabel>
+                    <Input id="email" value={user.email} disabled className="bg-muted" />
+                    <FieldDescription>
+                      Email cannot be changed. Contact support if you need to update your email.
+                    </FieldDescription>
+                  </Field>
+
+                  {/* Debug Mode Toggle */}
+                  <Field orientation="horizontal">
+                    <FieldContent>
+                      <FieldLabel htmlFor="debug-mode">Debug Mode</FieldLabel>
+                      <FieldDescription>
+                        Enable additional debugging information and developer features
+                      </FieldDescription>
+                    </FieldContent>
+                    <Switch
+                      id="debug-mode"
+                      checked={debugMode}
+                      onCheckedChange={(checked) => {
+                        setDebugMode(checked);
+                        setError(null);
+                      }}
+                      disabled={updateUser.isPending}
+                    />
+                  </Field>
+
+                  {/* Error Messages */}
+                  {error && (
+                    <div className="bg-destructive/15 text-destructive px-3 py-2 rounded-md text-sm">
+                      {error}
+                    </div>
+                  )}
+
+                  {/* Submit Button */}
+                  <Button
+                    type="submit"
+                    disabled={!hasChanges || updateUser.isPending}
+                    className="w-full sm:w-auto"
+                  >
+                    {updateUser.isPending ? (
+                      <>
+                        <Spinner className="mr-2 h-4 w-4" />
+                        Saving...
+                      </>
+                    ) : (
+                      <>
+                        <Save className="mr-2 h-4 w-4" />
+                        Save Changes
+                      </>
+                    )}
+                  </Button>
+                </FieldGroup>
+              </FieldSet>
             </form>
           </CardContent>
         </Card>
 
-        <Card>
+        <Card variant="muted">
           <CardHeader>
             <CardTitle>Danger Zone</CardTitle>
             <CardDescription>
@@ -319,7 +305,7 @@ function UserSettingsContent() {
                   >
                     {deleteUser.isPending ? (
                       <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <Spinner className="mr-2 h-4 w-4" />
                         Deleting...
                       </>
                     ) : (
@@ -356,25 +342,22 @@ export default function UserSettings() {
   return (
     <Suspense
       fallback={
-        <div className="container mx-auto py-8 max-w-4xl">
+        <div className="container mx-auto py-8 max-w-3xl">
           {/* Header with back button - same as main content */}
-          <div className="flex items-center gap-4 mb-6">
-            <Button variant="ghost" size="sm" onClick={handleGoBack}>
+          <div className="space-y-4 mb-6">
+            <Button variant="ghost" size="sm" onClick={handleGoBack} className="pl-0">
               <ArrowLeft className="h-4 w-4 mr-2" />
               Back
             </Button>
             <div>
-              <h1 className="text-3xl font-bold flex items-center gap-2">
-                <Settings className="h-8 w-8" />
-                User Settings
-              </h1>
+              <h1 className="text-3xl font-bold">User Settings</h1>
               <p className="text-muted-foreground">
                 Manage your profile information and account preferences
               </p>
             </div>
           </div>
           <div className="flex items-center justify-center py-16">
-            <Loader2 className="h-8 w-8 animate-spin" />
+            <Spinner className="h-8 w-8" />
           </div>
         </div>
       }

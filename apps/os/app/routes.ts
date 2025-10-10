@@ -39,7 +39,7 @@ export default [
       // Estate-specific routes with their own loader
       route(":estateId", "./routes/org/estate/loader.tsx", [
         index("./routes/org/estate/index.tsx"),
-        route("estate", "./routes/org/estate/estate.tsx"),
+        route("repo", "./routes/org/estate/repo.tsx"),
 
         ...prefix("integrations", [
           index("./routes/org/estate/integrations/index.tsx"),
@@ -48,8 +48,6 @@ export default [
         ]),
 
         ...prefix("agents", [
-          index("./routes/org/estate/agents/index.tsx"),
-          route("start-slack", "./routes/org/estate/agents/start-slack.tsx"),
           route("offline", "./routes/offline-agent-detail.tsx"),
           route(":agentClassName/:durableObjectName", "./routes/online-agent-detail.tsx"),
         ]),

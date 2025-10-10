@@ -101,7 +101,7 @@ export default function AdminForm() {
     );
   }, [inputs, search]);
   return (
-    <div className="flex flex-col flex-wrap gap-3 p-2">
+    <div className="flex flex-col flex-wrap gap-3">
       <style>
         {`
           input {

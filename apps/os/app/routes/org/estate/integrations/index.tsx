@@ -1,18 +1,25 @@
-import { ArrowRight, Github, ChevronDown, ChevronRight, X } from "lucide-react";
+import { ArrowRight, Github, ChevronDown, X, Puzzle } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Badge } from "../../../../components/ui/badge.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
-import { Label } from "../../../../components/ui/label.tsx";
 import {
   Dialog,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "../../../../components/ui/dialog.tsx";
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSeparator,
+  FieldSet,
+} from "../../../../components/ui/field.tsx";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -31,10 +38,11 @@ import {
   SelectValue,
 } from "../../../../components/ui/select.tsx";
 import {
-  Collapsible,
-  CollapsibleContent,
-  CollapsibleTrigger,
-} from "../../../../components/ui/collapsible.tsx";
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "../../../../components/ui/accordion.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,6 +50,17 @@ import {
   DropdownMenuTrigger,
   DropdownMenuSeparator,
 } from "../../../../components/ui/dropdown-menu.tsx";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "../../../../components/ui/table.tsx";
+import { Card, CardContent, CardFooter } from "../../../../components/ui/card.tsx";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../../../components/ui/tabs.tsx";
+import { Item, ItemContent, ItemMedia, ItemTitle } from "../../../../components/ui/item.tsx";
 import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
@@ -50,17 +69,15 @@ import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
   return [
-    { title: "Integrations - Iterate Dashboard" },
+    { title: "Iterate Connectors" },
     {
       name: "description",
-      content: "Connect your accounts to enable integrations across the platform",
+      content: "Connect your iterate bot to third parties",
     },
   ];
 }
 
 function ScopesList({ scope }: { scope: string }) {
-  const [isOpen, setIsOpen] = useState(false);
-
   // Split scopes by comma or space and clean them up
   const scopes = scope
     .split(/[,\s]+/)
@@ -76,29 +93,22 @@ function ScopesList({ scope }: { scope: string }) {
   }
 
   return (
-    <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <CollapsibleTrigger asChild>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="h-auto p-0 text-xs text-muted-foreground hover:text-foreground flex items-center"
-        >
-          <span className="mr-1">
-            {scopes.length} permission{scopes.length !== 1 ? "s" : ""}
-          </span>
-          {isOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        </Button>
-      </CollapsibleTrigger>
-      <CollapsibleContent className="mt-2">
-        <div className="grid grid-cols-1 gap-1">
-          {scopes.map((singleScope, index) => (
-            <Badge key={index} variant="secondary" className="text-xs justify-start font-mono">
-              {singleScope}
-            </Badge>
-          ))}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+    <Accordion type="single" collapsible>
+      <AccordionItem value="permissions">
+        <AccordionTrigger className="py-2 text-xs text-muted-foreground hover:text-foreground">
+          {scopes.length} permission{scopes.length !== 1 ? "s" : ""}
+        </AccordionTrigger>
+        <AccordionContent>
+          <div className="grid grid-cols-1 gap-1">
+            {scopes.map((singleScope, index) => (
+              <Badge key={index} variant="secondary" className="text-xs justify-start font-mono">
+                {singleScope}
+              </Badge>
+            ))}
+          </div>
+        </AccordionContent>
+      </AccordionItem>
+    </Accordion>
   );
 }
 
@@ -118,7 +128,7 @@ type MCPConnection = {
 export default function Integrations() {
   const estateId = useEstateId();
   const trpc = useTRPC();
-  const { data, isLoading, error, refetch } = useQuery(
+  const { data, refetch } = useSuspenseQuery(
     trpc.integrations.list.queryOptions({
       estateId: estateId,
     }),
@@ -133,7 +143,6 @@ export default function Integrations() {
 
   // Determine default tab: personal first, then company if personal is empty
   const defaultTab = personalCount > 0 ? "personal" : companyCount > 0 ? "company" : "personal";
-  const [activeTab, setActiveTab] = useState<"company" | "personal">(defaultTab);
 
   const { mutateAsync: startGithubAppInstallFlow } = useMutation(
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
@@ -147,8 +156,6 @@ export default function Integrations() {
 
   // Use the Slack connection hook
   const { connectSlackBot, disconnectSlackBot } = useSlackConnection();
-
-  const filteredMCPConnections = mcpConnections.filter((conn) => conn.mode === activeTab);
 
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {
@@ -207,76 +214,23 @@ export default function Integrations() {
     }
   };
 
-  if (isLoading) {
-    return (
-      <div className="p-6">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(2)].map((_, i) => (
-            <div key={i} className="animate-pulse border rounded-lg p-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-12 h-12 rounded-lg bg-gray-200"></div>
-                <div>
-                  <div className="h-4 bg-gray-200 rounded w-20 mb-2"></div>
-                  <div className="h-3 bg-gray-200 rounded w-32"></div>
-                </div>
-              </div>
-              <div className="h-8 bg-gray-200 rounded w-full"></div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="p-6">
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-          <p className="text-muted-foreground text-lg">
-            Connect your accounts to enable integrations across the platform
-          </p>
-        </div>
-        <div className="text-red-500">Error loading integrations: {error.message}</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="p-6">
-      {/* Header */}
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">Integrations</h1>
-        <p className="text-muted-foreground text-lg">
-          Connect your accounts to enable integrations across the platform
-        </p>
-      </div>
-
-      {/* OAuth Integration Cards (GitHub, Slack, Google) */}
-      <div className="mb-8">
-        <h2 className="text-xl font-semibold mb-4">Core Integrations</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {integrations.map((integration: any) => (
-            <div key={integration.id} className="relative border rounded-lg">
-              <div className="p-6 pb-4">
-                <div className="flex items-start justify-between">
-                  <div className="flex items-center gap-3">
-                    {integration.icon === "github" ? (
-                      <div className="w-12 h-12 rounded-lg bg-gray-900 flex items-center justify-center">
-                        <Github className="w-6 h-6 text-white" />
-                      </div>
-                    ) : integration.icon === "slack" ? (
-                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
+    <div className="space-y-6">
+      {/* Integrations Section */}
+      <Card variant="muted">
+        <CardContent>
+          <h2 className="text-xl font-semibold mb-4">Built-in Connectors</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {integrations.map((integration: any) => (
+              <Card key={integration.id}>
+                <CardContent>
+                  <Item className="p-0 mb-3">
+                    <ItemMedia>
+                      {integration.icon === "github" ? (
+                        <Github className="w-6 h-6" />
+                      ) : integration.icon === "slack" ? (
                         <img src="/slack.svg" alt={integration.name} className="w-6 h-6" />
-                      </div>
-                    ) : integration.icon === "google" ? (
-                      <div className="w-12 h-12 rounded-lg bg-white border border-gray-200 flex items-center justify-center">
+                      ) : integration.icon === "google" ? (
                         <svg className="w-6 h-6" viewBox="0 0 24 24">
                           <path
                             fill="#4285F4"
@@ -295,164 +249,132 @@ export default function Integrations() {
                             d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"
                           />
                         </svg>
-                      </div>
-                    ) : (
-                      <div className="w-12 h-12 rounded-lg bg-gray-200 flex items-center justify-center">
+                      ) : (
                         <span className="text-xs">{integration.name[0]}</span>
+                      )}
+                    </ItemMedia>
+                    <ItemContent>
+                      <ItemTitle>{integration.name}</ItemTitle>
+                      <div className="text-xs text-muted-foreground">
+                        {integration.id === "google"
+                          ? "Personal connection"
+                          : integration.isEstateWide
+                            ? "Shared with organization"
+                            : integration.isPersonal
+                              ? "Personal connection"
+                              : ""}
                       </div>
-                    )}
+                    </ItemContent>
+                  </Item>
+
+                  {integration.scope && (
                     <div>
-                      <div className="text-lg font-semibold">{integration.name}</div>
-                      <div className="text-sm text-muted-foreground">{integration.description}</div>
+                      <ScopesList scope={integration.scope} />
                     </div>
-                  </div>
-                </div>
-              </div>
+                  )}
 
-              <div className="px-6 pb-6">
-                {integration.isConnected && (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground mb-4">
-                    {integration.isEstateWide && (
-                      <Badge variant="outline" className="text-xs">
-                        Estate-wide
-                      </Badge>
-                    )}
-                    {integration.isPersonal && (
-                      <Badge variant="outline" className="text-xs">
-                        Personal
-                      </Badge>
-                    )}
-                  </div>
-                )}
-
-                {integration.scope && (
-                  <div className="mb-4">
-                    <p className="text-xs text-muted-foreground mb-1">Permissions:</p>
-                    <ScopesList scope={integration.scope} />
-                  </div>
-                )}
-
-                {integration.isConnected ? (
-                  <div className="flex items-center gap-2">
-                    <Badge variant="secondary" className="text-green-700 bg-green-100">
-                      Connected
-                    </Badge>
-                    {/* Show dropdown if both estate-wide and personal connections exist */}
-                    {integration.isEstateWide && integration.isPersonal ? (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" size="sm">
-                            Disconnect
-                            <ChevronDown className="ml-1 h-3 w-3" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuItem
-                            onClick={() => handleDisconnect(integration.id, "estate")}
-                          >
-                            Disconnect from Estate
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleDisconnect(integration.id, "personal")}
-                          >
-                            Disconnect Personal
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            className="text-red-600"
-                            onClick={() => handleDisconnect(integration.id, "both")}
-                          >
-                            Disconnect All
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleDisconnect(integration.id, "both")}
-                      >
-                        Disconnect
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <Button className="w-full" onClick={() => handleConnect(integration.id)}>
-                    Connect {integration.name}
-                    <ArrowRight className="w-4 h-4 ml-2" />
-                  </Button>
-                )}
-
-                {integration.connectedAt && (
-                  <p className="text-xs text-muted-foreground mt-2">
-                    Connected on {new Date(integration.connectedAt).toLocaleDateString()}
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* MCP Connections Table */}
-      {mcpConnections.length > 0 && (
-        <div>
-          <div className="mb-4">
-            <h2 className="text-xl font-semibold mb-2">MCP Servers</h2>
+                  {integration.isConnected ? (
+                    <>
+                      {integration.connectedAt && (
+                        <p className="text-xs text-green-600 mb-2">
+                          Connected on {new Date(integration.connectedAt).toLocaleDateString()}
+                        </p>
+                      )}
+                      {/* Show dropdown if both estate-wide and personal connections exist */}
+                      {integration.isEstateWide && integration.isPersonal ? (
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="outline" size="sm" className="w-full">
+                              Disconnect
+                              <ChevronDown className="ml-1 h-3 w-3" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem
+                              onClick={() => handleDisconnect(integration.id, "estate")}
+                            >
+                              Disconnect from Estate
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => handleDisconnect(integration.id, "personal")}
+                            >
+                              Disconnect Personal
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-red-600"
+                              onClick={() => handleDisconnect(integration.id, "both")}
+                            >
+                              Disconnect All
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full"
+                          onClick={() => handleDisconnect(integration.id, "both")}
+                        >
+                          Disconnect
+                        </Button>
+                      )}
+                    </>
+                  ) : (
+                    <Button className="w-full" onClick={() => handleConnect(integration.id)}>
+                      Connect {integration.name}
+                      <ArrowRight className="w-4 h-4 ml-2" />
+                    </Button>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
           </div>
+        </CardContent>
+      </Card>
 
-          {/* Tabs - only show if there are connections in multiple modes */}
-          {personalCount > 0 && companyCount > 0 && (
-            <div className="border-b mb-4">
-              <div className="flex gap-4">
-                <button
-                  className={`pb-2 px-1 border-b-2 transition-colors ${
-                    activeTab === "personal"
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveTab("personal")}
-                >
-                  Personal
-                  <Badge variant="secondary" className="ml-2">
-                    {personalCount}
-                  </Badge>
-                </button>
-                <button
-                  className={`pb-2 px-1 border-b-2 transition-colors ${
-                    activeTab === "company"
-                      ? "border-primary text-primary"
-                      : "border-transparent text-muted-foreground hover:text-foreground"
-                  }`}
-                  onClick={() => setActiveTab("company")}
-                >
-                  Estate-wide
-                  <Badge variant="secondary" className="ml-2">
-                    {companyCount}
-                  </Badge>
-                </button>
-              </div>
-            </div>
-          )}
+      {/* MCP Connections Section - Always Visible */}
+      <Card variant="muted">
+        <CardContent>
+          <h2 className="text-xl font-semibold mb-4">Remote MCP Server Connections</h2>
 
-          {/* Show mode label if only one type exists */}
-          {(personalCount > 0 || companyCount > 0) && !(personalCount > 0 && companyCount > 0) && (
-            <div className="mb-4">
-              <Badge variant="outline" className="text-sm">
-                {personalCount > 0 ? "Personal" : "Estate-wide"}
-              </Badge>
-            </div>
-          )}
+          {/* Always show tabs */}
+          <Tabs defaultValue={defaultTab} className="w-full">
+            <TabsList className="grid w-full grid-cols-2">
+              <TabsTrigger value="personal" className="flex items-center gap-2">
+                Personal
+                <Badge variant="secondary" className="text-xs">
+                  {personalCount}
+                </Badge>
+              </TabsTrigger>
+              <TabsTrigger value="company" className="flex items-center gap-2">
+                Shared with organization
+                <Badge variant="secondary" className="text-xs">
+                  {companyCount}
+                </Badge>
+              </TabsTrigger>
+            </TabsList>
 
-          {/* MCP Connections Table */}
-          <MCPConnectionsTable
-            connections={filteredMCPConnections}
-            onDisconnect={handleDisconnectMCP}
-            estateId={estateId}
-            onUpdate={refetch}
-          />
-        </div>
-      )}
+            <TabsContent value="personal" className="mt-4">
+              <MCPConnectionsTable
+                connections={mcpConnections.filter((c) => c.mode === "personal")}
+                onDisconnect={handleDisconnectMCP}
+                estateId={estateId}
+                onUpdate={refetch}
+              />
+            </TabsContent>
+
+            <TabsContent value="company" className="mt-4">
+              <MCPConnectionsTable
+                connections={mcpConnections.filter((c) => c.mode === "company")}
+                onDisconnect={handleDisconnectMCP}
+                estateId={estateId}
+                onUpdate={refetch}
+              />
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
     </div>
   );
 }
@@ -518,68 +440,74 @@ function MCPConnectionsTable({
     }
   }, [connectionDetails]);
 
-  if (connections.length === 0) {
-    return (
-      <div className="border rounded-lg p-8 text-center text-muted-foreground">
-        No MCP servers connected
-      </div>
-    );
-  }
-
   return (
     <>
-      <div className="border rounded-lg overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-muted/50">
-            <tr>
-              <th className="text-left p-4 font-medium">Server</th>
-              <th className="text-left p-4 font-medium">Type</th>
-              <th className="text-left p-4 font-medium">Connected</th>
-              <th className="text-right p-4 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {connections.map((connection) => (
-              <tr
-                key={connection.id}
-                className="hover:bg-muted/30 cursor-pointer"
-                onClick={() => handleRowClick(connection)}
-              >
-                <td className="p-4">
-                  <code className="text-sm">
-                    {connection.type === "mcp-params"
-                      ? connection.serverUrl
-                      : connection.providerId}
-                  </code>
-                </td>
-                <td className="p-4">
-                  <Badge variant="outline">
-                    {connection.type === "mcp-oauth" ? "OAuth" : "Params"}
-                  </Badge>
-                </td>
-                <td className="p-4 text-sm text-muted-foreground">
-                  {connection.connectedAt &&
-                    new Date(connection.connectedAt).toLocaleString(undefined, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    })}
-                </td>
-                <td className="p-4 text-right">
-                  <Button
-                    variant="destructive"
-                    size="sm"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConnectionToDisconnect(connection);
-                    }}
-                  >
-                    Disconnect
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="rounded-md border bg-background">
+        <Table>
+          <TableHeader>
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="h-12 px-4">Server</TableHead>
+              <TableHead className="h-12 px-4">Type</TableHead>
+              <TableHead className="h-12 px-4">Connected</TableHead>
+              <TableHead className="h-12 px-4 w-[100px]"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {connections.length > 0 ? (
+              connections.map((connection) => (
+                <TableRow
+                  key={connection.id}
+                  className="hover:bg-muted/50 cursor-pointer"
+                  onClick={() => handleRowClick(connection)}
+                >
+                  <TableCell className="px-4 py-3">
+                    <code className="text-sm">
+                      {connection.type === "mcp-params"
+                        ? connection.serverUrl
+                        : connection.providerId}
+                    </code>
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Badge variant="outline">
+                      {connection.type === "mcp-oauth" ? "OAuth" : "Params"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="px-4 py-3 text-sm text-muted-foreground">
+                    {connection.connectedAt &&
+                      new Date(connection.connectedAt).toLocaleString(undefined, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      })}
+                  </TableCell>
+                  <TableCell className="px-4 py-3">
+                    <Button
+                      variant="destructive"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setConnectionToDisconnect(connection);
+                      }}
+                    >
+                      Disconnect
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : (
+              <TableRow>
+                <TableCell colSpan={4} className="px-4 py-8">
+                  <div className="flex flex-col items-center justify-center text-center">
+                    <Puzzle className="h-8 w-8 text-muted-foreground mb-2" />
+                    <p className="text-sm text-muted-foreground">No MCP servers connected yet</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Just ask @iterate to connect to any remote MCP server URL
+                    </p>
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
       </div>
 
       {/* Connection Details Dialog */}
@@ -597,140 +525,170 @@ function MCPConnectionsTable({
           {isLoadingDetails ? (
             <div className="py-8 text-center text-muted-foreground">Loading...</div>
           ) : connectionDetails?.type === "params" ? (
-            <div className="space-y-4">
-              <div>
-                <Label>Server URL</Label>
-                <code className="block mt-1 p-2 bg-muted rounded text-sm">
-                  {selectedConnection?.serverUrl}
-                </code>
-              </div>
+            <FieldGroup>
+              <FieldSet>
+                <FieldLegend>Connection Information</FieldLegend>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel>Server URL</FieldLabel>
+                    <code className="block p-2 bg-muted rounded text-sm">
+                      {selectedConnection?.serverUrl}
+                    </code>
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
 
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <Label>Parameters</Label>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setParams([...params, { key: "", value: "", type: "header" }])}
-                  >
-                    Add Parameter
-                  </Button>
-                </div>
+              <FieldSeparator />
 
-                {params.map((param, index) => (
-                  <div key={index} className="flex gap-2 items-center">
-                    <div className="flex-1">
-                      <Input
-                        placeholder="Key"
-                        value={param.key}
-                        onChange={(e) => {
-                          const newParams = [...params];
-                          newParams[index].key = e.target.value;
-                          setParams(newParams);
-                        }}
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <Input
-                        placeholder="Value"
-                        type="password"
-                        value={param.value}
-                        onChange={(e) => {
-                          const newParams = [...params];
-                          newParams[index].value = e.target.value;
-                          setParams(newParams);
-                        }}
-                      />
-                    </div>
-                    <div className="w-32">
-                      <Select
-                        value={param.type}
-                        onValueChange={(value) => {
-                          const newParams = [...params];
-                          newParams[index].type = value;
-                          setParams(newParams);
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="header">Header</SelectItem>
-                          <SelectItem value="query_param">Query Param</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+              <FieldSet>
+                <FieldLegend>Parameters</FieldLegend>
+                <FieldDescription>
+                  Configure headers and query parameters for this MCP server connection
+                </FieldDescription>
+                <FieldGroup>
+                  <div className="flex items-center justify-between">
+                    <FieldLabel>Connection Parameters</FieldLabel>
                     <Button
-                      variant="ghost"
-                      size="icon"
-                      className="flex-shrink-0"
-                      onClick={() => {
-                        setParams(params.filter((_, i) => i !== index));
-                      }}
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setParams([...params, { key: "", value: "", type: "header" }])}
                     >
-                      <X className="h-4 w-4" />
+                      Add Parameter
                     </Button>
                   </div>
-                ))}
-              </div>
-            </div>
+
+                  {params.length > 0 ? (
+                    <div className="space-y-3">
+                      {params.map((param, index) => (
+                        <div
+                          key={index}
+                          className="grid grid-cols-[1fr_1fr_auto_auto] gap-2 items-end"
+                        >
+                          <Field>
+                            <FieldLabel htmlFor={`param-key-${index}`}>Key</FieldLabel>
+                            <Input
+                              id={`param-key-${index}`}
+                              placeholder="Authorization"
+                              value={param.key}
+                              onChange={(e) => {
+                                const newParams = [...params];
+                                newParams[index].key = e.target.value;
+                                setParams(newParams);
+                              }}
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor={`param-value-${index}`}>Value</FieldLabel>
+                            <Input
+                              id={`param-value-${index}`}
+                              placeholder="••••••••"
+                              type="password"
+                              value={param.value}
+                              onChange={(e) => {
+                                const newParams = [...params];
+                                newParams[index].value = e.target.value;
+                                setParams(newParams);
+                              }}
+                            />
+                          </Field>
+                          <Field>
+                            <FieldLabel htmlFor={`param-type-${index}`}>Type</FieldLabel>
+                            <Select
+                              value={param.type}
+                              onValueChange={(value) => {
+                                const newParams = [...params];
+                                newParams[index].type = value;
+                                setParams(newParams);
+                              }}
+                            >
+                              <SelectTrigger id={`param-type-${index}`} className="w-[140px]">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="header">Header</SelectItem>
+                                <SelectItem value="query_param">Query Param</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </Field>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="flex-shrink-0"
+                            onClick={() => {
+                              setParams(params.filter((_, i) => i !== index));
+                            }}
+                          >
+                            <X className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No parameters configured. Click "Add Parameter" to add connection parameters.
+                    </p>
+                  )}
+                </FieldGroup>
+              </FieldSet>
+            </FieldGroup>
           ) : connectionDetails?.type === "oauth" ? (
-            <div className="space-y-4">
-              <div>
-                <Label>Provider ID</Label>
-                <code className="block mt-1 p-2 bg-muted rounded text-sm">
-                  {connectionDetails.providerId}
-                </code>
-              </div>
+            <FieldGroup>
+              <FieldSet>
+                <FieldLegend>OAuth Connection</FieldLegend>
+                <FieldDescription>
+                  Details about your OAuth connection to this MCP server
+                </FieldDescription>
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel>Provider ID</FieldLabel>
+                    <code className="block p-2 bg-muted rounded text-sm">
+                      {connectionDetails.providerId}
+                    </code>
+                  </Field>
 
-              {connectionDetails.scope && (
-                <div>
-                  <Label>Scopes</Label>
-                  <div className="mt-1 p-2 bg-muted rounded text-sm">
-                    {connectionDetails.scope.split(" ").map((scope, i) => (
-                      <Badge key={i} variant="secondary" className="mr-1 mb-1">
-                        {scope}
-                      </Badge>
-                    ))}
-                  </div>
-                </div>
-              )}
+                  {connectionDetails.scope && (
+                    <Field>
+                      <FieldLabel>Scopes</FieldLabel>
+                      <div className="p-2 bg-muted rounded text-sm">
+                        {connectionDetails.scope.split(" ").map((scope: string, i: number) => (
+                          <Badge key={i} variant="secondary" className="mr-1 mb-1">
+                            {scope}
+                          </Badge>
+                        ))}
+                      </div>
+                    </Field>
+                  )}
 
-              {connectionDetails.clientInfo && (
-                <div>
-                  <Label>Client ID</Label>
-                  <code className="block mt-1 p-2 bg-muted rounded text-sm">
-                    {connectionDetails.clientInfo.client_id}
-                  </code>
-                </div>
-              )}
+                  {connectionDetails.clientInfo && (
+                    <Field>
+                      <FieldLabel>Client ID</FieldLabel>
+                      <code className="block p-2 bg-muted rounded text-sm">
+                        {connectionDetails.clientInfo.client_id}
+                      </code>
+                    </Field>
+                  )}
 
-              <div>
-                <Label>Connected</Label>
-                <div className="mt-1 text-sm text-muted-foreground">
-                  {new Date(connectionDetails.connectedAt).toLocaleString(undefined, {
-                    dateStyle: "long",
-                    timeStyle: "medium",
-                  })}
-                </div>
-              </div>
-            </div>
+                  <Field>
+                    <FieldLabel>Connected</FieldLabel>
+                    <div className="text-sm text-muted-foreground">
+                      {new Date(connectionDetails.connectedAt).toLocaleString(undefined, {
+                        dateStyle: "long",
+                        timeStyle: "medium",
+                      })}
+                    </div>
+                  </Field>
+                </FieldGroup>
+              </FieldSet>
+            </FieldGroup>
           ) : null}
 
-          <DialogFooter>
-            {selectedConnection?.type === "mcp-params" ? (
-              <>
-                <Button variant="outline" onClick={handleClose}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSaveParams} disabled={isUpdating}>
-                  {isUpdating ? "Saving..." : "Save Changes"}
-                </Button>
-              </>
-            ) : (
-              <Button onClick={handleClose}>Close</Button>
-            )}
-          </DialogFooter>
+          {selectedConnection?.type === "mcp-params" && (
+            <CardFooter className="justify-end">
+              <Button onClick={handleSaveParams} disabled={isUpdating}>
+                {isUpdating ? "Saving..." : "Save Changes"}
+              </Button>
+            </CardFooter>
+          )}
         </DialogContent>
       </Dialog>
 

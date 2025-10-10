@@ -6,7 +6,7 @@ export default function SessionInfoPage() {
   const { data: sessionInfo } = useSuspenseQuery(trpc.admin.getSessionInfo.queryOptions());
 
   return (
-    <div className="p-6 space-y-6">
+    <>
       <div>
         <h2 className="text-2xl font-bold">Session Information</h2>
         <p className="text-muted-foreground">Current user and session details</p>
@@ -27,6 +27,6 @@ export default function SessionInfoPage() {
           {JSON.stringify(sessionInfo?.session, null, 2)}
         </pre>
       </div>
-    </div>
+    </>
   );
 }

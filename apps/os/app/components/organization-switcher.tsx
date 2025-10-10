@@ -1,13 +1,13 @@
 import { ChevronsUpDown, Plus } from "lucide-react";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useNavigate, useRouteLoaderData } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
+import type { loader as orgLoader } from "../routes/org/loader.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
@@ -17,7 +17,17 @@ export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
   const currentOrganizationId = useOrganizationId();
-  const { data: organizations } = useSuspenseQuery(trpc.organization.list.queryOptions());
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
+  const { data: allOrganizations } = useSuspenseQuery({
+    ...trpc.organization.list.queryOptions(),
+    initialData: loaderData?.organizations,
+  });
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+
+  // Only show organizations where user is owner or member
+  const organizations = allOrganizations.filter(
+    (org) => org.role === "owner" || org.role === "member",
+  );
 
   const currentOrganization = organizations.find((org) => org.id === currentOrganizationId);
 
@@ -72,9 +82,6 @@ export function OrganizationSwitcher() {
             side="bottom"
             sideOffset={4}
           >
-            <DropdownMenuLabel className="text-xs text-muted-foreground">
-              Organizations
-            </DropdownMenuLabel>
             {organizations.map((org) => (
               <DropdownMenuItem
                 key={org.id}
@@ -90,13 +97,20 @@ export function OrganizationSwitcher() {
                 </div>
               </DropdownMenuItem>
             ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem className="gap-2 p-2" onClick={() => navigate("/new-organization")}>
-              <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
-                <Plus className="size-4" />
-              </div>
-              <div className="font-medium text-muted-foreground">Add organization</div>
-            </DropdownMenuItem>
+            {user.debugMode && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem
+                  className="gap-2 p-2"
+                  onClick={() => navigate("/new-organization")}
+                >
+                  <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
+                    <Plus className="size-4" />
+                  </div>
+                  <div className="font-medium text-muted-foreground">Add organization</div>
+                </DropdownMenuItem>
+              </>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>

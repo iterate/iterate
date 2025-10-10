@@ -1,18 +1,24 @@
 import { useState, Suspense } from "react";
-import { Settings, Loader2, Save } from "lucide-react";
+import { Save, Info } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useRouteLoaderData } from "react-router";
+import { toast } from "sonner";
+import { Spinner } from "../../components/ui/spinner.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
-import { Label } from "../../components/ui/label.tsx";
+import { Card, CardContent } from "../../components/ui/card.tsx";
+import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../components/ui/card.tsx";
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "../../components/ui/field.tsx";
 import type { Route } from "./+types/settings.ts";
+import type { loader as orgLoader } from "./loader.tsx";
 
 export function meta(_args: Route.MetaArgs) {
   return [
@@ -23,43 +29,36 @@ export function meta(_args: Route.MetaArgs) {
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const { data: organization } = useSuspenseQuery(
-    trpc.organization.get.queryOptions({ organizationId }),
-  );
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
+  const { data: organization } = useSuspenseQuery({
+    ...trpc.organization.get.queryOptions({ organizationId }),
+    initialData: loaderData?.organization,
+  });
 
   const [organizationName, setOrganizationName] = useState(organization.name);
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const updateOrganization = useMutation(
     trpc.organization.updateName.mutationOptions({
       onSuccess: (data) => {
-        setSuccessMessage("Organization name updated successfully");
+        toast.success("Organization name updated successfully");
         setOrganizationName(data.name);
-        setError(null);
-
-        // Clear success message after 3 seconds
-        setTimeout(() => setSuccessMessage(null), 3000);
       },
       onError: (error) => {
-        setError(error.message);
-        setSuccessMessage(null);
+        toast.error(error.message);
       },
     }),
   );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setSuccessMessage(null);
 
     if (!organizationName.trim()) {
-      setError("Organization name is required");
+      toast.error("Organization name is required");
       return;
     }
 
     if (organizationName === organization.name) {
-      setError("No changes to save");
+      toast.error("No changes to save");
       return;
     }
 
@@ -72,68 +71,66 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
   const hasChanges = organizationName !== organization.name;
 
   return (
-    <div className="p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-4">Organization Settings</h1>
-        <p className="text-muted-foreground text-lg">
-          Manage your organization configuration and preferences
-        </p>
-      </div>
-
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            <Settings className="h-6 w-6 text-muted-foreground" />
-            <div>
-              <CardTitle>General Settings</CardTitle>
-              <CardDescription>Update your organization name and other details</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-5xl">
+      <Card variant="muted">
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="organizationName">Organization Name</Label>
-              <Input
-                id="organizationName"
-                type="text"
-                placeholder="My Company"
-                value={organizationName}
-                onChange={(e) => {
-                  setOrganizationName(e.target.value);
-                  setError(null);
-                  setSuccessMessage(null);
-                }}
-                disabled={updateOrganization.isPending}
-              />
-            </div>
+          <form onSubmit={handleSubmit}>
+            <FieldSet>
+              <FieldLegend>Organization Settings</FieldLegend>
+              <FieldDescription>
+                Manage your organization configuration and preferences
+              </FieldDescription>
+              <FieldGroup>
+                <Field>
+                  <FieldLabel htmlFor="organizationName">Organization Name</FieldLabel>
+                  <Input
+                    id="organizationName"
+                    type="text"
+                    placeholder="My Company"
+                    value={organizationName}
+                    onChange={(e) => {
+                      setOrganizationName(e.target.value);
+                    }}
+                    disabled={updateOrganization.isPending}
+                  />
+                </Field>
 
-            {error && (
-              <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-md">
-                {error}
-              </div>
-            )}
-
-            {successMessage && (
-              <div className="text-sm p-3 rounded-md border bg-card">{successMessage}</div>
-            )}
-
-            <Button type="submit" disabled={updateOrganization.isPending || !hasChanges}>
-              {updateOrganization.isPending ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="mr-2 h-4 w-4" />
-                  Save Changes
-                </>
-              )}
-            </Button>
+                <Button type="submit" disabled={updateOrganization.isPending || !hasChanges}>
+                  {updateOrganization.isPending ? (
+                    <>
+                      <Spinner className="mr-2 h-4 w-4" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="mr-2 h-4 w-4" />
+                      Save Changes
+                    </>
+                  )}
+                </Button>
+              </FieldGroup>
+            </FieldSet>
           </form>
         </CardContent>
       </Card>
+
+      <Alert className="self-start">
+        <Info className="h-4 w-4" />
+        <AlertDescription className="text-pretty">
+          The primary way to configure iterate is via the{" "}
+          <code className="text-sm">iterate.config.ts</code> file in your repository. This follows
+          the principles of{" "}
+          <a
+            href="https://en.wikipedia.org/wiki/Infrastructure_as_code"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-foreground"
+          >
+            infrastructure as code.
+          </a>{" "}
+          Or, in this case perhaps "startup as code".
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }
@@ -152,10 +149,8 @@ export default function OrganizationSettings({ params }: Route.ComponentProps) {
   return (
     <Suspense
       fallback={
-        <div className="p-6">
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </div>
+        <div className="flex items-center justify-center py-16">
+          <Spinner className="h-8 w-8" />
         </div>
       }
     >

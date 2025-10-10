@@ -2,7 +2,7 @@
   "agentCanUpdateSnapshot": true,
   "install": "/usr/local/bin/wait-for-docker.sh && pnpm docker:up && pnpm install",
   "build": {
-    "dockerfile": "../scripts/setup-background-agent/Dockerfile",
+    "dockerfile": "Dockerfile",
     "context": "../scripts/setup-background-agent"
   },
   "terminals": []

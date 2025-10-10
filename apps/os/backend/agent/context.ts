@@ -3,6 +3,7 @@ import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
 import jsonataLib from "jsonata/sync";
+import { parse as parseYaml } from "yaml";
 import { logger } from "../tag-logger.ts";
 import type {
   ContextRule,
@@ -34,7 +35,9 @@ export function hasParticipant(searchString: string) {
 }
 
 export function slackChannel(channelIdOrName: string) {
-  const expression = `agentCoreState.slackChannelId = "${channelIdOrName}" or agentCoreState.slackChannel.name = "${channelIdOrName}"`;
+  // Normalize for channel name comparison (remove # prefix and lowercase)
+  const normalizedForName = channelIdOrName.toLowerCase().replace(/^#/, "");
+  const expression = `agentCoreState.slackChannelId = "${channelIdOrName}" or agentCoreState.slackChannel.name = "${normalizedForName}"`;
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
@@ -152,8 +155,18 @@ function evaluateSingleMatcher(matchAgainst: unknown, matcher: ContextRuleMatche
     case "jsonata": {
       // If the jsonata expression is invalid, this will throw an error
       // We may want to log a warning and return false in the future, but for now we like the error
-      const result = jsonataLib(matcher.expression).evaluate(matchAgainst);
-      return Boolean(result);
+      const evaluator = jsonataLib(matcher.expression);
+      // 1) Keep existing behaviour: evaluate against the full matchAgainst object
+      const resultAgainstFull = evaluator.evaluate(matchAgainst);
+      if (resultAgainstFull) return true;
+
+      // 2) Also allow shorthand expressions that assume the root is agentCoreState
+      const maybeObj = matchAgainst as Record<string, unknown> | undefined;
+      if (maybeObj && typeof maybeObj === "object" && "agentCoreState" in maybeObj) {
+        const resultAgainstCore = evaluator.evaluate((maybeObj as any).agentCoreState);
+        return Boolean(resultAgainstCore);
+      }
+      return false;
     }
 
     case "and": {
@@ -353,12 +366,66 @@ function parseHm(hhmm: string): number {
 }
 
 /**
+ * Parses front matter from a file content string.
+ * Front matter is delimited by triple dashes (---) at the start of the file.
+ * Returns the parsed front matter object and the remaining content.
+ * The match field is automatically converted: strings become jsonata expressions,
+ * objects are treated as ContextRuleMatcher directly.
+ */
+export function parseFrontMatter(content: string): {
+  frontMatter: Record<string, unknown>;
+  body: string;
+} {
+  const trimmedContent = content.trim();
+
+  if (!trimmedContent.startsWith("---")) {
+    return { frontMatter: {}, body: content };
+  }
+
+  const lines = trimmedContent.split("\n");
+  let endIndex = -1;
+
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") {
+      endIndex = i;
+      break;
+    }
+  }
+
+  if (endIndex === -1) {
+    return { frontMatter: {}, body: content };
+  }
+
+  const frontMatterText = lines.slice(1, endIndex).join("\n");
+  const body = lines
+    .slice(endIndex + 1)
+    .join("\n")
+    .trim();
+
+  try {
+    const frontMatter = parseYaml(frontMatterText) as Record<string, unknown>;
+    const result = frontMatter || {};
+
+    if (result.match !== undefined && result.match !== null) {
+      if (typeof result.match === "string") {
+        result.match = { type: "jsonata", expression: result.match };
+      }
+    }
+
+    return { frontMatter: result, body };
+  } catch (error) {
+    logger.error(`Failed to parse front matter as YAML:`, error);
+    return { frontMatter: {}, body: content };
+  }
+}
+
+/**
  * Helper function to create context rules from files matching a glob pattern.
  * Each file becomes a context rule with slug derived from filename and prompt from file content.
+ * Supports YAML front matter for overriding context rule properties.
  */
 export function contextRulesFromFiles(pattern: string, overrides: Partial<ContextRule> = {}) {
   try {
-    // Resolve pattern relative to the config file's directory
     const configDir = findIterateConfig();
     if (!configDir) {
       throw new Error("iterate.config.ts not found");
@@ -366,10 +433,14 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     const files = globSync(pattern, { cwd: configDir }) as string[];
     return files.map((filePath: string) => {
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
-      // Get relative path from config directory and remove .md extension
+      const { frontMatter, body } = parseFrontMatter(fileContent);
+
+      const defaultKey = filePath.replace(/\.md$/, "");
+
       return defineRule({
-        key: filePath.replace(/\.md$/, ""),
-        prompt: fileContent,
+        key: defaultKey,
+        prompt: body,
+        ...frontMatter,
         ...overrides,
       });
     });

@@ -1,29 +1,20 @@
-import { Suspense } from "react";
-import { UserCog, Loader2 } from "lucide-react";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { Users } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
+import { Card, CardContent } from "../../components/ui/card.tsx";
+import { Button } from "../../components/ui/button.tsx";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "../../components/ui/table.tsx";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "../../components/ui/select.tsx";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "../../components/ui/card.tsx";
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemGroup,
+  ItemMedia,
+  ItemTitle,
+} from "../../components/ui/item.tsx";
+import { Avatar, AvatarFallback, AvatarImage } from "../../components/ui/avatar.tsx";
+import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../components/ui/empty.tsx";
 import type { Route } from "./+types/team.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -38,6 +29,7 @@ const roleLabels: Record<string, string> = {
   admin: "Admin",
   member: "Member",
   guest: "Guest",
+  external: "External",
 };
 
 function OrganizationTeamContent({ organizationId }: { organizationId: string }) {
@@ -51,92 +43,145 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   const updateRole = useMutation(
     trpc.organization.updateMemberRole.mutationOptions({
       onSuccess: () => {
+        toast.success("Member promoted to owner successfully");
         // Invalidate the members query to refetch the data
         queryClient.invalidateQueries({
           queryKey: trpc.organization.listMembers.queryKey({ organizationId }),
         });
       },
+      onError: (error) => {
+        toast.error(`Failed to promote member: ${error.message}`);
+      },
     }),
   );
 
-  const handleRoleChange = (userId: string, role: string) => {
+  const handlePromoteToOwner = (userId: string) => {
     updateRole.mutate({
       organizationId,
       userId,
-      role: role as "member" | "admin" | "owner" | "guest",
+      role: "owner",
     });
   };
 
-  return (
-    <div className="p-6">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-4">Team Members</h1>
-        <p className="text-muted-foreground text-lg">
-          Manage your organization team members and their roles
-        </p>
-      </div>
+  // Group members by role
+  const internalMembers = members.filter((member) => member.role !== "external");
+  const externalMembers = members.filter((member) => member.role === "external");
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-3">
-            <UserCog className="h-6 w-6 text-muted-foreground" />
-            <div>
-              <CardTitle>Members</CardTitle>
-              <CardDescription>
-                {members.length} {members.length === 1 ? "member" : "members"}
-              </CardDescription>
-            </div>
-          </div>
-        </CardHeader>
+  // Ensure current user is shown first in internal members while preserving other order
+  const sortedInternalMembers = sortMembersWithCurrentFirst(internalMembers, currentUser.id);
+
+  const MemberItem = ({ member }: { member: (typeof members)[number] }) => {
+    const isCurrentUser = member.userId === currentUser.id;
+
+    return (
+      <Item>
+        <ItemMedia>
+          <Avatar>
+            <AvatarImage src={member.image || undefined} />
+            <AvatarFallback>{member.name.charAt(0).toUpperCase()}</AvatarFallback>
+          </Avatar>
+        </ItemMedia>
+        <ItemContent className="gap-1 min-w-0">
+          <ItemTitle>
+            {member.name}
+            {isCurrentUser && <span className="ml-2 text-xs text-muted-foreground">(You)</span>}
+          </ItemTitle>
+          <ItemDescription className="truncate" title={member.email}>
+            {member.email}
+          </ItemDescription>
+        </ItemContent>
+        <ItemActions>
+          {member.role === "member" && !isCurrentUser ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => handlePromoteToOwner(member.userId)}
+              disabled={updateRole.isPending}
+            >
+              Make owner
+            </Button>
+          ) : (
+            <span className="text-sm text-muted-foreground px-3 py-1">
+              {roleLabels[member.role]}
+            </span>
+          )}
+        </ItemActions>
+      </Item>
+    );
+  };
+
+  return (
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <Card variant="muted">
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Email</TableHead>
-                <TableHead>Role</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {members.map((member) => {
-                const isCurrentUser = member.userId === currentUser.id;
-                return (
-                  <TableRow key={member.id}>
-                    <TableCell className="font-medium">
-                      {member.name}
-                      {isCurrentUser && (
-                        <span className="ml-2 text-xs text-muted-foreground">(You)</span>
-                      )}
-                    </TableCell>
-                    <TableCell>{member.email}</TableCell>
-                    <TableCell>
-                      {isCurrentUser ? (
-                        <span className="text-sm">{roleLabels[member.role]}</span>
-                      ) : (
-                        <Select
-                          value={member.role}
-                          onValueChange={(value) => handleRoleChange(member.userId, value)}
-                          disabled={updateRole.isPending}
-                        >
-                          <SelectTrigger className="w-[120px]">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="owner">Owner</SelectItem>
-                            <SelectItem value="admin">Admin</SelectItem>
-                            <SelectItem value="member">Member</SelectItem>
-                            <SelectItem value="guest">Guest</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold">Organization Members</h2>
+            <span className="text-sm text-muted-foreground">
+              {internalMembers.length} {internalMembers.length === 1 ? "member" : "members"}
+            </span>
+          </div>
+
+          <p className="text-sm text-muted-foreground mb-4">
+            They are full members of the slack. The @iterate bot will allow them to use MCP servers
+            and organization-wide connectors.
+          </p>
+          <p className="text-sm text-muted-foreground mb-4">
+            They are able to access this dashboard.
+          </p>
+
+          {sortedInternalMembers.length === 0 ? (
+            <Empty>
+              <EmptyMedia variant="icon">
+                <Users className="h-12 w-12" />
+              </EmptyMedia>
+              <EmptyTitle>No organization members</EmptyTitle>
+              <EmptyDescription>
+                Organization members will appear here once they join your team.
+              </EmptyDescription>
+            </Empty>
+          ) : (
+            <ItemGroup>
+              {sortedInternalMembers.map((member, index) => (
+                <div key={member.id}>
+                  <MemberItem member={member} />
+                  {index !== sortedInternalMembers.length - 1 && <div className="my-2" />}
+                </div>
+              ))}
+            </ItemGroup>
+          )}
         </CardContent>
       </Card>
+
+      {/* External Users - Second on mobile, right on desktop */}
+      {externalMembers.length > 0 && (
+        <Card variant="muted">
+          <CardContent>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold">Slack connect users</h2>
+              <span className="text-sm text-muted-foreground">
+                {externalMembers.length} {externalMembers.length === 1 ? "user" : "users"}
+              </span>
+            </div>
+
+            <p className="text-sm text-muted-foreground mb-4">
+              The @iterate bot will speak to them like a normal person would.
+            </p>
+            <p className="text-sm text-muted-foreground mb-4">
+              They will not be able to connect to MCP servers, use connectors or access this
+              dashboard.
+            </p>
+
+            <ItemGroup>
+              {externalMembers.map((member, index) => (
+                <div key={member.id}>
+                  <MemberItem member={member} />
+                  {index !== externalMembers.length - 1 && <div className="my-2" />}
+                </div>
+              ))}
+            </ItemGroup>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
@@ -152,17 +197,32 @@ export default function OrganizationTeam({ params }: Route.ComponentProps) {
     );
   }
 
-  return (
-    <Suspense
-      fallback={
-        <div className="p-6">
-          <div className="flex items-center justify-center h-64">
-            <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-          </div>
-        </div>
-      }
-    >
-      <OrganizationTeamContent organizationId={organizationId} />
-    </Suspense>
-  );
+  return <OrganizationTeamContent organizationId={organizationId} />;
+}
+
+function sortMembersWithCurrentFirst<T extends { userId: string }>(
+  members: T[],
+  currentUserId: string,
+): T[] {
+  const rolePriority: Record<string, number> = {
+    owner: 0,
+    admin: 1,
+    member: 2,
+    guest: 3,
+    external: 4,
+  };
+
+  // Filter out the current user
+  const currentUser = members.find((member) => member.userId === currentUserId);
+  const otherMembers = members.filter((member) => member.userId !== currentUserId);
+
+  // Sort other members by role
+  const sortedOtherMembers = otherMembers.sort((a: any, b: any) => {
+    const aRolePriority = rolePriority[a.role as string] ?? 99;
+    const bRolePriority = rolePriority[b.role as string] ?? 99;
+    return aRolePriority - bRolePriority;
+  });
+
+  if (currentUser) sortedOtherMembers.unshift(currentUser);
+  return sortedOtherMembers;
 }

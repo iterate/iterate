@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { evaluateContextRuleMatchers, matchers, type ContextRule } from "./context.ts";
+import dedent from "dedent";
+import {
+  evaluateContextRuleMatchers,
+  matchers,
+  type ContextRule,
+  parseFrontMatter,
+} from "./context.ts";
 
 describe("evaluateContextRuleMatchers", () => {
   const cases = [
@@ -59,10 +65,24 @@ describe("evaluateContextRuleMatchers", () => {
       expected: true,
     },
 
+    // Shorthand (no agentCoreState. prefix) should also work
+    {
+      description: "[jsonata shorthand] boolean property true without prefix",
+      state: { paused: true },
+      matchers: [matchers.jsonata("paused")],
+      expected: true,
+    },
+
     {
       description: "[jsonata] nested string property exists",
       state: { modelOpts: { model: "gpt-4o-mini" } },
       matchers: [matchers.jsonata("$exists(agentCoreState.modelOpts.model)")],
+      expected: true,
+    },
+    {
+      description: "[jsonata shorthand] nested string property exists without prefix",
+      state: { modelOpts: { model: "gpt-4o-mini" } },
+      matchers: [matchers.jsonata("$exists(modelOpts.model)")],
       expected: true,
     },
     {
@@ -129,6 +149,12 @@ describe("evaluateContextRuleMatchers", () => {
       description: "[contains] includes substring",
       state: { systemPrompt: "You are a helpful assistant" },
       matchers: [matchers.jsonata("$contains(agentCoreState.systemPrompt, 'helpful')")],
+      expected: true,
+    },
+    {
+      description: "[jsonata shorthand] contains without prefix",
+      state: { systemPrompt: "You are a helpful assistant" },
+      matchers: [matchers.jsonata("$contains(systemPrompt, 'helpful')")],
       expected: true,
     },
     {
@@ -707,5 +733,103 @@ describe("timeWindow matcher", () => {
         matchAgainst: { agentCoreState: {}, durableObjectClassName: "TestAgent" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("parseFrontMatter", () => {
+  const cases = [
+    {
+      description: "should parse front matter with string match",
+      content: dedent`
+        ---
+        key: test-rule
+        match: agentCoreState.paused
+        ---
+
+        This is the body content.
+      `,
+      expectedFrontMatter: {
+        key: "test-rule",
+        match: { type: "jsonata", expression: "agentCoreState.paused" },
+      },
+      expectedBody: "This is the body content.",
+    },
+    {
+      description: "should parse front matter with object match",
+      content: dedent`
+        ---
+        key: complex-rule
+        match:
+          type: and
+          matchers:
+            - type: always
+            - type: jsonata
+              expression: agentCoreState.paused
+        ---
+
+        Complex rule body.
+      `,
+      expectedFrontMatter: {
+        key: "complex-rule",
+        match: {
+          type: "and",
+          matchers: [{ type: "always" }, { type: "jsonata", expression: "agentCoreState.paused" }],
+        },
+      },
+      expectedBody: "Complex rule body.",
+    },
+    {
+      description: "should handle content without front matter",
+      content: "This is just regular content without front matter.",
+      expectedFrontMatter: {},
+      expectedBody: "This is just regular content without front matter.",
+    },
+    {
+      description: "should handle content with only opening delimiter",
+      content: dedent`
+        ---
+        key: incomplete
+        This never closes
+      `,
+      expectedFrontMatter: {},
+      expectedBody: dedent`
+        ---
+        key: incomplete
+        This never closes
+      `,
+    },
+    {
+      description: "should handle empty front matter",
+      content: dedent`
+        ---
+        ---
+
+        Body content here.
+      `,
+      expectedFrontMatter: {},
+      expectedBody: "Body content here.",
+    },
+    {
+      description: "should handle front matter with key and description",
+      content: dedent`
+        ---
+        key: my-custom-key
+        description: This is a description
+        ---
+
+        Body content.
+      `,
+      expectedFrontMatter: {
+        key: "my-custom-key",
+        description: "This is a description",
+      },
+      expectedBody: "Body content.",
+    },
+  ];
+
+  it.each(cases)("$description", ({ content, expectedFrontMatter, expectedBody }) => {
+    const { frontMatter, body } = parseFrontMatter(content);
+    expect(frontMatter).toEqual(expectedFrontMatter);
+    expect(body).toBe(expectedBody);
   });
 });

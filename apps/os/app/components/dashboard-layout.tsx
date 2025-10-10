@@ -2,7 +2,6 @@ import { Link, useLocation, useParams } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
-  Users,
   Github,
   LogOut,
   Building2,
@@ -16,6 +15,7 @@ import {
   CreditCard,
   User,
   Bug,
+  Puzzle,
 } from "lucide-react";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
@@ -54,9 +54,8 @@ import { OrganizationSwitcher } from "./organization-switcher.tsx";
 
 const estateNavigation: NavigationItem[] = [
   { title: "Home", icon: HomeIcon, path: "" },
-  { title: "Git repository", icon: Github, path: "estate" },
-  { title: "Integrations", icon: Settings, path: "integrations" },
-  { title: "Manage Agents", icon: Users, path: "agents" },
+  { title: "Git repository", icon: Github, path: "repo" },
+  { title: "Connectors", icon: Puzzle, path: "integrations" },
 ];
 
 const organizationNavigation: NavigationItem[] = [
@@ -252,7 +251,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   // Only connect websocket if we're in an estate context
-  const ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
+  const _ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
 
   const getEstateUrl = (estateId: string, path: string) => {
     return `/${organizationId}/${estateId}${path ? `/${path}` : ""}`;
@@ -280,16 +279,6 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <OrganizationSwitcher />
           </SidebarHeader>
           <SidebarContent>
-            {/* Debug Mode Badge */}
-            {user.debugMode && (
-              <div className="px-3 pb-2">
-                <Badge variant="secondary" className="text-xs">
-                  <Bug className="mr-1 h-3 w-3" />
-                  DEBUG MODE
-                </Badge>
-              </div>
-            )}
-
             {/* Estate Navigation - One section per estate */}
             {estates?.map((estate: Estate) => (
               <SidebarGroup key={estate.id}>
@@ -364,11 +353,23 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarContent>
 
           <SidebarFooter>
-            {!ws.isConnected && (
-              <div className="flex items-center gap-2 mb-3 px-3">
-                <div className={`size-2 rounded-full bg-orange-500`}></div>
-                <span className="text-sm text-muted-foreground">Websocket connecting...</span>
-              </div>
+            {/* Connection indicator temporarily disabled until fixed */}
+            {/**
+             * {!ws.isConnected && (
+             *   <div className="flex items-center gap-2 mb-3 px-3">
+             *     <div className={`size-2 rounded-full bg-orange-500`}></div>
+             *     <span className="text-sm text-muted-foreground">Websocket connecting...</span>
+             *   </div>
+             * )}
+             */}
+            {user.debugMode && (
+              <Badge
+                variant="secondary"
+                className="text-xs bg-muted text-muted-foreground border-muted-foreground/20"
+              >
+                <Bug className="mr-1 h-3 w-3" />
+                DEBUG MODE
+              </Badge>
             )}
             <ThemeSwitcher />
             <UserSwitcher />
@@ -376,12 +377,12 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
         </Sidebar>
 
         <SidebarInset>
-          <header className="flex h-16 items-center gap-4 border-b px-6">
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />
             {/* TODO Breadcrumbs */}
           </header>
 
-          <main>{children}</main>
+          <main className="flex flex-1 flex-col gap-4 p-6 max-w-5xl">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>

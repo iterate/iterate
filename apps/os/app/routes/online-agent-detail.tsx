@@ -5,7 +5,7 @@ import { useAgent } from "agents/react";
 import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { trpcClient, useTRPC } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
-import { useEstateId, useEstateUrl } from "../hooks/use-estate.ts";
+import { useEstateId } from "../hooks/use-estate.ts";
 import { Card } from "../components/ui/card.tsx";
 import { Label } from "../components/ui/label.tsx";
 import { Textarea } from "../components/ui/textarea.tsx";
@@ -628,7 +628,6 @@ export default function AgentsPage() {
   const params = useParams();
   const { agentClassName, durableObjectName } = params;
   const estateId = useEstateId();
-  const getEstateUrl = useEstateUrl();
   const trpc = useTRPC();
 
   if (
@@ -843,7 +842,7 @@ export default function AgentsPage() {
   };
 
   const headerLeft = (
-    <Link to={getEstateUrl("agents")}>
+    <Link to={"/"}>
       <Button variant="ghost" size="sm">
         <ArrowLeft className="h-4 w-4 mr-2" />
         Back to Agents
