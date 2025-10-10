@@ -1,14 +1,13 @@
 import { useState, Suspense } from "react";
 import { Save, Info } from "lucide-react";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
-import { useOutletContext } from "react-router";
+import { useRouteLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Card, CardContent } from "../../components/ui/card.tsx";
-import type { OrgContext } from "../../route-contexts.ts";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 import {
   Field,
@@ -19,6 +18,7 @@ import {
   FieldSet,
 } from "../../components/ui/field.tsx";
 import type { Route } from "./+types/settings.ts";
+import type { loader as orgLoader } from "./loader.tsx";
 
 export function meta(_args: Route.MetaArgs) {
   return [
@@ -29,10 +29,10 @@ export function meta(_args: Route.MetaArgs) {
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const { organization: loaderOrganization } = useOutletContext<OrgContext>();
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
   const { data: organization } = useSuspenseQuery({
     ...trpc.organization.get.queryOptions({ organizationId }),
-    initialData: loaderOrganization,
+    initialData: loaderData?.organization,
   });
 
   const [organizationName, setOrganizationName] = useState(organization.name);
