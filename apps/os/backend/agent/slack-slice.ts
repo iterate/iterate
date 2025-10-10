@@ -156,8 +156,6 @@ export const slackSlice = defineAgentCoreSlice<{
         break;
       }
 
-      
-
       case "SLACK:WEBHOOK_EVENT_RECEIVED": {
         const payload = event.data.payload as SlackWebhookPayload;
 
