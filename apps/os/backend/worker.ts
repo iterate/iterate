@@ -23,6 +23,7 @@ import { IterateAgent } from "./agent/iterate-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
+import { RRuler } from "./durable-objects/rruler.ts";
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
@@ -314,5 +315,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { IterateAgent, SlackAgent, OrganizationWebSocket };
+export { IterateAgent, SlackAgent, OrganizationWebSocket, RRuler };
 export { Sandbox } from "@cloudflare/sandbox";

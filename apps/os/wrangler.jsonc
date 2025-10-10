@@ -62,6 +62,10 @@
         "name": "SANDBOX",
         "class_name": "Sandbox",
       },
+      {
+        "name": "RRULER",
+        "class_name": "RRuler",
+      },
     ],
   },
   "migrations": [
@@ -76,6 +80,10 @@
     {
       "tag": "2025-01-sandbox",
       "new_sqlite_classes": ["Sandbox"],
+    },
+    {
+      "tag": "2025-10-rruler",
+      "new_sqlite_classes": ["RRuler"],
     },
   ],
   "triggers": {
