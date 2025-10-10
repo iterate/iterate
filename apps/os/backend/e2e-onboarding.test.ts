@@ -152,9 +152,12 @@ test(
             cookie: sessionCookies,
           },
           onResponse(context: { response: Response }) {
-            const cookies = context.response.headers.get("set-cookie");
-            if (cookies) {
-              impersonationCookies = cookies;
+            const cookies = context.response.headers.getSetCookie();
+            const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
+            if (cookieObj) {
+              impersonationCookies = Object.entries(cookieObj)
+                .map(([key, value]) => `${key}=${value}`)
+                .join("; ");
             }
           },
         },
@@ -191,17 +194,18 @@ test(
       const templateOwner = "iterate";
       const templateRepo = "estate-template";
 
-      const newRepoResponse = await octokit.request(
-        "POST /repos/{template_owner}/{template_repo}/generate",
-        {
-          template_owner: templateOwner,
-          template_repo: templateRepo,
-          owner: "iterate-estates",
-          name: repoName,
-          private: false,
-          description: "E2E test estate repository",
-        },
-      );
+      const newRepoResponse = await octokit.rest.repos.createUsingTemplate({
+        template_owner: templateOwner,
+        template_repo: templateRepo,
+        owner: "iterate-estates",
+        name: repoName,
+        private: false,
+        description: "E2E test estate repository",
+      });
+
+      if (newRepoResponse.status !== 201) {
+        throw new Error(`Failed to create repository: ${JSON.stringify(newRepoResponse)}`);
+      }
 
       const newRepo = newRepoResponse.data;
       createdRepoFullName = newRepo.full_name;
@@ -275,7 +279,7 @@ test(
             throw new Error(`Build failed: ${latestBuild.errorMessage || "Unknown error"}`);
           }
 
-          return latestBuild.status === "completed";
+          return latestBuild.status === "complete";
         });
 
       console.log("Build completed successfully");
@@ -283,9 +287,9 @@ test(
       // Step 7: Send message to Slack
       console.log("Step 9: Sending message to Slack...");
 
-      const slackClient = new WebClient(testSeedData.slack.bot.accessToken);
+      const slackUserClient = new WebClient(testSeedData.slack.user.accessToken);
 
-      const messageResult = await slackClient.chat.postMessage({
+      const messageResult = await slackUserClient.chat.postMessage({
         channel: testSeedData.slack.targetChannelId,
         text: `Hello from E2E test  <@${testSeedData.slack.bot.id}>!`,
       });
@@ -302,17 +306,22 @@ test(
 
       const replyTimeout = 2 * 60 * 1000; // 2 minutes
       const replyPollInterval = 3000; // 3 seconds
-      const _replyGracePeriod = 10000; // 10 seconds
 
-      await new Promise((resolve) => setTimeout(resolve, _replyGracePeriod));
+      const slackBotClient = new WebClient(testSeedData.slack.bot.accessToken);
 
       await expect
         .poll(
           async () => {
-            const replies = await slackClient.conversations.replies({
-              channel: testSeedData.slack.targetChannelId,
-              ts: messageTs,
-            });
+            console.log("Polling for replies...");
+            const replies = await slackBotClient.conversations
+              .replies({
+                channel: testSeedData.slack.targetChannelId,
+                ts: messageTs,
+              })
+              .catch((error) => {
+                console.error("Failed to get replies:", error);
+                throw error;
+              });
 
             if (!replies.ok || !replies.messages) {
               return [];
@@ -320,9 +329,8 @@ test(
 
             // Filter out the original message and get replies from bot
             const botReplies = replies.messages.filter(
-              (msg) => msg.ts !== messageTs && msg.bot_id === testSeedData.slack.bot.id,
+              (msg) => msg.ts !== messageTs && msg.user === testSeedData.slack.bot.id,
             );
-
             return botReplies;
           },
           {
@@ -345,7 +353,7 @@ test(
           });
 
           const [owner, repo] = createdRepoFullName.split("/");
-          await octokit.request("DELETE /repos/{owner}/{repo}", {
+          await octokit.rest.repos.delete({
             owner,
             repo,
           });
