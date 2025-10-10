@@ -383,7 +383,6 @@ export function slackWebhookEventToPromptFragment(params: {
         case "me_message":
         case "message_replied":
         case "ekm_access_denied":
-        case "thread_broadcast":
         case "message_changed":
         case "channel_archive":
         case "channel_unarchive":
