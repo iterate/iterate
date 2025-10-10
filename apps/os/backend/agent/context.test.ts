@@ -59,10 +59,24 @@ describe("evaluateContextRuleMatchers", () => {
       expected: true,
     },
 
+    // Shorthand (no agentCoreState. prefix) should also work
+    {
+      description: "[jsonata shorthand] boolean property true without prefix",
+      state: { paused: true },
+      matchers: [matchers.jsonata("paused")],
+      expected: true,
+    },
+
     {
       description: "[jsonata] nested string property exists",
       state: { modelOpts: { model: "gpt-4o-mini" } },
       matchers: [matchers.jsonata("$exists(agentCoreState.modelOpts.model)")],
+      expected: true,
+    },
+    {
+      description: "[jsonata shorthand] nested string property exists without prefix",
+      state: { modelOpts: { model: "gpt-4o-mini" } },
+      matchers: [matchers.jsonata("$exists(modelOpts.model)")],
       expected: true,
     },
     {
@@ -129,6 +143,12 @@ describe("evaluateContextRuleMatchers", () => {
       description: "[contains] includes substring",
       state: { systemPrompt: "You are a helpful assistant" },
       matchers: [matchers.jsonata("$contains(agentCoreState.systemPrompt, 'helpful')")],
+      expected: true,
+    },
+    {
+      description: "[jsonata shorthand] contains without prefix",
+      state: { systemPrompt: "You are a helpful assistant" },
+      matchers: [matchers.jsonata("$contains(systemPrompt, 'helpful')")],
       expected: true,
     },
     {
