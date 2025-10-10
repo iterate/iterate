@@ -152,8 +152,18 @@ function evaluateSingleMatcher(matchAgainst: unknown, matcher: ContextRuleMatche
     case "jsonata": {
       // If the jsonata expression is invalid, this will throw an error
       // We may want to log a warning and return false in the future, but for now we like the error
-      const result = jsonataLib(matcher.expression).evaluate(matchAgainst);
-      return Boolean(result);
+      const evaluator = jsonataLib(matcher.expression);
+      // 1) Keep existing behaviour: evaluate against the full matchAgainst object
+      const resultAgainstFull = evaluator.evaluate(matchAgainst);
+      if (resultAgainstFull) return true;
+
+      // 2) Also allow shorthand expressions that assume the root is agentCoreState
+      const maybeObj = matchAgainst as Record<string, unknown> | undefined;
+      if (maybeObj && typeof maybeObj === "object" && "agentCoreState" in maybeObj) {
+        const resultAgainstCore = evaluator.evaluate((maybeObj as any).agentCoreState);
+        return Boolean(resultAgainstCore);
+      }
+      return false;
     }
 
     case "and": {
