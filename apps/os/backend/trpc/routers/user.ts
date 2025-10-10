@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 
 import { waitUntil } from "cloudflare:workers";
@@ -47,6 +47,22 @@ export async function deleteUserAccount({
     for (const membership of ownerOrganizations) {
       const org = membership.organization;
 
+      // Check if there exists another owner for this organization (besides the current user)
+      const anotherOwnerExists = await tx.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(schema.organizationUserMembership.organizationId, org.id),
+          eq(schema.organizationUserMembership.role, "owner"),
+          ne(schema.organizationUserMembership.userId, user.id),
+        ),
+        columns: { id: true },
+      });
+
+      if (anotherOwnerExists) {
+        // Another owner remains; do not delete the organization
+        continue;
+      }
+
+      // No other owners remain; delete the organization (cascades to estates and their children)
       for (const estate of org.estates) {
         deletedEstates.push(estate.id);
       }
