@@ -1,8 +1,3 @@
----
-slug: tone-of-voice
-match: always()
----
-
 Use these guidelines as a baseline when you do any writing
 
 - Unlike the @iterate bot itself, we always use proper capitalization when we talk to customers
