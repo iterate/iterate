@@ -212,15 +212,17 @@ function sortMembersWithCurrentFirst<T extends { userId: string }>(
     external: 4,
   };
 
-  return [...members].sort((a: any, b: any) => {
-    const aIsCurrent = a.userId === currentUserId;
-    const bIsCurrent = b.userId === currentUserId;
-    if (aIsCurrent !== bIsCurrent) return aIsCurrent ? -1 : 1;
+  // Filter out the current user
+  const currentUser = members.find((member) => member.userId === currentUserId);
+  const otherMembers = members.filter((member) => member.userId !== currentUserId);
 
+  // Sort other members by role
+  const sortedOtherMembers = otherMembers.sort((a: any, b: any) => {
     const aRolePriority = rolePriority[a.role as string] ?? 99;
     const bRolePriority = rolePriority[b.role as string] ?? 99;
-    if (aRolePriority !== bRolePriority) return aRolePriority - bRolePriority;
-
-    return 0;
+    return aRolePriority - bRolePriority;
   });
+
+  if (currentUser) sortedOtherMembers.unshift(currentUser);
+  return sortedOtherMembers;
 }
