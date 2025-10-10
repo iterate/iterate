@@ -174,7 +174,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
         deps?.onLLMStreamResponseStreamingChunk?.(chunk);
         if (chunk.type === "response.output_item.added" && chunk.item.type === "function_call") {
-          this.updateSlackStatusDebounced(`🛠️ ${chunk.item.name}...`);
+          const toolName = chunk.item.name;
+          // Look up the tool to check if it has a custom status indicator text
+          const tool = this.agentCore.state.runtimeTools.find(
+            (t) => t.type === "function" && t.name === toolName,
+          );
+          const statusText =
+            tool && tool.type === "function" && tool.statusIndicatorText
+              ? tool.statusIndicatorText
+              : `🛠️ ${toolName}...`;
+          this.updateSlackStatusDebounced(statusText);
         }
       },
       onEventAdded: (payload: {

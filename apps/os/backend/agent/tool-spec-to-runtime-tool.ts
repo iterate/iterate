@@ -129,6 +129,7 @@ export function toolSpecsToImplementations(params: {
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,
         description: spec.overrideDescription || def?.description || null,
+        statusIndicatorText: spec.statusIndicatorText || def?.statusIndicatorText || undefined,
         execute: async (_openaiExecuteParams, methodParams) => {
           const combinedArgs = { ...(methodParams as {}), ...(passThroughArgs as {}) };
           const validatedArgs = def?.input
