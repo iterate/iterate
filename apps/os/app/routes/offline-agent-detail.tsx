@@ -58,7 +58,6 @@ function ArchiveUploader({
   const [error, setError] = useState<string | null>(null);
   const [urlInput, setUrlInput] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const getEstateUrl = useEstateUrl();
 
   const handleFileSelect = async (file: File) => {
     setIsLoading(true);
@@ -107,7 +106,7 @@ function ArchiveUploader({
         <CardHeader>
           <div className="flex items-center justify-between">
             <CardTitle>Load Agent Trace</CardTitle>
-            <Link to={getEstateUrl("agents")}>
+            <Link to={"/"}>
               <Button variant="ghost" size="sm">
                 <ArrowLeft className="h-4 w-4 mr-2" />
                 Back to Agents
