@@ -21,7 +21,7 @@ const config = defineConfig({
       `,
       tools: [tools.exec()],
       // this is the #agents-with-sandboxes channel
-      match: matchers.slackChannel("agents-with-sandboxes"),
+      match: matchers.slackChannel("#agents-with-sandboxes"),
     },
   ],
 });
