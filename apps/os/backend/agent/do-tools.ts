@@ -11,6 +11,7 @@ export type RuntimeJsonSchema = {
 
 export type DOToolDef<Params, Result> = {
   description?: string;
+  statusIndicatorText?: string;
   input?: z.ZodType<Params>;
   output?: z.ZodType<Awaited<Result>>;
 };
