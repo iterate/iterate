@@ -1,8 +1,16 @@
-import type { DurableObjectState } from "cloudflare:workers";
 import { RRule } from "rrule";
 import { z } from "zod";
 
 type InvokeMode = "manual" | "scheduled";
+
+type DurableObjectState = {
+  storage: {
+    sql: any;
+    setAlarm(scheduledTime: number): void;
+    deleteAlarm(): void;
+  };
+  blockConcurrencyWhile<T>(cb: () => Promise<T> | T): Promise<T>;
+};
 
 const EventRuleAdd = z.object({
   type: z.literal("rule_add"),
@@ -39,6 +47,9 @@ const EventInvoke = z.object({
       retryCount: z.number().int().nonnegative().optional(),
       error: z.string().optional(),
       spanId: z.string().uuid().optional(),
+      method: z.string().optional(),
+      args: z.unknown().optional(),
+      value: z.unknown().optional(),
     })
     .optional(),
   meta: z.unknown().optional(),
@@ -61,10 +72,25 @@ type RuleRecord = {
   meta?: unknown;
 };
 
+type RuleMutationEvent = Extract<Event, { type: "rule_add" | "rule_change" }>;
+
 type AlarmInfo = {
   retryCount?: number;
   isRetry?: boolean;
 };
+
+type InvokeContext = {
+  rule: RuleRecord;
+  mode: InvokeMode;
+  retryCount: number;
+};
+
+type InvocationError = Error & {
+  spanId?: string;
+  duration?: number;
+};
+
+type RuleMethod = (ctx: InvokeContext) => unknown | Promise<unknown>;
 
 const SAFETY_MS = 10_000;
 
@@ -73,7 +99,7 @@ export class Schedrruler {
   private readonly sql: any;
   private readonly rules = new Map<string, RuleRecord>();
 
-  constructor(ctx: DurableObjectState, env: unknown) {
+  constructor(ctx: DurableObjectState, _env: unknown) {
     this.ctx = ctx;
     this.sql = ctx.storage.sql;
 
@@ -136,15 +162,19 @@ export class Schedrruler {
         for (const row of rows) {
           nextByKey.set(row.rule_key, row.next_ts ?? null);
         }
-        const snapshot: Record<string, { method: string; next: string | null }> = {};
-        for (const [key, rule] of this.rules) {
-          const nextTs = nextByKey.get(key) ?? null;
-          snapshot[key] = {
+        const rules = Array.from(this.rules.values()).map((rule) => {
+          const nextTs = nextByKey.get(rule.key) ?? null;
+          return {
+            key: rule.key,
+            rrule: rule.rrule,
             method: rule.method,
+            args: rule.args ?? null,
+            meta: rule.meta ?? null,
+            nextTs,
             next: nextTs != null ? new Date(nextTs).toISOString() : null,
           };
-        }
-        return json(snapshot);
+        });
+        return json({ now: new Date().toISOString(), rules });
       }
 
       if (request.method === "POST" && url.pathname === "/__test/alarm") {
@@ -179,12 +209,24 @@ export class Schedrruler {
       }
 
       try {
-        await this.invokeRule(rule, "scheduled", info?.retryCount ?? 0);
+        const outcome = await this.invokeRule(rule, "scheduled", info?.retryCount ?? 0);
         const next = this.computeNextTs(rule.rrule, now);
         this.sql.exec("BEGIN IMMEDIATE");
         try {
           this.appendEvent(
-            { type: "invoke", key: rule.key, mode: "scheduled", result: { ok: true } },
+            {
+              type: "invoke",
+              key: rule.key,
+              mode: "scheduled",
+              result: {
+                ok: true,
+                dur: outcome.duration,
+                spanId: outcome.spanId,
+                method: rule.method,
+                args: rule.args,
+                value: outcome.value,
+              },
+            },
             Date.now(),
           );
           if (next != null) {
@@ -206,7 +248,15 @@ export class Schedrruler {
               type: "invoke",
               key: rule.key,
               mode: "scheduled",
-              result: { ok: false, error: String(err), retryCount: info?.retryCount ?? 0 },
+              result: {
+                ok: false,
+                error: String(err),
+                retryCount: info?.retryCount ?? 0,
+                spanId: (err as InvocationError).spanId,
+                dur: (err as InvocationError).duration,
+                method: rule.method,
+                args: rule.args,
+              },
             },
             Date.now(),
           );
@@ -229,18 +279,19 @@ export class Schedrruler {
       switch (event.type) {
         case "rule_add":
         case "rule_change": {
-          this.appendEvent(event, Date.now());
-          this.rules.set(event.key, {
-            key: event.key,
-            rrule: event.rrule,
-            method: event.method,
-            args: event.args,
-            meta: event.meta,
+          const ruleEvent = event as RuleMutationEvent;
+          this.appendEvent(ruleEvent, Date.now());
+          this.rules.set(ruleEvent.key, {
+            key: ruleEvent.key,
+            rrule: ruleEvent.rrule,
+            method: ruleEvent.method,
+            args: ruleEvent.args,
+            meta: ruleEvent.meta,
           });
-          this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, event.key);
-          const ts = this.computeNextTs(event.rrule, Date.now());
+          this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, ruleEvent.key);
+          const ts = this.computeNextTs(ruleEvent.rrule, Date.now());
           if (ts != null) {
-            this.upsertNext(event.key, ts);
+            this.upsertNext(ruleEvent.key, ts);
           }
           break;
         }
@@ -264,9 +315,21 @@ export class Schedrruler {
           }
 
           try {
-            await this.invokeRule(rule, "manual", 0);
+            const outcome = await this.invokeRule(rule, "manual", 0);
             this.appendEvent(
-              { type: "invoke", key: rule.key, mode: "manual", result: { ok: true } },
+              {
+                type: "invoke",
+                key: rule.key,
+                mode: "manual",
+                result: {
+                  ok: true,
+                  dur: outcome.duration,
+                  spanId: outcome.spanId,
+                  method: rule.method,
+                  args: rule.args,
+                  value: outcome.value,
+                },
+              },
               Date.now(),
             );
           } catch (err) {
@@ -275,7 +338,14 @@ export class Schedrruler {
                 type: "invoke",
                 key: rule.key,
                 mode: "manual",
-                result: { ok: false, error: String(err) },
+                result: {
+                  ok: false,
+                  error: String(err),
+                  method: rule.method,
+                  args: rule.args,
+                  spanId: (err as InvocationError).spanId,
+                  dur: (err as InvocationError).duration,
+                },
               },
               Date.now(),
             );
@@ -311,12 +381,13 @@ export class Schedrruler {
       if (event.type === "rule_delete") {
         this.rules.delete(event.key);
       } else {
-        this.rules.set(event.key, {
-          key: event.key,
-          rrule: event.rrule,
-          method: event.method,
-          args: event.args,
-          meta: event.meta,
+        const ruleEvent = event as RuleMutationEvent;
+        this.rules.set(ruleEvent.key, {
+          key: ruleEvent.key,
+          rrule: ruleEvent.rrule,
+          method: ruleEvent.method,
+          args: ruleEvent.args,
+          meta: ruleEvent.meta,
         });
       }
     }
@@ -387,30 +458,50 @@ export class Schedrruler {
     }
   }
 
-  private async invokeRule(rule: RuleRecord, mode: InvokeMode, retryCount: number): Promise<void> {
+  private async invokeRule(
+    rule: RuleRecord,
+    mode: InvokeMode,
+    retryCount: number,
+  ): Promise<{ value: unknown; duration: number; spanId: string }> {
     const spanId = crypto.randomUUID();
     const started = Date.now();
     const fn = (this as Record<string, unknown>)[rule.method];
     if (typeof fn !== "function") {
-      throw new Error(`unknown method: ${rule.method}`);
+      const error = new Error(`unknown method: ${rule.method}`) as InvocationError;
+      error.spanId = spanId;
+      error.duration = Date.now() - started;
+      throw error;
     }
 
-    await (fn as (ctx: { rule: RuleRecord; mode: InvokeMode; retryCount: number }) => Promise<void> | void).call(this, {
-      rule,
-      mode,
-      retryCount,
-    });
-    const duration = Date.now() - started;
-    console.log(
-      `[schedrruler] span=${spanId} rule=${rule.key} mode=${mode} ok dur=${duration}ms method=${rule.method}`,
-    );
+    try {
+      const value = await (fn as RuleMethod).call(this, {
+        rule,
+        mode,
+        retryCount,
+      });
+      const duration = Date.now() - started;
+      console.log(
+        `[schedrruler] span=${spanId} rule=${rule.key} mode=${mode} ok dur=${duration}ms method=${rule.method}`,
+      );
+      return { value, duration, spanId };
+    } catch (unknownError) {
+      const duration = Date.now() - started;
+      const error = (unknownError instanceof Error ? unknownError : new Error(String(unknownError))) as InvocationError;
+      error.spanId = spanId;
+      error.duration = duration;
+      console.error(
+        `[schedrruler] span=${spanId} rule=${rule.key} mode=${mode} failed after ${duration}ms method=${rule.method}`,
+        error,
+      );
+      throw error;
+    }
   }
 
-  async log({ rule }: { rule: RuleRecord }): Promise<void> {
+  async log({ rule }: InvokeContext): Promise<void> {
     console.log("[schedrruler] rule triggered", rule.key, rule.args ?? "");
   }
 
-  async error(): Promise<void> {
+  async error(_: InvokeContext): Promise<void> {
     throw new Error("schedrruler: simulated failure");
   }
 }

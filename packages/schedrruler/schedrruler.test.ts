@@ -166,9 +166,9 @@ describe("Schedrruler durable object", () => {
     const rows = (await response.json()) as Array<Record<string, any>>;
     const summary = pluckFields(
       rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
-      ["type", "rule_key", "payload.mode", "payload.result.ok"],
+      ["type", "rule_key", "payload.mode", "payload.result.method", "payload.result.ok"],
       { stringifyColumns: true },
-    );
+    ) as string;
     const lines = summary
       .split("\n")
       .filter(Boolean)
@@ -176,8 +176,8 @@ describe("Schedrruler durable object", () => {
 
     expect(lines).toMatchInlineSnapshot(`
       [
-        "[\"invoke\",\"scheduled\",\"scheduled\",true]",
-        "[\"rule_add\",\"scheduled\",null,null]",
+        "[\"invoke\",\"scheduled\",\"scheduled\",\"log\",true]",
+        "[\"rule_add\",\"scheduled\",null,null,null]",
       ]
     `);
   });
@@ -204,9 +204,9 @@ describe("Schedrruler durable object", () => {
     const rows = (await response.json()) as Array<Record<string, any>>;
     const summary = pluckFields(
       rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
-      ["type", "rule_key", "payload.mode", "payload.result.ok"],
+      ["type", "rule_key", "payload.mode", "payload.result.method", "payload.result.ok"],
       { stringifyColumns: true },
-    );
+    ) as string;
     const lines = summary
       .split("\n")
       .filter(Boolean)
@@ -214,9 +214,9 @@ describe("Schedrruler durable object", () => {
 
     expect(lines).toMatchInlineSnapshot(`
       [
-        "[\"invoke\",\"manual\",\"manual\",null]",
-        "[\"invoke\",\"manual\",\"manual\",true]",
-        "[\"rule_add\",\"manual\",null,null]",
+        "[\"invoke\",\"manual\",\"manual\",\"log\",true]",
+        "[\"invoke\",\"manual\",\"manual\",null,null]",
+        "[\"rule_add\",\"manual\",null,null,null]",
       ]
     `);
   });
