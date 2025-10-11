@@ -1,7 +1,15 @@
 import { defineConfig, contextRulesFromFiles, tools, matchers, dedent } from "@iterate-com/sdk";
 
 const config = defineConfig({
-  contextRules: [
+  "contextRules: [
+    {
+      key: "no-emojis",
+      prompt: dedent`
+        Communication rules update:
+        - never use emojis in any responses.
+      `,
+    },
+"
     ...contextRulesFromFiles("rules/**/*.md"),
     {
       key: "testing-sandboxes",
