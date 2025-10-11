@@ -2,6 +2,7 @@ import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
+import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -66,47 +67,68 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected slackAPI!: WebClient;
 
-  private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
-    const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
-    if (!slackChannelId || !slackThreadId) return;
-
-    await this.slackAPI.assistant.threads.setStatus({
-      channel_id: slackChannelId,
-      thread_ts: slackThreadId,
-      status: status || "",
-    });
-  }, 300);
-
-  private checkAndClearTypingIndicator = pDebounce(async () => {
-    const state = this.agentCore.state as SlackSliceState;
-    const status = state.typingIndicatorStatus;
-
-    if (!status) return;
-
-    if (this.agentCore.llmRequestInProgress()) {
-      void this.checkAndClearTypingIndicator();
-      return;
+  protected get slackChannelId(): string {
+    const { slackChannelId } = this.getReducedState() as SlackSliceState;
+    if (typeof slackChannelId !== "string") {
+      throw new Error("INTERNAL ERROR: slackChannelId is not a string; this should never happen.");
     }
-
-    this.agentCore.addEvents([
-      {
-        type: "SLACK:UPDATE_TYPING_STATUS",
-        data: { status: null },
-      },
-    ]);
-    void this.updateSlackStatusDebounced(null);
-  }, 15000);
-
-  private syncTypingIndicator() {
-    const state = this.agentCore.state as SlackSliceState;
-    const status = state.typingIndicatorStatus ?? null;
-
-    void this.updateSlackStatusDebounced(status);
-
-    if (status) {
-      void this.checkAndClearTypingIndicator();
-    }
+    return slackChannelId;
   }
+
+  protected get slackThreadId(): string {
+    const { slackThreadId } = this.getReducedState() as SlackSliceState;
+    if (typeof slackThreadId !== "string") {
+      throw new Error("INTERNAL ERROR: slackThreadId is not a string; this should never happen.");
+    }
+    return slackThreadId;
+  }
+
+  // Sets both the "typing status" and "loading messages" fields on the slack thread
+  // The typing status is the thing you know from human slack users.
+  // You can set the "is typing..." bit in "@boris is typing..." that is shown
+  // at the bottom of the screen.
+  // The loading_messages are a new crazy bot thing that shows a shimmering bot avatar while
+  // your bot is thinking and cycles through an array of string status that appear where the message will
+  // later appear.
+  private updateSlackThreadStatus = pDebounce((params: { status: string | null | undefined }) => {
+    const { status } = params;
+    try {
+      void this.slackAPI.assistant.threads.setStatus({
+        channel_id: this.slackChannelId,
+        thread_ts: this.slackThreadId,
+
+        // Not super elegant but here's the logic
+        // - we want the old-school status indicator that human users get to not feel out of place
+        //    - so we just alternate it between "is typing..." and "is thinking..."
+        //    - emoji are out of place here as they `@iterate is ✏️ typing` doesn't look good
+        // - the loading messages, on the other hand, are rendered like actual slack messages
+        // - so "🎨 generating image..." is a perfectly fine update
+        // - we think ... at the end looks good but don't want to write it a million times, so we
+        //   append it here
+
+        // Note that there is some funkiness where at the root of the thread the loading message
+        // is actually shown inline with the username like a typing status indicator,
+        // and there it doesn't look good to have an emoji. So we could edge case that, too.
+        status: status
+          ? status === "✏️ writing response"
+            ? "is typing..."
+            : "is thinking..."
+          : "",
+
+        // Slack's new status API cycles through provided strings (loading_messages) while the
+        // status is visible. Notes:
+        // - Newlines are not supported; emojis are fine
+        // - Cycles IN ORDER, so you can do animations
+        // - Max 10 elements; multiple spaces collapse; no markdown
+        // - On some devices, emojis may not render identically
+        // For clearing (status === null), omit loading_messages entirely.
+        ...(status ? { loading_messages: [`${status}...`] } : {}),
+      });
+    } catch (error) {
+      // log error but don't crash DO
+      logger.error("Failed to update Slack status:", error);
+    }
+  }, 100);
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
@@ -141,6 +163,33 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
+      onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
+        deps?.onLLMStreamResponseStreamingChunk?.(chunk);
+        // console.log(chunk.type);
+        switch (chunk.type) {
+          case "response.output_item.added": {
+            switch (chunk.item.type) {
+              case "function_call": {
+                const toolName = chunk.item.name;
+                const tool = this.agentCore.state.runtimeTools.find(
+                  (t) => t.type === "function" && t.name === toolName,
+                );
+                const statusText =
+                  tool && tool.type === "function" && tool.statusIndicatorText
+                    ? tool.statusIndicatorText
+                    : `🛠️ ${toolName}...`;
+                this.updateSlackThreadStatus({ status: statusText });
+                break;
+              }
+              case "reasoning": {
+                this.updateSlackThreadStatus({ status: "🧠 thinking" });
+                break;
+              }
+            }
+            break;
+          }
+        }
+      },
       onEventAdded: (payload: {
         event: AgentCoreEvent;
         reducedState: CoreReducedState;
@@ -153,22 +202,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         const event = payload.event as AgentCoreEvent;
         switch (event.type) {
           case "CORE:LLM_REQUEST_START":
-            this.agentCore.addEvents([
-              {
-                type: "SLACK:UPDATE_TYPING_STATUS",
-                data: { status: "is typing..." },
-              },
-            ]);
+            this.updateSlackThreadStatus({ status: "🧠 thinking" });
             break;
 
-          case "CORE:LLM_REQUEST_CANCEL":
-            this.agentCore.addEvents([
-              {
-                type: "SLACK:UPDATE_TYPING_STATUS",
-                data: { status: null },
-              },
-            ]);
-            break;
           case "CORE:FILE_SHARED": {
             const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
             if (fileSharedEvent.data.direction === "from-agent-to-user") {
@@ -197,9 +233,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           }
         }
 
-        if (event.type !== "CORE:LOG") {
-          this.syncTypingIndicator();
-        }
+        // if (event.type !== "CORE:LOG") {
+        //   this.syncTypingIndicator();
+        // }
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
@@ -791,13 +827,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const magic: MagicAgentInstructions = {};
     if (endTurn) {
       magic.__triggerLLMRequest = false;
-      this.agentCore.addEvents([
-        {
-          type: "SLACK:UPDATE_TYPING_STATUS",
-          data: { status: null },
-        },
-      ]);
-      this.syncTypingIndicator();
     }
 
     // return an empty object to conserve tokens in the success case, plus magic flags if any

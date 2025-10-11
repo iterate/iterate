@@ -33,6 +33,7 @@ export const AgentDurableObjectToolSpec = z.object({
   strict: z.boolean().default(false).optional(), // When true (default), OpenAI returns a model error if the arguments don't validate. Set to false for fuzzy matching.
   triggerLLMRequest: z.boolean().default(true).optional(), // When true (default), the tool call triggers an LLM request after execution
   hideOptionalInputs: z.boolean().default(false).optional(), // When true, filters out optional fields from the JSON schema before execution
+  statusIndicatorText: z.string().nullable().optional(), // Text to show in Slack typing indicator when this tool is being called
 });
 export type AgentDurableObjectToolSpec = z.infer<typeof AgentDurableObjectToolSpec>;
 
@@ -98,6 +99,7 @@ export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEventInput> = Functi
   canBeParallelized?: boolean; // If true, the tool can be called in parallel with other tools
   execute: LocalFunctionToolExecuteFunction<TEventInput>;
   isAsync?: boolean; // If true, tool execution creates an ASYNC_TOOL_CALL_CREATED event
+  statusIndicatorText?: string; // Text to show in Slack typing indicator when this tool is being called
   metadata?: {
     source?: "mcp" | "trpc" | "durable-object" | "worker";
     toolSpecHash?: string;
