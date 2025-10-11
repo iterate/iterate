@@ -1036,9 +1036,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     });
 
     if (!targetAgent) {
-      throw new Error(
-        `Agent instance ${name} not found in estate ${this.databaseRecord.estateId}`,
-      );
+      throw new Error(`Agent instance ${name} not found in estate ${this.databaseRecord.estateId}`);
     }
 
     const agentConstructor = await (async () => {

@@ -723,19 +723,18 @@ export const integrationsPlugin = () =>
               db,
               agentInstanceName: agentDurableObject.durableObjectName,
             };
-            const agentStub =
-              await (async () => {
-                switch (agentDurableObject.className) {
-                  case "SlackAgent":
-                    return await SlackAgent.getStubByName(params);
-                  case "OnboardingAgent": {
-                    const { OnboardingAgent } = await import("../agent/onboarding-agent.ts");
-                    return await OnboardingAgent.getStubByName(params);
-                  }
-                  default:
-                    return await IterateAgent.getStubByName(params);
+            const agentStub = await (async () => {
+              switch (agentDurableObject.className) {
+                case "SlackAgent":
+                  return await SlackAgent.getStubByName(params);
+                case "OnboardingAgent": {
+                  const { OnboardingAgent } = await import("../agent/onboarding-agent.ts");
+                  return await OnboardingAgent.getStubByName(params);
                 }
-              })();
+                default:
+                  return await IterateAgent.getStubByName(params);
+              }
+            })();
             await agentStub.addEvents([
               {
                 type: "CORE:LLM_INPUT_ITEM",
