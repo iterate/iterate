@@ -147,10 +147,18 @@ export const integrationsPlugin = () =>
               db,
               agentInstanceName: state.agentDurableObject.durableObjectName,
             };
-            const agentStub =
-              state.agentDurableObject.className === "SlackAgent"
-                ? await SlackAgent.getStubByName(params)
-                : await IterateAgent.getStubByName(params);
+            const agentStub = await (async () => {
+              switch (state.agentDurableObject.className) {
+                case "SlackAgent":
+                  return await SlackAgent.getStubByName(params);
+                case "OnboardingAgent": {
+                  const { OnboardingAgent } = await import("../agent/onboarding-agent.ts");
+                  return await OnboardingAgent.getStubByName(params);
+                }
+                default:
+                  return await IterateAgent.getStubByName(params);
+              }
+            })();
 
             await agentStub.addEvents([
               {
@@ -716,9 +724,18 @@ export const integrationsPlugin = () =>
               agentInstanceName: agentDurableObject.durableObjectName,
             };
             const agentStub =
-              agentDurableObject.className === "SlackAgent"
-                ? await SlackAgent.getStubByName(params)
-                : await IterateAgent.getStubByName(params);
+              await (async () => {
+                switch (agentDurableObject.className) {
+                  case "SlackAgent":
+                    return await SlackAgent.getStubByName(params);
+                  case "OnboardingAgent": {
+                    const { OnboardingAgent } = await import("../agent/onboarding-agent.ts");
+                    return await OnboardingAgent.getStubByName(params);
+                  }
+                  default:
+                    return await IterateAgent.getStubByName(params);
+                }
+              })();
             await agentStub.addEvents([
               {
                 type: "CORE:LLM_INPUT_ITEM",

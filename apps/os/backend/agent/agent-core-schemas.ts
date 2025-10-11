@@ -261,6 +261,22 @@ export const SetModelOptsEventInput = z.object({
   ...setModelOptsEventFields,
 });
 
+const messageFromAgentEventFields = {
+  type: z.literal("CORE:MESSAGE_FROM_AGENT"),
+  data: z.object({
+    fromAgentName: z.string(),
+    message: z.string(),
+  }),
+};
+export const MessageFromAgentEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...messageFromAgentEventFields,
+});
+export const MessageFromAgentEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...messageFromAgentEventFields,
+});
+
 // CORE:SET_METADATA
 const setMetadataEventFields = {
   type: z.literal("CORE:SET_METADATA"),
@@ -500,6 +516,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   SetMetadataEvent,
   AddContextRulesEvent,
   SetModelOptsEvent,
+  MessageFromAgentEvent,
   InternalErrorEvent,
   LogEvent,
   InitializedWithEventsEvent,
@@ -522,6 +539,7 @@ export const agentCoreEventInputSchemasUndiscriminated = [
   SetMetadataEventInput,
   AddContextRulesEventInput,
   SetModelOptsEventInput,
+  MessageFromAgentEventInput,
   InternalErrorEventInput,
   LogEventInput,
   InitializedWithEventsEventInput,

@@ -726,6 +726,21 @@ export class AgentCore<
         next.metadata = mergeDeep(next.metadata, event.data);
         break;
 
+      case "CORE:MESSAGE_FROM_AGENT": {
+        const developerMessage = {
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `Message from agent ${event.data.fromAgentName}: ${event.data.message}`,
+            },
+          ],
+        };
+        next.inputItems = [...next.inputItems, developerMessage];
+        break;
+      }
+
       case "CORE:LLM_INPUT_ITEM":
         if (event.data) {
           const item = event.data;

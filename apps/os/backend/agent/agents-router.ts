@@ -13,9 +13,9 @@ import {
 } from "./agent-core-schemas.ts";
 // import type { MergedEventForSlices } from "./agent-core.ts";
 import { IterateAgent } from "./iterate-agent.ts";
-import { SlackAgent, type SlackAgentSlices } from "./slack-agent.ts";
+import { OnboardingAgent } from "./onboarding-agent.ts";
+import { SlackAgent } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { MergedEventForSlices } from "./agent-core.ts";
 import { MCPEventInput } from "./mcp/mcp-slice.ts";
 import { SlackEventInput } from "./slack-slice.ts";
 // import type { SlackAgentSlices } from "./slack-agent.ts";
@@ -28,7 +28,7 @@ const agentStubProcedure = protectedProcedure
       estateId: z.string().describe("The estate this agent belongs to"),
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent", "SlackAgent"])
+        .enum(["IterateAgent", "SlackAgent", "OnboardingAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
@@ -44,10 +44,16 @@ const agentStubProcedure = protectedProcedure
       reason: input.reason || "Created via agents router",
     };
     // Always use getOrCreateStubByName - agents are created on demand
-    const agent =
-      input.agentClassName === "SlackAgent"
-        ? await SlackAgent.getOrCreateStubByName(getOrCreateStubParams)
-        : await IterateAgent.getOrCreateStubByName(getOrCreateStubParams);
+    const agent = await (async () => {
+      switch (input.agentClassName) {
+        case "SlackAgent":
+          return await SlackAgent.getOrCreateStubByName(getOrCreateStubParams);
+        case "OnboardingAgent":
+          return await OnboardingAgent.getOrCreateStubByName(getOrCreateStubParams);
+        default:
+          return await IterateAgent.getOrCreateStubByName(getOrCreateStubParams);
+      }
+    })();
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 
@@ -142,7 +148,7 @@ export const agentsRouter = router({
   getEvents: agentStubProcedure
     .meta({ description: "Get the events of an agent instance" })
     .query(async ({ ctx }) => {
-      return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
+      return await ctx.agent.getEvents();
     }),
 
   getAgentDebugURL: agentStubProcedure.query(async ({ ctx }) => {

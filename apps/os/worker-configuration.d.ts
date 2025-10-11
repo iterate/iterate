@@ -3,12 +3,18 @@
 declare namespace Cloudflare {
 	interface GlobalProps {
 		mainModule: typeof import("./backend/worker");
-		durableNamespaces: "IterateAgent" | "SlackAgent" | "OrganizationWebSocket" | "Sandbox";
+                durableNamespaces:
+                        | "IterateAgent"
+                        | "SlackAgent"
+                        | "OnboardingAgent"
+                        | "OrganizationWebSocket"
+                        | "Sandbox";
 	}
 	interface Env {
-		ITERATE_AGENT: DurableObjectNamespace<import("./backend/worker").IterateAgent>;
-		SLACK_AGENT: DurableObjectNamespace<import("./backend/worker").SlackAgent>;
-		ORGANIZATION_WEBSOCKET: DurableObjectNamespace<import("./backend/worker").OrganizationWebSocket>;
+                ITERATE_AGENT: DurableObjectNamespace<import("./backend/worker").IterateAgent>;
+                SLACK_AGENT: DurableObjectNamespace<import("./backend/worker").SlackAgent>;
+                ONBOARDING_AGENT: DurableObjectNamespace<import("./backend/worker").OnboardingAgent>;
+                ORGANIZATION_WEBSOCKET: DurableObjectNamespace<import("./backend/worker").OrganizationWebSocket>;
 		SANDBOX: DurableObjectNamespace<import("./backend/worker").Sandbox>;
 		ITERATE_FILES: R2Bucket;
 		SELF: Service<typeof import("./backend/worker").default>;

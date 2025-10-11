@@ -326,15 +326,15 @@ export const agentInstance = pgTable(
       .text()
       .notNull()
       .references(() => estate.id, { onDelete: "cascade" }),
-    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent"
+    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
   (t) => [
-    // Global uniqueness for DO identifiers
-    uniqueIndex().on(t.durableObjectName),
+    // DO instance names must be unique per estate
+    uniqueIndex().on(t.estateId, t.durableObjectName),
     uniqueIndex().on(t.durableObjectId),
     // Listing helpers
     index().on(t.estateId),

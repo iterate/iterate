@@ -947,10 +947,18 @@ export const integrationsRouter = router({
         agentInstanceName: agentDurableObject.durableObjectName,
       };
 
-      const agentStub =
-        agentDurableObject.className === "SlackAgent"
-          ? await SlackAgent.getStubByName(params)
-          : await IterateAgent.getStubByName(params);
+      const agentStub = await (async () => {
+        switch (agentDurableObject.className) {
+          case "SlackAgent":
+            return await SlackAgent.getStubByName(params);
+          case "OnboardingAgent": {
+            const { OnboardingAgent } = await import("../../agent/onboarding-agent.ts");
+            return await OnboardingAgent.getStubByName(params);
+          }
+          default:
+            return await IterateAgent.getStubByName(params);
+        }
+      })();
 
       if (!agentStub) {
         throw new TRPCError({

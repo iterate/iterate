@@ -1019,6 +1019,60 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return this.agentCore.addEvents(events);
   }
 
+  async sendMessage({
+    name,
+    message,
+    triggerLLMRequest,
+  }: {
+    name: string;
+    message: string;
+    triggerLLMRequest?: true;
+  }) {
+    const targetAgent = await this.db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.estateId, this.databaseRecord.estateId),
+        eq(agentInstance.durableObjectName, name),
+      ),
+    });
+
+    if (!targetAgent) {
+      throw new Error(
+        `Agent instance ${name} not found in estate ${this.databaseRecord.estateId}`,
+      );
+    }
+
+    const agentConstructor = await (async () => {
+      switch (targetAgent.className) {
+        case "IterateAgent":
+          return IterateAgent;
+        case "SlackAgent": {
+          const { SlackAgent } = await import("./slack-agent.ts");
+          return SlackAgent;
+        }
+        case "OnboardingAgent": {
+          const { OnboardingAgent } = await import("./onboarding-agent.ts");
+          return OnboardingAgent;
+        }
+        default:
+          throw new Error(`Unsupported agent class ${targetAgent.className}`);
+      }
+    })();
+
+    const stub = await agentConstructor.getStubByName({
+      db: this.db,
+      agentInstanceName: targetAgent.durableObjectName,
+    });
+
+    return await stub.addEvent({
+      type: "CORE:MESSAGE_FROM_AGENT",
+      data: {
+        fromAgentName: this.databaseRecord.durableObjectName,
+        message,
+      },
+      ...(triggerLLMRequest ? { triggerLLMRequest } : {}),
+    });
+  }
+
   getReducedState(): Readonly<
     MergedStateForSlices<Slices> & MergedStateForSlices<CoreAgentSlices>
   > {

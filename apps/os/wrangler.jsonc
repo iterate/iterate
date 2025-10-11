@@ -55,6 +55,10 @@
         "class_name": "SlackAgent",
       },
       {
+        "name": "ONBOARDING_AGENT",
+        "class_name": "OnboardingAgent",
+      },
+      {
         "name": "ORGANIZATION_WEBSOCKET",
         "class_name": "OrganizationWebSocket",
       },
@@ -68,6 +72,10 @@
     {
       "tag": "2025-01-init-agents",
       "new_sqlite_classes": ["IterateAgent", "SlackAgent"],
+    },
+    {
+      "tag": "2025-01-onboarding-agent",
+      "new_sqlite_classes": ["OnboardingAgent"],
     },
     {
       "tag": "2025-01-websocket",
