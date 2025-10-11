@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "cron-parser": "^4.7.1",
     "rrule": "^2.8.1",
     "zod": "4.1.11"
   },

@@ -1,3 +1,4 @@
+import parser from "cron-parser";
 import { RRule } from "rrule";
 import { z } from "zod";
 
@@ -12,26 +13,65 @@ type DurableObjectState = {
   blockConcurrencyWhile<T>(cb: () => Promise<T> | T): Promise<T>;
 };
 
-const EventRuleAdd = z.object({
-  type: z.literal("rule_add"),
-  key: z.string().min(1),
+const RRuleInstructionInputSchema = z.object({
+  kind: z.literal("rrule"),
   rrule: z.string().min(1),
+});
+
+const CronInstructionInputSchema = z.object({
+  kind: z.literal("cron"),
+  cron: z.string().min(1),
+  timezone: z.string().min(1).optional(),
+});
+
+const OnceInstructionInputSchema = z.object({
+  kind: z.literal("once"),
+  at: z.union([z.number(), z.string(), z.date()]),
+});
+
+const InstructionInputSchema = z.discriminatedUnion("kind", [
+  RRuleInstructionInputSchema,
+  CronInstructionInputSchema,
+  OnceInstructionInputSchema,
+]);
+
+type InstructionInput = z.infer<typeof InstructionInputSchema>;
+
+const RRuleInstructionSchema = RRuleInstructionInputSchema;
+const CronInstructionSchema = CronInstructionInputSchema;
+const OnceInstructionSchema = z.object({
+  kind: z.literal("once"),
+  at: z.number().int().nonnegative(),
+});
+
+const InstructionSchema = z.discriminatedUnion("kind", [
+  RRuleInstructionSchema,
+  CronInstructionSchema,
+  OnceInstructionSchema,
+]);
+
+type Instruction = z.infer<typeof InstructionSchema>;
+
+const EventDirectiveAddInput = z.object({
+  type: z.literal("directive_add"),
+  key: z.string().min(1),
+  instruction: InstructionInputSchema,
   method: z.string().min(1),
   args: z.unknown().optional(),
   meta: z.unknown().optional(),
 });
 
-const EventRuleChange = z.object({
-  type: z.literal("rule_change"),
+const EventDirectiveChangeInput = z.object({
+  type: z.literal("directive_change"),
   key: z.string().min(1),
-  rrule: z.string().min(1),
+  instruction: InstructionInputSchema,
   method: z.string().min(1),
   args: z.unknown().optional(),
   meta: z.unknown().optional(),
 });
 
-const EventRuleDelete = z.object({
-  type: z.literal("rule_delete"),
+const EventDirectiveDelete = z.object({
+  type: z.literal("directive_delete"),
   key: z.string().min(1),
   meta: z.unknown().optional(),
 });
@@ -55,24 +95,73 @@ const EventInvoke = z.object({
   meta: z.unknown().optional(),
 });
 
+const LegacyEventDirectiveAdd = z.object({
+  type: z.literal("rule_add"),
+  key: z.string().min(1),
+  rrule: z.string().min(1),
+  method: z.string().min(1),
+  args: z.unknown().optional(),
+  meta: z.unknown().optional(),
+});
+
+const LegacyEventDirectiveChange = z.object({
+  type: z.literal("rule_change"),
+  key: z.string().min(1),
+  rrule: z.string().min(1),
+  method: z.string().min(1),
+  args: z.unknown().optional(),
+  meta: z.unknown().optional(),
+});
+
+const LegacyEventDirectiveDelete = z.object({
+  type: z.literal("rule_delete"),
+  key: z.string().min(1),
+  meta: z.unknown().optional(),
+});
+
+const EventDirectiveAdd = EventDirectiveAddInput.extend({
+  instruction: InstructionSchema,
+});
+
+const EventDirectiveChange = EventDirectiveChangeInput.extend({
+  instruction: InstructionSchema,
+});
+
 const EventSchema = z.discriminatedUnion("type", [
-  EventRuleAdd,
-  EventRuleChange,
-  EventRuleDelete,
+  EventDirectiveAdd,
+  EventDirectiveChange,
+  EventDirectiveDelete,
+  EventInvoke,
+]);
+
+const EventInputSchema = z.discriminatedUnion("type", [
+  EventDirectiveAddInput,
+  EventDirectiveChangeInput,
+  EventDirectiveDelete,
+  EventInvoke,
+]);
+
+const LegacyEventSchema = z.discriminatedUnion("type", [
+  LegacyEventDirectiveAdd,
+  LegacyEventDirectiveChange,
+  LegacyEventDirectiveDelete,
   EventInvoke,
 ]);
 
 type Event = z.infer<typeof EventSchema>;
+type EventInput = z.infer<typeof EventInputSchema>;
+type LegacyEvent = z.infer<typeof LegacyEventSchema>;
 
-type RuleRecord = {
+type DirectiveMutationEvent = Extract<Event, { type: "directive_add" | "directive_change" }>;
+type DirectiveMutationEventInput = Extract<EventInput, { type: "directive_add" | "directive_change" }>;
+
+type DirectiveRecord = {
   key: string;
-  rrule: string;
+  instruction: Instruction;
   method: string;
   args?: unknown;
   meta?: unknown;
 };
-
-type RuleMutationEvent = Extract<Event, { type: "rule_add" | "rule_change" }>;
 
 type AlarmInfo = {
   retryCount?: number;
@@ -80,7 +169,7 @@ type AlarmInfo = {
 };
 
 type InvokeContext = {
-  rule: RuleRecord;
+  directive: DirectiveRecord;
   mode: InvokeMode;
   retryCount: number;
 };
@@ -90,14 +179,14 @@ type InvocationError = Error & {
   duration?: number;
 };
 
-type RuleMethod = (ctx: InvokeContext) => unknown | Promise<unknown>;
+type DirectiveMethod = (ctx: InvokeContext) => unknown | Promise<unknown>;
 
 const SAFETY_MS = 10_000;
 
 export class Schedrruler {
   private readonly ctx: DurableObjectState;
   private readonly sql: any;
-  private readonly rules = new Map<string, RuleRecord>();
+  private readonly directives = new Map<string, DirectiveRecord>();
 
   constructor(ctx: DurableObjectState, _env: unknown) {
     this.ctx = ctx;
@@ -120,8 +209,8 @@ export class Schedrruler {
         );
       `);
 
-      this.replayRulesFromEvents();
-      this.backfillNextForActiveRules();
+      this.replayDirectivesFromEvents();
+      this.backfillNextForActiveDirectives();
       this.rescheduleAlarm();
     });
   }
@@ -134,12 +223,21 @@ export class Schedrruler {
         const items: unknown[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
         const accepted: Event[] = [];
         for (const item of items) {
-          const parsed = EventSchema.safeParse(item);
+          const parsed = EventInputSchema.safeParse(item);
           if (!parsed.success) {
-            console.warn("schedrruler: drop invalid event", parsed.error.message);
+            const legacy = LegacyEventSchema.safeParse(item);
+            if (!legacy.success) {
+              console.warn("schedrruler: drop invalid event", parsed.error.message);
+              continue;
+            }
+            const normalizedLegacy = this.normalizeLegacyEvent(legacy.data);
+            if (!normalizedLegacy) continue;
+            accepted.push(normalizedLegacy);
             continue;
           }
-          accepted.push(parsed.data);
+          const normalized = this.normalizeIncomingEvent(parsed.data);
+          if (!normalized) continue;
+          accepted.push(normalized);
         }
         await this.addEvents(accepted);
         return json({ accepted: accepted.length });
@@ -162,19 +260,19 @@ export class Schedrruler {
         for (const row of rows) {
           nextByKey.set(row.rule_key, row.next_ts ?? null);
         }
-        const rules = Array.from(this.rules.values()).map((rule) => {
-          const nextTs = nextByKey.get(rule.key) ?? null;
+        const directives = Array.from(this.directives.values()).map((directive) => {
+          const nextTs = nextByKey.get(directive.key) ?? null;
           return {
-            key: rule.key,
-            rrule: rule.rrule,
-            method: rule.method,
-            args: rule.args ?? null,
-            meta: rule.meta ?? null,
+            key: directive.key,
+            instruction: directive.instruction,
+            method: directive.method,
+            args: directive.args ?? null,
+            meta: directive.meta ?? null,
             nextTs,
             next: nextTs != null ? new Date(nextTs).toISOString() : null,
           };
         });
-        return json({ now: new Date().toISOString(), rules });
+        return json({ now: new Date().toISOString(), directives });
       }
 
       if (request.method === "POST" && url.pathname === "/__test/alarm") {
@@ -202,37 +300,37 @@ export class Schedrruler {
     let hadError = false;
 
     for (const { rule_key } of due) {
-      const rule = this.rules.get(rule_key);
-      if (!rule) {
+      const directive = this.directives.get(rule_key);
+      if (!directive) {
         this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, rule_key);
         continue;
       }
 
       try {
-        const outcome = await this.invokeRule(rule, "scheduled", info?.retryCount ?? 0);
-        const next = this.computeNextTs(rule.rrule, now);
+        const outcome = await this.invokeDirective(directive, "scheduled", info?.retryCount ?? 0);
+        const next = this.computeNextTs(directive.instruction, now, { inclusive: false });
         this.sql.exec("BEGIN IMMEDIATE");
         try {
           this.appendEvent(
             {
               type: "invoke",
-              key: rule.key,
+              key: directive.key,
               mode: "scheduled",
               result: {
                 ok: true,
                 dur: outcome.duration,
                 spanId: outcome.spanId,
-                method: rule.method,
-                args: rule.args,
+                method: directive.method,
+                args: directive.args,
                 value: outcome.value,
               },
             },
             Date.now(),
           );
           if (next != null) {
-            this.upsertNext(rule.key, next);
+            this.upsertNext(directive.key, next);
           } else {
-            this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, rule.key);
+            this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, directive.key);
           }
           this.sql.exec("COMMIT");
         } catch (commitError) {
@@ -246,7 +344,7 @@ export class Schedrruler {
           this.appendEvent(
             {
               type: "invoke",
-              key: rule.key,
+              key: directive.key,
               mode: "scheduled",
               result: {
                 ok: false,
@@ -254,8 +352,8 @@ export class Schedrruler {
                 retryCount: info?.retryCount ?? 0,
                 spanId: (err as InvocationError).spanId,
                 dur: (err as InvocationError).duration,
-                method: rule.method,
-                args: rule.args,
+                method: directive.method,
+                args: directive.args,
               },
             },
             Date.now(),
@@ -277,27 +375,21 @@ export class Schedrruler {
   private async addEvents(events: Event[]): Promise<void> {
     for (const event of events) {
       switch (event.type) {
-        case "rule_add":
-        case "rule_change": {
-          const ruleEvent = event as RuleMutationEvent;
-          this.appendEvent(ruleEvent, Date.now());
-          this.rules.set(ruleEvent.key, {
-            key: ruleEvent.key,
-            rrule: ruleEvent.rrule,
-            method: ruleEvent.method,
-            args: ruleEvent.args,
-            meta: ruleEvent.meta,
-          });
-          this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, ruleEvent.key);
-          const ts = this.computeNextTs(ruleEvent.rrule, Date.now());
+        case "directive_add":
+        case "directive_change": {
+          const normalized = event as DirectiveMutationEvent;
+          this.appendEvent(normalized, Date.now());
+          this.directives.set(normalized.key, this.toDirectiveRecord(normalized));
+          this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, normalized.key);
+          const ts = this.computeNextTs(normalized.instruction, Date.now(), { inclusive: true });
           if (ts != null) {
-            this.upsertNext(ruleEvent.key, ts);
+            this.upsertNext(normalized.key, ts);
           }
           break;
         }
-        case "rule_delete": {
+        case "directive_delete": {
           this.appendEvent(event, Date.now());
-          this.rules.delete(event.key);
+          this.directives.delete(event.key);
           this.sql.exec(`DELETE FROM next WHERE rule_key = ?`, event.key);
           break;
         }
@@ -308,25 +400,25 @@ export class Schedrruler {
           }
           this.appendEvent(event, Date.now());
 
-          const rule = this.rules.get(event.key);
-          if (!rule) {
-            console.warn("schedrruler: manual invoke skipped; rule not found", event.key);
+          const directive = this.directives.get(event.key);
+          if (!directive) {
+            console.warn("schedrruler: manual invoke skipped; directive not found", event.key);
             break;
           }
 
           try {
-            const outcome = await this.invokeRule(rule, "manual", 0);
+            const outcome = await this.invokeDirective(directive, "manual", 0);
             this.appendEvent(
               {
                 type: "invoke",
-                key: rule.key,
+                key: directive.key,
                 mode: "manual",
                 result: {
                   ok: true,
                   dur: outcome.duration,
                   spanId: outcome.spanId,
-                  method: rule.method,
-                  args: rule.args,
+                  method: directive.method,
+                  args: directive.args,
                   value: outcome.value,
                 },
               },
@@ -336,13 +428,13 @@ export class Schedrruler {
             this.appendEvent(
               {
                 type: "invoke",
-                key: rule.key,
+                key: directive.key,
                 mode: "manual",
                 result: {
                   ok: false,
                   error: String(err),
-                  method: rule.method,
-                  args: rule.args,
+                  method: directive.method,
+                  args: directive.args,
                   spanId: (err as InvocationError).spanId,
                   dur: (err as InvocationError).duration,
                 },
@@ -360,47 +452,56 @@ export class Schedrruler {
     this.rescheduleAlarm();
   }
 
-  private replayRulesFromEvents(): void {
+  private replayDirectivesFromEvents(): void {
     const rows = this.sql
       .exec(
         `SELECT payload FROM events
-         WHERE type IN ('rule_add','rule_change','rule_delete')
+         WHERE type IN ('directive_add','directive_change','directive_delete')
          ORDER BY ts ASC, id ASC`,
       )
       .toArray();
 
-    this.rules.clear();
+    this.directives.clear();
 
     for (const row of rows) {
-      const parsed = EventSchema.safeParse(JSON.parse(row.payload));
+      const raw = JSON.parse(row.payload);
+      const parsed = EventSchema.safeParse(raw);
       if (!parsed.success) {
-        console.warn("schedrruler: dropping invalid historical event", parsed.error.message);
+        const legacy = LegacyEventSchema.safeParse(raw);
+        if (!legacy.success) {
+          console.warn("schedrruler: dropping invalid historical event", parsed.error.message);
+          continue;
+        }
+        const upgraded = this.normalizeLegacyEvent(legacy.data);
+        if (!upgraded) continue;
+        if (upgraded.type === "directive_delete") {
+          this.directives.delete(upgraded.key);
+        } else if (upgraded.type === "invoke") {
+          continue;
+        } else {
+          this.directives.set(upgraded.key, this.toDirectiveRecord(upgraded));
+        }
         continue;
       }
       const event = parsed.data;
-      if (event.type === "rule_delete") {
-        this.rules.delete(event.key);
+      if (event.type === "directive_delete") {
+        this.directives.delete(event.key);
+      } else if (event.type === "invoke") {
+        continue;
       } else {
-        const ruleEvent = event as RuleMutationEvent;
-        this.rules.set(ruleEvent.key, {
-          key: ruleEvent.key,
-          rrule: ruleEvent.rrule,
-          method: ruleEvent.method,
-          args: ruleEvent.args,
-          meta: ruleEvent.meta,
-        });
+        this.directives.set(event.key, this.toDirectiveRecord(event));
       }
     }
   }
 
-  private backfillNextForActiveRules(): void {
+  private backfillNextForActiveDirectives(): void {
     const existing = new Set(
       this.sql.exec(`SELECT rule_key FROM next`).toArray().map((row: any) => row.rule_key as string),
     );
     const now = Date.now();
-    for (const [key, rule] of this.rules) {
+    for (const [key, directive] of this.directives) {
       if (existing.has(key)) continue;
-      const ts = this.computeNextTs(rule.rrule, now);
+      const ts = this.computeNextTs(directive.instruction, now, { inclusive: true });
       if (ts != null) {
         this.upsertNext(key, ts);
       }
@@ -435,19 +536,147 @@ export class Schedrruler {
     );
   }
 
-  private computeNextTs(rrule: string, afterMs: number): number | null {
-    try {
-      const options = RRule.parseString(rrule);
-      if (!options.dtstart) {
-        options.dtstart = new Date();
+  private computeNextTs(
+    instruction: Instruction,
+    afterMs: number,
+    { inclusive = false }: { inclusive?: boolean } = {},
+  ): number | null {
+    switch (instruction.kind) {
+      case "rrule": {
+        try {
+          const options = RRule.parseString(instruction.rrule);
+          if (!options.dtstart) {
+            options.dtstart = new Date();
+          }
+          const schedule = new RRule(options);
+          const next = schedule.after(new Date(afterMs), inclusive);
+          return next ? next.getTime() : null;
+        } catch (error) {
+          console.warn("schedrruler: invalid RRULE", instruction.rrule, error);
+          return null;
+        }
       }
-      const schedule = new RRule(options);
-      const next = schedule.after(new Date(afterMs), false);
-      return next ? next.getTime() : null;
-    } catch (error) {
-      console.warn("schedrruler: invalid RRULE", rrule, error);
-      return null;
+      case "cron": {
+        try {
+          const currentDate = inclusive ? new Date(Math.max(afterMs - 1, 0)) : new Date(afterMs);
+          const parsed = parser.parseExpression(instruction.cron, {
+            currentDate,
+            tz: instruction.timezone,
+            iterator: false,
+          });
+          const nextDate = parsed.next().toDate();
+          if (inclusive && nextDate.getTime() <= afterMs) {
+            return afterMs;
+          }
+          return nextDate.getTime();
+        } catch (error) {
+          console.warn("schedrruler: invalid cron expression", instruction.cron, error);
+          return null;
+        }
+      }
+      case "once": {
+        const ts = instruction.at;
+        if (inclusive && ts <= afterMs) {
+          return Math.max(ts, afterMs);
+        }
+        return ts > afterMs ? ts : null;
+      }
+      default:
+        instruction satisfies never;
+        return null;
     }
+  }
+
+  private normalizeIncomingEvent(event: EventInput): Event | null {
+    switch (event.type) {
+      case "directive_add":
+      case "directive_change": {
+        const instruction = this.resolveInstruction(event.instruction, event.key);
+        if (!instruction) return null;
+        return { ...event, instruction };
+      }
+      default:
+        return event as Event;
+    }
+  }
+
+  private normalizeLegacyEvent(event: LegacyEvent): Event | null {
+    switch (event.type) {
+      case "rule_add":
+        return {
+          type: "directive_add",
+          key: event.key,
+          instruction: { kind: "rrule", rrule: event.rrule },
+          method: event.method,
+          args: event.args,
+          meta: event.meta,
+        } satisfies Event;
+      case "rule_change":
+        return {
+          type: "directive_change",
+          key: event.key,
+          instruction: { kind: "rrule", rrule: event.rrule },
+          method: event.method,
+          args: event.args,
+          meta: event.meta,
+        } satisfies Event;
+      case "rule_delete":
+        return {
+          type: "directive_delete",
+          key: event.key,
+          meta: event.meta,
+        } satisfies Event;
+      case "invoke":
+        return event as Event;
+      default:
+        event satisfies never;
+        return null;
+    }
+  }
+
+  private resolveInstruction(input: InstructionInput, key: string): Instruction | null {
+    switch (input.kind) {
+      case "rrule":
+        return input;
+      case "cron":
+        return input;
+      case "once": {
+        const ts = this.toTimestamp(input.at);
+        if (ts == null) {
+          console.warn("schedrruler: invalid 'once' timestamp", input.at, "for", key);
+          return null;
+        }
+        return { kind: "once", at: ts };
+      }
+      default:
+        input satisfies never;
+        return null;
+    }
+  }
+
+  private toTimestamp(value: number | string | Date): number | null {
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    if (value instanceof Date) {
+      const ms = value.getTime();
+      return Number.isFinite(ms) ? ms : null;
+    }
+    return null;
+  }
+
+  private toDirectiveRecord(event: DirectiveMutationEvent): DirectiveRecord {
+    return {
+      key: event.key,
+      instruction: event.instruction,
+      method: event.method,
+      args: event.args,
+      meta: event.meta,
+    };
   }
 
   private async safeJson(request: Request): Promise<unknown> {
@@ -458,30 +687,30 @@ export class Schedrruler {
     }
   }
 
-  private async invokeRule(
-    rule: RuleRecord,
+  private async invokeDirective(
+    directive: DirectiveRecord,
     mode: InvokeMode,
     retryCount: number,
   ): Promise<{ value: unknown; duration: number; spanId: string }> {
     const spanId = crypto.randomUUID();
     const started = Date.now();
-    const fn = (this as Record<string, unknown>)[rule.method];
+    const fn = (this as Record<string, unknown>)[directive.method];
     if (typeof fn !== "function") {
-      const error = new Error(`unknown method: ${rule.method}`) as InvocationError;
+      const error = new Error(`unknown method: ${directive.method}`) as InvocationError;
       error.spanId = spanId;
       error.duration = Date.now() - started;
       throw error;
     }
 
     try {
-      const value = await (fn as RuleMethod).call(this, {
-        rule,
+      const value = await (fn as DirectiveMethod).call(this, {
+        directive,
         mode,
         retryCount,
       });
       const duration = Date.now() - started;
       console.log(
-        `[schedrruler] span=${spanId} rule=${rule.key} mode=${mode} ok dur=${duration}ms method=${rule.method}`,
+        `[schedrruler] span=${spanId} directive=${directive.key} mode=${mode} ok dur=${duration}ms method=${directive.method}`,
       );
       return { value, duration, spanId };
     } catch (unknownError) {
@@ -490,15 +719,15 @@ export class Schedrruler {
       error.spanId = spanId;
       error.duration = duration;
       console.error(
-        `[schedrruler] span=${spanId} rule=${rule.key} mode=${mode} failed after ${duration}ms method=${rule.method}`,
+        `[schedrruler] span=${spanId} directive=${directive.key} mode=${mode} failed after ${duration}ms method=${directive.method}`,
         error,
       );
       throw error;
     }
   }
 
-  async log({ rule }: InvokeContext): Promise<void> {
-    console.log("[schedrruler] rule triggered", rule.key, rule.args ?? "");
+  async log({ directive }: InvokeContext): Promise<void> {
+    console.log("[schedrruler] directive triggered", directive.key, directive.args ?? "");
   }
 
   async error(_: InvokeContext): Promise<void> {

@@ -65,8 +65,16 @@ class FakeSql {
     }
 
     if (/^SELECT PAYLOAD FROM EVENTS/i.test(normalized)) {
+      const trackedTypes = new Set([
+        "directive_add",
+        "directive_change",
+        "directive_delete",
+        "rule_add",
+        "rule_change",
+        "rule_delete",
+      ]);
       const rows = [...this.events]
-        .filter((event) => ["rule_add", "rule_change", "rule_delete"].includes(event.type))
+        .filter((event) => trackedTypes.has(event.type))
         .sort((a, b) => (a.ts - b.ts) || (a.id - b.id))
         .map(({ payload }) => ({ payload }));
       return new ArrayResult(rows);
@@ -147,13 +155,13 @@ describe("Schedrruler durable object", () => {
     return schedrruler.fetch(makeRequest(path, init));
   }
 
-  it("runs scheduled invocations and records the result", async () => {
+  it("runs RRULE directives and records the result", async () => {
     await fetchDo("/events", {
       method: "POST",
       body: JSON.stringify({
-        type: "rule_add",
+        type: "directive_add",
         key: "scheduled",
-        rrule: "FREQ=SECONDLY;COUNT=2",
+        instruction: { kind: "rrule", rrule: "FREQ=SECONDLY;COUNT=2" },
         method: "log",
       }),
       headers: { "content-type": "application/json" },
@@ -166,7 +174,7 @@ describe("Schedrruler durable object", () => {
     const rows = (await response.json()) as Array<Record<string, any>>;
     const summary = pluckFields(
       rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
-      ["type", "rule_key", "payload.mode", "payload.result.method", "payload.result.ok"],
+      ["type", "rule_key", "payload.instruction.kind", "payload.result.method", "payload.result.ok"],
       { stringifyColumns: true },
     ) as string;
     const lines = summary
@@ -176,8 +184,8 @@ describe("Schedrruler durable object", () => {
 
     expect(lines).toMatchInlineSnapshot(`
       [
-        "[\"invoke\",\"scheduled\",\"scheduled\",\"log\",true]",
-        "[\"rule_add\",\"scheduled\",null,null,null]",
+        "[\"directive_add\",\"scheduled\",\"rrule\",null,null]",
+        "[\"invoke\",\"scheduled\",null,\"log\",true]",
       ]
     `);
   });
@@ -186,9 +194,9 @@ describe("Schedrruler durable object", () => {
     await fetchDo("/events", {
       method: "POST",
       body: JSON.stringify({
-        type: "rule_add",
+        type: "directive_add",
         key: "manual",
-        rrule: "FREQ=DAILY",
+        instruction: { kind: "rrule", rrule: "FREQ=DAILY" },
         method: "log",
       }),
       headers: { "content-type": "application/json" },
@@ -214,9 +222,80 @@ describe("Schedrruler durable object", () => {
 
     expect(lines).toMatchInlineSnapshot(`
       [
+        "[\"directive_add\",\"manual\",null,null,null]",
         "[\"invoke\",\"manual\",\"manual\",\"log\",true]",
         "[\"invoke\",\"manual\",\"manual\",null,null]",
-        "[\"rule_add\",\"manual\",null,null,null]",
+      ]
+    `);
+  });
+
+  it("supports once directives for one-off timers", async () => {
+    await fetchDo("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "directive_add",
+        key: "launch",
+        instruction: { kind: "once", at: new Date(initial.getTime() - 5_000).toISOString() },
+        method: "log",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+
+    await schedrruler.alarm();
+
+    const response = await fetchDo("/events?limit=5");
+    const rows = (await response.json()) as Array<Record<string, any>>;
+    const summary = pluckFields(
+      rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
+      ["type", "rule_key", "payload.instruction.kind", "payload.result.method", "payload.result.ok"],
+      { stringifyColumns: true },
+    ) as string;
+    const lines = summary
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+
+    expect(lines).toMatchInlineSnapshot(`
+      [
+        "[\"directive_add\",\"launch\",\"once\",null,null]",
+        "[\"invoke\",\"launch\",null,\"log\",true]",
+      ]
+    `);
+
+    expect(state.storage.alarm).toBeNull();
+  });
+
+  it("computes cron directives using cron-parser", async () => {
+    await fetchDo("/events", {
+      method: "POST",
+      body: JSON.stringify({
+        type: "directive_add",
+        key: "cron", 
+        instruction: { kind: "cron", cron: "*/1 * * * * *" },
+        method: "log",
+      }),
+      headers: { "content-type": "application/json" },
+    });
+
+    vi.setSystemTime(new Date(initial.getTime() + 1_500));
+    await schedrruler.alarm();
+
+    const response = await fetchDo("/events?limit=5");
+    const rows = (await response.json()) as Array<Record<string, any>>;
+    const summary = pluckFields(
+      rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) })),
+      ["type", "rule_key", "payload.instruction.kind", "payload.result.method", "payload.result.ok"],
+      { stringifyColumns: true },
+    ) as string;
+    const lines = summary
+      .split("\n")
+      .filter(Boolean)
+      .sort();
+
+    expect(lines).toMatchInlineSnapshot(`
+      [
+        "[\"directive_add\",\"cron\",\"cron\",null,null]",
+        "[\"invoke\",\"cron\",null,\"log\",true]",
       ]
     `);
   });

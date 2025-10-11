@@ -232,18 +232,26 @@ const HTML = `<!DOCTYPE html>
   </head>
   <body>
     <h1>Schedrruler playground</h1>
-    <p>Interact with the Durable Object scheduler: add rules, invoke them manually, and inspect the event log in real time.</p>
+    <p>Interact with the Durable Object scheduler: add directives, invoke them manually, and inspect the event log in real time.</p>
     <main>
       <section>
-        <h2>Create or update a rule</h2>
-        <form id="rule-form">
+        <h2>Create or update a directive</h2>
+        <form id="directive-form">
           <label>
-            Rule key
-            <input name="key" type="text" placeholder="my-rule" required />
+            Directive key
+            <input name="key" type="text" placeholder="my-directive" required />
           </label>
           <label>
-            RRULE string
-            <input name="rrule" type="text" placeholder="FREQ=MINUTELY;INTERVAL=1" required />
+            Instruction type
+            <select name="instruction-kind">
+              <option value="rrule">RRULE</option>
+              <option value="cron">Cron</option>
+              <option value="once">Once</option>
+            </select>
+          </label>
+          <label id="instruction-value-label">
+            <span>Instruction value</span>
+            <input name="instruction-value" type="text" placeholder="FREQ=MINUTELY;INTERVAL=1" required />
           </label>
           <label>
             Method
@@ -257,23 +265,23 @@ const HTML = `<!DOCTYPE html>
             <textarea name="args" placeholder='{ "message": "Hello" }'></textarea>
           </label>
           <div class="rule-actions">
-            <button type="submit">Save rule</button>
+            <button type="submit">Save directive</button>
             <button type="button" class="muted-button" id="clear-form">Clear</button>
           </div>
-          <div class="status" id="rule-status" role="status" aria-live="polite"></div>
+          <div class="status" id="directive-status" role="status" aria-live="polite"></div>
         </form>
       </section>
 
       <section>
-        <h2>Example rules</h2>
+        <h2>Example directives</h2>
         <p>Select an example to populate the form. Each example generates a unique key.</p>
-        <ul class="examples" id="example-rules"></ul>
+        <ul class="examples" id="example-directives"></ul>
       </section>
 
       <section>
-        <h2>Active rules</h2>
-        <div class="rules-grid" id="rules-list">
-          <p class="empty-state">Loading rules…</p>
+        <h2>Active directives</h2>
+        <div class="rules-grid" id="directives-list">
+          <p class="empty-state">Loading directives…</p>
         </div>
       </section>
 
@@ -286,52 +294,53 @@ const HTML = `<!DOCTYPE html>
     </main>
 
     <script type="module">
-      const form = document.getElementById("rule-form");
+      const form = document.getElementById("directive-form");
       const keyInput = form.querySelector('[name="key"]');
-      const rruleInput = form.querySelector('[name="rrule"]');
+      const instructionKind = form.querySelector('[name="instruction-kind"]');
+      const instructionValue = form.querySelector('[name="instruction-value"]');
+      const instructionValueLabel = document.querySelector('#instruction-value-label span');
       const methodInput = form.querySelector('[name="method"]');
       const argsInput = form.querySelector('[name="args"]');
-      const status = document.getElementById("rule-status");
-      const examplesList = document.getElementById("example-rules");
-      const rulesList = document.getElementById("rules-list");
+      const status = document.getElementById("directive-status");
+      const examplesList = document.getElementById("example-directives");
+      const directivesList = document.getElementById("directives-list");
       const eventLog = document.getElementById("event-log");
       const clearButton = document.getElementById("clear-form");
 
       const EXAMPLES = [
         {
-          label: "Log once in 3 seconds",
+          label: "Invoke once in ~3 seconds",
           prepare() {
-            const dtstartIso = new Date(Date.now() + 3000).toISOString();
-            const dtstart = dtstartIso.replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+            const at = new Date(Date.now() + 3000).toISOString();
             return {
-              key: 'demo-' + Math.random().toString(36).slice(2, 8),
-              rrule: 'DTSTART=' + dtstart + ';FREQ=SECONDLY;COUNT=1',
+              key: 'once-' + Math.random().toString(36).slice(2, 8),
+              instruction: { kind: "once", at },
               method: "log",
               args: {
                 message: "Triggers roughly three seconds after creation",
-                createdAt: dtstartIso,
+                createdAt: at,
               },
             };
           },
         },
         {
-          label: "Log every minute",
+          label: "RRULE: every minute",
           prepare() {
             return {
-              key: 'minute-' + Math.random().toString(36).slice(2, 8),
-              rrule: "FREQ=MINUTELY;INTERVAL=1",
+              key: 'rrule-' + Math.random().toString(36).slice(2, 8),
+              instruction: { kind: "rrule", rrule: "FREQ=MINUTELY;INTERVAL=1" },
               method: "log",
               args: { message: "Runs once per minute" },
             };
           },
         },
         {
-          label: "Fail once to test retries",
+          label: "Cron: every 10 seconds",
           prepare() {
             return {
-              key: 'fail-' + Math.random().toString(36).slice(2, 8),
-              rrule: "FREQ=SECONDLY;COUNT=1",
-              method: "error",
+              key: 'cron-' + Math.random().toString(36).slice(2, 8),
+              instruction: { kind: "cron", cron: "*/10 * * * * *" },
+              method: "log",
             };
           },
         },
@@ -348,7 +357,17 @@ const HTML = `<!DOCTYPE html>
           button.addEventListener("click", () => {
             const payload = example.prepare();
             keyInput.value = payload.key;
-            rruleInput.value = payload.rrule;
+            if (payload.instruction) {
+              instructionKind.value = payload.instruction.kind;
+              updateInstructionLabel();
+              if (payload.instruction.kind === "rrule") {
+                instructionValue.value = payload.instruction.rrule;
+              } else if (payload.instruction.kind === "cron") {
+                instructionValue.value = payload.instruction.cron;
+              } else {
+                instructionValue.value = String(payload.instruction.at);
+              }
+            }
             methodInput.value = payload.method;
             argsInput.value = payload.args ? JSON.stringify(payload.args, null, 2) : "";
             status.classList.remove("error");
@@ -361,11 +380,73 @@ const HTML = `<!DOCTYPE html>
 
       renderExamples();
 
+      function updateInstructionLabel() {
+        const kind = instructionKind.value;
+        const placeholderMap = {
+          rrule: "FREQ=MINUTELY;INTERVAL=1",
+          cron: "*/5 * * * * *",
+          once: new Date(Date.now() + 60_000).toISOString(),
+        };
+        const labelText =
+          kind === "cron"
+            ? "Cron expression"
+            : kind === "once"
+              ? "Run at (ISO string or timestamp)"
+              : "RRULE string";
+        if (instructionValueLabel) {
+          instructionValueLabel.textContent = labelText;
+        }
+        instructionValue.placeholder = placeholderMap[kind] || "";
+        if (kind === "once" && !instructionValue.value) {
+          instructionValue.value = new Date(Date.now() + 60_000).toISOString();
+        }
+      }
+
+      instructionKind.addEventListener("change", updateInstructionLabel);
+      updateInstructionLabel();
+
       function formatError(error) {
         if (error && typeof error === "object" && "message" in error) {
           return String(error.message);
         }
         return String(error);
+      }
+
+      function resolveOnceValue(value) {
+        const trimmed = value.trim();
+        if (!trimmed) return null;
+        if (/^\d+$/.test(trimmed)) {
+          return Number(trimmed);
+        }
+        const relativeMatch = trimmed.match(/^\+(\d+)([smhd])$/i);
+        if (relativeMatch) {
+          const amount = Number(relativeMatch[1]);
+          const unit = relativeMatch[2].toLowerCase();
+          const multipliers = { s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+          const delta = amount * (multipliers[unit] ?? 0);
+          return new Date(Date.now() + delta).toISOString();
+        }
+        return trimmed;
+      }
+
+      function buildInstruction(kind, rawValue) {
+        const value = rawValue.trim();
+        if (!value) {
+          return null;
+        }
+        switch (kind) {
+          case "rrule":
+            return { kind: "rrule", rrule: value };
+          case "cron":
+            return { kind: "cron", cron: value };
+          case "once": {
+            const resolved = resolveOnceValue(value);
+            if (resolved == null) return null;
+            return { kind: "once", at: resolved };
+          }
+          default:
+            return null;
+        }
       }
 
       async function postEvent(payload) {
@@ -396,13 +477,13 @@ const HTML = `<!DOCTYPE html>
       form.addEventListener("submit", async (event) => {
         event.preventDefault();
         const key = keyInput.value.trim();
-        const rrule = rruleInput.value.trim();
         const method = methodInput.value.trim();
         const argsText = argsInput.value.trim();
+        const instruction = buildInstruction(instructionKind.value, instructionValue.value);
 
-        if (!key || !rrule || !method) {
+        if (!key || !method || !instruction) {
           status.classList.add("error");
-          status.textContent = "Key, RRULE, and method are required.";
+          status.textContent = "Key, instruction, and method are required.";
           return;
         }
 
@@ -418,9 +499,9 @@ const HTML = `<!DOCTYPE html>
         }
 
         const payload = {
-          type: "rule_add",
+          type: "directive_add",
           key,
-          rrule,
+          instruction,
           method,
         };
 
@@ -428,7 +509,7 @@ const HTML = `<!DOCTYPE html>
           payload.args = args;
         }
 
-        await handleEventSubmission(payload, "Rule saved.");
+        await handleEventSubmission(payload, "Directive saved.");
       });
 
       clearButton.addEventListener("click", () => {
@@ -436,6 +517,7 @@ const HTML = `<!DOCTYPE html>
         argsInput.value = "";
         status.classList.remove("error");
         status.textContent = "Form cleared.";
+        updateInstructionLabel();
       });
 
       function formatRelativeTime(iso) {
@@ -466,30 +548,55 @@ const HTML = `<!DOCTYPE html>
         }
       }
 
+      function formatTimestamp(input) {
+        if (typeof input === "number") {
+          return new Date(input).toISOString();
+        }
+        return String(input);
+      }
+
+      function formatInstruction(instruction) {
+        if (!instruction || typeof instruction !== "object") {
+          return "Unknown instruction";
+        }
+        switch (instruction.kind) {
+          case "rrule":
+            return 'RRULE ' + instruction.rrule;
+          case "cron": {
+            const tz = instruction.timezone ? ' (tz ' + instruction.timezone + ')' : '';
+            return 'Cron ' + instruction.cron + tz;
+          }
+          case "once":
+            return 'Once @ ' + formatTimestamp(instruction.at);
+          default:
+            return JSON.stringify(instruction);
+        }
+      }
+
       function hasOwn(obj, key) {
         return Object.prototype.hasOwnProperty.call(obj, key);
       }
 
-      async function invokeRule(key) {
+      async function invokeDirective(key) {
         await handleEventSubmission({ type: "invoke", key, mode: "manual" }, 'Invoked ' + key + '.');
       }
 
-      async function deleteRule(key) {
-        await handleEventSubmission({ type: "rule_delete", key }, 'Deleted ' + key + '.');
+      async function deleteDirective(key) {
+        await handleEventSubmission({ type: "directive_delete", key }, 'Deleted ' + key + '.');
       }
 
-      function renderRules(state) {
-        if (!state || !Array.isArray(state.rules) || state.rules.length === 0) {
-          rulesList.innerHTML = '';
+      function renderDirectives(state) {
+        if (!state || !Array.isArray(state.directives) || state.directives.length === 0) {
+          directivesList.innerHTML = '';
           const empty = document.createElement("p");
           empty.className = "empty-state";
-          empty.textContent = "No active rules. Create one above to get started.";
-          rulesList.appendChild(empty);
+          empty.textContent = "No active directives. Create one above to get started.";
+          directivesList.appendChild(empty);
           return;
         }
 
-        rulesList.innerHTML = "";
-        state.rules.forEach((rule) => {
+        directivesList.innerHTML = "";
+        state.directives.forEach((directive) => {
           const card = document.createElement("article");
           card.className = "rule-card";
 
@@ -497,13 +604,13 @@ const HTML = `<!DOCTYPE html>
           header.className = "rule-header";
 
           const title = document.createElement("h3");
-          title.textContent = rule.key;
+          title.textContent = directive.key;
           header.appendChild(title);
 
           const next = document.createElement("span");
           next.className = "event-summary";
-          next.textContent = rule.next
-            ? new Date(rule.next).toLocaleTimeString() + ' (' + formatRelativeTime(rule.next) + ')'
+          next.textContent = directive.next
+            ? new Date(directive.next).toLocaleTimeString() + ' (' + formatRelativeTime(directive.next) + ')'
             : "No future run";
           header.appendChild(next);
 
@@ -515,21 +622,21 @@ const HTML = `<!DOCTYPE html>
           label.className = "detail-label";
           label.textContent = "Method";
           const value = document.createElement("span");
-          value.textContent = rule.method;
+          value.textContent = directive.method;
           ruleInfo.appendChild(label);
           ruleInfo.appendChild(value);
           card.appendChild(ruleInfo);
 
-          const rruleRow = document.createElement("div");
-          rruleRow.className = "detail-row";
-          const rruleLabel = document.createElement("span");
-          rruleLabel.className = "detail-label";
-          rruleLabel.textContent = "RRULE";
-          const rruleValue = document.createElement("code");
-          rruleValue.textContent = rule.rrule;
-          rruleRow.appendChild(rruleLabel);
-          rruleRow.appendChild(rruleValue);
-          card.appendChild(rruleRow);
+          const instructionRow = document.createElement("div");
+          instructionRow.className = "detail-row";
+          const instructionLabel = document.createElement("span");
+          instructionLabel.className = "detail-label";
+          instructionLabel.textContent = "Instruction";
+          const instructionValueNode = document.createElement("code");
+          instructionValueNode.textContent = formatInstruction(directive.instruction);
+          instructionRow.appendChild(instructionLabel);
+          instructionRow.appendChild(instructionValueNode);
+          card.appendChild(instructionRow);
 
           const argsRow = document.createElement("div");
           argsRow.className = "detail-row";
@@ -537,10 +644,23 @@ const HTML = `<!DOCTYPE html>
           argsLabel.className = "detail-label";
           argsLabel.textContent = "Args";
           const argsValue = document.createElement("pre");
-          argsValue.textContent = formatJson(rule.args, rule.args !== null && rule.args !== undefined);
+          argsValue.textContent = formatJson(directive.args, directive.args !== null && directive.args !== undefined);
           argsRow.appendChild(argsLabel);
           argsRow.appendChild(argsValue);
           card.appendChild(argsRow);
+
+          if (directive.meta !== null && directive.meta !== undefined) {
+            const metaRow = document.createElement("div");
+            metaRow.className = "detail-row";
+            const metaLabel = document.createElement("span");
+            metaLabel.className = "detail-label";
+            metaLabel.textContent = "Meta";
+            const metaValue = document.createElement("pre");
+            metaValue.textContent = formatJson(directive.meta, true);
+            metaRow.appendChild(metaLabel);
+            metaRow.appendChild(metaValue);
+            card.appendChild(metaRow);
+          }
 
           const actions = document.createElement("div");
           actions.className = "rule-actions";
@@ -549,7 +669,7 @@ const HTML = `<!DOCTYPE html>
           invokeButton.type = "button";
           invokeButton.textContent = "Invoke now";
           invokeButton.addEventListener("click", () => {
-            invokeRule(rule.key);
+            invokeDirective(directive.key);
           });
           actions.appendChild(invokeButton);
 
@@ -558,12 +678,12 @@ const HTML = `<!DOCTYPE html>
           deleteButton.textContent = "Delete";
           deleteButton.classList.add("muted-button");
           deleteButton.addEventListener("click", () => {
-            deleteRule(rule.key);
+            deleteDirective(directive.key);
           });
           actions.appendChild(deleteButton);
 
           card.appendChild(actions);
-          rulesList.appendChild(card);
+          directivesList.appendChild(card);
         });
       }
 
@@ -673,6 +793,74 @@ const HTML = `<!DOCTYPE html>
             }
 
             card.appendChild(details);
+          } else if (payload.type === "directive_add" || payload.type === "directive_change") {
+            const details = document.createElement("div");
+            details.className = "rules-grid";
+
+            const instructionRow = document.createElement("div");
+            instructionRow.className = "detail-row";
+            const instructionLabel = document.createElement("span");
+            instructionLabel.className = "detail-label";
+            instructionLabel.textContent = "Instruction";
+            const instructionValueNode = document.createElement("pre");
+            instructionValueNode.textContent = formatInstruction(payload.instruction);
+            instructionRow.appendChild(instructionLabel);
+            instructionRow.appendChild(instructionValueNode);
+            details.appendChild(instructionRow);
+
+            const methodRow = document.createElement("div");
+            methodRow.className = "detail-row";
+            const methodLabel = document.createElement("span");
+            methodLabel.className = "detail-label";
+            methodLabel.textContent = "Method";
+            const methodValue = document.createElement("span");
+            methodValue.textContent = payload.method;
+            methodRow.appendChild(methodLabel);
+            methodRow.appendChild(methodValue);
+            details.appendChild(methodRow);
+
+            const argsRow = document.createElement("div");
+            argsRow.className = "detail-row";
+            const argsLabel = document.createElement("span");
+            argsLabel.className = "detail-label";
+            argsLabel.textContent = "Args";
+            const argsValue = document.createElement("pre");
+            argsValue.textContent = formatJson(payload.args, payload.args !== undefined && payload.args !== null);
+            argsRow.appendChild(argsLabel);
+            argsRow.appendChild(argsValue);
+            details.appendChild(argsRow);
+
+            if (payload.meta !== undefined) {
+              const metaRow = document.createElement("div");
+              metaRow.className = "detail-row";
+              const metaLabel = document.createElement("span");
+              metaLabel.className = "detail-label";
+              metaLabel.textContent = "Meta";
+              const metaValue = document.createElement("pre");
+              metaValue.textContent = formatJson(payload.meta, true);
+              metaRow.appendChild(metaLabel);
+              metaRow.appendChild(metaValue);
+              details.appendChild(metaRow);
+            }
+
+            card.appendChild(details);
+          } else if (payload.type === "directive_delete") {
+            const summary = document.createElement("div");
+            summary.className = "event-summary";
+            summary.textContent = "Directive deleted";
+            card.appendChild(summary);
+            if (payload.meta !== undefined) {
+              const metaRow = document.createElement("div");
+              metaRow.className = "detail-row";
+              const metaLabel = document.createElement("span");
+              metaLabel.className = "detail-label";
+              metaLabel.textContent = "Meta";
+              const metaValue = document.createElement("pre");
+              metaValue.textContent = formatJson(payload.meta, true);
+              metaRow.appendChild(metaLabel);
+              metaRow.appendChild(metaValue);
+              card.appendChild(metaRow);
+            }
           } else {
             const payloadBlock = document.createElement("pre");
             payloadBlock.textContent = formatJson(payload, true);
@@ -697,7 +885,7 @@ const HTML = `<!DOCTYPE html>
           ]);
           const state = await stateResponse.json();
           const events = await eventsResponse.json();
-          renderRules(state);
+          renderDirectives(state);
           renderEvents(events);
         } catch (error) {
           status.classList.add("error");
