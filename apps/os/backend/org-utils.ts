@@ -55,7 +55,7 @@ export const createUserOrganizationAndEstate = async (
     .values({
       // For now we don't allow people to make more estates or edit theirs and never show this anywhere
       // But in the future users will be able to create multiple estates in one organization
-      name: `Primary`,
+      name: `${user.email}'s primary estate`,
       organizationId: organization.id,
     })
     .returning();
