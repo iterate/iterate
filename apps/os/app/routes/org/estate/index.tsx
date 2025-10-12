@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, Suspense } from "react";
 import { useNavigate } from "react-router";
 import {
   Bot,
@@ -24,6 +24,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../../../components/ui/dialog.tsx";
+import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
 import { Label } from "../../../components/ui/label.tsx";
 import { Textarea } from "../../../components/ui/textarea.tsx";
 import { Skeleton } from "../../../components/ui/skeleton.tsx";
@@ -78,11 +79,14 @@ function truncateEnd(str: string, maxLength = 20) {
 }
 
 function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }) {
+  const estateId = useEstateId();
   const [copied, setCopied] = useState(false);
+
+  const displayName = name.startsWith(`${estateId}-`) ? name.slice(`${estateId}-`.length) : name;
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
-    navigator.clipboard.writeText(name);
+    navigator.clipboard.writeText(displayName);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -94,8 +98,8 @@ function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }
         onClick={onClick}
         title={name}
       >
-        <span className="sm:hidden">{truncateEnd(name)}</span>
-        <span className="hidden sm:inline">{truncateMiddle(name)}</span>
+        <span className="sm:hidden">{truncateEnd(displayName)}</span>
+        <span className="hidden sm:inline">{truncateMiddle(displayName)}</span>
       </button>
       <Button variant="ghost" size="icon" className="h-6 w-6 shrink-0" onClick={handleCopy}>
         {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
@@ -115,12 +119,14 @@ export default function Home() {
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [agentName, setAgentName] = useState("");
+  const [agentType, setAgentType] = useState<"IterateAgent" | "OnboardingAgent">("IterateAgent");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [channel, setChannel] = useState("");
   const [firstMessage, setFirstMessage] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
   const { data: agents } = useSuspenseQuery(trpc.agents.list.queryOptions({ estateId }));
+  const { data: estateInfo } = useSuspenseQuery(trpc.estate.get.queryOptions({ estateId }));
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   // Fetch Slack channels for the dialog
@@ -162,7 +168,7 @@ export default function Home() {
 
   const handleCreateAgent = () => {
     if (agentName.trim()) {
-      navigate(getEstateUrl(`/agents/IterateAgent/${agentName.trim()}`));
+      navigate(getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`));
     }
   };
 
@@ -251,6 +257,14 @@ export default function Home() {
               <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
               Message @iterate on Slack
             </Button>
+
+            {estateInfo.onboardingAgentName && user.debugMode ? (
+              <div className="pt-4">
+                <Suspense fallback={<Skeleton className="h-[120px] w-full" />}>
+                  <OnboardingHero estateId={estateId} />
+                </Suspense>
+              </div>
+            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -266,8 +280,8 @@ export default function Home() {
                   You can also chat with your agents <i>outside</i> of Slack!
                 </p>
               </div>
-              <div className="flex gap-2 relative">
-                <div className="relative flex-1">
+              <div className="space-y-2">
+                <div className="relative">
                   <div className="absolute left-3 top-1/2 transform -translate-y-1/2">
                     <Bot size={16} className="text-muted-foreground" />
                   </div>
@@ -275,7 +289,7 @@ export default function Home() {
                     value={agentName}
                     onChange={(e) => setAgentName(e.target.value)}
                     placeholder="Enter agent durable object instance name"
-                    className="flex-1 pl-10"
+                    className="pl-10"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         handleCreateAgent();
@@ -283,9 +297,25 @@ export default function Home() {
                     }}
                   />
                 </div>
-                <Button onClick={handleCreateAgent} disabled={!agentName.trim()}>
-                  Go
-                </Button>
+                <div className="flex gap-2">
+                  <Select
+                    value={agentType}
+                    onValueChange={(value: "IterateAgent" | "OnboardingAgent") =>
+                      setAgentType(value)
+                    }
+                  >
+                    <SelectTrigger className="flex-1">
+                      <SelectValue placeholder="Select agent type" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="IterateAgent">IterateAgent</SelectItem>
+                      <SelectItem value="OnboardingAgent">OnboardingAgent</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button onClick={handleCreateAgent} disabled={!agentName.trim()}>
+                    Go
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -563,5 +593,30 @@ export default function Home() {
         </CardContent>
       </Card>
     </>
+  );
+}
+
+function OnboardingHero({ estateId }: { estateId: string }) {
+  const trpc = useTRPC();
+  const { data } = useSuspenseQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
+
+  const results = data?.results ?? {};
+
+  if (Object.keys(results).length === 0) {
+    return (
+      <Alert>
+        <AlertCircle className="h-4 w-4" />
+        <AlertDescription>
+          We’re gathering onboarding insights. Check back in a moment.
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-lg font-semibold">Onboarding Data</div>
+      <SerializedObjectCodeBlock data={results} initialFormat="yaml" className="h-64" />
+    </div>
   );
 }

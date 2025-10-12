@@ -42,7 +42,7 @@ export const iterateAgentTools = defineDOTools({
   doNothing: {
     description:
       "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
-    statusIndicatorText: "🙈 ignoring you",
+    statusIndicatorText: "🙈 sitting this one out",
     input: z.object({
       reason: z
         .string()
@@ -257,6 +257,20 @@ export const iterateAgentTools = defineDOTools({
     statusIndicatorText: "🏷️ adding label",
     input: z.object({
       label: z.string().describe("Label to add (e.g., 'GMAIL', 'GCALENDAR')"),
+    }),
+  },
+  messageAgent: {
+    description:
+      "Send a message to another agent. The target agent will receive the message and can respond to it asynchronously.",
+    statusIndicatorText: "💬 sending message",
+    input: z.object({
+      agentName: z.string().describe("The name of the target agent to send the message to"),
+      message: z.string().describe("The message content to send"),
+      // could in the future expand to model whether or not to interrupt agent, etc
+      triggerLLMRequest: z
+        .boolean()
+        .default(true)
+        .describe("Whether to trigger an LLM request in the target agent (default: true)"),
     }),
   },
 });

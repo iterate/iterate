@@ -410,7 +410,6 @@ export function slackWebhookEventToPromptFragment(params: {
                     text: slackEvent.text,
                     ts: slackEvent.ts,
                     createdAt: webhookEvent.createdAt,
-                    note: "This message was sent by you (the bot) and should appear chronologically before any user interactions with it",
                   },
                   null,
                   2,

@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and } from "drizzle-orm";
 import {
   protectedProcedure,
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
 } from "../trpc.ts";
-import { estate, builds, iterateConfig } from "../../db/schema.ts";
+import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
   getGithubInstallationToken,
@@ -14,6 +14,8 @@ import {
 } from "../../integrations/github/github-utils.ts";
 import type { DB } from "../../db/client.ts";
 import type { CloudflareEnv } from "../../../env.ts";
+import type { OnboardingData } from "../../agent/onboarding-agent.ts";
+import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -130,14 +132,15 @@ export const estateRouter = router({
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
+      onboardingAgentName: userEstate.onboardingAgentName ?? null,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
     };
   }),
 
-  getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx, input }) => {
+  getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {
     const record = await ctx.db.query.iterateConfig.findFirst({
-      where: eq(iterateConfig.estateId, input.estateId),
+      where: eq(iterateConfig.estateId, ctx.estate.id),
     });
 
     return {
@@ -200,6 +203,112 @@ export const estateRouter = router({
 
       return estateBuilds;
     }),
+
+  getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
+    const estateId = ctx.estate.id;
+
+    // Get the estate with onboarding agent name
+    const estateData = await ctx.db.query.estate.findFirst({
+      where: eq(estate.id, estateId),
+    });
+
+    if (!estateData) {
+      throw new Error("Estate not found");
+    }
+
+    // If no onboarding agent name, onboarding is completed
+    if (!estateData.onboardingAgentName) {
+      return {
+        status: "completed" as const,
+        agentName: null,
+        onboardingData: null,
+      };
+    }
+
+    // Find the agent instance for this estate and agent name
+    const agent = await ctx.db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.estateId, estateId),
+        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
+      ),
+    });
+
+    if (!agent) {
+      return {
+        status: "in-progress" as const,
+        agentName: estateData.onboardingAgentName,
+        onboardingData: {},
+      };
+    }
+
+    try {
+      // Get the agent stub using the existing helper
+      const stub = await getAgentStubByName(toAgentClassName(agent.className), {
+        db: ctx.db,
+        agentInstanceName: agent.durableObjectName,
+      });
+
+      const response = await stub.fetch("http://do/state");
+      const state = (await response.json()) as { onboardingData?: OnboardingData };
+
+      return {
+        status: "in-progress" as const,
+        agentName: estateData.onboardingAgentName,
+        onboardingData: state.onboardingData ?? {},
+      };
+    } catch (_error) {
+      // If we can't fetch the state, return empty onboarding data
+      return {
+        status: "in-progress" as const,
+        agentName: estateData.onboardingAgentName,
+        onboardingData: {},
+      };
+    }
+  }),
+
+  // Get latest onboarding results by calling the agent's getResults() tool
+  getOnboardingResults: estateProtectedProcedure.query(async ({ ctx }) => {
+    const estateId = ctx.estate.id;
+
+    // Read the onboarding agent name from the estate
+    const estateData = await ctx.db.query.estate.findFirst({
+      where: eq(estate.id, estateId),
+    });
+
+    if (!estateData?.onboardingAgentName) {
+      return { results: {} as Record<string, unknown> };
+    }
+
+    // Find the agent instance for this estate and agent name
+    const agent = await ctx.db.query.agentInstance.findFirst({
+      where: and(
+        eq(agentInstance.estateId, estateId),
+        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
+      ),
+    });
+
+    if (!agent) {
+      return { results: {} as Record<string, unknown> };
+    }
+
+    // Get the agent stub and call getResults() if it's an OnboardingAgent
+    const stub = await getAgentStubByName(toAgentClassName(agent.className), {
+      db: ctx.db,
+      agentInstanceName: agent.durableObjectName,
+    });
+
+    // Narrow to onboarding agent based on class name
+    if (agent.className === "OnboardingAgent") {
+      try {
+        const results = await (stub as any).getResults({});
+        return { results: results ?? {} };
+      } catch (_err) {
+        return { results: {} as Record<string, unknown> };
+      }
+    }
+
+    return { results: {} as Record<string, unknown> };
+  }),
 
   triggerRebuild: estateProtectedProcedure
     .input(
