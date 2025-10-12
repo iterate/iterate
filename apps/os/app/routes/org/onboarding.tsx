@@ -15,7 +15,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../../components/ui/select.tsx";
-import { Badge } from "../../components/ui/badge.tsx";
 import { Card, CardContent } from "../../components/ui/card.tsx";
 import {
   Collapsible,
@@ -534,20 +533,15 @@ function SlackStep({ organizationId }: StepProps) {
 
   return (
     <div className="flex justify-center">
-      <Card variant="muted" className="w-full">
+      <Card variant="muted" className="w-full max-w-2xl">
         <CardContent className="px-12 py-16">
-          <div className="max-w-xl mx-auto text-center space-y-8">
-            <div className="space-y-4">
-              <h2 className="text-4xl font-semibold">You're all set!</h2>
-              <p className="text-lg text-muted-foreground">
-                You can now ask
-                <Badge variant="secondary" className="mx-2 font-mono text-base">
-                  @iterate
-                </Badge>
-                to onboard you in Slack.
-              </p>
-            </div>
-            <Button size="lg" className="h-auto px-12 py-6 text-xl" onClick={handleOpenSlack}>
+          <div className="text-center space-y-8">
+            <h2 className="text-4xl font-semibold">You're all set!</h2>
+            <Button
+              size="lg"
+              className="h-auto w-full max-w-md px-12 py-6 text-xl"
+              onClick={handleOpenSlack}
+            >
               <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
               Continue in Slack
             </Button>
