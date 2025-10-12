@@ -16,6 +16,7 @@ import {
   SelectValue,
 } from "../../components/ui/select.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
+import { Card, CardContent } from "../../components/ui/card.tsx";
 import {
   Collapsible,
   CollapsibleContent,
@@ -526,34 +527,46 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   );
 }
 
-function SlackStep() {
+function SlackStep({ organizationId }: StepProps) {
   const handleOpenSlack = () => {
-    window.open("slack://open", "_blank");
+    window.open("slack://open", "_blank", "noopener,noreferrer");
   };
 
   return (
-    <div className="space-y-8">
-      <div className="space-y-3">
-        <h2 className="text-3xl font-semibold">You're all set!</h2>
-      </div>
-      <div className="grid gap-8 md:grid-cols-2">
-        <div className="space-y-6">
-          <p className="text-muted-foreground">
-            You can now ask
-            <Badge variant="secondary" className="mx-2 font-mono">
-              @iterate
-            </Badge>
-            to onboard you in slack.
-          </p>
-          <div>
-            <Button variant="outline" onClick={handleOpenSlack}>
-              <img src="/slack.svg" alt="Slack" className="h-4 w-4" />
-              Open Slack
+    <div className="flex justify-center">
+      <Card variant="muted" className="w-full">
+        <CardContent className="px-12 py-16">
+          <div className="max-w-xl mx-auto text-center space-y-8">
+            <div className="space-y-4">
+              <h2 className="text-4xl font-semibold">You're all set!</h2>
+              <p className="text-lg text-muted-foreground">
+                You can now ask
+                <Badge variant="secondary" className="mx-2 font-mono text-base">
+                  @iterate
+                </Badge>
+                to onboard you in Slack.
+              </p>
+            </div>
+            <Button
+              size="lg"
+              className="h-auto px-12 py-6 text-xl"
+              onClick={handleOpenSlack}
+            >
+              <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
+              Continue in Slack
             </Button>
+            <div>
+              <Button
+                variant="ghost"
+                className="text-sm text-muted-foreground hover:text-foreground"
+                asChild
+              >
+                <a href={`/${organizationId}`}>Or go to your dashboard</a>
+              </Button>
+            </div>
           </div>
-        </div>
-        <div />
-      </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
