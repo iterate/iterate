@@ -152,14 +152,8 @@ export function SerializedObjectCodeBlock({
   ];
 
   return (
-    <div className="relative">
-      <div
-        className={clsx(
-          "cm-SerializedObjectCodeBlock",
-          "rounded overflow-hidden overflow-y-auto",
-          className,
-        )}
-      >
+    <div className={clsx("relative flex flex-col", className)}>
+      <div className="cm-SerializedObjectCodeBlock rounded overflow-hidden overflow-y-auto flex-1 min-h-0">
         <CodeMirror value={code} extensions={extensions} />
       </div>
 

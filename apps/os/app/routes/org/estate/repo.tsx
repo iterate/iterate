@@ -585,7 +585,7 @@ function EstateContent() {
               )}
             </SheetDescription>
           </SheetHeader>
-          <div className="flex flex-1 flex-col overflow-hidden px-4 pb-4">
+          <div className="flex flex-1 flex-col min-h-0 px-4 pb-4">
             {compiledConfigQuery.isLoading ? (
               <div className="flex flex-1 items-center justify-center">
                 <Spinner className="h-6 w-6" />
@@ -611,7 +611,7 @@ function EstateContent() {
                 </Button>
               </div>
             ) : iterateConfigData ? (
-              <SerializedObjectCodeBlock data={iterateConfigData} className="h-full" />
+              <SerializedObjectCodeBlock data={iterateConfigData} className="flex-1 min-h-0" />
             ) : (
               <div className="flex flex-1 items-center justify-center text-center text-sm text-muted-foreground">
                 No compiled iterate config available yet.
