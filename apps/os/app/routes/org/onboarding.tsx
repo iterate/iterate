@@ -547,11 +547,7 @@ function SlackStep({ organizationId }: StepProps) {
                 to onboard you in Slack.
               </p>
             </div>
-            <Button
-              size="lg"
-              className="h-auto px-12 py-6 text-xl"
-              onClick={handleOpenSlack}
-            >
+            <Button size="lg" className="h-auto px-12 py-6 text-xl" onClick={handleOpenSlack}>
               <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
               Continue in Slack
             </Button>
