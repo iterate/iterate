@@ -11,9 +11,10 @@ import {
   Clock,
   GitBranch,
   Github,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
@@ -63,6 +64,14 @@ import {
   FieldLabel,
   FieldSet,
 } from "../../../components/ui/field.tsx";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "../../../components/ui/sheet.tsx";
+import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -80,6 +89,7 @@ export function meta() {
 
 function EstateContent() {
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
+  const [isIterateConfigSheetOpen, setIsIterateConfigSheetOpen] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
   const [repoPath, setRepoPath] = useState<string | undefined>(undefined);
   const [repoBranch, setRepoBranch] = useState<string | undefined>(undefined);
@@ -111,6 +121,17 @@ function EstateContent() {
       limit: 10,
     }),
   );
+
+  const compiledConfigQuery = useQuery({
+    ...trpc.estate.getCompiledIterateConfig.queryOptions({
+      estateId: estateId!,
+    }),
+    enabled: isIterateConfigSheetOpen && Boolean(estateId),
+  });
+  const iterateConfigData = compiledConfigQuery.data?.config ?? null;
+  const iterateConfigUpdatedAt = compiledConfigQuery.data?.updatedAt
+    ? new Date(compiledConfigQuery.data.updatedAt).toLocaleString()
+    : null;
 
   // Compute display values for repo fields
   // Use state values if they've been explicitly set (including empty string), otherwise use defaults
@@ -294,7 +315,19 @@ function EstateContent() {
         {/* Git Repository Explanation */}
         <Card variant="muted">
           <CardHeader>
-            <CardTitle>Your iterate repo</CardTitle>
+            <div className="flex items-center justify-between">
+              <CardTitle>Your iterate repo</CardTitle>
+              {connectedRepo && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsIterateConfigSheetOpen(true)}
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  View iterate config
+                </Button>
+              )}
+            </div>
           </CardHeader>
           <CardContent>
             <CardDescription className="space-y-2">
@@ -534,6 +567,59 @@ function EstateContent() {
           </CardContent>
         </Card>
       )}
+
+      <Sheet open={isIterateConfigSheetOpen} onOpenChange={setIsIterateConfigSheetOpen}>
+        <SheetContent
+          side="right"
+          className="max-w-none w-full sm:max-w-none"
+          style={{ width: "min(100vw, max(1000px, 70vw))" }}
+        >
+          <SheetHeader>
+            <SheetTitle>Compiled iterate.config.ts</SheetTitle>
+            <SheetDescription>
+              View the compiled iterate configuration for this estate.
+              {iterateConfigUpdatedAt && (
+                <span className="mt-1 block text-xs text-muted-foreground">
+                  Last updated {iterateConfigUpdatedAt}
+                </span>
+              )}
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex flex-1 flex-col min-h-0 px-4 pb-4">
+            {compiledConfigQuery.isLoading ? (
+              <div className="flex flex-1 items-center justify-center">
+                <Spinner className="h-6 w-6" />
+              </div>
+            ) : compiledConfigQuery.isError ? (
+              <div className="flex flex-1 flex-col items-center justify-center text-center text-sm text-muted-foreground">
+                <p>
+                  Failed to load the iterate config.
+                  {compiledConfigQuery.error instanceof Error && (
+                    <span className="mt-2 block text-xs text-muted-foreground">
+                      {compiledConfigQuery.error.message}
+                    </span>
+                  )}
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  onClick={() => compiledConfigQuery.refetch()}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry
+                </Button>
+              </div>
+            ) : iterateConfigData ? (
+              <SerializedObjectCodeBlock data={iterateConfigData} className="flex-1 min-h-0" />
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-center text-sm text-muted-foreground">
+                No compiled iterate config available yet.
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
 
       {/* Repository Configuration Dialog */}
       <Dialog
