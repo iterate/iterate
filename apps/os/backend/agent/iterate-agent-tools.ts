@@ -129,7 +129,7 @@ export const iterateAgentTools = defineDOTools({
         .boolean()
         .default(false)
         .describe(
-          "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, or when you need to see what the page looks like. Defaults to false.",
+          "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, text which is isn't matched, or when you need to see what the page looks like. Defaults to false.",
         )
         .optional(),
       includeTextContent: z
@@ -250,6 +250,13 @@ export const iterateAgentTools = defineDOTools({
     input: z.object({
       messageId: z.string().describe("The ID of the message to retrieve"),
       userId: z.string().describe("The user ID to use for authentication"),
+    }),
+  },
+  addLabel: {
+    description: "Add a label to the agent's metadata to enable specific tool sets",
+    statusIndicatorText: "🏷️ adding label",
+    input: z.object({
+      label: z.string().describe("Label to add (e.g., 'GMAIL', 'GCALENDAR')"),
     }),
   },
 });
