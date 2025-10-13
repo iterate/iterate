@@ -66,6 +66,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   protected slackAPI!: WebClient;
+  private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
   protected get slackChannelId(): string {
     const { slackChannelId } = this.getReducedState() as SlackSliceState;
@@ -124,6 +125,25 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         // For clearing (status === null), omit loading_messages entirely.
         ...(status ? { loading_messages: [`${status}...`] } : {}),
       });
+
+      if (this.slackStatusClearTimeout) {
+        clearTimeout(this.slackStatusClearTimeout);
+      }
+
+      if (status) {
+        const scheduleClear = () => {
+          if (this.agentCore.llmRequestInProgress()) {
+            this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
+            return;
+          }
+          this.slackStatusClearTimeout = null;
+          this.updateSlackThreadStatus({ status: undefined });
+        };
+
+        this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
+      } else {
+        this.slackStatusClearTimeout = null;
+      }
     } catch (error) {
       // log error but don't crash DO
       logger.error("Failed to update Slack status:", error);
