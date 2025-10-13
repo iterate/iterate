@@ -21,6 +21,7 @@
  */
 
 import { Mutex } from "async-mutex";
+import jsonata from "jsonata/sync";
 import type { OpenAI } from "openai";
 import type {
   ResponseFunctionToolCall,
@@ -303,6 +304,7 @@ export class AgentCore<
     const next: AugmentedCoreReducedState = {
       ...inputState,
       runtimeTools: [],
+      enabledContextRules: [],
       ephemeralPromptFragments: {},
       toolSpecs: [],
       mcpServers: [],
@@ -313,6 +315,7 @@ export class AgentCore<
       const matchAgainst = this.deps.getRuleMatchData(next);
       return evaluateContextRuleMatchers({ contextRule, matchAgainst });
     });
+    next.enabledContextRules = enabledContextRules;
     // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
     // into the LLM instructions for this request. These are ephemeral and recomputed per request.
     next.ephemeralPromptFragments = Object.fromEntries(
@@ -1418,7 +1421,17 @@ export class AgentCore<
     try {
       const args = JSON.parse(call.arguments || "{}");
 
-      let needsApproval = call.name.includes("getAgentDebugURL") || call.name.includes("sendGmail");
+      const policies = this.state.enabledContextRules.flatMap(
+        (rule) => rule.toolApprovalPolicies || [],
+      );
+      let needsApproval = false;
+      for (const policy of policies) {
+        const evaluator = jsonata(policy.matcher || "true");
+        const result = evaluator.evaluate(call);
+        if (result) {
+          needsApproval = policy.approvalRequired;
+        }
+      }
       if (call.call_id.startsWith("injected-")) needsApproval = false;
 
       if (needsApproval) {
