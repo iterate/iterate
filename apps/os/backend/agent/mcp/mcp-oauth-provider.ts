@@ -35,6 +35,10 @@ import { env } from "../../../env.ts";
  * Congrats, we successfully connected to the MCP server.
  */
 
+export function getMCPVerificationKey(providerId: string, clientId: string): string {
+  return `mcp-verifier-${providerId}-${clientId}`;
+}
+
 export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
   serverId: string | undefined;
@@ -214,7 +218,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     if (!clientInformation) {
       throw new Error("Cannot save code verifier without client information");
     }
-    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow
 
     await this.params.db
@@ -286,7 +290,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     if (!clientInformation) {
       throw new Error("Cannot get code verifier without client information");
     }
-    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
     const verification = await this.params.db.query.verification.findFirst({
       where: eq(schema.verification.identifier, verificationKey),
     });

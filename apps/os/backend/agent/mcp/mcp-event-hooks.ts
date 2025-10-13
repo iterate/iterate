@@ -1,5 +1,7 @@
+import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
+import pRace from "p-suite/p-race";
 import { eq, and } from "drizzle-orm";
 import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
@@ -262,32 +264,31 @@ export async function handleMCPConnectRequest(
 
   const manager = new MCPClientManager("iterate-agent", "1.0.0");
 
-  const abortController = new AbortController();
-  const timeoutId = setTimeout(() => {
-    abortController.abort("MCP connection timeout - authentication may have expired");
-  }, 30_000); // 30 seconds timeout
-
   let result: Awaited<ReturnType<typeof manager.connect>>;
 
   try {
-    const connectOptions: Parameters<typeof manager.connect>[1] = {
-      transport: {
-        authProvider: oauthProvider,
-        type: "auto",
-        requestInit: {
-          headers: appliedHeaders,
-          signal: abortController.signal,
+    result = await pRace((signal) => [
+      manager.connect(modifiedServerUrl, {
+        transport: {
+          authProvider: oauthProvider,
+          type: "auto",
+          requestInit: {
+            headers: appliedHeaders,
+            signal,
+          },
         },
-      },
-      ...(reconnect && {
-        reconnect: {
-          id: reconnect.id,
-          oauthClientId: reconnect.oauthClientId,
-          oauthCode: reconnect.oauthCode,
-        },
+        ...(reconnect && {
+          reconnect: {
+            id: reconnect.id,
+            oauthClientId: reconnect.oauthClientId,
+            oauthCode: reconnect.oauthCode,
+          },
+        }),
       }),
-    };
-    result = await manager.connect(modifiedServerUrl, connectOptions);
+      setTimeoutPromise(30_000, null, { signal }).then(() => {
+        throw new Error("MCP connection timeout - authentication may have expired");
+      }),
+    ]);
   } catch (error) {
     oauthProvider?.resetTokens();
     events.push({
@@ -302,8 +303,6 @@ export async function handleMCPConnectRequest(
       triggerLLMRequest: false,
     });
     return events;
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   if (result.authUrl) {
@@ -334,6 +333,7 @@ export async function handleMCPConnectRequest(
 
   mcpConnectionCache.managers.set(cacheKey, manager);
 
+  // Failback to Unknown if the server developer has not implemented the specification properly
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name || "Unknown";
 
   const tools = manager.listTools().filter((t) => t.serverId === result.id);
