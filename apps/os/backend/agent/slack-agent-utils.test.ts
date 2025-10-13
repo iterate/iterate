@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, test } from "vitest";
 import type { SlackEvent } from "@slack/types";
 import { getMessageMetadata, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 
@@ -50,7 +50,7 @@ describe("shouldUnfurlSlackMessage", () => {
     },
   ];
 
-  it.each(cases)("$name", ({ input, expected }) => {
+  test.for(cases)("$name", ({ input, expected }) => {
     expect(shouldUnfurlSlackMessage(input)).toBe(expected);
   });
 });
@@ -400,7 +400,7 @@ describe("thread_ts extraction", () => {
     },
   ];
 
-  it.each(cases)("$name", async ({ input, expected }) => {
+  test.for(cases)("$name", async ({ input, expected }) => {
     expect((await getMessageMetadata(input, null as any)).threadTs).toEqual(expected);
   });
 });

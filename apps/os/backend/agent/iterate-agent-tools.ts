@@ -171,7 +171,7 @@ export const iterateAgentTools = defineDOTools({
   },
   exec: {
     description: "Execute a shell in a sandbox.",
-    statusIndicatorText: "⚙️ running command",
+    statusIndicatorText: "⚙️ ${args.command}",
     input: z.object({
       command: z.string(),
       env: z.record(z.string(), z.string()).optional(),

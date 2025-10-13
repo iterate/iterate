@@ -26,7 +26,6 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -39,11 +38,17 @@ import {
   getMentionedExternalUserIds,
   getMessageMetadata,
   isBotMentionedInMessage,
+  shouldIncludeEventInConversation,
+  shouldUnfurlSlackMessage,
   slackWebhookEventToIdempotencyKey,
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
+import {
+  buildSlackThreadStatusPayload,
+  resolveStatusIndicatorText,
+} from "./status-indicator.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -94,36 +99,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   private updateSlackThreadStatus = pDebounce((params: { status: string | null | undefined }) => {
     const { status } = params;
     try {
+      const statusPayload = buildSlackThreadStatusPayload(status);
+      const { loading_messages, ...rest } = statusPayload;
       void this.slackAPI.assistant.threads.setStatus({
         channel_id: this.slackChannelId,
         thread_ts: this.slackThreadId,
-
-        // Not super elegant but here's the logic
-        // - we want the old-school status indicator that human users get to not feel out of place
-        //    - so we just alternate it between "is typing..." and "is thinking..."
-        //    - emoji are out of place here as they `@iterate is ✏️ typing` doesn't look good
-        // - the loading messages, on the other hand, are rendered like actual slack messages
-        // - so "🎨 generating image..." is a perfectly fine update
-        // - we think ... at the end looks good but don't want to write it a million times, so we
-        //   append it here
-
-        // Note that there is some funkiness where at the root of the thread the loading message
-        // is actually shown inline with the username like a typing status indicator,
-        // and there it doesn't look good to have an emoji. So we could edge case that, too.
-        status: status
-          ? status === "✏️ writing response"
-            ? "is typing..."
-            : "is thinking..."
-          : "",
-
-        // Slack's new status API cycles through provided strings (loading_messages) while the
-        // status is visible. Notes:
-        // - Newlines are not supported; emojis are fine
-        // - Cycles IN ORDER, so you can do animations
-        // - Max 10 elements; multiple spaces collapse; no markdown
-        // - On some devices, emojis may not render identically
-        // For clearing (status === null), omit loading_messages entirely.
-        ...(status ? { loading_messages: [`${status}...`] } : {}),
+        ...rest,
+        ...(loading_messages ? { loading_messages } : {}),
       });
 
       if (this.slackStatusClearTimeout) {
@@ -194,10 +176,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 const tool = this.agentCore.state.runtimeTools.find(
                   (t) => t.type === "function" && t.name === toolName,
                 );
-                const statusText =
-                  tool && tool.type === "function" && tool.statusIndicatorText
-                    ? tool.statusIndicatorText
-                    : `🛠️ ${toolName}...`;
+                const statusText = resolveStatusIndicatorText({
+                  toolName,
+                  statusIndicatorText:
+                    tool && tool.type === "function" ? tool.statusIndicatorText : undefined,
+                  argsJson: chunk.item.arguments,
+                  templateContext: {
+                    ...(tool ? { tool } : {}),
+                    chunk,
+                  },
+                });
                 this.updateSlackThreadStatus({ status: statusText });
                 break;
               }
