@@ -721,6 +721,30 @@ export const integrationsRouter = router({
           });
 
           if (acc && acc.userId === ctx.user.id) {
+            // Clean up related OAuth data
+            // First get the dynamic client info to get the specific clientId
+            const clientInfo = await ctx.db.query.dynamicClientInfo.findFirst({
+              where: and(
+                eq(schemas.dynamicClientInfo.providerId, acc.providerId),
+                eq(schemas.dynamicClientInfo.userId, ctx.user.id),
+              ),
+            });
+
+            if (clientInfo) {
+              // Delete specific verification records for this provider and client
+              // Pattern: mcp-verifier-{providerId}-{clientId}
+              const verificationKey = `mcp-verifier-${acc.providerId}-${clientInfo.clientId}`;
+              await ctx.db
+                .delete(schemas.verification)
+                .where(eq(schemas.verification.identifier, verificationKey));
+
+              // Delete the dynamic client info
+              await ctx.db
+                .delete(schemas.dynamicClientInfo)
+                .where(eq(schemas.dynamicClientInfo.id, clientInfo.id));
+            }
+
+            // Delete the account record
             await ctx.db.delete(account).where(eq(account.id, connectionId));
           }
         }
