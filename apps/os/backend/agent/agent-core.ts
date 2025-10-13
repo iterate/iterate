@@ -1418,7 +1418,7 @@ export class AgentCore<
     try {
       const args = JSON.parse(call.arguments || "{}");
 
-      let needsApproval = call.name.includes("getAgentDebugURL");
+      let needsApproval = call.name.includes("getAgentDebugURL") || call.name.includes("sendGmail");
       if (call.call_id.startsWith("injected-")) needsApproval = false;
 
       if (needsApproval) {

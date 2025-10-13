@@ -302,6 +302,8 @@ export const defaultContextRules = defineRules([
       - Use simple, plain text by default
       - Only use HTML formatting when explicitly requested
       - Keep emails concise and professional
+      - If recipient/subject/body are not provided, assume the user wants to test out this functionality and send a test email to themselves with subject 'hello from iterate' and something witty in the body.
+      - The user will prompted for approval so there's no risk of unwanted emails being sent, so use the sendGmail tool freely.
 
       When replying to emails:
       - Use sendGmail with threadId and inReplyTo (messageId) from getGmailMessage

@@ -4,6 +4,7 @@ import { and, asc, eq, or, inArray } from "drizzle-orm";
 import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
+import dedent from "dedent";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -270,26 +271,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
             this.ctx.waitUntil(
               Promise.resolve().then(async () => {
+                const options = ["+1", "-1"];
+                const messageTs = toolCallApprovalEvent.data.approvalKey;
+                await Promise.all(
+                  options.map((name) => this.removeSlackReaction({ messageTs, name })),
+                );
                 if (!toolCallApprovalEvent.data.approved) {
-                  await this.addSlackReaction({
-                    messageTs: event.data.approvalKey,
-                    name: "no_entry",
-                  });
+                  await this.addSlackReaction({ messageTs, name: "no_entry" });
                   return;
                 }
 
-                await this.addSlackReaction({
-                  messageTs: event.data.approvalKey,
-                  name: "rocket",
-                });
-                await this.injectToolCall({
-                  args: found.args as {},
-                  toolName: found.toolName,
-                });
-                await this.addSlackReaction({
-                  messageTs: event.data.approvalKey,
-                  name: "white_check_mark",
-                });
+                await this.addSlackReaction({ messageTs, name: "rocket" });
+                await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
+                await this.addSlackReaction({ messageTs, name: "white_check_mark" });
               }),
             );
             break;
@@ -306,15 +300,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       requestApprovalForToolCall: async (
         payload: Parameters<NonNullable<AgentCoreDeps["requestApprovalForToolCall"]>>[0],
       ) => {
-        const result = await this.rawSendSlackMessage({
-          text: `A tool call has been requested: ${payload.toolName} with the below arguments. Use :+1: to approve or :-1: to reject.\n\n\`\`\`${YAML.stringify(
-            {
-              callId: payload.toolCallId,
-              args: payload.args,
-            },
-          )}\n\`\`\``,
-        });
-        console.log(`sent message requesting approval`, result);
+        const yamlArgs = YAML.stringify(payload.args || {}).trim();
+        const message = dedent`
+          Approval needed to call tool ${payload.toolName}. Approve or reject with the buttons below.
+
+          ${yamlArgs === "{}" ? "" : `Arguments:\n\n${yamlArgs}`}
+        `.trim();
+        const result = await this.rawSendSlackMessage({ text: message });
+        if (!result.ts) throw new Error("Failed to send approval request message");
+        const options = ["+1", "-1"]; // add the options ahead of time to make it easy to react
+        for (const name of options) {
+          await this.addSlackReaction({ messageTs: result.ts!, name });
+        }
+
         return ApprovalKey.parse(result.ts);
       },
       lazyConnectionDeps: {
@@ -870,6 +868,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     if (
       slackEvent.type === "reaction_added" &&
+      !isBotMessageThatShouldBeIgnored &&
       slackEvent.item.ts in currentState.toolCallApprovals &&
       (slackEvent.reaction === "+1" || slackEvent.reaction === "-1")
     ) {
