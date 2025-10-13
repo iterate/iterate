@@ -402,7 +402,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:CONNECTION_ERROR": {
-            const { connectionKey, serverUrl, error } = event.data;
+            const { connectionKey, error } = event.data;
 
             const messageTs = connectionKey && this.mcpConnectionMessages.get(connectionKey);
 
@@ -423,11 +423,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                   ],
                 })
                 .then(() => {
-                  // Clean up the tracking
-                  if (connectionKey) {
-                    this.mcpConnectionMessages.delete(connectionKey);
-                  }
-                  this.mcpConnectionMessages.delete(serverUrl);
+                  this.mcpConnectionMessages.delete(connectionKey);
                 });
             }
             break;
