@@ -76,6 +76,7 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
+import type { MagicAgentInstructions } from "./magic.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1383,7 +1384,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return { reversed: input.message.split("").reverse().join("") };
   }
   doNothing() {
-    return {};
+    return { __triggerLLMRequest: false } satisfies MagicAgentInstructions;
   }
   async getEstate() {
     return {
