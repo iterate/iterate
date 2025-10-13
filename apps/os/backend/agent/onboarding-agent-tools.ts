@@ -28,4 +28,24 @@ export const onboardingAgentTools = defineDOTools({
         .describe("Optional initial message to post in the thread"),
     }),
   },
+  getOnboardingProgress: {
+    description: "Check which onboarding steps the user has completed",
+    statusIndicatorText: "📋 checking onboarding progress",
+    input: z.object({}),
+  },
+  updateOnboardingProgress: {
+    description: "Mark an onboarding step as complete or incomplete",
+    statusIndicatorText: "✅ updating onboarding progress",
+    input: z.object({
+      step: z.enum([
+        "firstToolConnected",
+        "remoteMCPConnected",
+        "learnedBotUsageEverywhere",
+        "removedOnboardingRules",
+        "stripeConnected",
+        "communityInviteSent",
+      ]).describe("The onboarding step to update"),
+      completed: z.boolean().default(true).describe("Whether the step is completed (default: true)"),
+    }),
+  },
 });
