@@ -734,7 +734,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
     const slackEvent = slackWebhookPayload.event!;
     const messageMetadata = await getMessageMetadata(slackEvent, this.db);
-
+    logger.info("messageMetadata", messageMetadata);
     if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
       return;
     }

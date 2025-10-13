@@ -1,26 +1,33 @@
 import { AsyncLocalStorage } from "async_hooks";
+import { waitUntil } from "../env.ts";
+
+// Primitive types for metadata
+type Primitive = string | number | boolean | null | undefined;
 
 export namespace TagLogger {
   export type Level = keyof typeof TagLogger.levels;
-  export type ErrorTrackingFn = (
-    error: Error,
-    metadata: TagLogger.Context["metadata"],
-  ) => void | Promise<void>;
   export type Context = {
     level: TagLogger.Level;
-    metadata: Record<string, unknown> & {
+    metadata: Record<string, Primitive> & {
       userId: string | undefined;
       path?: string;
-      method?: string;
+      httpMethod?: string;
+      methodName?: string;
       url?: string;
-      requestId: string;
+      traceId: string;
+      message?: never;
     };
-    logs: Array<{ level: TagLogger.Level; timestamp: Date; args: unknown[] }>;
-    errorTracking: TagLogger.ErrorTrackingFn;
+    logs: Array<{ level: TagLogger.Level; timestamp: Date; message: string }>;
+    debugMemories: Array<{ timestamp: Date; message: string }>;
   };
   export type Implementation = Record<
     TagLogger.Level,
-    (call: { args: unknown[]; metadata: Record<string, unknown> }) => void
+    (call: {
+      message: string;
+      metadata: Record<string, Primitive>;
+      debugMemories?: Array<{ timestamp: Date; message: string }>;
+      errorObject?: Error;
+    }) => void
   >;
 }
 
@@ -33,23 +40,23 @@ export class TagLogger {
 
   get context(): TagLogger.Context {
     const store = this._storage.getStore();
+    if (store) {
+      return store;
+    }
     // In tests, provide a default context.
     // We do not want to do this in production as it will cause logs to intermingle.
-    if (import.meta.env.MODE === "test" && !store)
-      return {
-        level: "info",
-        metadata: {
-          userId: undefined,
-          path: "",
-          method: "",
-          url: "",
-          requestId: "",
-        },
-        logs: [],
-        errorTracking: () => {},
-      };
-    if (!store) throw new Error("No context found for logger");
-    return store;
+    return {
+      level: "info",
+      metadata: {
+        userId: undefined,
+        path: "",
+        httpMethod: "",
+        url: "",
+        traceId: "",
+      },
+      logs: [],
+      debugMemories: [],
+    };
   }
 
   get level() {
@@ -67,28 +74,65 @@ export class TagLogger {
   }
 
   addMetadata(metadata: Partial<TagLogger.Context["metadata"]>) {
-    this._storage.enterWith({
-      ...this.context,
-      metadata: { ...this.context.metadata, ...metadata },
-    });
+    // Directly mutate the context metadata instead of using enterWith (not supported in Cloudflare Workers)
+    Object.assign(this.context.metadata, metadata);
   }
 
   removeMetadata(key: string) {
-    this._storage.enterWith({
-      ...this.context,
-      metadata: { ...this.context.metadata, [key]: undefined },
-    });
+    // Directly mutate the context metadata instead of using enterWith (not supported in Cloudflare Workers)
+    this.context.metadata[key] = undefined;
   }
 
   getMetadata(key?: string) {
     return key ? this.context.metadata[key] : this.context.metadata;
   }
 
-  _log({ level, args, forget }: { level: TagLogger.Level; args: unknown[]; forget?: boolean }) {
-    if (!forget) this.context.logs.push({ level, timestamp: new Date(), args });
+  _log({ level, args }: { level: TagLogger.Level; args: unknown[] }) {
+    // Serialize args to a message string
+    const message = args
+      .map((arg) => {
+        if (arg instanceof Error) {
+          // For errors, just use the message here - the full error will be in metadata for error level
+          return arg.message;
+        }
+        if (typeof arg === "string") {
+          return arg;
+        }
+        try {
+          return JSON.stringify(arg);
+        } catch {
+          return String(arg);
+        }
+      })
+      .join(" ");
 
+    // Store debug logs as memories
+    if (level === "debug") {
+      this.context.debugMemories.push({ timestamp: new Date(), message });
+    }
+
+    // Always store the log (except debug logs are ephemeral)
+    this.context.logs.push({ level, timestamp: new Date(), message });
+
+    // Check if we should actually output this log based on level
     if (this.levelNumber > TagLogger.levels[level]) return;
-    this._implementation[level]({ args, metadata: this.context.metadata });
+
+    // For warn and error, include debug memories
+    const debugMemories =
+      level === "warn" || level === "error" ? this.context.debugMemories : undefined;
+
+    // For error level, include the full error object if present
+    const errorObject = level === "error" && args[0] instanceof Error ? args[0] : undefined;
+
+    // Copy metadata to prevent mutations from affecting logged values
+    const metadataCopy = { ...this.context.metadata };
+
+    this._implementation[level]({
+      message,
+      metadata: metadataCopy,
+      debugMemories,
+      errorObject,
+    });
   }
 
   debug(...args: unknown[]) {
@@ -109,25 +153,17 @@ export class TagLogger {
   }
 
   /** Runs the logger in a new async context, use this to scope logs to a specific async context */
-  runInContext<T>(
-    metadata: TagLogger.Context["metadata"],
-    errorTracking: TagLogger.ErrorTrackingFn,
-    fn: () => T,
-  ): T {
+  runInContext<T>(metadata: TagLogger.Context["metadata"], fn: () => T): T {
     const existingContext = this._storage.getStore();
+    // Create a shallow copy of metadata to prevent mutations from affecting the original
     const newContext: TagLogger.Context = existingContext
-      ? { ...existingContext, metadata, logs: [], errorTracking }
-      : { level: "info", metadata, logs: [], errorTracking };
+      ? { ...existingContext, metadata: { ...metadata }, logs: [], debugMemories: [] }
+      : { level: "info", metadata: { ...metadata }, logs: [], debugMemories: [] };
     return this._storage.run(newContext, fn);
   }
 
-  enterWith(metadata: TagLogger.Context["metadata"], errorTracking: TagLogger.ErrorTrackingFn) {
-    const existingContext = this._storage.getStore();
-    const newContext: TagLogger.Context = existingContext
-      ? { ...existingContext, metadata, errorTracking }
-      : { level: "info", metadata, logs: [], errorTracking };
-    this._storage.enterWith(newContext);
-  }
+  // Note: enterWith is not supported in Cloudflare Workers
+  // Use runInContext or getOrCreateContext instead
 
   /** Check if we're currently in a context */
   hasContext(): boolean {
@@ -135,15 +171,11 @@ export class TagLogger {
   }
 
   /** Run function, only creating context if one doesn't exist */
-  ensureContext<T>(
-    metadata: TagLogger.Context["metadata"],
-    errorTracking: TagLogger.ErrorTrackingFn,
-    fn: () => T,
-  ): T {
+  getOrCreateContext<T>(metadata: TagLogger.Context["metadata"], fn: () => T): T {
     if (this.hasContext()) {
       return fn();
     }
-    return this.runInContext(metadata, errorTracking, fn);
+    return this.runInContext(metadata, fn);
   }
   error(error: Error): void; // uses passed error
   error(message: string): void; // wraps with Error
@@ -163,12 +195,43 @@ export class TagLogger {
     } else {
       errorToLog = new Error(args.join(" "));
     }
-    this.context.errorTracking(errorToLog, this.context.metadata);
+
+    // Track error with posthog (built-in, noop in test mode)
+    this._trackError(errorToLog);
+
     this._log({ level: "error", args: [errorToLog] });
   }
+
+  private _trackError(error: Error) {
+    // Skip error tracking in test mode
+    if (import.meta.env.MODE === "test") {
+      return;
+    }
+
+    waitUntil(
+      (async () => {
+        try {
+          const { PostHog } = await import("posthog-node");
+          const { env } = await import("../env.ts");
+
+          const posthog = new PostHog(env.POSTHOG_PUBLIC_KEY, {
+            host: "https://eu.i.posthog.com",
+          });
+
+          posthog.captureException(error, this.context.metadata.userId, {
+            environment: env.POSTHOG_ENVIRONMENT,
+            ...this.context.metadata,
+          });
+
+          await posthog.shutdown();
+        } catch (trackingError) {
+          // Silently fail if error tracking fails
+          console.error("Failed to track error:", trackingError);
+        }
+      })(),
+    );
+  }
 }
-<<<<<<< HEAD
-=======
 
 /**
  * Creates a proxy that wraps all methods with logger context.
@@ -185,7 +248,7 @@ export class TagLogger {
  *       method: methodName,
  *       url: undefined,
  *       requestId: typeid("req").toString(),
- *     }), posthogErrorTracking);
+ *     }));
  *   }
  * }
  * ```
@@ -194,7 +257,6 @@ export function withLoggerContext<T extends object>(
   target: T,
   loggerInstance: TagLogger,
   getMetadata: (methodName: string, args: unknown[]) => TagLogger.Context["metadata"],
-  errorTracking: TagLogger.ErrorTrackingFn,
 ): T {
   return new Proxy(target, {
     get(target, prop, receiver) {
@@ -206,54 +268,31 @@ export function withLoggerContext<T extends object>(
       }
 
       // Wrap the function with logger context
-      return function (this: T, ...args: unknown[]) {
+      return (...args: unknown[]) => {
         const metadata = getMetadata(String(prop), args);
-        return loggerInstance.ensureContext(metadata, errorTracking, () => {
-          return value.apply(this, args);
-        });
+        return loggerInstance.getOrCreateContext(metadata, () => value.apply(target, args));
       };
     },
   });
 }
 
-/**
- * Creates a Hono middleware that wraps each request with logger context.
- * This is an alternative to manually calling runInContext in middleware.
- *
- * Example:
- * ```typescript
- * import { createLoggerMiddleware } from "./tag-logger.ts";
- * import { posthogErrorTracking } from "./posthog-error-tracker.ts";
- *
- * app.use("*", createLoggerMiddleware(logger, (c) => ({
- *   userId: c.var.session?.user?.id || undefined,
- *   path: c.req.path,
- *   method: c.req.method,
- *   url: c.req.url,
- *   requestId: typeid("req").toString(),
- * }), posthogErrorTracking));
- * ```
- */
-export function createLoggerMiddleware<Context>(
-  loggerInstance: TagLogger,
-  getMetadata: (context: Context) => TagLogger.Context["metadata"],
-  errorTracking: TagLogger.ErrorTrackingFn,
-) {
-  return async (c: Context, next: () => Promise<void>) => {
-    const metadata = getMetadata(c);
-    // Always create a new context for each request to ensure isolation
-    await loggerInstance.runInContext(metadata, errorTracking, next);
-  };
-}
-
->>>>>>> 0298bbb (feat: Proxy durable object with logger context)
-function serializeError(error: unknown) {
+function serializeError(error: unknown): any {
   if (error instanceof Error) {
-    const plain = {};
+    const plain: any = {
+      name: error.name,
+      message: error.message,
+    };
 
+    // Include cause if present (recursively serialize it)
+    if (error.cause) {
+      plain.cause = serializeError(error.cause);
+    }
+
+    // Include any additional enumerable properties
     Object.getOwnPropertyNames(error).forEach((key) => {
-      // @ts-expect-error - we don't care about the type of the error
-      plain[key] = error[key];
+      if (!plain[key] && key !== "stack") {
+        plain[key] = (error as any)[key];
+      }
     });
 
     return plain;
@@ -265,8 +304,13 @@ const replacer = (_: string, value: unknown) => serializeError(value);
 
 /* eslint-disable no-console -- this is the one place where we use console */
 export const logger = new TagLogger({
-  debug: ({ args, metadata }) => console.debug(JSON.stringify({ args, metadata }, replacer, 2)),
-  info: ({ args, metadata }) => console.info(JSON.stringify({ args, metadata }, replacer, 2)),
-  warn: ({ args, metadata }) => console.warn(JSON.stringify({ args, metadata }, replacer, 2)),
-  error: ({ args, metadata }) => console.error(JSON.stringify({ args, metadata }, replacer, 2)),
+  debug: ({ message, metadata }) =>
+    console.debug(JSON.stringify({ message, ...metadata }, replacer)),
+  info: ({ message, metadata }) => console.info(JSON.stringify({ message, ...metadata }, replacer)),
+  warn: ({ message, metadata, debugMemories }) =>
+    console.warn(JSON.stringify({ message, ...metadata, debugMemories }, replacer)),
+  error: ({ message, metadata, debugMemories, errorObject }) =>
+    console.error(
+      JSON.stringify({ message, ...metadata, debugMemories, error: errorObject }, replacer),
+    ),
 });

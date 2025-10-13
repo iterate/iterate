@@ -7,7 +7,6 @@ import { getDb } from "../db/client.ts";
 import { getAuth, type AuthSession } from "../auth/auth.ts";
 import { getUserEstateAccess } from "../trpc/trpc.ts";
 import { logger, withLoggerContext } from "../tag-logger.ts";
-import { posthogErrorTracking } from "../posthog-error-tracker.ts";
 
 // Event schemas for WebSocket communication
 export const InvalidateInfo = z.discriminatedUnion("type", [
@@ -47,22 +46,11 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
 
-    return withLoggerContext(
-      this,
-      logger,
-      (methodName) => ({
-        userId: undefined,
-<<<<<<< HEAD
-        path: undefined,
-        method: methodName,
-        url: undefined,
-=======
-        methodName,
->>>>>>> 0298bbb (feat: Proxy durable object with logger context)
-        requestId: typeid("req").toString(),
-      }),
-      posthogErrorTracking,
-    );
+    return withLoggerContext(this, logger, (methodName) => ({
+      userId: undefined,
+      methodName,
+      traceId: typeid("req").toString(),
+    }));
   }
 
   async fetch(request: Request): Promise<Response> {

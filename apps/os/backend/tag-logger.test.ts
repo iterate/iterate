@@ -12,33 +12,39 @@ vi.mock("cloudflare:workers", () => ({
 
 type LogCall = {
   level: TagLogger.Level;
-  args: unknown[];
-  metadata: Record<string, unknown>;
+  message: string;
+  metadata: Record<string, string | number | boolean | null | undefined>;
+  debugMemories?: Array<{ timestamp: Date; message: string }>;
+  errorObject?: Error;
 };
 
 const createLogger = () => {
   const calls: LogCall[] = [];
   const mocks = {
-    info: (call: { args: unknown[]; metadata: Record<string, unknown> }) =>
-      calls.push({ level: "info", ...call }),
-    warn: (call: { args: unknown[]; metadata: Record<string, unknown> }) =>
-      calls.push({ level: "warn", ...call }),
-    error: (call: { args: unknown[]; metadata: Record<string, unknown> }) =>
-      calls.push({ level: "error", ...call }),
-    debug: (call: { args: unknown[]; metadata: Record<string, unknown> }) =>
-      calls.push({ level: "debug", ...call }),
-  };
-
-  const errorTrackingCalls: Array<{ error: Error; metadata: Record<string, unknown> }> = [];
-  const errorTracking: TagLogger.ErrorTrackingFn = (error, metadata) => {
-    errorTrackingCalls.push({ error, metadata });
+    info: (call: {
+      message: string;
+      metadata: Record<string, string | number | boolean | null | undefined>;
+    }) => calls.push({ level: "info", ...call }),
+    warn: (call: {
+      message: string;
+      metadata: Record<string, string | number | boolean | null | undefined>;
+      debugMemories?: Array<{ timestamp: Date; message: string }>;
+    }) => calls.push({ level: "warn", ...call }),
+    error: (call: {
+      message: string;
+      metadata: Record<string, string | number | boolean | null | undefined>;
+      debugMemories?: Array<{ timestamp: Date; message: string }>;
+      errorObject?: Error;
+    }) => calls.push({ level: "error", ...call }),
+    debug: (call: {
+      message: string;
+      metadata: Record<string, string | number | boolean | null | undefined>;
+    }) => calls.push({ level: "debug", ...call }),
   };
 
   return {
     mocks,
     calls,
-    errorTrackingCalls,
-    errorTracking,
     logger: new TagLogger(mocks),
   };
 };
@@ -46,33 +52,30 @@ const createLogger = () => {
 const baseMetadata = {
   userId: undefined,
   path: "/test",
-  method: "GET",
+  httpMethod: "GET",
   url: "http://test.com",
-  requestId: "test-123",
+  traceId: "test-123",
 };
 
 describe("basic logging", () => {
   test("logs with metadata", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.info("test message", { data: 123 });
     });
 
     expect(calls).toMatchInlineSnapshot(`
       [
         {
-          "args": [
-            "test message",
-            {
-              "data": 123,
-            },
-          ],
+          "debugMemories": undefined,
+          "errorObject": undefined,
           "level": "info",
+          "message": "test message {"data":123}",
           "metadata": {
-            "method": "GET",
+            "httpMethod": "GET",
             "path": "/test",
-            "requestId": "test-123",
+            "traceId": "test-123",
             "url": "http://test.com",
             "userId": undefined,
           },
@@ -82,9 +85,9 @@ describe("basic logging", () => {
   });
 
   test("all log levels work", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.level = "debug"; // Set to debug to see all logs
       logger.debug("debug message");
       logger.info("info message");
@@ -92,53 +95,45 @@ describe("basic logging", () => {
       logger.error(new Error("error message"));
     });
 
-    expect(calls.map((c) => ({ level: c.level, args: c.args }))).toMatchInlineSnapshot(`
+    expect(calls.map((c) => ({ level: c.level, message: c.message }))).toMatchInlineSnapshot(`
       [
         {
-          "args": [
-            "debug message",
-          ],
           "level": "debug",
+          "message": "debug message",
         },
         {
-          "args": [
-            "info message",
-          ],
           "level": "info",
+          "message": "info message",
         },
         {
-          "args": [
-            "warn message",
-          ],
           "level": "warn",
+          "message": "warn message",
         },
         {
-          "args": [
-            [Error: error message],
-          ],
           "level": "error",
+          "message": "error message",
         },
       ]
     `);
   });
 
   test("deprecated log method still works", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.log("test");
     });
 
     expect(calls[0]?.level).toBe("info");
-    expect(calls[0]?.args).toEqual(["test"]);
+    expect(calls[0]?.message).toBe("test");
   });
 });
 
 describe("metadata management", () => {
   test("withMetadata adds metadata", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.info("before");
       logger.addMetadata({ customKey: "customValue", userId: "user-123" });
       logger.info("after");
@@ -153,9 +148,9 @@ describe("metadata management", () => {
   });
 
   test("removeMetadata removes metadata", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext({ ...baseMetadata, customKey: "value" }, errorTracking, () => {
+    logger.runInContext({ ...baseMetadata, customKey: "value" }, () => {
       logger.info("before");
       logger.removeMetadata("customKey");
       logger.info("after");
@@ -166,9 +161,9 @@ describe("metadata management", () => {
   });
 
   test("getMetadata retrieves metadata", () => {
-    const { logger, errorTracking } = createLogger();
+    const { logger } = createLogger();
 
-    logger.runInContext({ ...baseMetadata, custom: "value" }, errorTracking, () => {
+    logger.runInContext({ ...baseMetadata, custom: "value" }, () => {
       expect(logger.getMetadata("custom")).toBe("value");
       expect(logger.getMetadata("userId")).toBe(undefined);
       expect(logger.getMetadata()).toEqual({ ...baseMetadata, custom: "value" });
@@ -176,17 +171,13 @@ describe("metadata management", () => {
   });
 
   test("nested contexts inherit and override metadata", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext({ ...baseMetadata, outer: "value" }, errorTracking, () => {
+    logger.runInContext({ ...baseMetadata, outer: "value" }, () => {
       logger.info("outer");
-      logger.runInContext(
-        { ...baseMetadata, outer: "value", inner: "nested" },
-        errorTracking,
-        () => {
-          logger.info("inner");
-        },
-      );
+      logger.runInContext({ ...baseMetadata, outer: "value", inner: "nested" }, () => {
+        logger.info("inner");
+      });
       logger.info("outer again");
     });
 
@@ -198,9 +189,9 @@ describe("metadata management", () => {
 
 describe("log level filtering", () => {
   test("respects log level - only shows info and above by default", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.debug("debug");
       logger.info("info");
       logger.warn("warn");
@@ -212,9 +203,9 @@ describe("log level filtering", () => {
   });
 
   test("can change log level to debug", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.level = "debug";
       logger.debug("debug");
       logger.info("info");
@@ -224,9 +215,9 @@ describe("log level filtering", () => {
   });
 
   test("can change log level to warn", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.level = "warn";
       logger.debug("debug");
       logger.info("info");
@@ -238,9 +229,9 @@ describe("log level filtering", () => {
   });
 
   test("can change log level to error", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.level = "error";
       logger.debug("debug");
       logger.info("info");
@@ -254,34 +245,28 @@ describe("log level filtering", () => {
 
 describe("logs tracking", () => {
   test("tracks logs in context", () => {
-    const { logger, errorTracking } = createLogger();
+    const { logger } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.debug("first");
       logger.info("second");
       logger.warn("third");
 
       const logs = logger.context.logs;
       expect(logs).toHaveLength(3);
-      expect(logs.map((l) => ({ level: l.level, args: l.args }))).toMatchInlineSnapshot(`
+      expect(logs.map((l) => ({ level: l.level, message: l.message }))).toMatchInlineSnapshot(`
         [
           {
-            "args": [
-              "first",
-            ],
             "level": "debug",
+            "message": "first",
           },
           {
-            "args": [
-              "second",
-            ],
             "level": "info",
+            "message": "second",
           },
           {
-            "args": [
-              "third",
-            ],
             "level": "warn",
+            "message": "third",
           },
         ]
       `);
@@ -289,9 +274,9 @@ describe("logs tracking", () => {
   });
 
   test("logs have timestamps", () => {
-    const { logger, errorTracking } = createLogger();
+    const { logger } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.info("test");
 
       const log = logger.context.logs[0];
@@ -302,101 +287,165 @@ describe("logs tracking", () => {
 
 describe("error handling", () => {
   test("error with Error object", () => {
-    const { logger, calls, errorTracking, errorTrackingCalls } = createLogger();
+    const { logger, calls } = createLogger();
     const testError = new Error("test error");
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.error(testError);
     });
 
-    expect(calls[0]?.args[0]).toBe(testError);
-    expect(errorTrackingCalls).toHaveLength(1);
-    expect(errorTrackingCalls[0]?.error).toBe(testError);
-    expect(errorTrackingCalls[0]?.metadata).toEqual(baseMetadata);
+    expect(calls[0]?.message).toBe("test error");
   });
 
   test("error with string message", () => {
-    const { logger, calls, errorTracking, errorTrackingCalls } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.error("test error message");
     });
 
-    const loggedError = calls[0]?.args[0] as Error;
-    expect(loggedError).toBeInstanceOf(Error);
-    expect(loggedError.message).toBe("test error message");
-    expect(errorTrackingCalls[0]?.error).toBe(loggedError);
+    expect(calls[0]?.message).toBe("test error message");
   });
 
   test("error with message and cause", () => {
-    const { logger, calls, errorTracking, errorTrackingCalls } = createLogger();
+    const { logger, calls } = createLogger();
     const causeError = new Error("cause");
 
-    logger.runInContext(baseMetadata, errorTracking, () => {
+    logger.runInContext(baseMetadata, () => {
       logger.error("wrapped error", causeError);
     });
 
-    const loggedError = calls[0]?.args[0] as Error;
-    expect(loggedError).toBeInstanceOf(Error);
-    expect(loggedError.message).toBe("wrapped error");
-    expect(loggedError.cause).toBe(causeError);
-    expect(errorTrackingCalls[0]?.error).toBe(loggedError);
+    expect(calls[0]?.message).toBe("wrapped error");
   });
 
-  test("error tracking receives correct metadata", () => {
-    const { logger, errorTracking, errorTrackingCalls } = createLogger();
+  test("error includes metadata", () => {
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(
-      { ...baseMetadata, userId: "user-456", custom: "data" },
-      errorTracking,
-      () => {
-        logger.error(new Error("test"));
-      },
-    );
+    logger.runInContext({ ...baseMetadata, userId: "user-456", custom: "data" }, () => {
+      logger.error(new Error("test"));
+    });
 
-    expect(errorTrackingCalls[0]?.metadata).toEqual({
+    expect(calls[0]?.metadata).toEqual({
       ...baseMetadata,
       userId: "user-456",
       custom: "data",
     });
   });
+
+  test("error with cause includes the cause in errorObject", () => {
+    const { logger, calls } = createLogger();
+    const causeError = new Error("original cause");
+    const wrapperError = new Error("wrapped error", { cause: causeError });
+
+    logger.runInContext(baseMetadata, () => {
+      logger.error(wrapperError);
+    });
+
+    expect(calls[0]?.message).toBe("wrapped error");
+    expect(calls[0]?.errorObject).toBe(wrapperError);
+    expect(calls[0]?.errorObject?.cause).toBe(causeError);
+  });
+
+  test("error created from string and cause includes the cause", () => {
+    const { logger, calls } = createLogger();
+    const causeError = new Error("underlying issue");
+
+    logger.runInContext(baseMetadata, () => {
+      logger.error("Something went wrong", causeError);
+    });
+
+    expect(calls[0]?.message).toBe("Something went wrong");
+    expect(calls[0]?.errorObject).toBeInstanceOf(Error);
+    expect(calls[0]?.errorObject?.message).toBe("Something went wrong");
+    expect(calls[0]?.errorObject?.cause).toBe(causeError);
+  });
+});
+
+describe("debug memories", () => {
+  test("warn and error include debug memories", () => {
+    const { logger, calls } = createLogger();
+
+    logger.runInContext(baseMetadata, () => {
+      logger.debug("debug 1");
+      logger.debug("debug 2");
+      logger.info("info message");
+      logger.debug("debug 3");
+      logger.warn("warning message");
+    });
+
+    // Info should not include debug memories
+    expect(calls[0]?.debugMemories).toBeUndefined();
+
+    // Warn should include all debug memories from the context
+    expect(calls[1]?.debugMemories).toHaveLength(3);
+    expect(calls[1]?.debugMemories?.map((m) => m.message)).toEqual([
+      "debug 1",
+      "debug 2",
+      "debug 3",
+    ]);
+  });
+
+  test("error includes debug memories", () => {
+    const { logger, calls } = createLogger();
+
+    logger.runInContext(baseMetadata, () => {
+      logger.debug("debug before error");
+      logger.info("info message");
+      logger.debug("debug right before error");
+      logger.error(new Error("test error"));
+    });
+
+    expect(calls[1]?.debugMemories).toHaveLength(2);
+    expect(calls[1]?.debugMemories?.map((m) => m.message)).toEqual([
+      "debug before error",
+      "debug right before error",
+    ]);
+  });
+
+  test("debug logs are still output when level is debug", () => {
+    const { logger, calls } = createLogger();
+
+    logger.runInContext(baseMetadata, () => {
+      logger.level = "debug";
+      logger.debug("debug 1");
+      logger.debug("debug 2");
+      logger.warn("warning");
+    });
+
+    // All debug logs should be in the output
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.level).toBe("debug");
+    expect(calls[1]?.level).toBe("debug");
+    expect(calls[2]?.level).toBe("warn");
+
+    // And the warn should still include memories
+    expect(calls[2]?.debugMemories).toHaveLength(2);
+  });
 });
 
 describe("context independence", () => {
   test("parallel contexts don't interfere with each other", async () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
     // Run multiple contexts in parallel
     await Promise.all([
       new Promise<void>((resolve) => {
-        logger.runInContext(
-          { ...baseMetadata, requestId: "req-1", userId: "user-1" },
-          errorTracking,
-          () => {
-            logger.info("message from context 1");
-            resolve();
-          },
-        );
+        logger.runInContext({ ...baseMetadata, requestId: "req-1", userId: "user-1" }, () => {
+          logger.info("message from context 1");
+          resolve();
+        });
       }),
       new Promise<void>((resolve) => {
-        logger.runInContext(
-          { ...baseMetadata, requestId: "req-2", userId: "user-2" },
-          errorTracking,
-          () => {
-            logger.info("message from context 2");
-            resolve();
-          },
-        );
+        logger.runInContext({ ...baseMetadata, requestId: "req-2", userId: "user-2" }, () => {
+          logger.info("message from context 2");
+          resolve();
+        });
       }),
       new Promise<void>((resolve) => {
-        logger.runInContext(
-          { ...baseMetadata, requestId: "req-3", userId: "user-3" },
-          errorTracking,
-          () => {
-            logger.info("message from context 3");
-            resolve();
-          },
-        );
+        logger.runInContext({ ...baseMetadata, requestId: "req-3", userId: "user-3" }, () => {
+          logger.info("message from context 3");
+          resolve();
+        });
       }),
     ]);
 
@@ -412,26 +461,18 @@ describe("context independence", () => {
   });
 
   test("nested contexts maintain separate state", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext(
-      { ...baseMetadata, requestId: "outer", level: "info" },
-      errorTracking,
-      () => {
-        logger.info("outer message");
+    logger.runInContext({ ...baseMetadata, requestId: "outer", level: "info" }, () => {
+      logger.info("outer message");
 
-        logger.runInContext(
-          { ...baseMetadata, requestId: "inner", level: "debug" },
-          errorTracking,
-          () => {
-            logger.info("inner message");
-          },
-        );
+      logger.runInContext({ ...baseMetadata, requestId: "inner", level: "debug" }, () => {
+        logger.info("inner message");
+      });
 
-        // Back in outer context
-        logger.info("outer message 2");
-      },
-    );
+      // Back in outer context
+      logger.info("outer message 2");
+    });
 
     expect(calls).toHaveLength(3);
     expect(calls[0]?.metadata.requestId).toBe("outer");
@@ -440,16 +481,16 @@ describe("context independence", () => {
   });
 
   test("context logs are isolated", () => {
-    const { logger, errorTracking } = createLogger();
+    const { logger } = createLogger();
 
     let outerLogs: unknown[] = [];
     let innerLogs: unknown[] = [];
 
-    logger.runInContext({ ...baseMetadata, requestId: "outer" }, errorTracking, () => {
+    logger.runInContext({ ...baseMetadata, requestId: "outer" }, () => {
       logger.info("outer log 1");
       logger.info("outer log 2");
 
-      logger.runInContext({ ...baseMetadata, requestId: "inner" }, errorTracking, () => {
+      logger.runInContext({ ...baseMetadata, requestId: "inner" }, () => {
         logger.info("inner log 1");
         innerLogs = [...logger.context.logs];
       });
@@ -461,21 +502,21 @@ describe("context independence", () => {
     expect(innerLogs).toHaveLength(1);
     expect(innerLogs[0]).toMatchObject({
       level: "info",
-      args: ["inner log 1"],
+      message: "inner log 1",
     });
 
     // Outer context should have all outer logs
     expect(outerLogs).toHaveLength(2);
-    expect(outerLogs.map((l: any) => l.args[0])).toEqual(["outer log 1", "outer log 2"]);
+    expect(outerLogs.map((l: any) => l.message)).toEqual(["outer log 1", "outer log 2"]);
   });
 
   test("metadata changes in one context don't affect another", () => {
-    const { logger, calls, errorTracking } = createLogger();
+    const { logger, calls } = createLogger();
 
-    logger.runInContext({ ...baseMetadata, shared: "original" }, errorTracking, () => {
+    logger.runInContext({ ...baseMetadata, shared: "original" }, () => {
       logger.info("before");
 
-      logger.runInContext({ ...baseMetadata, shared: "nested" }, errorTracking, () => {
+      logger.runInContext({ ...baseMetadata, shared: "nested" }, () => {
         logger.addMetadata({ shared: "modified-nested" });
         logger.info("nested");
       });

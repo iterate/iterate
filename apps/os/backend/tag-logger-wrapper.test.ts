@@ -1,6 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
 import { TagLogger, withLoggerContext } from "./tag-logger.ts";
-import { posthogErrorTracking } from "./posthog-error-tracker.ts";
 
 // Mock cloudflare:workers for tests
 vi.mock("cloudflare:workers", () => ({
@@ -12,30 +11,25 @@ vi.mock("cloudflare:workers", () => ({
 
 describe("withLoggerContext", () => {
   test("wraps all methods with logger context", () => {
-    const calls: Array<{ method: string; args: unknown[] }> = [];
+    const calls: Array<{ method: string; message: string }> = [];
     const testLogger = new TagLogger({
-      info: ({ args }) => calls.push({ method: "info", args }),
-      debug: ({ args }) => calls.push({ method: "debug", args }),
-      warn: ({ args }) => calls.push({ method: "warn", args }),
-      error: ({ args }) => calls.push({ method: "error", args }),
+      info: ({ message }) => calls.push({ method: "info", message }),
+      debug: ({ message }) => calls.push({ method: "debug", message }),
+      warn: ({ message }) => calls.push({ method: "warn", message }),
+      error: ({ message }) => calls.push({ method: "error", message }),
     });
 
     class TestService {
       value = 0;
 
       constructor() {
-        return withLoggerContext(
-          this,
-          testLogger,
-          (methodName) => ({
-            userId: undefined,
-            path: undefined,
-            method: undefined,
-            url: undefined,
-            requestId: `test-${methodName}`,
-          }),
-          posthogErrorTracking,
-        );
+        return withLoggerContext(this, testLogger, (methodName) => ({
+          userId: undefined,
+          path: undefined,
+          methodName: undefined,
+          url: undefined,
+          traceId: `test-${methodName}`,
+        }));
       }
 
       async increment() {
@@ -62,8 +56,8 @@ describe("withLoggerContext", () => {
     service.decrement();
 
     expect(calls).toHaveLength(2);
-    expect(calls[0]?.args).toEqual(["incrementing"]);
-    expect(calls[1]?.args).toEqual(["decrementing"]);
+    expect(calls[0]?.message).toBe("incrementing");
+    expect(calls[1]?.message).toBe("decrementing");
     expect(service.getValue()).toBe(0);
   });
 
@@ -78,18 +72,13 @@ describe("withLoggerContext", () => {
 
     class TestService {
       constructor() {
-        return withLoggerContext(
-          this,
-          testLogger,
-          (methodName) => ({
-            userId: undefined,
-            path: undefined,
-            method: undefined,
-            url: undefined,
-            requestId: `test-${methodName}`,
-          }),
-          posthogErrorTracking,
-        );
+        return withLoggerContext(this, testLogger, (methodName) => ({
+          userId: undefined,
+          path: undefined,
+          methodName: undefined,
+          url: undefined,
+          traceId: `test-${methodName}`,
+        }));
       }
 
       async outerMethod() {
@@ -109,33 +98,28 @@ describe("withLoggerContext", () => {
     expect(calls).toHaveLength(2);
 
     // Both should use the outer method's context (first one established)
-    expect(calls[0]?.metadata.requestId).toBe("test-outerMethod");
-    expect(calls[1]?.metadata.requestId).toBe("test-outerMethod");
+    expect(calls[0]?.metadata.traceId).toBe("test-outerMethod");
+    expect(calls[1]?.metadata.traceId).toBe("test-outerMethod");
   });
 
   test("works with async methods", async () => {
     const calls: Array<string> = [];
     const testLogger = new TagLogger({
-      info: ({ args }) => calls.push(args[0] as string),
-      debug: ({ args }) => calls.push(args[0] as string),
-      warn: ({ args }) => calls.push(args[0] as string),
-      error: ({ args }) => calls.push(args[0] as string),
+      info: ({ message }) => calls.push(message),
+      debug: ({ message }) => calls.push(message),
+      warn: ({ message }) => calls.push(message),
+      error: ({ message }) => calls.push(message),
     });
 
     class AsyncService {
       constructor() {
-        return withLoggerContext(
-          this,
-          testLogger,
-          () => ({
-            userId: undefined,
-            path: undefined,
-            method: undefined,
-            url: undefined,
-            requestId: "async-test",
-          }),
-          posthogErrorTracking,
-        );
+        return withLoggerContext(this, testLogger, () => ({
+          userId: undefined,
+          path: undefined,
+          methodName: undefined,
+          url: undefined,
+          traceId: "async-test",
+        }));
       }
 
       async fetchData() {
@@ -163,18 +147,13 @@ describe("withLoggerContext", () => {
 
     class Calculator {
       constructor() {
-        return withLoggerContext(
-          this,
-          testLogger,
-          () => ({
-            userId: undefined,
-            path: undefined,
-            method: undefined,
-            url: undefined,
-            requestId: "calc-test",
-          }),
-          posthogErrorTracking,
-        );
+        return withLoggerContext(this, testLogger, () => ({
+          userId: undefined,
+          path: undefined,
+          methodName: undefined,
+          url: undefined,
+          traceId: "calc-test",
+        }));
       }
 
       add(a: number, b: number): number {

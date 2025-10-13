@@ -1,6 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
-import { TagLogger, createLoggerMiddleware } from "./tag-logger.ts";
-import { posthogErrorTracking } from "./posthog-error-tracker.ts";
+import { TagLogger } from "./tag-logger.ts";
+import { createLoggerMiddleware } from "./tag-logger-middleware.ts";
 
 // Mock cloudflare:workers for tests
 vi.mock("cloudflare:workers", () => ({
@@ -28,25 +28,24 @@ type MockContext = {
 
 describe("createLoggerMiddleware", () => {
   test("middleware sets up logger context for the request", async () => {
-    const calls: Array<{ args: unknown[]; metadata: Record<string, unknown> }> = [];
+    const calls: Array<{
+      message: string;
+      metadata: Record<string, string | number | boolean | null | undefined>;
+    }> = [];
     const testLogger = new TagLogger({
-      info: ({ args, metadata }) => calls.push({ args, metadata }),
-      debug: ({ args, metadata }) => calls.push({ args, metadata }),
-      warn: ({ args, metadata }) => calls.push({ args, metadata }),
-      error: ({ args, metadata }) => calls.push({ args, metadata }),
+      info: ({ message, metadata }) => calls.push({ message, metadata }),
+      debug: ({ message, metadata }) => calls.push({ message, metadata }),
+      warn: ({ message, metadata }) => calls.push({ message, metadata }),
+      error: ({ message, metadata }) => calls.push({ message, metadata }),
     });
 
-    const middleware = createLoggerMiddleware<MockContext>(
-      testLogger,
-      (c) => ({
-        userId: c.var.session?.user?.id || undefined,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        requestId: "test-req-123",
-      }),
-      posthogErrorTracking,
-    );
+    const middleware = createLoggerMiddleware(testLogger, (c: MockContext) => ({
+      userId: c.var.session?.user?.id || undefined,
+      path: c.req.path,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: "test-req-123",
+    }));
 
     const mockContext: MockContext = {
       req: {
@@ -70,17 +69,17 @@ describe("createLoggerMiddleware", () => {
       testLogger.info("Inside handler");
     };
 
-    await middleware(mockContext, next);
+    await middleware(mockContext as any, next);
 
     expect(handlerCalled).toBe(true);
     expect(calls).toHaveLength(1);
-    expect(calls[0]?.args).toEqual(["Inside handler"]);
+    expect(calls[0]?.message).toBe("Inside handler");
     expect(calls[0]?.metadata).toEqual({
       userId: "user-456",
       path: "/api/test",
-      method: "GET",
+      httpMethod: "GET",
       url: "http://example.com/api/test",
-      requestId: "test-req-123",
+      traceId: "test-req-123",
     });
   });
 
@@ -93,17 +92,13 @@ describe("createLoggerMiddleware", () => {
       error: ({ metadata }) => calls.push({ metadata }),
     });
 
-    const middleware = createLoggerMiddleware<MockContext>(
-      testLogger,
-      (c) => ({
-        userId: c.var.session?.user?.id || undefined,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        requestId: "test-req-789",
-      }),
-      posthogErrorTracking,
-    );
+    const middleware = createLoggerMiddleware(testLogger, (c: MockContext) => ({
+      userId: c.var.session?.user?.id || undefined,
+      path: c.req.path,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: "test-req-789",
+    }));
 
     const mockContext: MockContext = {
       req: {
@@ -118,34 +113,30 @@ describe("createLoggerMiddleware", () => {
       testLogger.warn("Public endpoint accessed");
     };
 
-    await middleware(mockContext, next);
+    await middleware(mockContext as any, next);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.metadata.userId).toBe(undefined);
     expect(calls[0]?.metadata.path).toBe("/api/public");
-    expect(calls[0]?.metadata.method).toBe("POST");
+    expect(calls[0]?.metadata.httpMethod).toBe("POST");
   });
 
   test("middleware handles async operations correctly", async () => {
     const logs: string[] = [];
     const testLogger = new TagLogger({
-      info: ({ args }) => logs.push(args[0] as string),
-      debug: ({ args }) => logs.push(args[0] as string),
-      warn: ({ args }) => logs.push(args[0] as string),
-      error: ({ args }) => logs.push(args[0] as string),
+      info: ({ message }) => logs.push(message),
+      debug: ({ message }) => logs.push(message),
+      warn: ({ message }) => logs.push(message),
+      error: ({ message }) => logs.push(message),
     });
 
-    const middleware = createLoggerMiddleware<MockContext>(
-      testLogger,
-      (c) => ({
-        userId: undefined,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        requestId: "async-req",
-      }),
-      posthogErrorTracking,
-    );
+    const middleware = createLoggerMiddleware(testLogger, (c: MockContext) => ({
+      userId: undefined,
+      path: c.req.path,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: "async-req",
+    }));
 
     const mockContext: MockContext = {
       req: {
@@ -162,7 +153,7 @@ describe("createLoggerMiddleware", () => {
       testLogger.info("After async");
     };
 
-    await middleware(mockContext, next);
+    await middleware(mockContext as any, next);
 
     expect(logs).toEqual(["Before async", "After async"]);
   });
@@ -175,17 +166,13 @@ describe("createLoggerMiddleware", () => {
       error: () => {},
     });
 
-    const middleware = createLoggerMiddleware<MockContext>(
-      testLogger,
-      (c) => ({
-        userId: undefined,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        requestId: "error-req",
-      }),
-      posthogErrorTracking,
-    );
+    const middleware = createLoggerMiddleware(testLogger, (c: MockContext) => ({
+      userId: undefined,
+      path: c.req.path,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: "error-req",
+    }));
 
     const mockContext: MockContext = {
       req: {
@@ -201,7 +188,7 @@ describe("createLoggerMiddleware", () => {
       throw testError;
     };
 
-    await expect(middleware(mockContext, next)).rejects.toThrow("Test error");
+    await expect(middleware(mockContext as any, next)).rejects.toThrow("Test error");
   });
 
   test("each request gets isolated context", async () => {
@@ -213,17 +200,13 @@ describe("createLoggerMiddleware", () => {
       error: ({ metadata }) => calls.push({ metadata }),
     });
 
-    const middleware = createLoggerMiddleware<MockContext>(
-      testLogger,
-      (c) => ({
-        userId: c.var.session?.user?.id || undefined,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        requestId: `req-${c.req.path}`,
-      }),
-      posthogErrorTracking,
-    );
+    const middleware = createLoggerMiddleware(testLogger, (c: MockContext) => ({
+      userId: c.var.session?.user?.id || undefined,
+      path: c.req.path,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: `req-${c.req.path}`,
+    }));
 
     // Simulate two separate requests
     const request1: MockContext = {
@@ -244,19 +227,19 @@ describe("createLoggerMiddleware", () => {
       var: { session: { user: { id: "user-2" } } },
     };
 
-    await middleware(request1, async () => {
+    await middleware(request1 as any, async () => {
       testLogger.info("Request 1");
     });
 
-    await middleware(request2, async () => {
+    await middleware(request2 as any, async () => {
       testLogger.info("Request 2");
     });
 
     expect(calls).toHaveLength(2);
     // Each request should have its own context
-    expect(calls[0]?.metadata.requestId).toBe("req-/api/request1");
+    expect(calls[0]?.metadata.traceId).toBe("req-/api/request1");
     expect(calls[0]?.metadata.userId).toBe("user-1");
-    expect(calls[1]?.metadata.requestId).toBe("req-/api/request2");
+    expect(calls[1]?.metadata.traceId).toBe("req-/api/request2");
     expect(calls[1]?.metadata.userId).toBe("user-2");
   });
 });

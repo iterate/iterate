@@ -30,6 +30,12 @@ export type AgentInitParams = {
   // Optional props forwarded to PartyKit when setting the room name
   // Used to pass initial metadata for the room/server initialisation
   props?: Record<string, unknown>;
+  // Optional tracing information for logger context
+  tracing?: {
+    userId?: string;
+    parentSpan?: string;
+    traceId?: string;
+  };
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
@@ -41,7 +47,6 @@ import {
 } from "../file-handlers.ts";
 import { tutorialRules } from "../../sdk/tutorial.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
-import { posthogErrorTracking } from "../posthog-error-tracker.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -481,6 +486,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     await this.persistInitParams(params);
 
+    // Add logger metadata now that we have the database records
+    logger.addMetadata({
+      agentId: params.record.id,
+      estateId: params.record.estateId,
+      organizationId: params.organization.id,
+      estateName: params.estate.name,
+      agentClassName: params.record.className,
+      ...(params.tracing?.userId && { userId: params.tracing.userId }),
+      ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),
+      ...(params.tracing?.traceId && { traceId: params.tracing.traceId }),
+    });
+
     // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
     // These records (estate, organization, iterateConfig) change infrequently and callers
     // typically already fetched them. This also helps when the DO is not colocated with
@@ -583,18 +600,12 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
 
-    return withLoggerContext(
-      this,
-      logger,
-      (methodName) => ({
-        userId: undefined,
-        path: "",
-        method: methodName,
-        url: "",
-        requestId: typeid("req").toString(),
-      }),
-      posthogErrorTracking,
-    );
+    return withLoggerContext(this, logger, (methodName) => ({
+      userId: undefined, // Will be set via tracing in initIterateAgent
+      methodName: methodName,
+      url: "",
+      traceId: typeid("req").toString(),
+    }));
   }
 
   /**
