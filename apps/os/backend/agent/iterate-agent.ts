@@ -2116,19 +2116,19 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
-    const { endpoint, method, body, queryParams, pathParams, userId } = input;
+    const { endpoint, method, body, queryParams, pathParams, impersonateUserId } = input;
 
-    if (!userId.startsWith("usr_")) {
+    if (!impersonateUserId.startsWith("usr_")) {
       return {
         success: false,
         error: dedent`
-          The user ID ${userId} is not a valid user ID.
+          The user ID ${impersonateUserId} is not a valid user ID.
           It should start with "usr_".
         `,
       };
     }
 
-    const userRole = await this.getUserRole(userId);
+    const userRole = await this.getUserRole(impersonateUserId);
     if (!userRole || userRole === "guest" || userRole === "external") {
       return {
         success: false,
@@ -2140,7 +2140,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     let accessToken: string;
     try {
       const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
-      accessToken = await getGoogleAccessTokenForUser(this.db, userId);
+      accessToken = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
     } catch (error) {
       const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
       const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
@@ -2149,7 +2149,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       const url = await getGoogleOAuthURL({
         db: this.db,
         estateId: this.databaseRecord.estateId,
-        userId,
+        userId: impersonateUserId,
         agentDurableObject: this.databaseRecord,
         callbackUrl,
       });
@@ -2201,7 +2201,7 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
   }
 
   async sendGmail(input: Inputs["sendGmail"]): Promise<Result<unknown>> {
-    const { to, subject, body, cc, bcc, threadId, inReplyTo, userId } = input;
+    const { to, subject, body, cc, bcc, threadId, inReplyTo, impersonateUserId } = input;
 
     let emailContent = `To: ${to}\r\n`;
     if (cc) emailContent += `Cc: ${cc}\r\n`;
@@ -2227,18 +2227,18 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
     return this.callGoogleAPI({
       endpoint: "/gmail/v1/users/me/messages/send",
       method: "POST",
-      userId,
+      impersonateUserId,
       body: requestBody,
     });
   }
 
   async getGmailMessage(input: Inputs["getGmailMessage"]): Promise<Result<unknown>> {
-    const { messageId, userId } = input;
+    const { messageId, impersonateUserId } = input;
 
     const result = await this.callGoogleAPI({
       endpoint: `/gmail/v1/users/me/messages/${messageId}`,
       method: "GET",
-      userId,
+      impersonateUserId,
       queryParams: { format: "full" },
     });
 
