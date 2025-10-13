@@ -263,6 +263,7 @@ export async function handleMCPConnectRequest(
   const manager = new MCPClientManager("iterate-agent", "1.0.0");
 
   let result: Awaited<ReturnType<typeof manager.connect>>;
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const connectOptions: Parameters<typeof manager.connect>[1] = {
@@ -286,16 +287,24 @@ export async function handleMCPConnectRequest(
       manager.connect(modifiedServerUrl, connectOptions),
       // wait 20 seconds - if fail, add an error event
       new Promise<typeof result>((_, reject) => {
-        setTimeout(
+        timeoutId = setTimeout(
           () => reject(new Error("MCP connection timeout - authentication may have expired")),
           20_000, // 10_000 was too short for some
         );
       }),
     ]);
+    // Clear the timeout since connection succeeded
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
     // Set the serverId on the provider for OAuth state preservation
     oauthProvider.serverId = result.id;
   } catch (error) {
-    oauthProvider?.resetClientAndTokens();
+    oauthProvider?.resetTokens();
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+
     events.push({
       type: "MCP:CONNECTION_ERROR",
       data: {
@@ -311,6 +320,18 @@ export async function handleMCPConnectRequest(
   }
 
   if (result.authUrl) {
+    if (timeoutId !== undefined) {
+      clearTimeout(timeoutId);
+    }
+
+    // Close the partial connection since we need OAuth first
+    // The connection will be re-established after OAuth completes
+    try {
+      await manager.closeConnection(result.id);
+    } catch (cleanupError) {
+      logger.warn(`[MCP] Failed to cleanup manager after OAuth required:`, cleanupError);
+    }
+
     events.push({
       type: "MCP:OAUTH_REQUIRED",
       data: {
@@ -463,6 +484,11 @@ export function getConnectionQueue(
   cacheKey: MCPConnectionKey,
 ): ConnectionQueueEntry {
   let entry = mcpConnectionQueues.get(cacheKey);
+  // If the entry exists but the controller is already aborted, remove it and create a fresh one
+  if (entry?.controller.signal.aborted) {
+    mcpConnectionQueues.delete(cacheKey);
+    entry = undefined;
+  }
   if (!entry) {
     entry = {
       queue: new PQueue({ concurrency: 1 }),
