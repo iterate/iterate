@@ -2330,6 +2330,15 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
       },
     };
   }
+
+  async addLabel(input: Inputs["addLabel"]): Promise<Result<unknown>> {
+    const { label } = input;
+    this.addEvent({ type: "CORE:ADD_LABEL", data: { label } });
+    return {
+      success: true,
+      data: { message: `Label "${label}" added successfully` },
+    };
+  }
 }
 
 // -----------------------------------------------------------------------------

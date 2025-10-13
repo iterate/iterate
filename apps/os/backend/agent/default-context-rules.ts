@@ -213,6 +213,46 @@ export const defaultContextRules = defineRules([
     ],
   },
   {
+    key: "activate-gmail-tools",
+    match: matchers.and(
+      matchers.forAgentClass("SlackAgent"),
+      matchers.not(matchers.hasLabel("GMAIL")),
+    ),
+    tools: [
+      iterateAgentTool.addLabel({
+        overrideName: "activateGmailTools",
+        overrideDescription:
+          "Activate Gmail tools for this agent. This enables sendGmail, listGmailMessages, getGmailMessage, and other Gmail-related functionality.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+        passThroughArgs: { label: "GMAIL" },
+      }),
+    ],
+  },
+  {
+    key: "activate-gcalendar-tools",
+    match: matchers.and(
+      matchers.forAgentClass("SlackAgent"),
+      matchers.not(matchers.hasLabel("GCALENDAR")),
+    ),
+    tools: [
+      iterateAgentTool.addLabel({
+        overrideName: "activateGcalendarTools",
+        overrideDescription:
+          "Activate Google Calendar tools for this agent. This enables createCalendarEvent, listCalendarEvents, and other calendar-related functionality.",
+        overrideInputJSONSchema: {
+          type: "object",
+          properties: {},
+          required: [],
+        },
+        passThroughArgs: { label: "GCALENDAR" },
+      }),
+    ],
+  },
+  {
     key: "using-linear",
     prompt: dedent`
       When using Linear tools:
@@ -281,7 +321,7 @@ export const defaultContextRules = defineRules([
       - Use list tools with appropriate filters (e.g., is:unread, from:someone@example.com)
       - Respect user privacy and only access what's needed
     `,
-    match: matchers.forAgentClass("SlackAgent"),
+    match: matchers.and(matchers.forAgentClass("SlackAgent"), matchers.hasLabel("GMAIL")),
     tools: [
       iterateAgentTool.sendGmail(),
       // requires unapproved scope: gmail.modify
@@ -469,7 +509,7 @@ export const defaultContextRules = defineRules([
       - Only set singleEvents="true" and orderBy="startTime" if you need each occurrence separately
       - Use appropriate time ranges to avoid overwhelming results
     `,
-    match: matchers.forAgentClass("SlackAgent"),
+    match: matchers.and(matchers.forAgentClass("SlackAgent"), matchers.hasLabel("GCALENDAR")),
     tools: [
       iterateAgentTool.callGoogleAPI({
         overrideName: "createCalendarEvent",
