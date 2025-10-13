@@ -1,6 +1,5 @@
 ---
-slug: how-we-use-notion
-match: hasMCPConnection("mcp.notion.com")
+match: $contains($string(mcpConnections), "mcp.notion.app")
 ---
 
 # How We Use Notion

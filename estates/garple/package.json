@@ -26,7 +26,7 @@
     "zod": "^4.1.11"
   },
   "scripts": {
-    "dev": "cd apps/website && CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- vite dev",
+    "dev:garple": "cd apps/website && CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- vite dev",
     "build": "cd apps/website && doppler run -- vite build",
     "deploy": "pnpm run build && cd apps/website && doppler run -- wrangler deploy",
     "typecheck": "cd apps/website && tsc --noEmit",

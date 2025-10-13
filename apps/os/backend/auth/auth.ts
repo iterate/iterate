@@ -9,6 +9,7 @@ import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
+import { serviceAuthPlugin } from "./service-auth.ts";
 
 export const getAuth = (db: DB) =>
   betterAuth({
@@ -50,6 +51,7 @@ export const getAuth = (db: DB) =>
     plugins: [
       admin(),
       integrationsPlugin(),
+      serviceAuthPlugin(),
       // We don't use any of the better auth stripe plugin's database schema or
       // subscription / plan management features
       // But it's handy just for the webhook handling and for creating a customer portal

@@ -1,7 +1,6 @@
 // Creates a TRPC client that can be used in vitest tests running in Node.js
 
 import { createTRPCClient, httpBatchLink, loggerLink } from "@trpc/client";
-import SuperJSON from "superjson";
 import type { AppRouter } from "../../../../trpc/root";
 
 // TODO this needs a better place and obvs depends on which app we want to hit etc
@@ -167,7 +166,6 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
     httpBatchLink({
       url,
       methodOverride: "POST",
-      transformer: SuperJSON,
       fetch: customFetch as any,
     }),
   );

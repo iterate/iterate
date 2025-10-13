@@ -55,7 +55,7 @@ export const createUserOrganizationAndEstate = async (
     .values({
       // For now we don't allow people to make more estates or edit theirs and never show this anywhere
       // But in the future users will be able to create multiple estates in one organization
-      name: `Primary`,
+      name: `${user.email}'s primary estate`,
       organizationId: organization.id,
     })
     .returning();
@@ -107,6 +107,9 @@ function isTestSignup(
   userEmail: string | undefined,
   organizationName: string,
 ): boolean {
+  // Add example.com to the patterns to catch test onboarding users
+  if (userEmail?.endsWith("@example.com")) return true;
+
   const raw = env.TEST_USER_PATTERNS;
   if (!raw) return false;
 

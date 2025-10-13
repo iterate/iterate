@@ -10,7 +10,11 @@ import {
   getUserOrganizations,
 } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
+import {
+  createStripeCustomerAndSubscriptionForOrganization,
+  stripeClient,
+} from "../../integrations/stripe/stripe.ts";
+import { logger } from "../../tag-logger.ts";
 
 type SlackUserProperties = {
   discoveredInChannels: string[] | undefined;
@@ -127,6 +131,25 @@ export const organizationRouter = router({
           code: "INTERNAL_SERVER_ERROR",
           message: "Failed to update organization",
         });
+      }
+
+      const stripeCustomerId = updatedOrganization.stripeCustomerId;
+
+      if (stripeCustomerId) {
+        waitUntil(
+          (async () => {
+            try {
+              await stripeClient.customers.update(stripeCustomerId, {
+                name: updatedOrganization.name,
+              });
+            } catch (error) {
+              logger.error(
+                `Failed to update Stripe customer ${stripeCustomerId} for organization ${updatedOrganization.id}`,
+                error,
+              );
+            }
+          })(),
+        );
       }
 
       return updatedOrganization;
