@@ -281,6 +281,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 }
 
                 await this.addSlackReaction({ messageTs, name: "eyes" });
+                // todo: handle async calls well
                 await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
                 await Promise.all([
                   this.removeSlackReaction({ messageTs, name: "eyes" }),
