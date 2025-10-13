@@ -45,6 +45,7 @@ import {
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
+import type { MergedEventForSlices } from "./agent-core.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -71,48 +72,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // Track Slack message timestamps for MCP connection status buttons
   // Maps from serverId or connectionKey to message timestamp
   private mcpConnectionMessages = new Map<string, string>();
-
-  private updateSlackStatusDebounced = pDebounce(async (status: string | null) => {
-    const { slackChannelId, slackThreadId } = this.getReducedState() as SlackSliceState;
-    if (!slackChannelId || !slackThreadId) return;
-
-    await this.slackAPI.assistant.threads.setStatus({
-      channel_id: slackChannelId,
-      thread_ts: slackThreadId,
-      status: status || "",
-    });
-  }, 300);
-
-  private checkAndClearTypingIndicator = pDebounce(async () => {
-    const state = this.agentCore.state as SlackSliceState;
-    const status = state.typingIndicatorStatus;
-
-    if (!status) return;
-
-    if (this.agentCore.llmRequestInProgress()) {
-      void this.checkAndClearTypingIndicator();
-      return;
-    }
-
-    this.agentCore.addEvents([
-      {
-        type: "SLACK:UPDATE_TYPING_STATUS",
-        data: { status: null },
-      },
-    ]);
-    void this.updateSlackStatusDebounced(null);
-  }, 15000);
-
-  private syncTypingIndicator() {
-    const state = this.agentCore.state as SlackSliceState;
-    const status = state.typingIndicatorStatus ?? null;
-
-    void this.updateSlackStatusDebounced(status);
-
-    if (status) {
-      void this.checkAndClearTypingIndicator();
-    }
-  }
 
   protected get slackChannelId(): string {
     const { slackChannelId } = this.getReducedState() as SlackSliceState;
@@ -246,7 +205,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       }) => {
         deps?.onEventAdded?.(payload);
 
-        const event = payload.event as any; // Type is broader than AgentCoreEvent to include MCP events
+        const event = payload.event as MergedEventForSlices<SlackAgentSlices>;
         switch (event.type) {
           case "CORE:LLM_REQUEST_START":
             this.updateSlackThreadStatus({ status: "🧠 thinking" });
