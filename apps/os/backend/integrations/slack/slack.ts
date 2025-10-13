@@ -1,25 +1,3 @@
-/**
- * Slack Integration Module
- *
- * ## Email Handling Strategy
- *
- * This module handles user sync from Slack. Since our system requires emails for all users,
- * we use the following patterns:
- *
- * ### Users With Real Emails
- * - Regular internal users: Use actual email from Slack profile (assumed to exist)
- * - External users with email: Use actual email from Slack profile
- *
- * ### Users Without Emails (Synthetic Email Pattern)
- * For any user without a real email (internal bots, external users, etc.):
- * - Pattern: `slack-connect-{slackUserId}@external.slack.iterate.com`
- * - Example: slack-connect-U06Q2Q2C2TX@external.slack.iterate.com
- * - Example: slack-connect-B07EXAMPLE@external.slack.iterate.com
- *
- * This unified synthetic email pattern allows us to maintain a required, unique email field
- * while supporting all types of Slack users.
- */
-
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq, inArray, sql } from "drizzle-orm";

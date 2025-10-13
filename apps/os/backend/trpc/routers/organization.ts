@@ -12,6 +12,23 @@ import {
 import { schema } from "../../db/client.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 
+type SlackUserProperties = {
+  discoveredInChannels: string[] | undefined;
+  slackUsername: string | undefined;
+  slackRealName: string | undefined;
+};
+
+type OrganizationMember = {
+  id: string;
+  userId: string;
+  name: string;
+  email: string;
+  image: string | null;
+  role: string;
+  isBot: boolean;
+  createdAt: Date;
+} & SlackUserProperties;
+
 export const organizationRouter = router({
   // List all organizations the user has access to (excluding external)
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -116,7 +133,7 @@ export const organizationRouter = router({
     }),
 
   // List all members of an organization
-  listMembers: orgProtectedProcedure.query(async ({ ctx }) => {
+  listMembers: orgProtectedProcedure.query(async ({ ctx }): Promise<OrganizationMember[]> => {
     const members = await ctx.db.query.organizationUserMembership.findMany({
       where: eq(schema.organizationUserMembership.organizationId, ctx.organization.id),
       with: {
@@ -172,7 +189,7 @@ export const organizationRouter = router({
         }
       }
 
-      return members.map((m) => {
+      return members.map((m): OrganizationMember => {
         const isGuestOrExternal = ["external", "guest"].includes(m.role);
         const userMetadata = userMetadataMap.get(m.user.id);
         return {
@@ -192,19 +209,21 @@ export const organizationRouter = router({
     }
 
     // If no estate found, return basic member info without Slack metadata
-    return members.map((m) => ({
-      id: m.id,
-      userId: m.user.id,
-      name: m.user.name,
-      email: m.user.email,
-      image: m.user.image,
-      role: m.role,
-      isBot: m.user.isBot,
-      createdAt: m.createdAt,
-      discoveredInChannels: undefined,
-      slackUsername: undefined,
-      slackRealName: undefined,
-    }));
+    return members.map(
+      (m): OrganizationMember => ({
+        id: m.id,
+        userId: m.user.id,
+        name: m.user.name,
+        email: m.user.email,
+        image: m.user.image,
+        role: m.role,
+        isBot: m.user.isBot,
+        createdAt: m.createdAt,
+        discoveredInChannels: undefined,
+        slackUsername: undefined,
+        slackRealName: undefined,
+      }),
+    );
   }),
 
   // Update a member's role
