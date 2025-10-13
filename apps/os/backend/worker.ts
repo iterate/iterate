@@ -5,10 +5,11 @@ import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { PostHog } from "posthog-node";
 import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { type CloudflareEnv } from "../env.ts";
+import { waitUntil, type CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
