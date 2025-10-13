@@ -209,6 +209,10 @@ slackApp.post("/webhook", async (c) => {
   return c.text("ok");
 });
 
+slackApp.post("/interactivity", async (c) => {
+  return c.text("ok");
+});
+
 export function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
   const suffix = `slack-${estateId}`;
   return `ts-${threadTs}-${suffix}`;
