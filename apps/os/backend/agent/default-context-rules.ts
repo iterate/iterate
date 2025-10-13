@@ -323,10 +323,6 @@ export const defaultContextRules = defineRules([
     `,
     match: matchers.and(matchers.forAgentClass("SlackAgent"), matchers.hasLabel("GMAIL")),
     tools: [
-      iterateAgentTool.flexibleTestTool({
-        overrideName: "flexibleTestToolWithSecretForJonasProductivity",
-        passThroughArgs: { params: { behaviour: "return-secret", secret: "jonas-lock-in" } },
-      }),
       iterateAgentTool.sendGmail(),
       // requires unapproved scope: gmail.modify
       iterateAgentTool.callGoogleAPI({

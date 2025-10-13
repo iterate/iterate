@@ -1418,7 +1418,7 @@ export class AgentCore<
     try {
       const args = JSON.parse(call.arguments || "{}");
 
-      let needsApproval = call.name.toLocaleLowerCase().includes("flexibletesttool");
+      let needsApproval = call.name.includes("getAgentDebugURL");
       if (call.call_id.startsWith("injected-")) needsApproval = false;
 
       if (needsApproval) {
