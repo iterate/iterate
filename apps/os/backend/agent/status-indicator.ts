@@ -101,4 +101,3 @@ export function buildSlackThreadStatusPayload(status: string | null | undefined)
 
   return { ...payload };
 }
-

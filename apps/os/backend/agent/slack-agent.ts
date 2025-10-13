@@ -45,10 +45,7 @@ import {
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
-import {
-  buildSlackThreadStatusPayload,
-  resolveStatusIndicatorText,
-} from "./status-indicator.ts";
+import { buildSlackThreadStatusPayload, resolveStatusIndicatorText } from "./status-indicator.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now

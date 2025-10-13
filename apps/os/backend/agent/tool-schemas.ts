@@ -33,10 +33,7 @@ export const AgentDurableObjectToolSpec = z.object({
   strict: z.boolean().default(false).optional(), // When true (default), OpenAI returns a model error if the arguments don't validate. Set to false for fuzzy matching.
   triggerLLMRequest: z.boolean().default(true).optional(), // When true (default), the tool call triggers an LLM request after execution
   hideOptionalInputs: z.boolean().default(false).optional(), // When true, filters out optional fields from the JSON schema before execution
-  statusIndicatorText: z
-    .string()
-    .nullable()
-    .optional(), // Text to show in Slack typing indicator when this tool is being called. Supports `${...}` JSONata expressions.
+  statusIndicatorText: z.string().nullable().optional(), // Text to show in Slack typing indicator when this tool is being called. Supports `${...}` JSONata expressions.
 });
 export type AgentDurableObjectToolSpec = z.infer<typeof AgentDurableObjectToolSpec>;
 
