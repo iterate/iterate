@@ -405,10 +405,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           case "MCP:CONNECTION_ERROR": {
             const { connectionKey, serverUrl, error } = event.data;
 
-            // Check for message using connectionKey or serverUrl
-            const messageTs =
-              (connectionKey && this.mcpConnectionMessages.get(connectionKey)) ||
-              this.mcpConnectionMessages.get(serverUrl);
+            const messageTs = connectionKey && this.mcpConnectionMessages.get(connectionKey);
 
             if (messageTs) {
               void this.slackAPI.chat
