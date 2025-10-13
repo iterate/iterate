@@ -252,4 +252,11 @@ export const iterateAgentTools = defineDOTools({
       userId: z.string().describe("The user ID to use for authentication"),
     }),
   },
+  addLabel: {
+    description: "Add a label to the agent's metadata to enable specific tool sets",
+    statusIndicatorText: "🏷️ adding label",
+    input: z.object({
+      label: z.string().describe("Label to add (e.g., 'GMAIL', 'GCALENDAR')"),
+    }),
+  },
 });

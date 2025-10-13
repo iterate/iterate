@@ -561,6 +561,76 @@ describe("evaluateContextRuleMatchers", () => {
       matchers: [matchers.forAgentClass("SlackAgent")],
       expected: false,
     },
+
+    // hasLabel matcher tests
+    {
+      description: "[hasLabel] matches when label exists in array",
+      state: {
+        metadata: {
+          labels: ["GMAIL", "GCALENDAR"],
+        },
+      },
+      matchers: [matchers.hasLabel("GMAIL")],
+      expected: true,
+    },
+    {
+      description: "[hasLabel] matches second label in array",
+      state: {
+        metadata: {
+          labels: ["GMAIL", "GCALENDAR"],
+        },
+      },
+      matchers: [matchers.hasLabel("GCALENDAR")],
+      expected: true,
+    },
+    {
+      description: "[hasLabel] does not match when label is not in array",
+      state: {
+        metadata: {
+          labels: ["GMAIL"],
+        },
+      },
+      matchers: [matchers.hasLabel("GCALENDAR")],
+      expected: false,
+    },
+    {
+      description: "[hasLabel] does not match when labels array is empty",
+      state: {
+        metadata: {
+          labels: [],
+        },
+      },
+      matchers: [matchers.hasLabel("GMAIL")],
+      expected: false,
+    },
+    {
+      description: "[hasLabel] does not match when labels property is missing",
+      state: {
+        metadata: {},
+      },
+      matchers: [matchers.hasLabel("GMAIL")],
+      expected: false,
+    },
+    {
+      description: "[hasLabel] works with and combinator",
+      state: {
+        metadata: {
+          labels: ["GMAIL", "GCALENDAR"],
+        },
+      },
+      matchers: [matchers.and(matchers.hasLabel("GMAIL"), matchers.hasLabel("GCALENDAR"))],
+      expected: true,
+    },
+    {
+      description: "[hasLabel] works with or combinator",
+      state: {
+        metadata: {
+          labels: ["GMAIL"],
+        },
+      },
+      matchers: [matchers.or(matchers.hasLabel("GMAIL"), matchers.hasLabel("GCALENDAR"))],
+      expected: true,
+    },
   ];
 
   it.each(cases)("$description", async (testCase) => {
