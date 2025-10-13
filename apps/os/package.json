@@ -13,6 +13,8 @@
     "iterate": "doppler run -- tsx --import ./sdk/cli/cf-shim/loader.ts ./sdk/cli/index.ts",
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
+    "test:onboarding": "VITEST_RUN_ONBOARDING_TEST=true doppler run -- vitest run ./backend/e2e-onboarding.test.ts",
+    "test:onboarding:production": "VITEST_RUN_ONBOARDING_TEST=true doppler run --config prd -- vitest run ./backend/e2e-onboarding.test.ts",
     "test:watch": "doppler run -- vitest --watch",
     "typecheck": "pnpm run cf-typegen && react-router typegen && tsc -b",
     "db:migrate": "drizzle-kit migrate",
