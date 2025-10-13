@@ -334,6 +334,23 @@ export const RemoveToolSpecsEventInput = z.object({
   ...removeToolSpecsEventFields,
 });
 
+// CORE:MESSAGE_FROM_AGENT
+const messageFromAgentEventFields = {
+  type: z.literal("CORE:MESSAGE_FROM_AGENT"),
+  data: z.object({
+    fromAgentName: z.string(),
+    message: z.string(),
+  }),
+};
+export const MessageFromAgentEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...messageFromAgentEventFields,
+});
+export const MessageFromAgentEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...messageFromAgentEventFields,
+});
+
 // CORE:INTERNAL_ERROR
 const internalErrorEventFields = {
   type: z.literal("CORE:INTERNAL_ERROR"),
@@ -523,6 +540,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   PauseLLMRequestsEvent,
   ResumeLLMRequestsEvent,
   FileSharedEvent,
+  MessageFromAgentEvent,
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantMentionedEvent,
@@ -546,6 +564,7 @@ export const agentCoreEventInputSchemasUndiscriminated = [
   PauseLLMRequestsEventInput,
   ResumeLLMRequestsEventInput,
   FileSharedEventInput,
+  MessageFromAgentEventInput,
   ParticipantJoinedEventInput,
   ParticipantLeftEventInput,
   ParticipantMentionedEventInput,
@@ -655,6 +674,8 @@ export type ResumeLLMRequestsEventInput = z.infer<typeof ResumeLLMRequestsEventI
 
 export type FileSharedEvent = z.infer<typeof FileSharedEvent>;
 export type FileSharedEventInput = z.infer<typeof FileSharedEventInput>;
+export type MessageFromAgentEvent = z.infer<typeof MessageFromAgentEvent>;
+export type MessageFromAgentEventInput = z.infer<typeof MessageFromAgentEventInput>;
 
 export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
 export type ParticipantJoinedEventInput = z.infer<typeof ParticipantJoinedEventInput>;

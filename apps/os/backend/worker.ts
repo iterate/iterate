@@ -20,6 +20,7 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
+import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
@@ -28,6 +29,7 @@ import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
+import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -107,15 +109,19 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
-  if (agentClassName !== "IterateAgent" && agentClassName !== "SlackAgent") {
+  if (
+    agentClassName !== "IterateAgent" &&
+    agentClassName !== "SlackAgent" &&
+    agentClassName !== "OnboardingAgent"
+  ) {
     return c.json({ error: "Invalid agent class name" }, 400);
   }
 
   try {
-    const agentStub =
-      agentClassName === "SlackAgent"
-        ? await SlackAgent.getStubByName({ db: c.var.db, agentInstanceName })
-        : await IterateAgent.getStubByName({ db: c.var.db, agentInstanceName });
+    const agentStub = await getAgentStubByName(toAgentClassName(agentClassName), {
+      db: c.var.db,
+      agentInstanceName,
+    });
     return agentStub.fetch(c.req.raw);
   } catch (error) {
     const message = (error as Error).message || "Unknown error";
@@ -314,5 +320,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { IterateAgent, SlackAgent, OrganizationWebSocket };
+export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket };
 export { Sandbox } from "@cloudflare/sandbox";
