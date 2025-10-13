@@ -6,7 +6,7 @@ import {
   getUserEstateAccess,
   router,
 } from "../trpc.ts";
-import { estate, builds } from "../../db/schema.ts";
+import { estate, builds, iterateConfig } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
   getGithubInstallationToken,
@@ -132,6 +132,17 @@ export const estateRouter = router({
       organizationId: userEstate.organizationId,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
+    };
+  }),
+
+  getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx, input }) => {
+    const record = await ctx.db.query.iterateConfig.findFirst({
+      where: eq(iterateConfig.estateId, input.estateId),
+    });
+
+    return {
+      config: record?.config ?? null,
+      updatedAt: record?.updatedAt ?? null,
     };
   }),
 

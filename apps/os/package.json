@@ -5,7 +5,8 @@
   "scripts": {
     "build": "react-router build",
     "cf-typegen": "wrangler types --no-include-runtime",
-    "deploy": "doppler run -- pnpm run build && doppler run -- wrangler deploy",
+    "deploy": "doppler run -- pnpm run build && doppler run -- pnpm run posthog:sourcemaps && doppler run -- wrangler deploy",
+    "posthog:sourcemaps": "posthog-cli --host https://eu.posthog.com sourcemap inject --directory ./build && posthog-cli --host https://eu.posthog.com sourcemap upload --directory ./build",
     "dev": "pnpm iterate dev start",
     "eval": "doppler run -- evalite run-once && tsx evals/evalite-exporter.ts",
     "eval:serve": "pnpx serve ignoreme/evalite-ui",
@@ -13,6 +14,8 @@
     "iterate": "doppler run -- tsx --import ./sdk/cli/cf-shim/loader.ts ./sdk/cli/index.ts",
     "preview": "pnpm run build && vite preview",
     "test": "doppler run -- vitest",
+    "test:onboarding": "VITEST_RUN_ONBOARDING_TEST=true doppler run -- vitest run ./backend/e2e-onboarding.test.ts",
+    "test:onboarding:production": "VITEST_RUN_ONBOARDING_TEST=true doppler run --config prd -- vitest run ./backend/e2e-onboarding.test.ts",
     "test:watch": "doppler run -- vitest --watch",
     "typecheck": "pnpm run cf-typegen && react-router typegen && tsc -b",
     "db:migrate": "drizzle-kit migrate",
@@ -103,6 +106,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.13.10",
     "@cloudflare/workers-types": "^4.20251004.0",
+    "@posthog/cli": "^0.4.8",
     "@react-router/dev": "^7.9.3",
     "@tailwindcss/vite": "^4.1.14",
     "@types/better-sqlite3": "7.6.13",
