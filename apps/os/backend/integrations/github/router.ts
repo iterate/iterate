@@ -63,7 +63,15 @@ githubApp.get(
       })
       .parse(JSON.parse(verification.value));
 
-    const { estateId, redirectUri, userId, callbackURL } = parsedState;
+    const { estateId, redirectUri: redirectUriOriginal, userId, callbackURL } = parsedState;
+
+    let redirectUri = redirectUriOriginal;
+    if (process.env.GITHUB_OAUTH_REDIRECT_BASE_URL) {
+      redirectUri = new URL(
+        new URL(redirectUriOriginal).pathname,
+        process.env.GITHUB_OAUTH_REDIRECT_BASE_URL,
+      ).toString();
+    }
 
     const userAccessTokenRes = await fetch(`https://github.com/login/oauth/access_token`, {
       method: "POST",
