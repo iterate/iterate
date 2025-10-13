@@ -2,9 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
-import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
-import { type CloudflareEnv } from "../../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -346,6 +345,10 @@ export async function syncSlackChannels(
 /**
  * Syncs internal Slack workspace users for an estate.
  * Returns Set of Slack user IDs that are internal to the workspace.
+ *
+ * Email handling strategy:
+ * - Regular users: Use their actual Slack profile email (assumed to exist)
+ * - Users without emails: Generate synthetic email: slack-connect-{slackUserId}@external.slack.iterate.com
  */
 export async function syncSlackUsersInBackground(
   db: DB,
@@ -362,8 +365,9 @@ export async function syncSlackUsersInBackground(
     }
 
     // Filter out invalid members upfront
+    // Include bots by allowing members without emails (we'll create synthetic emails for them)
     const validMembers = userListResponse.members.filter(
-      (member) => member.id && member.profile?.email && !member.deleted,
+      (member) => member.id && !member.deleted && (member.profile?.email || member.is_bot),
     );
 
     if (validMembers.length === 0) {
@@ -385,18 +389,28 @@ export async function syncSlackUsersInBackground(
         return;
       }
 
-      const emails = validMembers.map((m) => m.profile!.email!);
+      // Create emails for all members
+      // Regular users: Use actual email from Slack profile (assumed to exist)
+      // Users without email: Generate unified synthetic email pattern
+      const memberEmails = validMembers.map((m) => {
+        if (m.profile?.email) {
+          return m.profile.email;
+        }
+        // Synthetic email for users without email addresses (bots, etc.)
+        return `slack-connect-${m.id}@external.slack.iterate.com`;
+      });
 
       // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
       try {
         await tx
           .insert(schema.user)
           .values(
-            validMembers.map((member) => ({
+            validMembers.map((member, index) => ({
               name: member.real_name || member.name || "",
-              email: member.profile!.email!,
+              email: memberEmails[index],
               image: member.profile?.image_192,
               emailVerified: false,
+              isBot: member.is_bot ?? false,
             })),
           )
           .onConflictDoNothing();
@@ -406,7 +420,7 @@ export async function syncSlackUsersInBackground(
 
       // Step 2: Fetch ALL users (both existing and newly created)
       const allUsers = await tx.query.user.findMany({
-        where: inArray(schema.user.email, emails),
+        where: inArray(schema.user.email, memberEmails),
       });
       const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
 
@@ -414,11 +428,13 @@ export async function syncSlackUsersInBackground(
       const mappingsToUpsert = [];
       const organizationMembershipsToUpsert = [];
 
-      for (const member of validMembers) {
-        const user = usersByEmail.get(member.profile!.email!);
+      for (let i = 0; i < validMembers.length; i++) {
+        const member = validMembers[i];
+        const memberEmail = memberEmails[i];
+        const user = usersByEmail.get(memberEmail);
 
         if (!user) {
-          logger.error(`User not found for email ${member.profile!.email!}`);
+          logger.error(`User not found for email ${memberEmail}`);
           continue;
         }
 
@@ -429,7 +445,7 @@ export async function syncSlackUsersInBackground(
           providerMetadata: member,
         });
 
-        // Determine role based on Slack restrictions
+        // Determine role based on Slack restrictions or bot status
         const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
 
         organizationMembershipsToUpsert.push({
@@ -464,8 +480,9 @@ export async function syncSlackUsersInBackground(
       }
 
       // Log sync results
+      const botCount = validMembers.filter((m) => m.is_bot).length;
       logger.info(
-        `Slack sync complete: ${validMembers.length} members processed, ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
+        `Slack sync complete: ${validMembers.length} members processed (${botCount} bots), ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
       );
     });
 
@@ -539,6 +556,10 @@ export async function syncSlackForEstateInBackground(
 /**
  * Syncs Slack Connect (external) users from shared channels.
  * Creates user records and marks them as "external" in organization membership.
+ *
+ * Email handling strategy:
+ * - External users with email: Use their actual Slack profile email
+ * - External users without email: Generate synthetic email: slack-connect-{slackUserId}@external.slack.iterate.com
  */
 export async function syncSlackConnectUsers(
   db: DB,
@@ -651,7 +672,8 @@ export async function syncSlackConnectUsers(
         continue;
       }
 
-      // Create synthetic email if real email not available
+      // Use actual email from Slack profile, or generate synthetic email for users without one
+      // Pattern: slack-connect-{slackUserId}@external.slack.iterate.com (e.g., slack-connect-U06Q2Q2C2TX@external.slack.iterate.com)
       const email =
         userInfo.profile?.email || `slack-connect-${externalUserId}@external.slack.iterate.com`;
 
@@ -664,6 +686,7 @@ export async function syncSlackConnectUsers(
             email: email,
             emailVerified: false,
             image: userInfo.profile?.image_192,
+            isBot: userInfo.is_bot ?? false,
           })
           .onConflictDoNothing();
       } catch (error) {

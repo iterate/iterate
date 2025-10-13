@@ -2,32 +2,26 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { tsImport } from "tsx/esm/api";
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
 import { z } from "zod/v4";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
+import { createDb } from "../cli-db.ts";
+import { addSuperAdminUser } from "./admin.ts";
 
 async function runBootstrap(configPath?: string) {
-  if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
-    throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
-  }
-
-  const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
-    max: 1,
-    fetch_types: false,
-  });
-
-  const db = drizzle(pg, { schema, casing: "snake_case" });
+  // Hardcoding this so we never accidentally use the production db
+  const connStr = `postgres://postgres:postgres@localhost:5432/iterate`;
+  const db = createDb(connStr);
 
   // Always delete all iterate configs first
   await db.delete(schema.iterateConfig);
   console.log("Emptied iterate_config table ahead of bootstrap.");
 
+  await addSuperAdminUser(connStr);
+
   // If no config path provided, we're done
   if (!configPath) {
-    await pg.end();
     console.log(
       "No iterate config path provided - estates will have an empty iterate config (like repo-less estates in production)",
     );
@@ -49,7 +43,6 @@ async function runBootstrap(configPath?: string) {
   });
 
   if (!resolvedPath) {
-    await pg.end();
     throw new Error(
       `Could not find iterate config at any of these paths:\n${possiblePaths.map((p) => `  - ${p}`).join("\n")}`,
     );
@@ -62,7 +55,6 @@ async function runBootstrap(configPath?: string) {
   const config = configModule.default || configModule;
 
   if (!config) {
-    await pg.end();
     throw new Error("No default export found in iterate config");
   }
 
@@ -75,8 +67,6 @@ async function runBootstrap(configPath?: string) {
       estateId: estate.id,
     });
   }
-
-  await pg.end();
 
   console.log(`Bootstrapped ${estates.length} estates' iterateConfig from ${resolvedPath}`);
 }

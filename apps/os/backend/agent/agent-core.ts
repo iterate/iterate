@@ -732,6 +732,17 @@ export class AgentCore<
         next.metadata = mergeDeep(next.metadata, event.data);
         break;
 
+      case "CORE:ADD_LABEL": {
+        const existingLabels = Array.isArray(next.metadata.labels) ? next.metadata.labels : [];
+        if (!existingLabels.includes(event.data.label)) {
+          next.metadata = {
+            ...next.metadata,
+            labels: [...existingLabels, event.data.label],
+          };
+        }
+        break;
+      }
+
       case "CORE:LLM_INPUT_ITEM":
         if (event.data) {
           const item = event.data;

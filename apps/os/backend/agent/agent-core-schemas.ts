@@ -311,6 +311,22 @@ export const SetMetadataEventInput = z.object({
   ...setMetadataEventFields,
 });
 
+// CORE:ADD_LABEL
+const addLabelEventFields = {
+  type: z.literal("CORE:ADD_LABEL"),
+  data: z.object({
+    label: z.string().describe("Label to add to the agent's metadata"),
+  }),
+};
+export const AddLabelEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...addLabelEventFields,
+});
+export const AddLabelEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...addLabelEventFields,
+});
+
 // CORE:ADD_TOOL_SPECS
 const addToolSpecsEventFields = {
   type: z.literal("CORE:ADD_TOOL_SPECS"),
@@ -536,6 +552,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   LlmOutputItemEvent,
   SetSystemPromptEvent,
   SetMetadataEvent,
+  AddLabelEvent,
   AddContextRulesEvent,
   SetModelOptsEvent,
   InternalErrorEvent,
@@ -560,6 +577,7 @@ export const agentCoreEventInputSchemasUndiscriminated = [
   LlmOutputItemEventInput,
   SetSystemPromptEventInput,
   SetMetadataEventInput,
+  AddLabelEventInput,
   AddContextRulesEventInput,
   SetModelOptsEventInput,
   InternalErrorEventInput,
@@ -656,6 +674,9 @@ export type RemoveToolSpecsEventInput = z.infer<typeof RemoveToolSpecsEventInput
 
 export type SetModelOptsEvent = z.infer<typeof SetModelOptsEvent>;
 export type SetModelOptsEventInput = z.infer<typeof SetModelOptsEventInput>;
+
+export type AddLabelEvent = z.infer<typeof AddLabelEvent>;
+export type AddLabelEventInput = z.infer<typeof AddLabelEventInput>;
 
 export type InternalErrorEvent = z.infer<typeof InternalErrorEvent>;
 export type InternalErrorEventInput = z.infer<typeof InternalErrorEventInput>;

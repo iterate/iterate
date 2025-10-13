@@ -35,6 +35,24 @@ describe("AgentCore", () => {
     expect(h.agentCore.state.metadata).toEqual({ foo: { bar: 1, baz: 2 } });
   });
 
+  createAgentCoreTest([])("adds labels to metadata", async ({ h }) => {
+    await h.initializeAgent();
+
+    await h.agentCore.addEvent({ type: "CORE:ADD_LABEL", data: { label: "GMAIL" } });
+    await h.agentCore.addEvent({ type: "CORE:ADD_LABEL", data: { label: "GCALENDAR" } });
+
+    expect(h.agentCore.state.metadata.labels).toEqual(["GMAIL", "GCALENDAR"]);
+  });
+
+  createAgentCoreTest([])("does not add duplicate labels", async ({ h }) => {
+    await h.initializeAgent();
+
+    await h.agentCore.addEvent({ type: "CORE:ADD_LABEL", data: { label: "GMAIL" } });
+    await h.agentCore.addEvent({ type: "CORE:ADD_LABEL", data: { label: "GMAIL" } });
+
+    expect(h.agentCore.state.metadata.labels).toEqual(["GMAIL"]);
+  });
+
   createAgentCoreTest([])(
     "executes function tools and creates function call events",
     async ({ h }) => {

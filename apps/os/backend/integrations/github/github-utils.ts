@@ -1,8 +1,7 @@
 import { createPrivateKey, createHmac } from "crypto";
 import { SignJWT } from "jose";
 import { eq, and } from "drizzle-orm";
-import { waitUntil } from "cloudflare:workers";
-import { env } from "../../../env.ts";
+import { waitUntil, env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schemas from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";

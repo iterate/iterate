@@ -1,4 +1,6 @@
-import { env as _env } from "cloudflare:workers";
+// eslint-disable-next-line iterate/no-direct-waituntil-import -- This file defines the waitUntil wrapper
+import { env as _env, waitUntil as _waitUntil } from "cloudflare:workers";
+import { logger } from "./backend/tag-logger.ts";
 
 export type CloudflareEnv = Env & {
   VITE_PUBLIC_URL: string;
@@ -29,6 +31,7 @@ export type CloudflareEnv = Env & {
   STRIPE_SECRET_KEY: string;
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICING_PLAN_ID: string;
+  SERVICE_AUTH_TOKEN: string;
 
   // Comma-separated list of hostnames. If a user with a verified email using that hostname signs up,
   // they get user.role=admin set. This is particularly useful for testing in development when
@@ -38,6 +41,28 @@ export type CloudflareEnv = Env & {
   // Comma-separated list of regex patterns used to detect test users.
   // Matching is case-insensitive substring across user name, email, and organization name.
   TEST_USER_PATTERNS?: string;
+
+  // JSON object with seed data for test users
+  ONBOARDING_E2E_TEST_SETUP_PARAMS?: string;
 };
 
 export const env = _env as CloudflareEnv;
+
+/**
+ * Wrapper around cloudflare:workers waitUntil that catches and logs errors.
+ * Use this instead of importing waitUntil directly from "cloudflare:workers".
+ *
+ * @example
+ * import { waitUntil } from "../env.ts";
+ *
+ * waitUntil((async () => {
+ *   await someAsyncTask();
+ * })());
+ */
+export function waitUntil(promise: Promise<unknown>): void {
+  _waitUntil(
+    promise.catch((error) => {
+      logger.error("Error in waitUntil callback", error);
+    }),
+  );
+}

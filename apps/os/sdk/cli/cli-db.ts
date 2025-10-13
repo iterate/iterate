@@ -9,13 +9,17 @@ if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
   throw new Error("DRIZZLE_RW_POSTGRES_CONNECTION_STRING is not set");
 }
 
-const pg = postgres(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING, {
-  max: 5,
-  // If you are not using array types in your Postgres schema, disable `fetch_types` to avoid an additional round-trip (unnecessary latency)
-  fetch_types: false,
-});
+export const createDb = (connectionString: string) => {
+  return drizzle(
+    postgres(connectionString, {
+      max: 5,
+      fetch_types: false,
+    }),
+    { schema, casing: "snake_case" },
+  );
+};
 
-export const db = drizzle(pg, { schema, casing: "snake_case" });
+export const db = createDb(process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!);
 
 export type DB = typeof db;
 

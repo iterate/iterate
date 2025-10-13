@@ -300,6 +300,35 @@ export default defineConfig([
               };
             },
           },
+          "no-direct-waituntil-import": {
+            meta: {
+              docs: {
+                description:
+                  "Disallow importing waitUntil directly from cloudflare:workers - use the wrapper from env.ts instead",
+              },
+              type: "problem",
+            },
+            create: (context) => {
+              return {
+                ImportDeclaration: (node) => {
+                  if (node.source.value === "cloudflare:workers") {
+                    const waitUntilImport = node.specifiers.find(
+                      (spec) =>
+                        (spec.type === "ImportSpecifier" && spec.imported.name === "waitUntil") ||
+                        spec.type === "ImportNamespaceSpecifier",
+                    );
+                    if (waitUntilImport) {
+                      context.report({
+                        node: waitUntilImport,
+                        message:
+                          'Do not import waitUntil directly from "cloudflare:workers". Use the error-handling wrapper from "../env.ts" instead: import { waitUntil } from "../env.ts"',
+                      });
+                    }
+                  }
+                },
+              };
+            },
+          },
         },
       },
     },
@@ -311,6 +340,13 @@ export default defineConfig([
       "iterate/prefer-const": "error",
       "iterate/side-effect-imports-first": "warn",
       "iterate/zod-schema-naming": "error",
+    },
+  },
+  {
+    name: "iterate-no-direct-waituntil",
+    files: ["apps/os/**/*.ts", "apps/os/**/*.tsx"],
+    rules: {
+      "iterate/no-direct-waituntil-import": "error",
     },
   },
   ...vibeRules.flatMap((rule) => {

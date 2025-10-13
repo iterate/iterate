@@ -1,6 +1,5 @@
-import { waitUntil } from "cloudflare:workers";
 import dedent from "dedent";
-import { env } from "../env.ts";
+import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
@@ -107,6 +106,9 @@ function isTestSignup(
   userEmail: string | undefined,
   organizationName: string,
 ): boolean {
+  // Add example.com to the patterns to catch test onboarding users
+  if (userEmail?.endsWith("@example.com")) return true;
+
   const raw = env.TEST_USER_PATTERNS;
   if (!raw) return false;
 
