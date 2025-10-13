@@ -1,0 +1,1 @@
+ALTER TABLE "user" ADD COLUMN "is_bot" boolean DEFAULT false NOT NULL;
