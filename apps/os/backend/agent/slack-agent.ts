@@ -27,6 +27,7 @@ import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -278,21 +279,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:OAUTH_REQUIRED": {
-            const { integrationSlug, oauthUrl, serverId, connectionKey } = event.data;
+            const { oauthUrl, serverId, connectionKey, serverUrl } = event.data;
+
+            const hostname = new URL(serverUrl).hostname;
 
             void this.slackAPI.chat
               .postMessage({
                 channel: this.agentCore.state.slackChannelId as string,
                 thread_ts: this.agentCore.state.slackThreadId as string,
-                text: `🔐 Authorization required for ${integrationSlug}`,
+                text: `Authorize ${hostname}`,
                 blocks: [
-                  {
-                    type: "section",
-                    text: {
-                      type: "mrkdwn",
-                      text: `🔐 Authorization required for *${integrationSlug}*`,
-                    },
-                  },
                   {
                     type: "actions",
                     elements: [
@@ -300,7 +296,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                         type: "button",
                         text: {
                           type: "plain_text",
-                          text: "Authorize",
+                          text: `Authorize ${hostname}`,
                         },
                         url: oauthUrl,
                         style: "primary",
@@ -318,21 +314,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:PARAMS_REQUIRED": {
-            const { integrationSlug, paramsCollectionUrl, connectionKey } = event.data;
+            const { paramsCollectionUrl, connectionKey, serverUrl } = event.data;
+
+            const hostname = new URL(serverUrl).hostname;
 
             void this.slackAPI.chat
               .postMessage({
                 channel: this.agentCore.state.slackChannelId as string,
                 thread_ts: this.agentCore.state.slackThreadId as string,
-                text: `⚙️ Additional inputs required for ${integrationSlug}`,
+                text: `Authorize ${hostname}`,
                 blocks: [
-                  {
-                    type: "section",
-                    text: {
-                      type: "mrkdwn",
-                      text: `⚙️ Additional inputs required for *${integrationSlug}*`,
-                    },
-                  },
                   {
                     type: "actions",
                     elements: [
@@ -340,7 +331,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                         type: "button",
                         text: {
                           type: "plain_text",
-                          text: "Add Inputs",
+                          text: `Authorize ${hostname}`,
                         },
                         url: paramsCollectionUrl,
                         style: "primary",
@@ -357,22 +348,22 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:CONNECT_REQUEST": {
-            const { serverUrl, integrationSlug } = event.data;
-            const connectionKey = event.data.serverUrl; // Use serverUrl as key for lookup
+            const { serverUrl, mode, userId } = event.data;
 
-            // Check if we have a pending message for this connection
+            const connectionKey = getConnectionKey({ serverUrl, mode, userId });
+
             const messageTs = this.mcpConnectionMessages.get(connectionKey);
             if (messageTs) {
               void this.slackAPI.chat.update({
                 channel: this.agentCore.state.slackChannelId as string,
                 ts: messageTs,
-                text: `🔄 Connecting to ${integrationSlug || serverUrl}...`,
+                text: `🔄 Connecting to ${serverUrl}...`,
                 blocks: [
                   {
                     type: "section",
                     text: {
                       type: "mrkdwn",
-                      text: `🔄 Connecting to *${integrationSlug || serverUrl}*...`,
+                      text: `🔄 Connecting to *${serverUrl}*...`,
                     },
                   },
                 ],
@@ -381,9 +372,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:CONNECTION_ESTABLISHED": {
-            const { integrationSlug, serverId, connectionKey, tools } = event.data;
+            const { serverId, connectionKey, serverUrl } = event.data;
 
-            // Check both serverId and connectionKey
             const messageTs =
               this.mcpConnectionMessages.get(serverId) ||
               this.mcpConnectionMessages.get(connectionKey);
@@ -393,13 +383,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 .update({
                   channel: this.agentCore.state.slackChannelId as string,
                   ts: messageTs,
-                  text: `✅ Connected to ${integrationSlug}`,
+                  text: `✅ Connected to ${serverUrl}`,
                   blocks: [
                     {
                       type: "section",
                       text: {
                         type: "mrkdwn",
-                        text: `✅ Connected to *${integrationSlug}*\n${tools.length} ${tools.length === 1 ? "tool" : "tools"} available`,
+                        text: `✅ Connected to ${serverUrl}`,
                       },
                     },
                   ],

@@ -513,7 +513,7 @@ export const mcpSlice = defineAgentCoreSlice<{
             },
           },
           inputItems: [...state.inputItems, oauthMessage],
-          triggerLLMRequest: true,
+          triggerLLMRequest: false,
         };
         return newState;
       }
@@ -547,7 +547,7 @@ export const mcpSlice = defineAgentCoreSlice<{
             },
           },
           inputItems: [...state.inputItems, paramsRequiredMessage],
-          triggerLLMRequest: true,
+          triggerLLMRequest: false,
         };
         return newState;
       }
