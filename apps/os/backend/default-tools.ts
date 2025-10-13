@@ -370,6 +370,10 @@ export async function getScreenshotForURL(input: {
         body: JSON.stringify({
           url: input.url,
           viewport: input.viewport,
+          // https://developers.cloudflare.com/browser-rendering/rest-api/screenshot-endpoint/#navigate-and-capture-a-full-page-screenshot
+          screenshotOptions: {
+            fullPage: true,
+          },
         }),
       },
     );
