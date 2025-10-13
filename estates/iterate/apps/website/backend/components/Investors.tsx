@@ -17,7 +17,7 @@ export default function Investors() {
     {
       name: "Index Ventures",
       role: "Carlos Gonzales-Cadenas",
-      url: "http://indexventures.com/team/carlos-gonzalez-cadenas",
+      url: "https://indexventures.com/team/carlos-gonzalez-cadenas",
     },
     { name: "Lachy Groom", role: "LFG Fund", url: "https://twitter.com/lachygroom" },
     { name: "Max Mullen", role: "Co-founder of Instacart", url: "https://www.instacart.com" },
