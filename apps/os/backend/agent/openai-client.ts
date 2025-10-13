@@ -1,6 +1,6 @@
 import { OpenAI } from "openai";
 import invariant from "tiny-invariant";
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../env.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { getBraintrustLogger } from "../utils/braintrust-client.ts";
 import { posthogOpenAIWrapper } from "./posthog-openai-wrapper.ts";

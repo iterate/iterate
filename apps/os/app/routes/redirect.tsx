@@ -1,7 +1,7 @@
 import { redirect } from "react-router";
 import { eq, and } from "drizzle-orm";
-import { waitUntil } from "cloudflare:workers";
 import { WebClient } from "@slack/web-api";
+import { waitUntil } from "../../env.ts";
 import { GlobalLoading } from "../components/global-loading.tsx";
 import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
