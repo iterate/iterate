@@ -154,6 +154,42 @@ export const LocalFunctionToolCallEventInput = z.object({
   ...localFunctionToolCallEventFields,
 });
 
+export const ApprovalKey = z.string().brand("ApprovalKey");
+export type ApprovalKey = z.infer<typeof ApprovalKey>;
+const toolCallApprovalRequestedEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVAL_REQUESTED"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    toolName: z.string(),
+    toolCallId: z.string(),
+    args: z.unknown(),
+  }),
+};
+export const ToolCallApprovalRequestedEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalRequestedEventFields,
+});
+export const ToolCallApprovalRequestedEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...toolCallApprovalRequestedEventFields,
+});
+
+const toolCallApprovalEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVAL"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    approved: z.boolean(),
+  }),
+};
+export const ToolCallApprovalEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalEventFields,
+});
+export const ToolCallApprovalEventInput = z.object({
+  ...agentCoreBaseEventInputFields,
+  ...toolCallApprovalEventFields,
+});
+
 // CORE:LLM_REQUEST_START
 const llmRequestStartEventFields = {
   type: z.literal("CORE:LLM_REQUEST_START"),
@@ -491,6 +527,8 @@ export const FileSharedEventInput = z.object({
 
 export const agentCoreEventSchemasUndiscriminated = [
   LocalFunctionToolCallEvent,
+  ToolCallApprovalRequestedEvent,
+  ToolCallApprovalEvent,
   LlmRequestStartEvent,
   LlmRequestEndEvent,
   LlmRequestCancelEvent,
@@ -514,6 +552,8 @@ export const agentCoreEventSchemasUndiscriminated = [
 export const agentCoreEventInputSchemasUndiscriminated = [
   LocalFunctionToolCallEventInput,
   LlmRequestStartEventInput,
+  ToolCallApprovalRequestedEventInput,
+  ToolCallApprovalEventInput,
   LlmRequestEndEventInput,
   LlmRequestCancelEventInput,
   LlmInputItemEventInput,
@@ -668,6 +708,17 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
 
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
   contextRules: Record<string, ContextRule>;
+
+  toolCallApprovals: Record<
+    ApprovalKey,
+    {
+      toolCallId: string;
+      status: string;
+      toolName: string;
+      args: unknown;
+    }
+  >;
+
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
    * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
@@ -738,6 +789,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   contextRules: {},
+  toolCallApprovals: {},
   groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,

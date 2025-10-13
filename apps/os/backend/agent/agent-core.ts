@@ -35,6 +35,7 @@ import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
   AgentCoreEventInput,
+  type ApprovalKey,
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
@@ -175,6 +176,11 @@ export interface AgentCoreDeps {
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
+  requestApprovalForToolCall?: (payload: {
+    toolName: string;
+    args: JSONSerializable;
+    toolCallId: string;
+  }) => Promise<ApprovalKey>;
   /** Provided console instance */
   console: Console | TagLogger;
 }
@@ -1025,6 +1031,65 @@ export class AgentCore<
         break;
       }
 
+      case "CORE:TOOL_CALL_APPROVAL_REQUESTED": {
+        const { data } = event;
+        next.toolCallApprovals = {
+          ...next.toolCallApprovals,
+          [data.approvalKey]: {
+            ...event.data,
+            status: "pending",
+          },
+        };
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `A tool call has been requested: ${data.toolName} with args: ${JSON.stringify(data.args)}. Awaiting approval from the user.`,
+            },
+          ],
+        });
+        break;
+      }
+
+      case "CORE:TOOL_CALL_APPROVAL": {
+        const { data } = event;
+        const found = next.toolCallApprovals[data.approvalKey];
+        // next.triggerLLMRequest = true;
+        if (!found) {
+          next.inputItems.push({
+            type: "message" as const,
+            role: "developer" as const,
+            content: [
+              {
+                type: "input_text" as const,
+                text: `Tool call approval not found for key: ${data.approvalKey}. This should not have happened. Existing approval keys: ${Object.keys(next.toolCallApprovals).join(", ")}`,
+              },
+            ],
+          });
+          break;
+        }
+        next.toolCallApprovals = {
+          ...next.toolCallApprovals,
+          [data.approvalKey]: {
+            ...next.toolCallApprovals[data.approvalKey],
+            status: data.approved ? "approved" : "rejected",
+          },
+        };
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `Tool call ${found.toolName} with args: ${JSON.stringify(found.args)} has been ${data.approved ? "approved" : "rejected"}.`,
+            },
+          ],
+        });
+        break;
+      }
+
       case "CORE:INTERNAL_ERROR":
       case "CORE:INITIALIZED_WITH_EVENTS":
       case "CORE:LOG":
@@ -1341,6 +1406,36 @@ export class AgentCore<
     }
     try {
       const args = JSON.parse(call.arguments || "{}");
+
+      let needsApproval = call.name.toLocaleLowerCase().includes("flexibletesttool");
+      if (call.call_id.startsWith("injected-")) needsApproval = false;
+
+      if (needsApproval) {
+        const approvalKey = await this.deps.requestApprovalForToolCall!({
+          toolName: call.name,
+          args,
+          toolCallId: call.call_id,
+        }).catch((e) => {
+          throw new Error(`failed to request approval?? ${e}`);
+        });
+        return {
+          success: true,
+          output: { message: "Tool call needs approval" },
+          triggerLLMRequest: false,
+          addEvents: [
+            {
+              type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
+              data: {
+                approvalKey,
+                toolName: call.name,
+                args,
+                toolCallId: call.call_id,
+              },
+            },
+          ],
+        };
+      }
+
       const result = await tool.execute(call, args);
       return {
         success: true,

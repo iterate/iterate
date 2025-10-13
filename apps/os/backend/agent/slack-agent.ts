@@ -1,6 +1,7 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
+import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
 import { env as _env, env } from "../../env.ts";
@@ -27,11 +28,12 @@ import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
-import type {
-  AgentCoreEvent,
-  CoreReducedState,
-  ParticipantJoinedEventInput,
-  ParticipantMentionedEventInput,
+import {
+  ApprovalKey,
+  type AgentCoreEvent,
+  type CoreReducedState,
+  type ParticipantJoinedEventInput,
+  type ParticipantMentionedEventInput,
 } from "./agent-core-schemas.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
@@ -231,6 +233,47 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             );
             break;
           }
+
+          case "CORE:TOOL_CALL_APPROVAL": {
+            const toolCallApprovalEvent = event as AgentCoreEvent & {
+              type: "CORE:TOOL_CALL_APPROVAL";
+            };
+            const found =
+              this.agentCore.state.toolCallApprovals[toolCallApprovalEvent.data.approvalKey];
+            if (!found) {
+              logger.error(
+                "Tool call approval not found for key:",
+                toolCallApprovalEvent.data.approvalKey,
+              );
+              break;
+            }
+
+            this.ctx.waitUntil(
+              Promise.resolve().then(async () => {
+                if (!toolCallApprovalEvent.data.approved) {
+                  await this.addSlackReaction({
+                    messageTs: event.data.approvalKey,
+                    name: "no_entry",
+                  });
+                  return;
+                }
+
+                await this.addSlackReaction({
+                  messageTs: event.data.approvalKey,
+                  name: "rocket",
+                });
+                await this.injectToolCall({
+                  args: found.args as {},
+                  toolName: found.toolName,
+                });
+                await this.addSlackReaction({
+                  messageTs: event.data.approvalKey,
+                  name: "white_check_mark",
+                });
+              }),
+            );
+            break;
+          }
         }
 
         // if (event.type !== "CORE:LOG") {
@@ -239,6 +282,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       },
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
+      },
+      requestApprovalForToolCall: async (
+        payload: Parameters<NonNullable<AgentCoreDeps["requestApprovalForToolCall"]>>[0],
+      ) => {
+        const result = await this.rawSendSlackMessage({
+          text: `A tool call has been requested: ${payload.toolName} with the below arguments. Use :+1: to approve or :-1: to reject.\n\n\`\`\`${YAML.stringify(
+            {
+              callId: payload.toolCallId,
+              args: payload.args,
+            },
+          )}\n\`\`\``,
+        });
+        console.log(`sent message requesting approval`, result);
+        return ApprovalKey.parse(result.ts);
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
@@ -714,6 +771,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
     const slackEvent = slackWebhookPayload.event!;
     const messageMetadata = await getMessageMetadata(slackEvent, this.db);
+    console.log("slack webhook event received", slackEvent);
 
     if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
       return;
@@ -790,13 +848,27 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
     });
 
+    if (
+      slackEvent.type === "reaction_added" &&
+      slackEvent.item.ts in currentState.toolCallApprovals &&
+      (slackEvent.reaction === "+1" || slackEvent.reaction === "-1")
+    ) {
+      events.push({
+        type: "CORE:TOOL_CALL_APPROVAL",
+        data: {
+          approvalKey: slackEvent.item.ts,
+          approved: slackEvent.reaction === "+1",
+        },
+      });
+    }
+
     await this.addEvents(events);
     return {
       success: true,
     };
   }
 
-  async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
+  async rawSendSlackMessage(input: Inputs["sendSlackMessage"]) {
     const slackThreadId = this.agentCore.state.slackThreadId;
     const slackChannelId = this.agentCore.state.slackChannelId;
 
@@ -811,7 +883,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl: sendInput.unfurl,
     });
 
-    const result = await this.slackAPI.chat.postMessage({
+    return this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
       text: sendInput.text,
@@ -819,21 +891,22 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
     });
+  }
+
+  async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
+    const result = await this.rawSendSlackMessage(input);
 
     if (!result.ok) {
       throw new Error(`Failed to send Slack message: ${result.error}`);
     }
 
     const magic: MagicAgentInstructions = {};
-    if (endTurn) {
+    if (input.endTurn) {
       magic.__triggerLLMRequest = false;
     }
 
-    // return an empty object to conserve tokens in the success case, plus magic flags if any
-    return {
-      ...(result.ok ? {} : result),
-      ...magic,
-    };
+    // don't include slack API response to conserve tokens in the success case
+    return {};
   }
 
   async addSlackReaction(input: Inputs["addSlackReaction"]) {
