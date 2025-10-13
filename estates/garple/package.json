@@ -13,17 +13,17 @@
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.44.6",
     "hono": "^4.9.10",
-    "lucide-react": "0.542.0",
-    "posthog-js": "^1.271.0",
-    "react": "19.1.1",
+    "lucide-react": "0.545.0",
+    "posthog-js": "^1.275.1",
+    "react": "19.2.0",
     "react-dom": "19.1.1",
-    "react-router": "7.8.2",
+    "react-router": "7.9.4",
     "resend": "^6.1.2",
     "stripe": "^19.1.0",
     "superjson": "^2.2.2",
     "tailwind-merge": "^3.3.1",
     "typeid-js": "^1.2.0",
-    "zod": "^4.1.11"
+    "zod": "^4.1.12"
   },
   "scripts": {
     "dev:garple": "cd apps/website && CLOUDFLARE_INCLUDE_PROCESS_ENV=true doppler run -- vite dev",
@@ -39,10 +39,10 @@
     "db:studio:garple": "cd apps/website && drizzle-kit studio"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.13.10",
-    "@cloudflare/workers-types": "^4.20251004.0",
+    "@cloudflare/vite-plugin": "^1.13.12",
+    "@cloudflare/workers-types": "^4.20251011.0",
     "@iterate-com/sdk": "workspace:*",
-    "@types/react": "19.1.8",
+    "@types/react": "19.2.2",
     "@types/react-dom": "19.1.6",
     "autoprefixer": "^10.4.21",
     "drizzle-kit": "^0.31.5",
@@ -51,6 +51,6 @@
     "typescript": "^5.9.3",
     "vite": "^7.1.9",
     "vitest": "^3.2.4",
-    "wrangler": "^4.42.0"
+    "wrangler": "^4.42.2"
   }
 }
