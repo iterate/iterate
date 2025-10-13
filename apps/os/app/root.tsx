@@ -10,6 +10,7 @@ import {
 import { ThemeProvider } from "next-themes";
 import { Suspense } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { PostHogProvider, PostHogErrorBoundary } from "posthog-js/react";
 import type { Route } from "./+types/root";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
@@ -40,25 +41,29 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TrpcContext.TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="system"
-          enableSystem
-          enableColorScheme
-          storageKey="theme"
-          disableTransitionOnChange
-        >
-          <AuthGuard>
-            <Suspense fallback={<GlobalLoading />}>
-              <Outlet />
-            </Suspense>
-          </AuthGuard>
-          <Toaster />
-        </ThemeProvider>
-      </TrpcContext.TRPCProvider>
-    </QueryClientProvider>
+    <PostHogProvider apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY}>
+      <PostHogErrorBoundary fallback={<PostHogErrorFallback />}>
+        <QueryClientProvider client={queryClient}>
+          <TrpcContext.TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
+            <ThemeProvider
+              attribute="class"
+              defaultTheme="system"
+              enableSystem
+              enableColorScheme
+              storageKey="theme"
+              disableTransitionOnChange
+            >
+              <AuthGuard>
+                <Suspense fallback={<GlobalLoading />}>
+                  <Outlet />
+                </Suspense>
+              </AuthGuard>
+              <Toaster />
+            </ThemeProvider>
+          </TrpcContext.TRPCProvider>
+        </QueryClientProvider>
+      </PostHogErrorBoundary>
+    </PostHogProvider>
   );
 }
 
@@ -85,6 +90,15 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
           <code>{stack}</code>
         </pre>
       )}
+    </main>
+  );
+}
+
+function PostHogErrorFallback() {
+  return (
+    <main className="pt-16 p-4 container mx-auto">
+      <h1>Something went wrong</h1>
+      <p>An unexpected error occurred. Please try again later.</p>
     </main>
   );
 }
