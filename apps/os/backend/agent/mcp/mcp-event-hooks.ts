@@ -262,8 +262,12 @@ export async function handleMCPConnectRequest(
 
   const manager = new MCPClientManager("iterate-agent", "1.0.0");
 
+  const abortController = new AbortController();
+  const timeoutId = setTimeout(() => {
+    abortController.abort("MCP connection timeout - authentication may have expired");
+  }, 30_000); // 30 seconds timeout
+
   let result: Awaited<ReturnType<typeof manager.connect>>;
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const connectOptions: Parameters<typeof manager.connect>[1] = {
@@ -272,6 +276,7 @@ export async function handleMCPConnectRequest(
         type: "auto",
         requestInit: {
           headers: appliedHeaders,
+          signal: abortController.signal,
         },
       },
       ...(reconnect && {
@@ -282,29 +287,9 @@ export async function handleMCPConnectRequest(
         },
       }),
     };
-
-    result = await Promise.race([
-      manager.connect(modifiedServerUrl, connectOptions),
-      // wait 20 seconds - if fail, add an error event
-      new Promise<typeof result>((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error("MCP connection timeout - authentication may have expired")),
-          20_000, // 10_000 was too short for some
-        );
-      }),
-    ]);
-    // Clear the timeout since connection succeeded
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-    // Set the serverId on the provider for OAuth state preservation
-    oauthProvider.serverId = result.id;
+    result = await manager.connect(modifiedServerUrl, connectOptions);
   } catch (error) {
     oauthProvider?.resetTokens();
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-
     events.push({
       type: "MCP:CONNECTION_ERROR",
       data: {
@@ -317,13 +302,11 @@ export async function handleMCPConnectRequest(
       triggerLLMRequest: false,
     });
     return events;
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   if (result.authUrl) {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
-
     // Close the partial connection since we need OAuth first
     // The connection will be re-established after OAuth completes
     try {
@@ -351,10 +334,7 @@ export async function handleMCPConnectRequest(
 
   mcpConnectionCache.managers.set(cacheKey, manager);
 
-  const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
-  if (!serverName) {
-    throw new Error("Server name not found");
-  }
+  const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name || "Unknown";
 
   const tools = manager.listTools().filter((t) => t.serverId === result.id);
   const prompts = manager.listPrompts().filter((p) => p.serverId === result.id);
