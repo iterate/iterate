@@ -100,6 +100,12 @@ export function sandboxStatus(status: "starting" | "attached") {
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
+export function hasLabel(label: string) {
+  // Construct JSONata expression that checks if the label exists in agentCoreState.metadata.labels array
+  const expression = `${JSON.stringify(label)} in agentCoreState.metadata.labels`;
+  return { type: "jsonata", expression } satisfies ContextRuleMatcher;
+}
+
 export const matchers = {
   never,
   always,
@@ -112,6 +118,7 @@ export const matchers = {
   hasMCPConnection,
   forAgentClass,
   sandboxStatus,
+  hasLabel,
   and,
   or,
   not,
