@@ -209,7 +209,7 @@ slackApp.post("/webhook", async (c) => {
   return c.text("ok");
 });
 
-slackApp.post("/interactivity", async (c) => {
+slackApp.post("/interactive", async (c) => {
   return c.text("ok");
 });
 
