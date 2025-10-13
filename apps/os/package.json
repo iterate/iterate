@@ -100,6 +100,7 @@
     "type-fest": "^5.0.1",
     "typeid-js": "^1.2.0",
     "use-stick-to-bottom": "^1.1.1",
+    "usehooks-ts": "^3.1.1",
     "vaul": "^1.1.2",
     "yaml": "^2.8.1",
     "zod": "^4.1.11"

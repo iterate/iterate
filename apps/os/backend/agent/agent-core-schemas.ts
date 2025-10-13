@@ -725,6 +725,7 @@ with the agent.
 
 export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
   extends CoreReducedState<TEventInput> {
+  eventCount: number;
   /**
    * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
    */

@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import jsonata from "jsonata/sync";
+import { useLocalStorage } from "usehooks-ts";
 import type { AugmentedCoreReducedState } from "../../backend/agent/agent-core-schemas.ts";
 import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AutoComplete } from "./autocomplete.tsx";
@@ -10,8 +11,8 @@ interface AgentReducedStateProps {
 }
 
 export function AgentReducedState({ reducedState, className }: AgentReducedStateProps) {
-  const [selectedValue, setSelectedValue] = useState("");
-  const [searchValue, setSearchValue] = useState("");
+  const [selectedValue, setSelectedValue] = useLocalStorage("AgentReducedState.selectedValue", "");
+  const [searchValue, setSearchValue] = useLocalStorage("AgentReducedState.searchValue", "");
 
   // Create items from Object.keys of reducedState with agentCoreState. prefix
   const autocompleteItems = useMemo(() => {

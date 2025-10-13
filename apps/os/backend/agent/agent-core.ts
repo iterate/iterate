@@ -296,6 +296,7 @@ export class AgentCore<
   ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
     const next: AugmentedCoreReducedState = {
       ...inputState,
+      eventCount: this._events.length,
       runtimeTools: [],
       ephemeralPromptFragments: {},
       toolSpecs: [],
