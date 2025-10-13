@@ -1,8 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import { APIError } from "better-auth/api";
 import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
-import { getAuth } from "../auth/auth.ts";
+import { getAuth, type AuthSession } from "../auth/auth.ts";
 import { getUserEstateAccess } from "../trpc/trpc.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -69,11 +70,23 @@ export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
     // Verify authentication
     const db = getDb();
     const auth = getAuth(db);
-    const session = await auth.api.getSession({
-      headers: request.headers,
-    });
+    let session: AuthSession | null = null;
+    try {
+      session = await auth.api.getSession({
+        headers: request.headers,
+      });
 
-    if (!session?.user) {
+      if (!session?.user) {
+        return new Response("Unauthorized", { status: 401 });
+      }
+    } catch (error) {
+      if (error instanceof APIError) {
+        if (error.statusCode === 401 || error.statusCode === 403) {
+          // expected errors
+          return new Response(error.message, { status: error.statusCode });
+        }
+      }
+      logger.error("Error getting session:", error); // something broke
       return new Response("Unauthorized", { status: 401 });
     }
 
