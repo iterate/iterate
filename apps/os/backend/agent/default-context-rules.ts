@@ -210,6 +210,15 @@ export const defaultContextRules = defineRules([
           }),
         ),
       }),
+    ],
+  },
+  {
+    key: "activate-gmail-tools",
+    match: matchers.and(
+      matchers.forAgentClass("SlackAgent"),
+      matchers.not(matchers.hasLabel("GMAIL")),
+    ),
+    tools: [
       iterateAgentTool.addLabel({
         overrideName: "activateGmailTools",
         overrideDescription:
@@ -221,6 +230,15 @@ export const defaultContextRules = defineRules([
         },
         passThroughArgs: { label: "GMAIL" },
       }),
+    ],
+  },
+  {
+    key: "activate-gcalendar-tools",
+    match: matchers.and(
+      matchers.forAgentClass("SlackAgent"),
+      matchers.not(matchers.hasLabel("GCALENDAR")),
+    ),
+    tools: [
       iterateAgentTool.addLabel({
         overrideName: "activateGcalendarTools",
         overrideDescription:
