@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import type { JSONSchema } from "zod/v4/core";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { makeJSONSchemaOpenAICompatible } from "./zod-to-openai-json-schema.ts";
-import { hashToolSpec, type AgentCoreEventInput } from "./agent-core-schemas.ts";
+import { hashToolSpec, type AgentCoreEvent } from "./agent-core-schemas.ts";
 import { doToolToRuntimeJsonSchema, type DOToolDef, type DOToolDefinitions } from "./do-tools.ts";
 import {
   type AgentDurableObjectToolSpec,
@@ -47,7 +47,7 @@ function processMagic(rawResult: unknown, toolSpec: ToolSpec) {
   return {
     toolCallResult: (cleanedResult as JSONSerializable) || "",
     triggerLLMRequest,
-    ...(addEvents && { addEvents: addEvents as AgentCoreEventInput[] }),
+    ...(addEvents && { addEvents: addEvents as AgentCoreEvent[] }),
   };
 }
 

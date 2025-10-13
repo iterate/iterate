@@ -20,7 +20,10 @@ import type { ExplainedScoreResult } from "./scorer.ts";
 
 export * from "./scorer.ts";
 
-export type AgentEvent = AgentCoreEvent | MCPEvent | SlackSliceEvent;
+export type AgentEvent = (AgentCoreEvent | MCPEvent | SlackSliceEvent) & {
+  eventIndex: number;
+  createdAt: string;
+};
 
 export const baseURL = import.meta.env.VITE_PUBLIC_URL!;
 export const authClient = createAuthClient({
@@ -154,7 +157,7 @@ export async function createTestHelper({
     const lastKnownEventIndex = since.at(-1)!.eventIndex;
     return vi.waitUntil(
       async () => {
-        const events: AgentCoreEvent[] = (await getEvents()) as never;
+        const events: AgentEvent[] = (await getEvents()) as never;
         const select = options?.select || ((e) => e);
         for (const event of events) {
           if (event.type !== type) continue;

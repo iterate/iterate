@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod/v4";
 import { or, eq, asc } from "drizzle-orm";
 import { env } from "../env.ts";
-import type { AgentCoreEventInput } from "./agent/agent-core-schemas.ts";
+import type { AgentCoreEvent } from "./agent/agent-core-schemas.ts";
 import type { DB } from "./db/client.ts";
 import { slackWebhookEvent } from "./db/schema.ts";
 import { uploadFile } from "./file-handlers.ts";
@@ -537,7 +537,7 @@ async function getURLContentFromWebpage(params: {
       : Promise.resolve(null),
   ]);
 
-  const additionalEvents: AgentCoreEventInput[] = [];
+  const additionalEvents: AgentCoreEvent[] = [];
   const exaResult = includeTextContent && isFulfilled(textResult) ? textResult.value : null;
 
   if (includeTextContent && !isFulfilled(textResult)) {
@@ -640,7 +640,7 @@ async function getURLContentFromFile(params: {
 
   logger.log(`File uploaded for ${url}: ${fileRecord.id}`);
 
-  const additionalEvents: AgentCoreEventInput[] = [
+  const additionalEvents: AgentCoreEvent[] = [
     {
       type: "CORE:FILE_SHARED",
       data: {

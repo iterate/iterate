@@ -18,7 +18,7 @@ import {
 import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
-import type { AgentCoreEventInput } from "../../agent/agent-core.ts";
+import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 
 // Type alias for Slack message elements from ConversationsRepliesResponse
@@ -825,7 +825,7 @@ async function handleBotChannelJoin(params: {
         })),
       );
 
-      const contextEvents: AgentCoreEventInput[] = [
+      const contextEvents: AgentCoreEvent[] = [
         {
           type: "CORE:LLM_INPUT_ITEM",
           data: {

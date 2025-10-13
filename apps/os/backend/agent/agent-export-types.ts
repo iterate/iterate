@@ -24,6 +24,6 @@ export interface AgentTraceExport {
   exportedAt: string;
   metadata: AgentTraceExportMetadata;
   fileMetadata: Record<string, FileMetadata>;
-  events: AgentCoreEvent[];
+  events: (AgentCoreEvent & { eventIndex: number; createdAt: string })[];
   reducedStateSnapshots: Record<number, AugmentedCoreReducedState>;
 }

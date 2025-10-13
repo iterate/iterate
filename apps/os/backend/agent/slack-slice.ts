@@ -2,11 +2,7 @@
 
 import z from "zod";
 import { exhaustiveMatchingGuard, JSONSerializable } from "../utils/type-helpers.ts";
-import {
-  agentCoreBaseEventFields,
-  agentCoreBaseEventInputFields,
-  type CoreReducedState,
-} from "./agent-core-schemas.ts";
+import { agentCoreBaseEventFields, type CoreReducedState } from "./agent-core-schemas.ts";
 import { type SlackWebhookPayload } from "./slack.types.ts";
 import { defineAgentCoreSlice } from "./agent-core.ts";
 import {
@@ -31,12 +27,6 @@ export const SlackWebhookEventReceived = z.object({
   ...slackWebhookEventReceivedFields,
 });
 
-export const SlackWebhookEventReceivedInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...slackWebhookEventReceivedFields,
-});
-export type SlackWebhookEventReceivedInput = z.input<typeof SlackWebhookEventReceivedInput>;
-
 // SLACK:UPDATE_SLICE_STATE
 export const slackUpdateSliceStateFields = {
   type: z.literal("SLACK:UPDATE_SLICE_STATE"),
@@ -59,11 +49,6 @@ export const SlackUpdateSliceState = z.object({
   ...slackUpdateSliceStateFields,
 });
 
-export const SlackUpdateSliceStateInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...slackUpdateSliceStateFields,
-});
-
 // SLACK:UPDATE_TYPING_STATUS
 export const slackUpdateTypingStatusFields = {
   type: z.literal("SLACK:UPDATE_TYPING_STATUS"),
@@ -77,11 +62,6 @@ export const SlackUpdateTypingStatus = z.object({
   ...slackUpdateTypingStatusFields,
 });
 
-export const SlackUpdateTypingStatusInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...slackUpdateTypingStatusFields,
-});
-
 // ------------------------- Discriminated Unions -------------------------
 
 export const SlackSliceEvent = z.discriminatedUnion("type", [
@@ -90,19 +70,12 @@ export const SlackSliceEvent = z.discriminatedUnion("type", [
   SlackUpdateTypingStatus,
 ]);
 
-export const SlackEventInput = z.discriminatedUnion("type", [
-  SlackWebhookEventReceivedInput,
-  SlackUpdateSliceStateInput,
-  SlackUpdateTypingStatusInput,
-]);
-
 // ------------------------- Types -------------------------
 
 export type SlackWebhookEventReceived = z.infer<typeof SlackWebhookEventReceived>;
 export type SlackUpdateSliceState = z.infer<typeof SlackUpdateSliceState>;
 export type SlackUpdateTypingStatus = z.infer<typeof SlackUpdateTypingStatus>;
 export type SlackSliceEvent = z.infer<typeof SlackSliceEvent>;
-export type SlackSliceEventInput = z.input<typeof SlackEventInput>;
 
 export interface SlackSliceState {
   slackThreadId?: string | null;
@@ -121,12 +94,10 @@ export interface SlackSliceDeps {}
 export const slackSlice = defineAgentCoreSlice<{
   SliceState: SlackSliceState;
   EventSchema: typeof SlackSliceEvent;
-  EventInputSchema: typeof SlackEventInput;
   SliceDeps: SlackSliceDeps;
 }>({
   name: "slack-slice",
   eventSchema: SlackSliceEvent,
-  eventInputSchema: SlackEventInput,
   initialState: {
     slackThreadId: undefined,
     slackChannelId: undefined,
@@ -216,7 +187,7 @@ export const slackSlice = defineAgentCoreSlice<{
       next.contextRules["slack-context"] = {
         key: "slack-context",
         prompt: createSlackContextForState({
-          state: next,
+          state: next as never,
           botUserId: next.botUserId,
         }),
       };
@@ -242,7 +213,7 @@ export type SlackSlice = typeof slackSlice;
 // ---------------------------------------------------------------------------
 
 export function createSlackContextForState(params: {
-  state: CoreReducedState<SlackSliceEventInput> & SlackSliceState;
+  state: CoreReducedState<SlackSliceEvent> & SlackSliceState;
   botUserId?: string;
 }): PromptFragment {
   const { state, botUserId } = params;

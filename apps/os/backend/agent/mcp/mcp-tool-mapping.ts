@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import type { AgentCoreDeps, MergedStateForSlices } from "../agent-core.ts";
-import type { AgentCoreEventInput } from "../agent-core-schemas.ts";
+import type { AgentCoreEvent } from "../agent-core-schemas.ts";
 import type { LocalFunctionRuntimeTool } from "../tool-schemas.ts";
 import { sanitizeToolName } from "../tool-spec-to-runtime-tool.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
@@ -123,11 +123,11 @@ export async function processMCPContent(
 ): Promise<{
   textContent: string[];
   processedContent: Record<string, unknown>[];
-  fileEvents: AgentCoreEventInput[];
+  fileEvents: AgentCoreEvent[];
 }> {
   const textContent: string[] = [];
   const processedContent: Record<string, unknown>[] = [];
-  const fileEvents: AgentCoreEventInput[] = [];
+  const fileEvents: AgentCoreEvent[] = [];
 
   for (const item of content) {
     const parsed = MCPContentItem.safeParse(item);

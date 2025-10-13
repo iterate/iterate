@@ -15,11 +15,7 @@ import {
   user,
 } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
-import type {
-  AgentCoreDeps,
-  AgentCoreEventInput,
-  MergedEventInputForSlices,
-} from "./agent-core.ts";
+import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
@@ -29,8 +25,8 @@ import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./sl
 import type {
   AgentCoreEvent,
   CoreReducedState,
-  ParticipantJoinedEventInput,
-  ParticipantMentionedEventInput,
+  ParticipantJoinedEvent,
+  ParticipantMentionedEvent,
 } from "./agent-core-schemas.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
@@ -297,7 +293,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   protected async convertSlackSharedFilesToIterateFileSharedEvents(
     slackEvent: SlackEvent,
     botUserId: string | undefined,
-  ): Promise<AgentCoreEventInput[]> {
+  ): Promise<AgentCoreEvent[]> {
     if (shouldIncludeEventInConversation(slackEvent, botUserId) && slackEvent?.type === "message") {
       if (slackEvent.subtype === "file_share" && slackEvent.files) {
         const fileUploadPromises = slackEvent.files.map(async (slackFile) => {
@@ -360,7 +356,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   public async getSlackThreadHistoryInputEvents(
     threadTs: string,
     botUserId: string | undefined,
-  ): Promise<AgentCoreEventInput[]> {
+  ): Promise<AgentCoreEvent[]> {
     const timings: Record<string, number> = { startTime: performance.now() };
     const previousMessages = await this.db
       .select()
@@ -412,7 +408,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ],
     });
 
-    const events: AgentCoreEventInput[] = [
+    const events: AgentCoreEvent[] = [
       {
         type: "CORE:LLM_INPUT_ITEM",
         data: {
@@ -451,7 +447,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   public async getParticipantJoinedEvents(
     slackUserId: string,
     botUserId?: string,
-  ): Promise<ParticipantJoinedEventInput[]> {
+  ): Promise<ParticipantJoinedEvent[]> {
     if (slackUserId === botUserId) {
       return [];
     }
@@ -543,7 +539,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     messageText: string,
     currentSlackUserId?: string,
     botUserId?: string,
-  ): Promise<ParticipantMentionedEventInput[]> {
+  ): Promise<ParticipantMentionedEvent[]> {
     const mentionedUserIds = getMentionedExternalUserIds(messageText);
     const currentState = this.agentCore.state;
 
@@ -593,7 +589,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         ),
       );
 
-    return userMappings.map((userMapping): ParticipantMentionedEventInput => {
+    return userMappings.map((userMapping): ParticipantMentionedEvent => {
       return {
         type: "CORE:PARTICIPANT_MENTIONED",
         data: {
@@ -618,7 +614,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   public async initSlack(channelId: string, threadTs: string) {
-    const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
+    const events: MergedEventForSlices<SlackAgentSlices>[] = [];
 
     // Query database for channel info to populate state
     let slackChannel: { name: string; isShared: boolean; isExtShared: boolean } | null = null;
@@ -769,7 +765,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const isSlackInitialized = !!currentState.slackChannelId;
     const isThreadStarter = messageMetadata.ts === messageMetadata.threadTs;
 
-    const events: MergedEventInputForSlices<SlackAgentSlices>[] = [];
+    const events: MergedEventForSlices<SlackAgentSlices>[] = [];
 
     if (!isSlackInitialized) {
       const initEvents = await this.initSlack(messageMetadata.channel, messageMetadata.threadTs);
@@ -815,14 +811,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         ? this.getSlackThreadHistoryInputEvents(messageMetadata.threadTs, botUserId)
         : Promise.resolve([]),
     ]);
-    events.push(...(eventsLists satisfies Array<AgentCoreEventInput[]>).flat());
+    events.push(...(eventsLists satisfies Array<AgentCoreEvent[]>).flat());
 
     // Pass the webhook event to the reducer
     // The reducer will handle filtering and determine if LLM computation should be triggered
     events.push({
       type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
-        payload: slackWebhookPayload,
+        payload: slackWebhookPayload as {},
         updateThreadIds: true,
       },
       // Don't trigger LLM for bot messages or non-message events

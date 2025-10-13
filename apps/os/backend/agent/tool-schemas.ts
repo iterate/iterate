@@ -2,7 +2,7 @@ import z from "zod/v4";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 import { JSONSerializable } from "../utils/type-helpers.ts";
 import { FunctionCall, OpenAIBuiltinTool } from "./openai-response-schemas.ts";
-import type { AgentCoreEventInput } from "./agent-core-schemas.ts";
+import type { AgentCoreEvent } from "./agent-core-schemas.ts";
 export const IntegrationMode = z.enum(["personal", "company"]);
 export type IntegrationMode = z.infer<typeof IntegrationMode>;
 
@@ -79,7 +79,7 @@ export type MCPServerInput = z.input<typeof MCPServer>;
  * Type definition for tool execution result.
  * Tools can control whether their execution triggers an LLM request by setting triggerLLMRequest.
  */
-export type LocalFunctionToolExecuteResult<TEventInput = AgentCoreEventInput> = {
+export type LocalFunctionToolExecuteResult<TEventInput = AgentCoreEvent> = {
   toolCallResult: JSONSerializable;
   triggerLLMRequest?: boolean;
   addEvents?: TEventInput[];
@@ -90,12 +90,12 @@ export type LocalFunctionToolExecuteResult<TEventInput = AgentCoreEventInput> = 
  * This represents the implementation function for a tool that can be called by an agent.
  *
  */
-export type LocalFunctionToolExecuteFunction<TEventInput = AgentCoreEventInput> = (
+export type LocalFunctionToolExecuteFunction<TEventInput = AgentCoreEvent> = (
   functionCall: FunctionCall,
   ...args: unknown[]
 ) => Promise<LocalFunctionToolExecuteResult<TEventInput>>;
 
-export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEventInput> = FunctionTool & {
+export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEvent> = FunctionTool & {
   canBeParallelized?: boolean; // If true, the tool can be called in parallel with other tools
   execute: LocalFunctionToolExecuteFunction<TEventInput>;
   isAsync?: boolean; // If true, tool execution creates an ASYNC_TOOL_CALL_CREATED event
@@ -106,6 +106,6 @@ export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEventInput> = Functi
   };
 };
 
-export type RuntimeTool<TEventInput = AgentCoreEventInput> =
+export type RuntimeTool<TEventInput = AgentCoreEvent> =
   | OpenAIBuiltinTool
   | LocalFunctionRuntimeTool<TEventInput>;
