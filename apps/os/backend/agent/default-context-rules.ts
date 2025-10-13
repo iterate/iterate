@@ -143,6 +143,7 @@ const defaultSlackAgentPrompt = dedent`
 
    1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.
    2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:
+   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them "you are now connected" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.
    - e.g if the user wants to do stuff with Linear:
    \`\`\`js
    connectMCPServer({

@@ -363,7 +363,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                     type: "section",
                     text: {
                       type: "mrkdwn",
-                      text: `🔄 Connecting to *${serverUrl}*...`,
+                      text: `🔄 Connecting to ${serverUrl}...`,
                     },
                   },
                 ],
@@ -395,7 +395,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                   ],
                 })
                 .then(() => {
-                  // Clean up the tracking
                   this.mcpConnectionMessages.delete(serverId);
                   this.mcpConnectionMessages.delete(connectionKey);
                 });
