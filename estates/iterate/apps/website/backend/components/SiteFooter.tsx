@@ -1,4 +1,4 @@
-import SymbolIcon from "./Symbol.tsx";
+import SymbolIcon from "./symbol.tsx";
 import { Link } from "./Link.tsx";
 
 export default function SiteFooter() {

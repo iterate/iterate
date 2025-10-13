@@ -1,5 +1,5 @@
-import BlogLayout from "../components/BlogLayout.tsx";
-import LegalPage from "../components/LegalPage.tsx";
+import BlogLayout from "../components/blog-layout.tsx";
+import LegalPage from "../components/legal-page.tsx";
 
 export default function Terms() {
   return (

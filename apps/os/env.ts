@@ -38,6 +38,7 @@ export type CloudflareEnv = Env & {
   PROJECT_NAME: string;
   POSTHOG_ENVIRONMENT: string;
   EXA_API_KEY: string;
+  LOGO_DEV_PUBLISHABLE_KEY: string;
   CLOUDFLARE_API_TOKEN: string;
   CLOUDFLARE_ACCOUNT_ID: string;
   REPLICATE_API_TOKEN: string;

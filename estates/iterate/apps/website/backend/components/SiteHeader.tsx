@@ -1,6 +1,6 @@
 import Logo from "./Logo.tsx";
 import Navigation from "./Navigation.tsx";
-import { GitHubIcon } from "./Icons.tsx";
+import { GitHubIcon } from "./icons.tsx";
 
 export default function SiteHeader() {
   return (

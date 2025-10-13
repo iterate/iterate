@@ -1,5 +1,5 @@
-import BlogLayout from "../components/BlogLayout.tsx";
-import { Link } from "../components/Link.tsx";
+import BlogLayout from "../components/blog-layout.tsx";
+import { Link } from "../components/link.tsx";
 
 export default function ContactUs() {
   return (

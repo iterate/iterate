@@ -543,14 +543,18 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get account id" });
           }
 
-          // Link estate if we have an ID
-          // TODO(rahul): figure out if there are any edge cases
-          // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
-          // So we can skip this step for them
+          // Sync Slack channels
           if (estateId) {
-            // For linking flow, connect everything now
-            // Sync Slack channels, users (internal and external) in the background
-            waitUntil(syncSlackForEstateInBackground(db, tokens.access_token, estateId));
+            const currentEstateId: string = estateId!;
+            const botAccessToken: string = tokens.access_token!;
+
+            waitUntil(
+              (async () => {
+                logger.info("Starting Slack sync for estate", { estateId: currentEstateId });
+                await syncSlackForEstateInBackground(db, botAccessToken, currentEstateId!);
+                logger.info("Completed Slack sync for estate", { estateId: currentEstateId });
+              })(),
+            );
 
             await db
               .insert(schema.estateAccountsPermissions)
@@ -584,6 +588,37 @@ export const integrationsPlugin = () =>
                   },
                 },
               });
+
+            // Now that Slack is fully connected, trigger the OnboardingAgent if it exists
+            const estate = await db.query.estate.findFirst({
+              where: (e, { eq }) => eq(e.id, estateId),
+            });
+
+            if (estate?.onboardingAgentName) {
+              const agentName = estate.onboardingAgentName;
+              waitUntil(
+                (async () => {
+                  try {
+                    const { getOrCreateAgentStubByName } = await import(
+                      "../agent/agents/stub-getters.ts"
+                    );
+                    const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
+                      db,
+                      estateId: estate.id,
+                      agentInstanceName: agentName,
+                      reason: "Triggered OnboardingAgent after Slack connection",
+                    });
+                    // Boot the agent to trigger research and Slack thread creation
+                    await onboardingAgent.doNothing();
+                    logger.info("OnboardingAgent triggered after Slack connection", {
+                      estateId: estate.id,
+                    });
+                  } catch (error) {
+                    logger.error("Failed to trigger OnboardingAgent after Slack connection", error);
+                  }
+                })(),
+              );
+            }
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);

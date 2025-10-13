@@ -2,8 +2,8 @@ import { useLoaderData } from "react-router";
 import { getPostData } from "../lib/blog.ts";
 import { markdownToHtml } from "../lib/mdx.ts";
 import { formatDate } from "../utils/date.ts";
-import BlogLayout from "../components/BlogLayout.tsx";
-import { Link } from "../components/Link.tsx";
+import BlogLayout from "../components/blog-layout.tsx";
+import { Link } from "../components/link.tsx";
 
 export async function loader({ params }: { params: { slug: string } }) {
   const post = await getPostData(params.slug);
