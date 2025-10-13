@@ -42,7 +42,6 @@ import {
   slackWebhookEventToIdempotencyKey,
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
-import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
 // Inherit generic static helpers from IterateAgent
 
