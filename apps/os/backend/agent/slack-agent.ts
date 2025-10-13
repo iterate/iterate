@@ -263,27 +263,29 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               this.agentCore.state.toolCallApprovals[toolCallApprovalEvent.data.approvalKey];
             if (!found) {
               logger.error(
-                "Tool call approval not found for key:",
-                toolCallApprovalEvent.data.approvalKey,
+                `Tool call approval not found for key: ${toolCallApprovalEvent.data.approvalKey}`,
               );
               break;
             }
 
             this.ctx.waitUntil(
               Promise.resolve().then(async () => {
-                const options = ["+1", "-1"];
                 const messageTs = toolCallApprovalEvent.data.approvalKey;
-                await Promise.all(
-                  options.map((name) => this.removeSlackReaction({ messageTs, name })),
-                );
+                await Promise.all([
+                  this.removeSlackReaction({ messageTs, name: "+1" }),
+                  this.removeSlackReaction({ messageTs, name: "-1" }),
+                ]);
                 if (!toolCallApprovalEvent.data.approved) {
                   await this.addSlackReaction({ messageTs, name: "no_entry" });
                   return;
                 }
 
-                await this.addSlackReaction({ messageTs, name: "rocket" });
+                await this.addSlackReaction({ messageTs, name: "eyes" });
                 await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
-                await this.addSlackReaction({ messageTs, name: "white_check_mark" });
+                await Promise.all([
+                  this.removeSlackReaction({ messageTs, name: "eyes" }),
+                  this.addSlackReaction({ messageTs, name: "white_check_mark" }),
+                ]);
               }),
             );
             break;
@@ -789,7 +791,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async onSlackWebhookEventReceived(slackWebhookPayload: SlackWebhookPayload) {
     const slackEvent = slackWebhookPayload.event!;
     const messageMetadata = await getMessageMetadata(slackEvent, this.db);
-    console.log("slack webhook event received", slackEvent);
 
     if (!messageMetadata || !messageMetadata.channel || !messageMetadata.threadTs) {
       return;
