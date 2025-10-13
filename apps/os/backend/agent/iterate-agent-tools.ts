@@ -221,7 +221,7 @@ export const iterateAgentTools = defineDOTools({
         .describe(
           "Path parameters to insert into the URL. Path parameters are placeholders in the endpoint path represented as [param] that are replaced with the values in this object.",
         ),
-      userId: z.string().describe("The user ID to use for authentication"),
+      impersonateUserId: z.string().describe("The user ID to use for authentication"),
     }),
   },
   sendGmail: {
@@ -239,7 +239,7 @@ export const iterateAgentTools = defineDOTools({
         .string()
         .optional()
         .describe("Message ID to reply to (from getGmailMessage headers)"),
-      userId: z.string().describe("The user ID to use for authentication"),
+      impersonateUserId: z.string().describe("The user ID to use for authentication"),
     }),
   },
   // requires unapproved scope: gmail.modify
@@ -249,7 +249,7 @@ export const iterateAgentTools = defineDOTools({
     statusIndicatorText: "📬 fetching email",
     input: z.object({
       messageId: z.string().describe("The ID of the message to retrieve"),
-      userId: z.string().describe("The user ID to use for authentication"),
+      impersonateUserId: z.string().describe("The user ID to use for authentication"),
     }),
   },
   addLabel: {
