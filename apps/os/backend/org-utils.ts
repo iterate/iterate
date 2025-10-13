@@ -1,6 +1,5 @@
-import { waitUntil } from "cloudflare:workers";
 import dedent from "dedent";
-import { env } from "../env.ts";
+import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
