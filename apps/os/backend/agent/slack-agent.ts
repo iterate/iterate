@@ -485,7 +485,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           yamlArgs === "{}" ? "" : `Arguments:\n\n${yamlArgs}`,
         ];
         const text = message.filter(Boolean).join("\n\n");
-        const result = await this.rawSendSlackMessage({ text });
+        const result = await this.sendSlackMessage({ text });
         if (!result.ts) throw new Error("Failed to send approval request message");
 
         // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
@@ -1044,6 +1044,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         data: {
           approvalKey: ApprovalKey.parse(slackEvent.item.ts),
           approved: slackEvent.reaction === "+1",
+          approvedBy: slackEvent,
         },
       });
     }
@@ -1055,7 +1056,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     };
   }
 
-  async rawSendSlackMessage(input: Inputs["sendSlackMessage"]) {
+  async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
     const slackThreadId = this.agentCore.state.slackThreadId;
     const slackChannelId = this.agentCore.state.slackChannelId;
 
@@ -1070,7 +1071,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl: sendInput.unfurl,
     });
 
-    return this.slackAPI.chat.postMessage({
+    const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
       text: sendInput.text,
@@ -1078,22 +1079,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
     });
-  }
-
-  async sendSlackMessage(input: Inputs["sendSlackMessage"]) {
-    const result = await this.rawSendSlackMessage(input);
 
     if (!result.ok) {
       throw new Error(`Failed to send Slack message: ${result.error}`);
     }
 
-    const magic: MagicAgentInstructions = {};
-    if (input.endTurn) {
-      magic.__triggerLLMRequest = false;
-    }
+    const magic: MagicAgentInstructions = input.endTurn ? { __triggerLLMRequest: false } : {};
 
-    // don't include slack API response to conserve tokens in the success case
-    return { status: "message sent", ts: result.ts, ...magic };
+    // don't include full slack API response to conserve tokens in the success case. need some properties though so the LLM knows the message was sent
+    return { ok: true, ts: result.ts, ...magic };
   }
 
   async addSlackReaction(input: Inputs["addSlackReaction"]) {

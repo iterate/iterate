@@ -163,6 +163,7 @@ const toolCallApprovalEventFields = {
   data: z.object({
     approvalKey: ApprovalKey,
     approved: z.boolean(),
+    approvedBy: z.string(),
   }),
 };
 export const ToolCallApprovalEvent = z.object({
