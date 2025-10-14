@@ -97,6 +97,11 @@ export type LocalFunctionToolExecuteFunction<TEventInput = AgentCoreEvent> = (
 
 export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEvent> = FunctionTool & {
   canBeParallelized?: boolean; // If true, the tool can be called in parallel with other tools
+  wrappers: Array<
+    (
+      next: LocalFunctionToolExecuteFunction<TEventInput>,
+    ) => LocalFunctionToolExecuteFunction<TEventInput>
+  >;
   execute: LocalFunctionToolExecuteFunction<TEventInput>;
   isAsync?: boolean; // If true, tool execution creates an ASYNC_TOOL_CALL_CREATED event
   statusIndicatorText?: string; // Text to show in Slack typing indicator when this tool is being called

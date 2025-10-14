@@ -298,6 +298,12 @@ export const defaultContextRules = defineRules([
     match: matchers.sandboxStatus("starting"),
   },
   {
+    key: "policies",
+    toolApprovalPolicies: [
+      { approvalRequired: true, matcher: '$contains(name, "list_issues")' }, //
+    ],
+  },
+  {
     key: "google-gmail-tools",
     prompt: dedent`
       You have access to Gmail tools to send, read, reply to, and forward emails.

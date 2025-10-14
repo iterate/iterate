@@ -35,11 +35,7 @@ import type { TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
-<<<<<<< Updated upstream
   type ApprovalKey,
-=======
-  AgentCoreStoredEvent,
->>>>>>> Stashed changes
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
@@ -417,7 +413,7 @@ export class AgentCore<
         // Process events one by one to maintain state consistency
         for (const event of existing) {
           // Validate the event
-          const validated = this.combinedEventSchema.and(AgentCoreStoredEvent).parse(event);
+          const validated = this.combinedEventSchema.parse(event);
 
           // Track idempotency key if present
           if (validated.idempotencyKey) {
@@ -1408,13 +1404,14 @@ export class AgentCore<
       }
   > {
     const tools = this.state.runtimeTools;
-    const tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
+    let tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
       this.deps.console.error("Tool not found or not local:", tool);
       this.deps.console.error("runtime tools:", tools);
       this.deps.console.error("tool", JSON.stringify(tool, null, 2));
       return { success: false, error: `Tool not found or not local: ${call.name}` };
     }
+    tool.wrappers ||= [];
     try {
       const args = JSON.parse(call.arguments || "{}");
 
@@ -1430,34 +1427,47 @@ export class AgentCore<
         }
       }
       if (call.call_id.startsWith("injected-")) needsApproval = false;
+      console.log({ call, needsApproval, policies });
 
       if (needsApproval) {
-        const approvalKey = await this.deps.requestApprovalForToolCall!({
-          toolName: call.name,
-          args,
-          toolCallId: call.call_id,
-        }).catch((e) => {
-          throw new Error(`failed to request approval?? ${e}`);
-        });
-        return {
-          success: true,
-          output: { message: "Tool call needs approval" },
-          triggerLLMRequest: false,
-          addEvents: [
-            {
-              type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
-              data: {
-                approvalKey,
-                toolName: call.name,
-                args,
-                toolCallId: call.call_id,
-              },
+        const approvalWrapper: (typeof tool.wrappers)[0] = (_next) => async (call, args) => {
+          console.log("running needsApproval wrapper");
+          const approvalKey = await this.deps.requestApprovalForToolCall!({
+            toolName: call.name,
+            args: args as {},
+            toolCallId: call.call_id,
+          }).catch((e) => {
+            throw new Error(`failed to request approval?? ${e}`);
+          });
+          return {
+            toolCallResult: {
+              success: true,
+              output: { message: "Tool call needs approval" },
             },
-          ],
+            triggerLLMRequest: false,
+            addEvents: [
+              {
+                type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
+                data: {
+                  approvalKey,
+                  toolName: call.name,
+                  args,
+                  toolCallId: call.call_id,
+                },
+              },
+            ],
+          };
         };
+        tool = { ...tool, wrappers: [...tool.wrappers, approvalWrapper] };
       }
 
-      const result = await tool.execute(call, args);
+      console.log(tool.name, "wrappifying", tool.wrappers);
+      const wrapped = tool.wrappers.toReversed().reduce(
+        (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
+        tool.execute,
+      );
+      const result = await wrapped(call, args);
+      console.log(tool.name, "result", result);
       return {
         success: true,
         output: stripNonSerializableProperties(result.toolCallResult),

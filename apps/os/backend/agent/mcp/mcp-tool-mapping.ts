@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { MCPClientManager } from "agents/mcp/client";
 import { z } from "zod/v4";
 import type { AgentCoreDeps, MergedStateForSlices } from "../agent-core.ts";
 import type { AgentCoreEvent } from "../agent-core-schemas.ts";
@@ -354,6 +356,12 @@ export interface LazyConnectionDeps {
   }) => Promise<string | undefined>;
 }
 
+const mcpToolExecutionStorage = new AsyncLocalStorage<{
+  actualServerId: string;
+  manager: MCPClientManager;
+  toolArgs: any;
+}>();
+
 /**
  * Convert MCP tool to OpenAI runtime tool with impersonation support
  */
@@ -389,14 +397,9 @@ export function createRuntimeToolFromMCPTool(params: {
     };
   }
 
-  return {
-    type: "function",
-    name: toolName,
-    description: tool.description || `MCP tool from ${integrationSlug}`,
-    parameters: modifiedParameters,
-    strict: false,
-    metadata: { source: "mcp" },
-    async execute(_call, args: any) {
+  const lazyConnectionWrapper: LocalFunctionRuntimeTool["wrappers"][number] = (next) => {
+    return async (_call, args: any) => {
+      console.log("running mcp lazy connection wrapper");
       const { impersonateUserId, ...toolArgs } = args;
 
       let selectedConnectionKey: MCPConnectionKey | undefined;
@@ -503,19 +506,15 @@ export function createRuntimeToolFromMCPTool(params: {
         );
       }
 
-      const mcpResult = await manager
-        .callTool({
-          serverId: actualServerId,
-          name: tool.name,
-          arguments: toolArgs,
-        })
-        .catch((error) => {
-          logger.error(
-            `[MCP] Tool execution failed for ${tool.name}:`,
-            (error as Error)?.stack || error,
-          );
-          throw error;
-        });
+      const mcpResult = await mcpToolExecutionStorage.run(
+        { actualServerId, manager, toolArgs },
+        async () => {
+          console.log("running mcp tool execution next(...)");
+          const int = await next(_call, args);
+          console.log("ran mcp tool execution next(...)");
+          return int.toolCallResult as Awaited<ReturnType<typeof manager.callTool>>;
+        },
+      );
 
       if (mcpResult?.resource_link) {
         try {
@@ -584,6 +583,39 @@ export function createRuntimeToolFromMCPTool(params: {
         triggerLLMRequest: true,
         addEvents: [...additionalMCPEvents, ...fileEvents] as any,
       };
+    };
+  };
+
+  return {
+    type: "function",
+    name: toolName,
+    description: tool.description || `MCP tool from ${integrationSlug}`,
+    parameters: modifiedParameters,
+    strict: false,
+    metadata: { source: "mcp" },
+    wrappers: [lazyConnectionWrapper],
+    async execute() {
+      // input args aren't use, we rely on the middleware to process them and get what we need from async local storage
+      const store = mcpToolExecutionStorage.getStore();
+      if (!store) {
+        throw new Error("MCP tool execution called outside of lazy connection wrapper");
+      }
+      const { actualServerId, manager, toolArgs } = store;
+      const mcpResult = await manager
+        .callTool({
+          serverId: actualServerId,
+          name: tool.name,
+          arguments: toolArgs,
+        })
+        .catch((error) => {
+          logger.error(
+            `[MCP] Tool execution failed for ${tool.name}:`,
+            (error as Error)?.stack || error,
+          );
+          throw error;
+        });
+
+      return { toolCallResult: mcpResult as {} };
     },
   };
 }
