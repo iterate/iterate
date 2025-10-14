@@ -35,10 +35,15 @@ import type { TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
+<<<<<<< Updated upstream
   type ApprovalKey,
+=======
+  AgentCoreStoredEvent,
+>>>>>>> Stashed changes
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
+  type StoredEvent,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
 import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
@@ -323,9 +328,8 @@ export class AgentCore<
   }
 
   // Event log ---------------------------------------------------------------
-  private _events: (MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string })[] =
-    [];
-  get events(): ReadonlyArray<MergedEventForSlices<Slices>> {
+  private _events: StoredEvent<MergedEventForSlices<Slices>>[] = [];
+  get events(): ReadonlyArray<StoredEvent<MergedEventForSlices<Slices>>> {
     return this._events;
   }
 
@@ -413,14 +417,7 @@ export class AgentCore<
         // Process events one by one to maintain state consistency
         for (const event of existing) {
           // Validate the event
-          const _validated = this.combinedEventSchema.parse(event);
-          if (_validated.eventIndex === undefined || !_validated.createdAt) {
-            throw new Error(`eventIndex and createdAt are required: ${JSON.stringify(event)}`);
-          }
-          const validated = _validated as MergedEventForSlices<Slices> & {
-            eventIndex: number;
-            createdAt: string;
-          };
+          const validated = this.combinedEventSchema.and(AgentCoreStoredEvent).parse(event);
 
           // Track idempotency key if present
           if (validated.idempotencyKey) {
@@ -446,7 +443,7 @@ export class AgentCore<
         eventIndex: this._events.length,
         createdAt: new Date().toISOString(),
         triggerLLMRequest: false,
-      } as const;
+      } as const as StoredEvent<MergedEventForSlices<Slices>>;
       // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
       this._events.push(initializedEvent);
       this._state = this.runReducersOnSingleEvent(this._state, initializedEvent);
@@ -510,7 +507,7 @@ export class AgentCore<
       const originalEvents = [...this._events];
       const originalState = { ...this._state };
       const eventsAddedThisBatch: Array<{
-        event: MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string };
+        event: StoredEvent<MergedEventForSlices<Slices>>;
         reducedState: MergedStateForSlices<Slices>;
       }> = [];
 
@@ -530,7 +527,7 @@ export class AgentCore<
             eventIndex: this._events.length,
             createdAt: ev.createdAt ?? new Date().toISOString(),
             triggerLLMRequest: ev.triggerLLMRequest ?? false,
-          };
+          } as (typeof this._events)[number];
 
           // Add idempotency key to seen set if present
           if (parsed.idempotencyKey) {
@@ -573,7 +570,7 @@ export class AgentCore<
           eventIndex: this._events.length,
           createdAt: new Date().toISOString(),
           triggerLLMRequest: false,
-        } as const;
+        } as const as (typeof this.events)[number];
 
         // Add the error event to the events array
         // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
@@ -618,7 +615,7 @@ export class AgentCore<
               triggerLLMRequest: false,
             } as const;
             // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
-            this._events.push(cancelEvent);
+            this._events.push(cancelEvent as StoredEvent<MergedEventForSlices<Slices>>);
             this._state = this.runReducersOnSingleEvent(this._state, cancelEvent);
 
             // Invoke callback for cancel event
@@ -638,7 +635,7 @@ export class AgentCore<
             triggerLLMRequest: false,
           } satisfies AgentCoreEvent;
           // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
-          this._events.push(startEvent);
+          this._events.push(startEvent as StoredEvent<MergedEventForSlices<Slices>>);
           this._state = this.runReducersOnSingleEvent(this._state, startEvent);
 
           // Invoke callback for start event

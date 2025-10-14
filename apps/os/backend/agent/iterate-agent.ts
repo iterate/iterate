@@ -59,7 +59,11 @@ import {
   type MergedEventForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import { AgentCoreEvent, type AugmentedCoreReducedState } from "./agent-core-schemas.ts";
+import {
+  AgentCoreEvent,
+  type AugmentedCoreReducedState,
+  type StoredEvent,
+} from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -347,9 +351,7 @@ export class IterateAgent<
         agentCoreState: state,
         durableObjectClassName: this.constructor.name,
       }),
-      storeEvents: (
-        events: ReadonlyArray<AgentCoreEvent & { eventIndex: number; createdAt: string }>,
-      ) => {
+      storeEvents: (events: ReadonlyArray<StoredEvent<AgentCoreEvent>>) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
           this.sql`

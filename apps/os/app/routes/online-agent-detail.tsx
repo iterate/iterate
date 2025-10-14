@@ -29,10 +29,11 @@ import {
 import type {
   AgentCoreEvent,
   AugmentedCoreReducedState,
+  StoredEvent,
 } from "../../backend/agent/agent-core-schemas.ts";
 import type { SlackSliceEvent } from "../../backend/agent/slack-slice.ts";
 
-type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
+type AgentEvent = StoredEvent<AgentCoreEvent | SlackSliceEvent>;
 
 interface ToolDefinition {
   name: string;
