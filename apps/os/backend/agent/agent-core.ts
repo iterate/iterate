@@ -284,8 +284,8 @@ export class AgentCore<
   ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
     const next: AugmentedCoreReducedState = {
       ...inputState,
-      runtimeTools: [],
       enabledContextRules: [],
+      runtimeTools: [],
       ephemeralPromptFragments: {},
       toolSpecs: [],
       mcpServers: [],
@@ -1434,11 +1434,9 @@ export class AgentCore<
         }
       }
       if (call.call_id.startsWith("injected-")) needsApproval = false;
-      console.log({ call, needsApproval, policies });
 
       if (needsApproval) {
         const approvalWrapper: (typeof tool.wrappers)[0] = (_next) => async (call, args) => {
-          console.log("running needsApproval wrapper");
           const approvalKey = await this.deps.requestApprovalForToolCall!({
             toolName: call.name,
             args: args as {},

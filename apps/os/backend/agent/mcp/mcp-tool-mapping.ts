@@ -360,6 +360,7 @@ const mcpToolExecutionStorage = new AsyncLocalStorage<{
   actualServerId: string;
   manager: MCPClientManager;
   toolArgs: any;
+  done: boolean;
 }>();
 
 /**
@@ -408,7 +409,6 @@ export function createRuntimeToolFromMCPTool(params: {
 
   const lazyConnectionWrapper: LocalFunctionRuntimeTool["wrappers"][number] = (next) => {
     return async (_call, args: any) => {
-      console.log("running mcp lazy connection wrapper");
       const { impersonateUserId, ...toolArgs } = args;
 
       let selectedConnectionKey: MCPConnectionKey | undefined;
@@ -515,15 +515,16 @@ export function createRuntimeToolFromMCPTool(params: {
         );
       }
 
-      const mcpResult = await mcpToolExecutionStorage.run(
-        { actualServerId, manager, toolArgs },
-        async () => {
-          console.log("running mcp tool execution next(...)");
-          const int = await next(_call, args);
-          console.log("ran mcp tool execution next(...)");
-          return int.toolCallResult as Awaited<ReturnType<typeof manager.callTool>>;
-        },
-      );
+      const store = { actualServerId, manager, toolArgs, done: false };
+      const mcpResultInt = await mcpToolExecutionStorage.run(store, () => {
+        return next(_call, args);
+      });
+
+      if (!store.done) {
+        return mcpResultInt; // this may have been intercepted by another wrapper, don't try to treat it as a normal MCP result, just return it
+      }
+
+      const mcpResult = mcpResultInt.toolCallResult as Awaited<ReturnType<typeof manager.callTool>>;
 
       if (mcpResult?.resource_link) {
         try {
@@ -618,6 +619,8 @@ export function createRuntimeToolFromMCPTool(params: {
           );
           throw error;
         });
+
+      store.done = true;
 
       return { toolCallResult: mcpResult as {} };
     },
