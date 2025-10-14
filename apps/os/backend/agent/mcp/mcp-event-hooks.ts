@@ -1,5 +1,7 @@
+import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
+import pRace from "p-suite/p-race";
 import { eq, and } from "drizzle-orm";
 import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
@@ -263,37 +265,30 @@ export async function handleMCPConnectRequest(
   let result: Awaited<ReturnType<typeof manager.connect>>;
 
   try {
-    const connectOptions: Parameters<typeof manager.connect>[1] = {
-      transport: {
-        authProvider: oauthProvider,
-        type: "auto",
-        requestInit: {
-          headers: appliedHeaders,
+    result = await pRace((signal) => [
+      manager.connect(modifiedServerUrl, {
+        transport: {
+          authProvider: oauthProvider,
+          type: "auto",
+          requestInit: {
+            headers: appliedHeaders,
+            signal,
+          },
         },
-      },
-      ...(reconnect && {
-        reconnect: {
-          id: reconnect.id,
-          oauthClientId: reconnect.oauthClientId,
-          oauthCode: reconnect.oauthCode,
-        },
+        ...(reconnect && {
+          reconnect: {
+            id: reconnect.id,
+            oauthClientId: reconnect.oauthClientId,
+            oauthCode: reconnect.oauthCode,
+          },
+        }),
       }),
-    };
-
-    result = await Promise.race([
-      manager.connect(modifiedServerUrl, connectOptions),
-      // wait 20 seconds - if fail, add an error event
-      new Promise<typeof result>((_, reject) => {
-        setTimeout(
-          () => reject(new Error("MCP connection timeout - authentication may have expired")),
-          20_000, // 10_000 was too short for some
-        );
+      setTimeoutPromise(30_000, null, { signal }).then(() => {
+        throw new Error("MCP connection timeout - authentication may have expired");
       }),
     ]);
-    // Set the serverId on the provider for OAuth state preservation
-    oauthProvider.serverId = result.id;
   } catch (error) {
-    oauthProvider?.resetClientAndTokens();
+    oauthProvider?.resetTokens();
     events.push({
       type: "MCP:CONNECTION_ERROR",
       data: {
@@ -309,6 +304,14 @@ export async function handleMCPConnectRequest(
   }
 
   if (result.authUrl) {
+    // Close the partial connection since we need OAuth first
+    // The connection will be re-established after OAuth completes
+    try {
+      await manager.closeConnection(result.id);
+    } catch (cleanupError) {
+      logger.warn(`[MCP] Failed to cleanup manager after OAuth required:`, cleanupError);
+    }
+
     events.push({
       type: "MCP:OAUTH_REQUIRED",
       data: {
@@ -328,10 +331,8 @@ export async function handleMCPConnectRequest(
 
   mcpConnectionCache.managers.set(cacheKey, manager);
 
-  const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name;
-  if (!serverName) {
-    throw new Error("Server name not found");
-  }
+  // Failback to Unknown if the server developer has not implemented the specification properly
+  const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name || "Unknown";
 
   const tools = manager.listTools().filter((t) => t.serverId === result.id);
   const prompts = manager.listPrompts().filter((p) => p.serverId === result.id);
@@ -461,6 +462,11 @@ export function getConnectionQueue(
   cacheKey: MCPConnectionKey,
 ): ConnectionQueueEntry {
   let entry = mcpConnectionQueues.get(cacheKey);
+  // If the entry exists but the controller is already aborted, remove it and create a fresh one
+  if (entry?.controller.signal.aborted) {
+    mcpConnectionQueues.delete(cacheKey);
+    entry = undefined;
+  }
   if (!entry) {
     entry = {
       queue: new PQueue({ concurrency: 1 }),

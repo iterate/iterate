@@ -41,6 +41,8 @@ import {
   uploadFileFromURL,
 } from "../file-handlers.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
+import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -1876,10 +1878,15 @@ export class IterateAgent<
 
     let accessToken: string;
     try {
-      const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
-      accessToken = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      const accessTokenResult = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      accessToken = accessTokenResult.token;
+      const scopes = accessTokenResult.scope?.split(" ") || [];
+      const requiredScopes = GOOGLE_INTEGRATION_SCOPES;
+      const missingScope = requiredScopes.find((scope) => !scopes.includes(scope));
+      if (missingScope) {
+        throw new Error(`User is missing scope: ${missingScope}. They need to re-authorize.`);
+      }
     } catch (error) {
-      const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
       const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
         durableObjectInstanceName: this.databaseRecord.durableObjectName,
       });

@@ -48,10 +48,8 @@ const defaultSlackAgentPrompt = dedent`
 
    ### Calling Tools 
    - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).
-   - Whenever you call one or more tools, other than sendSlackMessage--> in parallel call sendSlackMessage with a brief description of what you're doing. This must be in italics.
-   - After each tool call, provide a 1-2 line validation (e.g share links, images, answers, or other relevant output etc.) of the result before proceeding.
-   - After you've shared the output, validate it and self-correct if needed.
-   - Otherwise, if you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.
+   - If you want to call multiple tools in parallel, you must ALSO call sendSlackMessage as the first toolcall in the batch with a brief description of what you're doing. This must be in italics.
+   - If you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.
     For example, if:
      - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.
      - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.
@@ -61,8 +59,8 @@ const defaultSlackAgentPrompt = dedent`
 
    Example: tool call in parallel with sendSlackMessage
    First LLM response in agent turn: (parallel tool calls)
+   - sendSlackMessage({text: "_fetching..."}) // sendSlackMessage always first in parallel tool calls
    - getURLContent({url: "https://example.com"} )
-   - sendSlackMessage({text: "_fetching..."})
    Second LLM response in agent turn (after getURLContent complete):
    - sendSlackMessage({ text: "fetched the contents of the URL. here they are: ...", endTurn: true }) 
 
@@ -105,7 +103,7 @@ const defaultSlackAgentPrompt = dedent`
    - Use Slack-flavour markdown
    - Don't use italics for multi-line messages
    - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. 
-   - Prefer inline links like "<URL|this image> is cool". Don't do <URL|click here to open>"
+   - Prefer inline links like "<URL|this page> is cool". Don't do "This page is cool: <URL|click here to open>"
    - Mentions: <@user_id>
    - Never use: Markdown tables (use lists/bullets)
    - Use the getURLContent tool to retrieve the contents of Slack messages that users link to (including the entire history of the linked thread)
@@ -143,6 +141,7 @@ const defaultSlackAgentPrompt = dedent`
 
    1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.
    2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:
+   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them "you are now connected" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.
    - e.g if the user wants to do stuff with Linear:
    \`\`\`js
    connectMCPServer({
@@ -171,6 +170,11 @@ const defaultSlackAgentPrompt = dedent`
    - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
+  - You do not need to share a link to the generated image with the user. It'll be shared as a side-effect of calling generateImage
+
+  # Capabilities
+  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. 
+  - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.
 `;
 export const defaultContextRules = defineRules([
   {
@@ -350,12 +354,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list messages for",
             },
           },
-          required: ["userId"],
+          required: ["impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/messages",
@@ -394,12 +398,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to modify messages for",
             },
           },
-          required: ["pathParams", "body", "userId"],
+          required: ["pathParams", "body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/messages/[messageId]/modify",
@@ -414,12 +418,12 @@ export const defaultContextRules = defineRules([
         overrideInputJSONSchema: {
           type: "object",
           properties: {
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list labels for",
             },
           },
-          required: ["userId"],
+          required: ["impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels",
@@ -450,12 +454,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["name"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create labels for",
             },
           },
-          required: ["body", "userId"],
+          required: ["body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels",
@@ -480,12 +484,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["labelId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete labels for",
             },
           },
-          required: ["pathParams", "userId"],
+          required: ["pathParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels/[labelId]",
@@ -564,12 +568,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["summary", "start", "end"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create events for",
             },
           },
-          required: ["body", "userId"],
+          required: ["body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events",
@@ -610,12 +614,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["maxResults"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list events for",
             },
           },
-          required: ["queryParams", "userId"],
+          required: ["queryParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events",
@@ -654,12 +658,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to update events for",
             },
           },
-          required: ["pathParams", "body", "userId"],
+          required: ["pathParams", "body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
@@ -679,12 +683,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["eventId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete events for",
             },
           },
-          required: ["pathParams", "userId"],
+          required: ["pathParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events/[eventId]",

@@ -74,16 +74,16 @@
       "new_sqlite_classes": ["IterateAgent", "SlackAgent"],
     },
     {
-      "tag": "2025-02-onboarding-agent",
-      "new_sqlite_classes": ["OnboardingAgent"],
-    },
-    {
       "tag": "2025-01-websocket",
       "new_sqlite_classes": ["OrganizationWebSocket"],
     },
     {
       "tag": "2025-01-sandbox",
       "new_sqlite_classes": ["Sandbox"],
+    },
+    {
+      "tag": "2025-02-onboarding-agent",
+      "new_sqlite_classes": ["OnboardingAgent"],
     },
   ],
   "triggers": {

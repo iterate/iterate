@@ -809,8 +809,8 @@ describe("mcp-slice", () => {
           (item: any) => item.type === "message" && item.role === "developer",
         );
         expect(devMessages).toHaveLength(1);
-        expect(devMessages[0].content[0].text).toContain("Authorization needed to access");
-        expect(devMessages[0].content[0].text).toContain("https://github.com/oauth/authorize");
+        expect(devMessages[0].content[0].text).toContain("User is being prompted to authorize");
+        expect(devMessages[0].content[0].text).toContain("github");
       });
 
       test6("should handle missing oauthUrl gracefully", async ({ h }) => {

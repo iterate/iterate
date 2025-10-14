@@ -34,9 +34,9 @@
   "devDependencies": {
     "@eslint/js": "^9.37.0",
     "@iterate-com/vibe-rules": "workspace:*",
-    "@types/node": "^24.7.0",
-    "@typescript-eslint/eslint-plugin": "^8.45.0",
-    "@typescript-eslint/parser": "^8.45.0",
+    "@types/node": "^24.7.2",
+    "@typescript-eslint/eslint-plugin": "^8.46.0",
+    "@typescript-eslint/parser": "^8.46.0",
     "eslint": "^9.37.0",
     "eslint-plugin-eslint-comments": "^3.2.0",
     "eslint-plugin-import": "^2.32.0",
@@ -52,5 +52,5 @@
   "dependencies": {
     "vibe-rules": "^0.3.91"
   },
-  "packageManager": "pnpm@10.18.0"
+  "packageManager": "pnpm@10.18.2"
 }
