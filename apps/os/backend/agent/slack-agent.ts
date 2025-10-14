@@ -4,6 +4,7 @@ import { and, asc, eq, or, inArray, lt } from "drizzle-orm";
 import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
+import { match, P } from "ts-pattern";
 import { env as _env, waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -284,6 +285,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             if (!found) {
               logger.error(
                 `Tool call approval not found for key: ${toolCallApprovalEvent.data.approvalKey}`,
+              );
+              break;
+            }
+            const data = toolCallApprovalEvent.data;
+            const userMatches = match(found.args)
+              .with({ impersonateUserId: data.approvedBy }, () => true)
+              .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
+              .otherwise(() => true); // no impersonateUserId, allow anybody to approve???
+
+            if (!userMatches) {
+              logger.info(
+                `User ${data.approvedBy} is not allowed to approve tool call for ${found.toolName}`,
               );
               break;
             }
@@ -657,6 +670,63 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     });
 
     return events;
+  }
+
+  private async getUserInfo(slackUserId: string, botUserId: string | undefined) {
+    if (slackUserId === botUserId) {
+      return null;
+    }
+    const currentState = this.agentCore.state;
+
+    const existingParticipant = Object.values(currentState.participants || {}).find(
+      (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+    );
+    if (existingParticipant) {
+      return {
+        status: "existing-participant" as const,
+        userId: existingParticipant.internalUserId,
+        userEmail: existingParticipant.email,
+        userName: existingParticipant.displayName,
+      };
+    }
+
+    const estateId = this.databaseRecord.estateId;
+
+    const result = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.externalId, slackUserId),
+          eq(estate.id, estateId),
+        ),
+      )
+      .limit(1);
+
+    // If no result, user either doesn't exist or doesn't have access to this estate
+    if (!result[0]) {
+      logger.info(
+        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
+      );
+      return null;
+    }
+
+    return {
+      status: "new-participant" as const,
+      ...result[0],
+    };
   }
 
   /**
@@ -1039,14 +1109,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       slackEvent.item.ts in currentState.toolCallApprovals &&
       (slackEvent.reaction === "+1" || slackEvent.reaction === "-1")
     ) {
-      currentEvents.push({
-        type: "CORE:TOOL_CALL_APPROVAL",
-        data: {
-          approvalKey: ApprovalKey.parse(slackEvent.item.ts),
-          approved: slackEvent.reaction === "+1",
-          approvedBy: slackEvent,
-        },
-      });
+      const userInfo = await this.getUserInfo(slackEvent.user, botUserId);
+      if (userInfo?.userId) {
+        currentEvents.push({
+          type: "CORE:TOOL_CALL_APPROVAL",
+          data: {
+            approvalKey: ApprovalKey.parse(slackEvent.item.ts),
+            approved: slackEvent.reaction === "+1",
+            approvedBy: userInfo.userId,
+          },
+        });
+      }
     }
 
     this.addEvents(currentEvents);
