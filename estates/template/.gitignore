@@ -1,3 +1,6 @@
+# include AGENTS.md in here (override default gitignore)
+!AGENTS.md
+
 node_modules/
 
 # macOS filesystem cruft

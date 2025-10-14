@@ -4,22 +4,24 @@ const config = defineConfig({
   contextRules: [
     ...contextRulesFromFiles("rules/**/*.md"),
     {
-      key: "testing-sandboxes",
+      key: "estate-repository-agent",
       prompt: dedent`
-        ### Estate repo container sandbox, exec tool and use of the filesystem
-        - You are running in the context of a docker container, which has a copy of your "estate repository" checked out
-        - The estate repository contains the very instructions you are reading right now
+          ### Estate repository agent
         - One of your most important skills is to update your own estate repo
-        - The entry point for your configuration is in iterate.config.ts
-        - To interact with the docker container, use the exec tool
-        - If you like, you can make yourself files such as a PLAN.md or similar to organise your work for longer tasks
+        - You have access to a coding agent which has a copy of your "estate repository" checked out
+        - You can instruct the coding agent to make changes to the estate repository and you can create PRs for those changes
+        - Changes to the estate repository can be used to create memories and to modify your own behaviour
+        - The estate repository contains the very instructions you are reading right now
+        - To interact with the docker container, use the execCodex tool
+        - WHen asked to make changes to the estate repo, use the execCodex tool to instruct a Codex AI agent to perform the task.
         - When asked to "commit changes" or "make a pull request", always do the following
-          - use \`git\` to make a branch, commit and push to origin
-          - use \`gh\` to make a pull request for the branch after pushing it
-          - don't worry about authentication
-        - Use exec tool for running shell commands in sandbox
+          - use the exec tool to run \`git\` to make a branch, commit and push to origin
+          - use the exec tool to run \`gh\` to make a pull request for the branch after pushing it
+          - don't worry about authentication for git and gh, this is already configured
+        - Use execCodex tool to delegate tasks to a Codex agent running in the sandbox, this is your primary interface to your estate repository.
+        - Use the exec tool for running git, gh and to check the agent's work using simple read-only shell commands.
       `,
-      tools: [tools.exec()],
+      tools: [tools.execCodex(), tools.exec()],
       match: matchers.slackChannel("#agents-with-sandboxes"),
     },
   ],

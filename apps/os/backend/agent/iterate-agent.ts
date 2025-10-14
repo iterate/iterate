@@ -1,3 +1,4 @@
+import { type ExecEvent, type Sandbox, type StreamOptions } from "@cloudflare/sandbox";
 import pMemoize from "p-suite/p-memoize";
 import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
@@ -374,7 +375,28 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        void fn();
+        const start = Date.now();
+        const interval = setInterval(async () => {
+          try {
+            await this.ctx.storage.setAlarm(new Date(Date.now() + 60000));
+            const response = await this.env.SLACK_AGENT.getByName(this.name).fetch(
+              "http://self/doNothing",
+            );
+            const text = await response.text();
+            console.log(
+              "Background task running for " + (Date.now() - start) / 1000 + "s",
+              text,
+              response.status,
+            );
+          } catch (err) {
+            console.error("Error setting alarm", err);
+          }
+        }, 10000);
+        this.ctx.waitUntil(
+          fn().finally(() => {
+            clearInterval(interval);
+          }),
+        );
       },
 
       getOpenAIClient: async () => {
@@ -1663,6 +1685,31 @@ export class IterateAgent<
     });
   }
 
+  async execCodex(input: Inputs["execCodex"]) {
+    const instructions: string = input.command;
+
+    const instructionsFilePath = `/tmp/instructions-${R.randomInteger(0, 99999)}.txt`;
+    const newInput: Inputs["exec"] = {
+      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
+      files: [
+        {
+          path: instructionsFilePath,
+          content: instructions,
+        },
+      ],
+      env: {
+        // this tells codex to use the openai api key
+        // setting OPENAI_API_KEY is not enough, because codex will not use it
+        CODEX_API_KEY: await getSecret(env, "OPENAI_API_KEY"),
+      },
+    };
+    const result = await this.exec(newInput);
+    // TODO: filter the json here and make it token efficient
+    return {
+      ...result,
+    };
+  }
+
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config
@@ -1725,13 +1772,14 @@ export class IterateAgent<
     // Retrieve the sandbox
     const { getSandbox } = await import("@cloudflare/sandbox");
 
-    const sandboxId = `agent-sandbox-${estateId}`;
+    // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
+      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
       // Ensure that the session directory exists
-      const sessionId = estateId;
-      const sessionDir = `/tmp/session-${estateId}`;
+      const sessionDir = `/tmp/session-${sessionId}`;
       await sandbox.mkdir(sessionDir, { recursive: true });
 
       // Create an isolated session
@@ -1739,6 +1787,9 @@ export class IterateAgent<
         id: sessionId,
         cwd: sessionDir,
         isolation: true,
+        env: {
+          ...input.env,
+        },
       });
 
       // Determine the checkout target and whether it's a commit hash
@@ -1757,7 +1808,7 @@ export class IterateAgent<
       const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
       // Init the sandbox (ignore any errors)
       const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-      const resultInit = await sandboxSession.exec(commandInit, {
+      using resultInit = await sandboxSession.exec(commandInit, {
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
@@ -1767,20 +1818,134 @@ export class IterateAgent<
         );
       }
 
+      if (input.command.length > 256) {
+        if (!input.files) {
+          input.files = [];
+        }
+        const commandId = R.randomInteger(0, 99999);
+        input.files.push({
+          path: `/tmp/command-id-${commandId}.sh`,
+          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
+        });
+        input.command = `bash /tmp/command-id-${commandId}.sh`;
+      }
+      // ------------------------------------------------------------------------
+      // Write files
+      // ------------------------------------------------------------------------
+      await Promise.all(
+        (input.files ?? []).map(async (file) => {
+          await sandboxSession.writeFile(file.path, file.content);
+        }),
+      );
+
       // ------------------------------------------------------------------------
       // Run exec
       // ------------------------------------------------------------------------
 
       // Run the exec command
       const commandExec = input.command;
-      const _resultExec = await sandboxSession.exec(commandExec, {
+
+      const resultStream = await execStreamOnContainer(sandbox, sandboxSession.id, commandExec, {
         timeout: 360 * 1000, // 360 seconds total timeout
       });
-      if (!_resultExec.success) {
-        logger.error(`Error running \`${commandExec}\` in sandbox`, _resultExec);
-      }
+      let stdout = "";
+      let stderr = "";
+      const stream = resultStream[Symbol.asyncIterator]();
 
-      return _resultExec;
+      let sandboxHealthy = true;
+      const interval = setInterval(async () => {
+        try {
+          const state = await sandbox.getState();
+          if (state.status !== "healthy") {
+            sandboxHealthy = false;
+          }
+          await sandbox.renewActivityTimeout();
+        } catch (err) {
+          console.error("Error renewing activity timeout", err);
+        }
+      }, 5000);
+      try {
+        let e: Promise<IteratorResult<ExecEvent, any>> | undefined;
+        while (true) {
+          if (!sandboxHealthy) {
+            console.log("Sandbox is not healthy, exiting");
+            return {
+              success: false,
+              message: "Sandbox crashed after completing this work",
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
+          }
+          const timeout = new Promise<"TIMEOUT">((resolve) => {
+            setTimeout(() => {
+              resolve("TIMEOUT");
+            }, 10000);
+          });
+          if (!e) {
+            e = stream.next();
+          }
+
+          const result = await Promise.race([e, timeout]);
+          if (result === "TIMEOUT") {
+            console.log("Exec timeout, looping");
+            continue;
+          }
+          // have to reset e
+          e = undefined;
+          if (result.done) {
+            console.log("Exec readable exhausted without complete event", {
+              input,
+              stdout,
+              stderr,
+            });
+            // should not get here
+            return {
+              success: false,
+              message: "Result stream terminated before process completion signal was received",
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
+          }
+          const event = result.value;
+          switch (event.type) {
+            case "stdout":
+              stdout += event.data;
+              console.log(`Exec stdout: ${event.data}`);
+              break;
+            case "stderr":
+              stderr += event.data;
+              console.log(`Exec stderr: ${event.data}`);
+              break;
+            case "error":
+              stderr += event.data;
+              console.log(`Exec error: ${event.data}`);
+              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+              return {
+                message: "Execution errors occurred",
+                success: false,
+                stdout,
+                stderr,
+                exitCode: 1,
+              };
+            case "complete":
+              console.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
+              return {
+                message:
+                  event.exitCode === 0
+                    ? "Execution completed successfully"
+                    : "Execution completed with errors",
+                success: event.exitCode === 0,
+                stdout,
+                stderr,
+                exitCode: event.exitCode,
+              };
+          }
+        }
+      } finally {
+        clearInterval(interval);
+      }
     };
 
     // If sandbox is not ready, start it, and schedule exec after it boots up.
@@ -1793,49 +1958,18 @@ export class IterateAgent<
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
     if (sandboxState.status !== "healthy") {
-      void sandbox
-        .startAndWaitForPorts(3000) // default sandbox port
-        .then(execInSandbox)
-        .then((resultExec) => {
-          // Inject a tool call event that will be processed by the agent
-          // TODO: this doesn't work
-          (this as any).addEvent({
-            type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
-            data: {
-              call: {
-                type: "function_call",
-                call_id: `exec-result-${Date.now()}`,
-                name: "sendSlackMessage",
-                arguments: JSON.stringify({
-                  text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
-                  endTurn: true,
-                }),
-                status: "completed", // ← Changed from "pending"
-              },
-              result: {
-                success: resultExec.success,
-                output: {},
-              },
-            },
-            triggerLLMRequest: false,
-          });
-        });
-
-      // TODO: this doesn't work
-      return {
-        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
-        __triggerLLMRequest: false,
-      };
+      await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
 
     if (!resultExec.success) {
+      console.error("Exec failed", resultExec);
       return {
         success: false,
         error: dedent`
-          Command failed with exit code ${resultExec.exitCode}
+          Command failed with exit code ${resultExec.exitCode} and message "${resultExec.message}"
 
           stdout:
           ${resultExec.stdout || "(empty)"}
@@ -1847,10 +1981,12 @@ export class IterateAgent<
       };
     }
 
+    console.log("Exec succeeded 1", resultExec);
     return {
       success: true,
       output: {
-        message: resultExec.stdout,
+        message: resultExec.message,
+        stdout: resultExec.stdout,
         stderr: resultExec.stderr,
       },
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
@@ -2094,4 +2230,95 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
+}
+
+async function getSecret<T extends keyof CloudflareEnv>(
+  env: CloudflareEnv,
+  key: T,
+): Promise<string> {
+  if (typeof env[key] === "string") {
+    return env[key];
+  }
+  const secret = env[key];
+  if (!secret) {
+    throw new Error(`Binding ${key} is missing from env`);
+  }
+  if ("get" in secret) {
+    // @ts-expect-error - we know that the secret is a function that returns a string but TypeScript doesn't
+    const secretValue = await secret.get();
+    // @ts-expect-error - we know that the secret is a function that returns a string but TypeScript doesn't
+    return secretValue as string;
+  }
+  throw new Error(`Secret ${key} is not a string or a function that returns a string`);
+}
+
+/**
+ * Execute a command with streaming output by making a direct fetch request to the container
+ * This bypasses the RPC layer and goes directly to the container's SSE endpoint
+ *
+ * @param stub - The Durable Object Sandbox stub
+ * @param sessionId - Required session ID for command execution
+ * @param command - The command to execute
+ * @param options - Optional streaming options (signal for cancellation)
+ * @returns AsyncIterable of ExecEvent objects
+ *
+ * @example
+ * ```typescript
+ * const sandbox = getSandbox(env.Sandbox, "my-sandbox");
+ * const session = await sandbox.createSession({ id: "my-session" });
+ *
+ * for await (const event of execStreamOnContainer(sandbox, session.id, "ls -la")) {
+ *   if (event.type === "stdout") {
+ *     console.log(event.data);
+ *   }
+ * }
+ * ```
+ */
+export async function execStreamOnContainer(
+  stub: DurableObjectStub<Sandbox<unknown>>,
+  sessionId: string,
+  command: string,
+  options?: StreamOptions,
+): Promise<AsyncIterable<ExecEvent>> {
+  const { responseToAsyncIterable } = await import("@cloudflare/sandbox");
+
+  // Construct the request to the container's streaming endpoint
+  const request = new Request("http://container/api/execute/stream", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      id: sessionId,
+      command,
+    }),
+    signal: options?.signal,
+  });
+
+  // Make the fetch request through the Durable Object stub
+  // This will route through Sandbox.fetch() -> containerFetch() -> container
+  const response = await stub.fetch(request);
+
+  // Check if the request was successful
+  if (!response.ok) {
+    let errorMessage = `Failed to execute command: ${response.status} ${response.statusText}`;
+    try {
+      const errorData = (await response.json()) as { error?: string };
+      if (errorData.error) {
+        errorMessage = errorData.error;
+      }
+    } catch {
+      // If we can't parse the error response, use the default message
+    }
+    throw new Error(errorMessage);
+  }
+
+  // Ensure we have a response body
+  if (!response.body) {
+    throw new Error("No response body for streaming execution");
+  }
+
+  // Parse the SSE stream and yield events
+  return responseToAsyncIterable<ExecEvent>(response, options?.signal);
 }

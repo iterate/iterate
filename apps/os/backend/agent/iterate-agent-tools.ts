@@ -170,11 +170,32 @@ export const iterateAgentTools = defineDOTools({
     }),
   },
   exec: {
-    description: "Execute a shell in a sandbox.",
+    description:
+      "Execute a shell in a sandbox. This should be used for making commits and PRs using git, gh and to perform simple-read-only shell commands.",
     statusIndicatorText: "⚙️ running command",
     input: z.object({
       command: z.string(),
+      files: z
+        .array(
+          z.object({
+            path: z
+              .string()
+              .describe(
+                "The relative path to the file in the sandbox (files will be created in a sandbox temporary directory)",
+              ),
+            content: z.string(),
+          }),
+        )
+        .optional()
+        .describe("Files to create in the sandbox before running the command"),
       env: z.record(z.string(), z.string()).optional(),
+    }),
+  },
+  execCodex: {
+    description: "Ask codex to perform a task in the sandbox.",
+    statusIndicatorText: "⚙️ running command",
+    input: z.object({
+      command: z.string(),
     }),
   },
   generateVideo: {
