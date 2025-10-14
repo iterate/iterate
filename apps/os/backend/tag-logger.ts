@@ -223,9 +223,7 @@ export class TagLogger {
       // wrap with Error
       errorToLog = new Error(args[0]);
     } else if (args.length === 2 && typeof args[0] === "string") {
-      errorToLog = new Error(args[0], {
-        cause: args[1] instanceof Error ? args[1] : new Error(String(args[1])),
-      });
+      errorToLog = new Error(args[0], { cause: args[1] });
     } else {
       errorToLog = new Error(args.join(" "));
     }

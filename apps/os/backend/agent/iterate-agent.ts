@@ -1778,10 +1778,8 @@ export class IterateAgent<
       });
       if (!resultInit.success) {
         logger.error(
-          JSON.stringify({
-            message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
-            result: resultInit,
-          }),
+          "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+          resultInit,
         );
       }
 
@@ -1795,12 +1793,7 @@ export class IterateAgent<
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!_resultExec.success) {
-        logger.error(
-          JSON.stringify({
-            message: `Error running \`${commandExec}\` in sandbox`,
-            result: _resultExec,
-          }),
-        );
+        logger.error(`Error running \`${commandExec}\` in sandbox`, _resultExec);
       }
 
       return _resultExec;

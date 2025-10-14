@@ -164,8 +164,8 @@ describe("metadata management", () => {
     const { logger } = createLogger();
 
     logger.runInContext({ ...baseMetadata, custom: "value" }, () => {
-      expect(logger.getMetadata("custom")).toBe("value");
-      expect(logger.getMetadata("userId")).toBe(undefined);
+      expect(logger.getMetadata().custom).toBe("value");
+      expect(logger.getMetadata().userId).toBe(undefined);
       expect(logger.getMetadata()).toEqual({ ...baseMetadata, custom: "value" });
     });
   });
