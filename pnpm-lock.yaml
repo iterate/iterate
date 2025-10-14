@@ -64,8 +64,8 @@ importers:
   apps/os:
     dependencies:
       '@better-auth/stripe':
-        specifier: ^1.3.27
-        version: 1.3.27(@better-auth/core@1.3.27)(better-auth@1.3.27(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(stripe@19.1.0(@types/node@24.7.2))
+        specifier: 1.3.26
+        version: 1.3.26(better-auth@1.3.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(stripe@19.1.0(@types/node@24.7.2))
       '@cfworker/json-schema':
         specifier: ^4.1.1
         version: 4.1.1
@@ -130,8 +130,8 @@ importers:
         specifier: ^0.5.0
         version: 0.5.0
       better-auth:
-        specifier: ^1.3.27
-        version: 1.3.27(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+        specifier: 1.3.26
+        version: 1.3.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       better-sqlite3:
         specifier: ^12.4.1
         version: 12.4.1
@@ -829,14 +829,13 @@ packages:
   '@base-org/account@1.1.1':
     resolution: {integrity: sha512-IfVJPrDPhHfqXRDb89472hXkpvJuQQR7FDI9isLPHEqSYt/45whIoBxSPgZ0ssTt379VhQo4+87PWI1DoLSfAQ==}
 
-  '@better-auth/core@1.3.27':
-    resolution: {integrity: sha512-3Sfdax6MQyronY+znx7bOsfQHI6m1SThvJWb0RDscFEAhfqLy95k1sl+/PgGyg0cwc2cUXoEiAOSqYdFYrg3vA==}
+  '@better-auth/core@1.3.26':
+    resolution: {integrity: sha512-S5ooXaOcn9eLV3/JayfbMsAB5PkfoTRaRrtpb5djwvI/UAJOgLyjqhd+rObsBycovQ/nPQvMKjzyM/G1oBKngA==}
 
-  '@better-auth/stripe@1.3.27':
-    resolution: {integrity: sha512-YXmWMvX07lCDHheRB65jl80sSHTClFeJqN2vU6v5tI+0R4tzYBeWxYjvkS6cks1JJ8IjPUKTew0gy2Px3AlOCA==}
+  '@better-auth/stripe@1.3.26':
+    resolution: {integrity: sha512-tOdB11BMtZUzZI7pIR+sznt0Z+fPWMYn02bb6biOAUVo7qyiuWMRvZ/KWfudug3QVBY/hGN/zyi1vM+IDRQq6A==}
     peerDependencies:
-      '@better-auth/core': 1.3.27
-      better-auth: 1.3.27
+      better-auth: 1.3.26
       stripe: ^18
 
   '@better-auth/utils@0.3.0':
@@ -4504,8 +4503,8 @@ packages:
   before-after-hook@4.0.0:
     resolution: {integrity: sha512-q6tR3RPqIB1pMiTRMFcZwuG5T8vwp+vUvEG0vuI6B+Rikh5BfPp2fQ82c925FOs+b0lcFQ8CFrL+KbilfZFhOQ==}
 
-  better-auth@1.3.27:
-    resolution: {integrity: sha512-SwiGAJ7yU6dBhNg0NdV1h5M8T5sa7/AszZVc4vBfMDrLLmvUfbt9JoJ0uRUJUEdKRAAxTyl9yA+F3+GhtAD80w==}
+  better-auth@1.3.26:
+    resolution: {integrity: sha512-umaOGmv29yF4sD6o2zlW6B0Oayko5yD/A8mKJOFDDEIoVP/pR7nJ/2KsqKy+xvBpnDsKdrZseqA8fmczPviUHw==}
     peerDependencies:
       '@lynx-js/react': '*'
       '@sveltejs/kit': '*'
@@ -10011,15 +10010,14 @@ snapshots:
       - zod
     optional: true
 
-  '@better-auth/core@1.3.27':
+  '@better-auth/core@1.3.26':
     dependencies:
       better-call: 1.0.19
       zod: 4.1.12
 
-  '@better-auth/stripe@1.3.27(@better-auth/core@1.3.27)(better-auth@1.3.27(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(stripe@19.1.0(@types/node@24.7.2))':
+  '@better-auth/stripe@1.3.26(better-auth@1.3.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(stripe@19.1.0(@types/node@24.7.2))':
     dependencies:
-      '@better-auth/core': 1.3.27
-      better-auth: 1.3.27(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      better-auth: 1.3.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       defu: 6.1.4
       stripe: 19.1.0(@types/node@24.7.2)
       zod: 4.1.12
@@ -14916,9 +14914,9 @@ snapshots:
 
   before-after-hook@4.0.0: {}
 
-  better-auth@1.3.27(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
+  better-auth@1.3.26(react-dom@19.2.0(react@19.2.0))(react@19.2.0):
     dependencies:
-      '@better-auth/core': 1.3.27
+      '@better-auth/core': 1.3.26
       '@better-auth/utils': 0.3.0
       '@better-fetch/fetch': 1.1.18
       '@noble/ciphers': 2.0.1
