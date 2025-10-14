@@ -926,7 +926,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     ) {
       return;
     }
-
     const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
 
     if (!botUserId) {
