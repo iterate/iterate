@@ -335,10 +335,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   /**
    * Fetches webhook payloads from a thread, optionally before a specific timestamp
    */
-  protected async getWebhooksFromThread(
-    threadTs: string,
-    beforeTs?: string,
-  ): Promise<SlackWebhookPayload[]> {
+  protected async getWebhooksFromThread({
+    threadTs,
+    beforeTs,
+  }: {
+    threadTs: string;
+    beforeTs?: string;
+  }): Promise<SlackWebhookPayload[]> {
     const whereConditions = [
       or(eq(slackWebhookEvent.thread_ts, threadTs), eq(slackWebhookEvent.ts, threadTs)),
       eq(slackWebhookEvent.type, "message"),
@@ -773,10 +776,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If mid-thread join, process historical webhooks first
     if (!isSlackInitialized && !isThreadStarter) {
-      const historicalWebhooks = await this.getWebhooksFromThread(
-        messageMetadata.threadTs,
-        messageMetadata.ts,
-      );
+      const historicalWebhooks = await this.getWebhooksFromThread({
+        threadTs: messageMetadata.threadTs,
+        beforeTs: messageMetadata.ts,
+      });
       for (const webhook of historicalWebhooks) {
         const events = await this.extractEventsFromWebhook(webhook, botUserId, false);
         this.addEvents(events);
