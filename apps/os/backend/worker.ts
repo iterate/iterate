@@ -49,7 +49,6 @@ export type Variables = {
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
-app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
 app.use("*", async (c, next) => {
   const db = getDb();
