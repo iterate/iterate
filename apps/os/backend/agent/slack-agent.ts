@@ -289,27 +289,37 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               break;
             }
             const data = toolCallApprovalEvent.data;
-            const userMatches = match(found.args)
-              .with({ impersonateUserId: data.approvedBy }, () => true)
-              .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
-              .otherwise(() => true); // no impersonateUserId, allow anybody to approve???
-
-            if (!userMatches) {
-              logger.info(
-                `User ${data.approvedBy} is not allowed to approve tool call for ${found.toolName}`,
-              );
-              break;
-            }
 
             this.ctx.waitUntil(
               Promise.resolve().then(async () => {
-                const messageTs = toolCallApprovalEvent.data.approvalKey;
+                const messageTs = data.approvalKey;
                 await Promise.all([
                   this.removeSlackReaction({ messageTs, name: "+1" }),
                   this.removeSlackReaction({ messageTs, name: "-1" }),
                 ]);
-                if (!toolCallApprovalEvent.data.approved) {
+                if (!data.approved) {
+                  await this.updateSlackMessage({
+                    ts: messageTs,
+                    text: `Tool call ${found.toolName} was rejected`,
+                  });
                   await this.addSlackReaction({ messageTs, name: "no_entry" });
+                  return;
+                }
+
+                const userMatches = match(found.args)
+                  .with({ impersonateUserId: data.approvedBy }, () => true)
+                  .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
+                  .otherwise(() => true); // no impersonateUserId, allow anybody to approve???
+
+                if (!userMatches) {
+                  await this.updateSlackMessage({
+                    ts: messageTs,
+                    text: `User is not allowed to approve tool call for ${found.toolName}`,
+                  });
+                  await this.addSlackReaction({ messageTs, name: "no_entry" });
+                  logger.info(
+                    `User ${data.approvedBy} is not allowed to approve tool call for ${found.toolName}`,
+                  );
                   return;
                 }
 

@@ -97,7 +97,7 @@ export type LocalFunctionToolExecuteFunction<TEventInput = AgentCoreEvent> = (
 
 export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEvent> = FunctionTool & {
   canBeParallelized?: boolean; // If true, the tool can be called in parallel with other tools
-  wrappers: Array<
+  wrappers?: Array<
     (
       next: LocalFunctionToolExecuteFunction<TEventInput>,
     ) => LocalFunctionToolExecuteFunction<TEventInput>
