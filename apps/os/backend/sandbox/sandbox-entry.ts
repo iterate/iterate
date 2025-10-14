@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* eslint-disable no-console -- Console statements are required for script output to stdout/stderr */
+
 /**
  * Build script that clones a GitHub repository, installs dependencies,
  * runs pnpm iterate, and sends a callback with the results.

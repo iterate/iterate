@@ -6,7 +6,6 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
 
 // Function to create organization and estate for new users
@@ -83,17 +82,11 @@ export const createUserOrganizationAndEstate = async (
       try {
         await createStripeCustomerAndSubscriptionForOrganization(db, result.organization, user);
 
-        const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
-          db,
-          estateId: estate.id,
-          agentInstanceName: agentName,
-          reason: "Auto-provisioned OnboardingAgent during estate creation",
-        });
-        // We need to call some method on the stub, otherwise the agent durable object
-        // wouldn't boot up. Obtaining a stub doesn't in itself do anything.
-        await onboardingAgent.doNothing();
+        // Note: OnboardingAgent is now triggered AFTER Slack is connected
+        // (see integrations.ts callbackSlack). We just create the agent instance name here
+        // so it's ready when Slack connects.
       } catch (error) {
-        logger.error("Failed to create stripe customer and start onboarding agent", error);
+        logger.error("Failed to create stripe customer", error);
       }
     })(),
   );

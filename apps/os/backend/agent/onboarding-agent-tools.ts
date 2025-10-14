@@ -2,6 +2,24 @@ import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 
 export const onboardingAgentTools = defineDOTools({
+  exaSearch: {
+    description:
+      "Search the web using Exa's neural search API. Returns high-quality, relevant results with content extraction. Use this for fast web research about companies, industries, funding, competitors, and other topics.",
+    statusIndicatorText: "🔍 searching with Exa",
+    input: z.object({
+      query: z.string().describe("The search query"),
+      numResults: z
+        .number()
+        .min(1)
+        .max(10)
+        .default(5)
+        .describe("Number of results to return (1-10)"),
+      includeDomains: z
+        .array(z.string())
+        .optional()
+        .describe("Optional: Limit results to specific domains"),
+    }),
+  },
   updateResults: {
     description:
       "Update the research results by merging the provided results into the existing research data.",
@@ -30,22 +48,26 @@ export const onboardingAgentTools = defineDOTools({
   },
   getOnboardingProgress: {
     description: "Check which onboarding steps the user has completed",
-    statusIndicatorText: "📋 checking onboarding progress",
+    // No status indicator - this is an internal check
     input: z.object({}),
   },
   updateOnboardingProgress: {
     description: "Mark an onboarding step as complete or incomplete",
-    statusIndicatorText: "✅ updating onboarding progress",
+    // No status indicator - this is an internal update
     input: z.object({
-      step: z.enum([
-        "firstToolConnected",
-        "remoteMCPConnected",
-        "learnedBotUsageEverywhere",
-        "removedOnboardingRules",
-        "stripeConnected",
-        "communityInviteSent",
-      ]).describe("The onboarding step to update"),
-      completed: z.boolean().default(true).describe("Whether the step is completed (default: true)"),
+      step: z
+        .enum([
+          "firstToolConnected",
+          "remoteMCPConnected",
+          "learnedBotUsageEverywhere",
+          "editedRulesForTone",
+          "communityInviteSent",
+        ])
+        .describe("The onboarding step to update"),
+      completed: z
+        .boolean()
+        .default(true)
+        .describe("Whether the step is completed (default: true)"),
     }),
   },
 });

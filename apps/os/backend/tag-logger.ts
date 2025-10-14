@@ -126,7 +126,6 @@ export class TagLogger {
   }
 }
 
-/* eslint-disable no-console -- this is the one place where we use console */
 export const logger = new TagLogger({
   // cloudflare ignores everything after the first arg
   debug: (...args) => (args.length <= 1 ? console.debug(...args) : console.debug(args)),
