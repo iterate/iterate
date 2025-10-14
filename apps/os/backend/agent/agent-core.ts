@@ -1084,6 +1084,10 @@ export class AgentCore<
           });
           break;
         }
+        if (found.status !== "pending") {
+          // already approved/rejected. ignore.
+          break;
+        }
         next.toolCallApprovals = {
           ...next.toolCallApprovals,
           [data.approvalKey]: {
@@ -1466,13 +1470,11 @@ export class AgentCore<
         tool = { ...tool, wrappers: [...tool.wrappers, approvalWrapper] };
       }
 
-      console.log(tool.name, "wrappifying", tool.wrappers);
-      const wrapped = tool.wrappers.toReversed().reduce(
+      const wrapped = (tool.wrappers || []).toReversed().reduce(
         (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
         tool.execute,
       );
       const result = await wrapped(call, args);
-      console.log(tool.name, "result", result);
       return {
         success: true,
         output: stripNonSerializableProperties(result.toolCallResult),

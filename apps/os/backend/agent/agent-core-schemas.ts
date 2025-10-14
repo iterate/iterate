@@ -595,7 +595,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
     ApprovalKey,
     {
       toolCallId: string;
-      status: string;
+      status: "pending" | "approved" | "rejected";
       toolName: string;
       args: unknown;
     }

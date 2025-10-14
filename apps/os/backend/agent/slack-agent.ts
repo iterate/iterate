@@ -277,18 +277,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           }
 
           case "CORE:TOOL_CALL_APPROVAL": {
-            const toolCallApprovalEvent = event as AgentCoreEvent & {
-              type: "CORE:TOOL_CALL_APPROVAL";
-            };
-            const found =
-              this.agentCore.state.toolCallApprovals[toolCallApprovalEvent.data.approvalKey];
+            // todo: make this a dependency function, with a callback for injectToolCall
+            const { data } = event;
+            const found = this.agentCore.state.toolCallApprovals[data.approvalKey];
             if (!found) {
-              logger.error(
-                `Tool call approval not found for key: ${toolCallApprovalEvent.data.approvalKey}`,
-              );
+              logger.error(`Tool call approval not found for key: ${data.approvalKey}`);
               break;
             }
-            const data = toolCallApprovalEvent.data;
 
             this.ctx.waitUntil(
               Promise.resolve().then(async () => {
@@ -325,6 +320,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
                 await this.addSlackReaction({ messageTs, name: "eyes" });
                 // todo: handle async calls well
+                // todo: move this elsewhere! makes no sense for slack-agent to be responsible for injecting the tool call
                 await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
                 await Promise.all([
                   this.removeSlackReaction({ messageTs, name: "eyes" }),
