@@ -459,7 +459,7 @@ function ParallelToolGroup({
 
   const totalExecutionTime =
     toolCalls.length > 0
-      ? Math.max(...toolCalls.map((call) => (call.event.data as any).executionTimeMs || 0))
+      ? Math.max(...toolCalls.map((call) => call.event.data.executionTimeMs || 0))
       : 0;
 
   const successCount = toolCalls.filter((call) => (call.event.data as any).result.success).length;

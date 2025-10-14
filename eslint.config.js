@@ -268,6 +268,14 @@ export default defineConfig([
             getBuiltinRule("prefer-const"),
             "Change to const, if you're finished tinkering",
           ),
+          "no-as-never": noRestrictedSyntax(
+            'TSAsExpression[typeAnnotation.type="TSNeverKeyword"]',
+            "Don't cast to never. This lets you pass in *anything* as a parameter. Use `as unknown as SomethingSpecific` instead.",
+          ),
+          "no-as-any": noRestrictedSyntax(
+            'TSAsExpression[typeAnnotation.type="TSAnyKeyword"]',
+            "Don't cast to any. This lets you pass in *anything* as a parameter. Use `as unknown as SomethingSpecific` instead.",
+          ),
           "side-effect-imports-first": {
             meta: {
               fixable: "code",
@@ -355,6 +363,40 @@ export default defineConfig([
     return [{ name: `vibe-rules/${name}`, files, ...eslint }];
   }),
 ]);
+
+function noRestrictedSyntax(selector, message) {
+  return builtinRuleWithOptions(
+    getBuiltinRule("no-restricted-syntax"), //
+    [{ selector, message }],
+  );
+  // const builtinRule = getBuiltinRule("no-restricted-syntax");
+  // /** @type {import("eslint").Rule.RuleModule} */
+  // const overridenRule = {
+  //   ...builtinRule,
+  //   create: (context) => {
+  //     context.options = [{ selector, message }];
+  //     return builtinRule.create(context);
+  //   },
+  // };
+  // return overridenRule;
+}
+
+function builtinRuleWithOptions(builtinRule, options) {
+  /** @type {import("eslint").Rule.RuleModule} */
+  const overridenRule = {
+    ...builtinRule,
+    create: (context) => {
+      const proxyContext = new Proxy(new Object(), {
+        get: (_target, prop) => {
+          if (prop === "options") return options;
+          return context[prop];
+        },
+      });
+      return builtinRule.create(proxyContext);
+    },
+  };
+  return overridenRule;
+}
 
 /** @param {import("eslint").Rule.RuleModule} builtinRule */
 function fixToSuggestionInIDE(builtinRule, desc = "Apply default fix") {
