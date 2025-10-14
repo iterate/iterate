@@ -1,5 +1,5 @@
-import SymbolIcon from "./Symbol.tsx";
-import { Link } from "./Link.tsx";
+import SymbolIcon from "./symbol.tsx";
+import { Link } from "./link.tsx";
 
 export default function SiteFooter() {
   return (

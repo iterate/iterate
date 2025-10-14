@@ -24,7 +24,7 @@ import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
-import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
+import { shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import {
   ApprovalKey,
   type AgentCoreEvent,
@@ -531,57 +531,62 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     slackEvent: SlackEvent,
     botUserId: string | undefined,
   ): Promise<AgentCoreEvent[]> {
-    if (shouldIncludeEventInConversation(slackEvent, botUserId) && slackEvent?.type === "message") {
-      if (slackEvent.subtype === "file_share" && slackEvent.files) {
-        const fileUploadPromises = slackEvent.files.map(async (slackFile) => {
-          try {
-            const downloadUrl = slackFile.url_private_download || slackFile.url_private;
-            if (!downloadUrl) {
-              logger.error(`No download URL for Slack file ${slackFile.id}`);
-              return null;
-            }
-            const fileRecord = await uploadFileFromURL({
-              url: downloadUrl,
-              filename: slackFile.name || `slack-file-${slackFile.id}`,
-              estateId: this.databaseRecord.estateId,
-              db: this.db,
-              headers: {
-                Authorization: `Bearer ${this.slackAPI.token}`,
-              },
-            });
-            logger.log("File record", fileRecord);
-            return {
-              iterateFileId: fileRecord.id,
-              originalFilename: fileRecord.filename ?? undefined,
-              size: fileRecord.fileSize ?? undefined,
-              mimeType: fileRecord.mimeType ?? undefined,
-              openAIFileId: fileRecord.openAIFileId || undefined,
-              slackFileId: slackFile.id,
-            };
-          } catch (error) {
-            logger.error(`Failed to upload Slack file ${slackFile.id}:`, error);
+    // Only process files from human messages (not bot's own messages)
+    if (
+      slackEvent?.type === "message" &&
+      "user" in slackEvent &&
+      slackEvent.user !== botUserId &&
+      "files" in slackEvent &&
+      slackEvent.files
+    ) {
+      const fileUploadPromises = slackEvent.files.map(async (slackFile) => {
+        try {
+          const downloadUrl = slackFile.url_private_download || slackFile.url_private;
+          if (!downloadUrl) {
+            logger.error(`No download URL for Slack file ${slackFile.id}`);
             return null;
           }
-        });
-
-        const fileResults = await Promise.all(fileUploadPromises);
-
-        const fileEvents = fileResults
-          .filter((result): result is NonNullable<typeof result> => result !== null)
-          .map((fileData) => ({
-            type: "CORE:FILE_SHARED" as const,
-            data: {
-              direction: "from-user-to-agent" as const,
-              iterateFileId: fileData.iterateFileId,
-              originalFilename: fileData.originalFilename,
-              size: fileData.size,
-              mimeType: fileData.mimeType,
-              openAIFileId: fileData.openAIFileId,
+          const fileRecord = await uploadFileFromURL({
+            url: downloadUrl,
+            filename: slackFile.name || `slack-file-${slackFile.id}`,
+            estateId: this.databaseRecord.estateId,
+            db: this.db,
+            headers: {
+              Authorization: `Bearer ${this.slackAPI.token}`,
             },
-            triggerLLMRequest: false,
-          }));
-        return fileEvents;
-      }
+          });
+          logger.log("File record", fileRecord);
+          return {
+            iterateFileId: fileRecord.id,
+            originalFilename: fileRecord.filename ?? undefined,
+            size: fileRecord.fileSize ?? undefined,
+            mimeType: fileRecord.mimeType ?? undefined,
+            openAIFileId: fileRecord.openAIFileId || undefined,
+            slackFileId: slackFile.id,
+          };
+        } catch (error) {
+          logger.error(`Failed to upload Slack file ${slackFile.id}:`, error);
+          return null;
+        }
+      });
+
+      const fileResults = await Promise.all(fileUploadPromises);
+
+      const fileEvents = fileResults
+        .filter((result): result is NonNullable<typeof result> => result !== null)
+        .map((fileData) => ({
+          type: "CORE:FILE_SHARED" as const,
+          data: {
+            direction: "from-user-to-agent" as const,
+            iterateFileId: fileData.iterateFileId,
+            originalFilename: fileData.originalFilename,
+            size: fileData.size,
+            mimeType: fileData.mimeType,
+            openAIFileId: fileData.openAIFileId,
+          },
+          triggerLLMRequest: false,
+        }));
+      return fileEvents;
     }
     return [];
   }

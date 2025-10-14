@@ -1,5 +1,5 @@
-import SiteHeader from "./SiteHeader.tsx";
-import SiteFooter from "./SiteFooter.tsx";
+import SiteHeader from "./site-header.tsx";
+import SiteFooter from "./site-footer.tsx";
 
 interface BlogLayoutProps {
   children: React.ReactNode;

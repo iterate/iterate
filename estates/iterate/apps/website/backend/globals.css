@@ -47,7 +47,13 @@ body {
   @apply text-slate-900;
 }
 .prose pre {
-  @apply bg-gray-50 border border-gray-200 p-4 rounded-none;
+  @apply bg-gray-900 text-gray-100 border border-gray-700 p-4 rounded-none;
+}
+.prose code {
+  @apply text-gray-900 bg-gray-100 px-1.5 py-0.5 rounded font-mono text-sm;
+}
+.prose pre code {
+  @apply bg-transparent text-gray-100 p-0;
 }
 .prose table {
   @apply text-base text-slate-900 border-collapse w-full;

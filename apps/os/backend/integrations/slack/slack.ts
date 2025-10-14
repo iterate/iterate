@@ -17,7 +17,6 @@ import {
 } from "../../agent/slack-agent-utils.ts";
 import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
-import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 
@@ -230,25 +229,27 @@ export async function reactToSlackWebhook(
     return;
   }
 
-  const shouldInclude = shouldIncludeEventInConversation(slackWebhookPayload.event, botUserId);
+  const event = slackWebhookPayload.event;
 
-  if (shouldInclude && slackWebhookPayload.event.type === "message") {
-    if (messageMetadata.channel && messageMetadata.ts) {
-      const isMentioned = isBotMentionedInMessage(slackWebhookPayload.event, botUserId);
-
-      if (isMentioned) {
-        await slackAPI.reactions
-          .add({
-            channel: messageMetadata.channel,
-            timestamp: messageMetadata.ts,
-            name: "eyes",
-          })
-          .then(
-            () => logger.info("[SlackAgent] Added eyes reaction"),
-            (error) => logger.error("[SlackAgent] Failed to add eyes reaction", error),
-          );
-      }
-    }
+  // Add eyes reaction when bot is mentioned in a human message
+  if (
+    event.type === "message" &&
+    "user" in event &&
+    event.user !== botUserId &&
+    messageMetadata.channel &&
+    messageMetadata.ts &&
+    isBotMentionedInMessage(event, botUserId)
+  ) {
+    await slackAPI.reactions
+      .add({
+        channel: messageMetadata.channel,
+        timestamp: messageMetadata.ts,
+        name: "eyes",
+      })
+      .then(
+        () => logger.info("[SlackAgent] Added eyes reaction"),
+        (error) => logger.error("[SlackAgent] Failed to add eyes reaction", error),
+      );
   }
 }
 
