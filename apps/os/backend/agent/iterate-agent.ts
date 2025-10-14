@@ -40,6 +40,8 @@ import {
   uploadFileFromURL,
 } from "../file-handlers.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
+import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -76,8 +78,6 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
-import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
-import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
