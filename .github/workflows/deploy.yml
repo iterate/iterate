@@ -33,19 +33,6 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
-      - name: Sync secrets
-        run: doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        working-directory: apps/os
-
-      - name: Run database migrations
-        run: |
-          export PSCALE_DATABASE_URL=$(doppler secrets get DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING --plain)
-          pnpm db:migrate
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-
       - name: Enable QEMU
         uses: docker/setup-qemu-action@v3
         with:
@@ -54,6 +41,7 @@ jobs:
       - name: Deploy OS
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          STAGE: prd
         run: pnpm run deploy
         working-directory: apps/os
 
