@@ -32,7 +32,7 @@ import type {
 } from "../../backend/agent/agent-core-schemas.ts";
 import type { SlackSliceEvent } from "../../backend/agent/slack-slice.ts";
 
-type AgentEvent = AgentCoreEvent | SlackSliceEvent;
+type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
 
 interface ToolDefinition {
   name: string;
@@ -166,7 +166,7 @@ function ToolCallInjector({
 }: {
   estateId: string;
   agentInstanceName: string;
-  agentClassName: "IterateAgent" | "SlackAgent";
+  agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
   reducedState: any;
   onClose: () => void;
 }) {
@@ -399,7 +399,7 @@ function FileUploadDialog({
 }: {
   estateId: string;
   agentInstanceName: string;
-  agentClassName: "IterateAgent" | "SlackAgent";
+  agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
   onClose: () => void;
 }) {
   const [files, setFiles] = useState<File[]>([]);
@@ -631,7 +631,11 @@ export default function AgentsPage() {
   const trpc = useTRPC();
 
   if (
-    !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
+    !(
+      agentClassName === "IterateAgent" ||
+      agentClassName === "SlackAgent" ||
+      agentClassName === "OnboardingAgent"
+    ) ||
     !durableObjectName
   ) {
     throw new Error("Invalid agent class name or durable object name");

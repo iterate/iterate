@@ -2,13 +2,13 @@ import { Hono } from "hono";
 import { createRequestHandler } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
-import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod";
 import { WorkerEntrypoint } from "cloudflare:workers";
-import { PostHog } from "posthog-node";
 import { cors } from "hono/cors";
-import { waitUntil, type CloudflareEnv } from "../env.ts";
+import { typeid } from "typeid-js";
+import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { type CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -20,6 +20,7 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
+import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
@@ -28,6 +29,8 @@ import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
+import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
+import { createLoggerMiddleware } from "./tag-logger-middleware.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -46,8 +49,30 @@ export type Variables = {
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
-app.use("*", cors({ origin: (c) => c }));
 app.use(contextStorage());
+app.use("*", async (c, next) => {
+  const db = getDb();
+  const auth = getAuth(db);
+  const session = await auth.api.getSession({
+    headers: c.req.raw.headers,
+  });
+  c.set("db", db);
+  c.set("auth", auth);
+  c.set("session", session);
+  return next();
+});
+
+// Sets up the logger with request metadata
+app.use(
+  "*",
+  createLoggerMiddleware<CloudflareEnv, Variables>(logger, (c) => ({
+    userId: c.var.session?.user?.id || undefined,
+    path: c.req.path,
+    httpMethod: c.req.method,
+    url: c.req.url,
+    traceId: typeid("req").toString(),
+  })),
+);
 
 app.use(
   "*",
@@ -61,43 +86,8 @@ app.use(
 app.onError((err, c) => {
   // Log the error
   logger.error("Unhandled error:", err);
-
-  // Track error in PostHog (non-blocking)
-  waitUntil(
-    (async () => {
-      const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
-        host: "https://eu.i.posthog.com",
-      });
-
-      // Get user ID if available
-      const userId = c.get("session")?.user?.id || "anonymous";
-
-      posthog.captureException(err, userId, {
-        environment: c.env.POSTHOG_ENVIRONMENT,
-        path: c.req.path,
-        method: c.req.method,
-        url: c.req.url,
-        errorName: err.name,
-      });
-
-      await posthog.shutdown();
-    })(),
-  );
-
   // Return error response
   return c.json({ error: "Internal Server Error" }, 500);
-});
-
-app.use("*", async (c, next) => {
-  const db = getDb();
-  const auth = getAuth(db);
-  const session = await auth.api.getSession({
-    headers: c.req.raw.headers,
-  });
-  c.set("db", db);
-  c.set("auth", auth);
-  c.set("session", session);
-  return next();
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
@@ -107,22 +97,26 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
-  if (agentClassName !== "IterateAgent" && agentClassName !== "SlackAgent") {
+  if (
+    agentClassName !== "IterateAgent" &&
+    agentClassName !== "SlackAgent" &&
+    agentClassName !== "OnboardingAgent"
+  ) {
     return c.json({ error: "Invalid agent class name" }, 400);
   }
 
   try {
-    const agentStub =
-      agentClassName === "SlackAgent"
-        ? await SlackAgent.getStubByName({ db: c.var.db, agentInstanceName })
-        : await IterateAgent.getStubByName({ db: c.var.db, agentInstanceName });
+    const agentStub = await getAgentStubByName(toAgentClassName(agentClassName), {
+      db: c.var.db,
+      agentInstanceName,
+    });
     return agentStub.fetch(c.req.raw);
   } catch (error) {
     const message = (error as Error).message || "Unknown error";
     if (message.includes("not found")) {
       return c.json({ error: "Agent not found" }, 404);
     }
-    logger.error("Failed to get agent stub:", error);
+    logger.error("Failed to get agent stub:", error as Error);
     return c.json({ error: "Failed to connect to agent" }, 500);
   }
 });
@@ -135,41 +129,10 @@ app.all("/api/trpc/*", (c) => {
     router: appRouter,
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
-    onError: ({ path, error, type, input }) => {
-      logger.error(`❌ tRPC server error on ${path ?? "<no-path>"}:`, {
-        type,
-        code: error.code,
-        message: error.message,
-        cause: error.cause,
-        input,
-        stack: error.stack,
-      });
-
-      // Track error in PostHog (non-blocking)
-      waitUntil(
-        (async () => {
-          const posthog = new PostHog(c.env.POSTHOG_PUBLIC_KEY, {
-            host: "https://eu.i.posthog.com",
-          });
-
-          const userId = c.var.session?.user?.id || "anonymous";
-          const httpCode = getHTTPStatusCodeFromError(error);
-          if (httpCode < 500) {
-            return;
-          }
-          posthog.captureException(error, userId, {
-            environment: c.env.POSTHOG_ENVIRONMENT,
-            trpcPath: path,
-            trpcType: type,
-            trpcCode: error.code,
-            trpcInput: input,
-            method: c.req.method,
-            url: c.req.url,
-          });
-
-          await posthog.shutdown();
-        })(),
-      );
+    onError: ({ error }) => {
+      if (getHTTPStatusCodeFromError(error) >= 500) {
+        logger.error("Error in tRPC endpoint:", error);
+      }
     },
   });
 });
@@ -256,7 +219,10 @@ app.post(
 
       return c.json(result);
     } catch (error) {
-      logger.error("Test build error:", error);
+      logger.error(
+        "Test build error:",
+        error instanceof Error ? error : new Error(error as string),
+      );
       return c.json(
         {
           error: "Internal server error during build test",
@@ -314,5 +280,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { IterateAgent, SlackAgent, OrganizationWebSocket };
+export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket };
 export { Sandbox } from "@cloudflare/sandbox";

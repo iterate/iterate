@@ -67,7 +67,7 @@ import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AgentReducedState } from "./agent-reduced-state.tsx";
 import { PagerDialog } from "./pager-dialog.tsx";
 
-type AgentEvent = AgentCoreEvent | SlackSliceEvent;
+type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
 
 export interface AgentDetailDataGetters {
   getFileUrl: (iterateFileId: string, disposition?: "inline" | "attachment") => string;
@@ -1200,7 +1200,7 @@ export function AgentDetailRenderer({
     agentClassName === "SlackAgent" ? (reducedState as SlackSliceState).botUserId : undefined;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden">
+    <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden -m-6">
       {/* Header */}
       <div className="flex-shrink-0 flex items-center gap-2 py-2 px-4 border-b">
         {headerLeft}

@@ -35,7 +35,6 @@ import type { TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
-  AgentCoreEventInput,
   type ApprovalKey,
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
@@ -188,7 +187,7 @@ export interface AgentCoreDeps {
 
 export type AgentCoreState = CoreReducedState;
 // Re-export event types from schemas for convenience
-export type { AgentCoreEvent, AgentCoreEventInput };
+export type { AgentCoreEvent };
 
 // ---------------------------------------------------------------------------
 // Updated AgentCoreSlice interface -----------------------------------------
@@ -200,8 +199,6 @@ export interface AgentCoreSlice<Spec extends AgentCoreSliceSpec = AgentCoreSlice
   initialState?: SliceStateOf<Spec>;
   /** Zod schema for stored events (required when slice defines events) */
   eventSchema: SliceEventSchemaOf<Spec>;
-  /** Zod schema for input events (defaults to `eventSchema`) */
-  eventInputSchema: SliceEventInputSchemaOf<Spec>;
   /** Reducer returning partial state updates */
   reduce(
     state: Readonly<
@@ -233,8 +230,8 @@ type UnionToIntersection<U> = (U extends any ? (arg: U) => void : never) extends
 // Replace StateOf/DepsOf with new implementations
 export type MergedStateForSlices<
   Sls extends readonly AgentCoreSlice[],
-  InputEvents = AgentCoreEventInput,
-> = CoreReducedState<InputEvents> & UnionToIntersection<SliceStateOf<SliceSpecOf<Sls[number]>>>;
+  Events = AgentCoreEvent,
+> = CoreReducedState<Events> & UnionToIntersection<SliceStateOf<SliceSpecOf<Sls[number]>>>;
 
 export type MergedDepsForSlices<Sls extends readonly AgentCoreSlice[]> = AgentCoreDeps &
   CheckDepsConflict<UnionToIntersection<SliceDepsOf<SliceSpecOf<Sls[number]>>>>;
@@ -248,27 +245,11 @@ export type MergedEventSchemaForSlices<Sls extends readonly AgentCoreSlice[]> =
         : never
       : never);
 
-export type MergedEventInputSchemaForSlices<Sls extends readonly AgentCoreSlice[]> =
-  | typeof AgentCoreEventInput
-  | (Sls[number] extends infer T
-      ? T extends AgentCoreSlice<any>
-        ? SliceEventInputSchemaOf<SliceSpecOf<T>>
-        : never
-      : never);
-
 export type MergedEventForSlices<Sls extends readonly AgentCoreSlice[]> =
   | AgentCoreEvent
   | (Sls[number] extends infer T
       ? T extends AgentCoreSlice<any>
         ? z.infer<SliceEventSchemaOf<SliceSpecOf<T>>>
-        : never
-      : never);
-
-export type MergedEventInputForSlices<Sls extends readonly AgentCoreSlice[]> =
-  | AgentCoreEventInput
-  | (Sls[number] extends infer T
-      ? T extends AgentCoreSlice<any>
-        ? z.input<SliceEventInputSchemaOf<SliceSpecOf<T>>>
         : never
       : never);
 
@@ -342,7 +323,8 @@ export class AgentCore<
   }
 
   // Event log ---------------------------------------------------------------
-  private _events: MergedEventForSlices<Slices>[] = [];
+  private _events: (MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string })[] =
+    [];
   get events(): ReadonlyArray<MergedEventForSlices<Slices>> {
     return this._events;
   }
@@ -355,8 +337,6 @@ export class AgentCore<
 
   // Combined Zod schema for validating any incoming event
   private readonly combinedEventSchema: z.ZodType<AgentCoreEvent>;
-  // Combined Zod schema for validating input events (with optional fields)
-  private readonly combinedEventInputSchema: z.ZodType<AgentCoreEventInput>;
 
   // Track initialization state
   private _initialized = false;
@@ -386,12 +366,6 @@ export class AgentCore<
     this.combinedEventSchema = sliceSchemas.length
       ? z.union([AgentCoreEvent, ...sliceSchemas])
       : AgentCoreEvent;
-
-    // Build combined input event schema
-    const sliceInputSchemas = slices.map((s) => s.eventInputSchema);
-    this.combinedEventInputSchema = sliceInputSchemas.length
-      ? z.union([AgentCoreEventInput, ...sliceInputSchemas])
-      : AgentCoreEventInput;
   }
 
   // -------------------------------------------------------------------------
@@ -439,7 +413,14 @@ export class AgentCore<
         // Process events one by one to maintain state consistency
         for (const event of existing) {
           // Validate the event
-          const validated = this.combinedEventSchema.parse(event);
+          const _validated = this.combinedEventSchema.parse(event);
+          if (_validated.eventIndex === undefined || !_validated.createdAt) {
+            throw new Error(`eventIndex and createdAt are required: ${JSON.stringify(event)}`);
+          }
+          const validated = _validated as MergedEventForSlices<Slices> & {
+            eventIndex: number;
+            createdAt: string;
+          };
 
           // Track idempotency key if present
           if (validated.idempotencyKey) {
@@ -497,7 +478,7 @@ export class AgentCore<
 
   /** btw this returns an array */
   addEvent(
-    event: MergedEventInputForSlices<Slices> | MergedEventInputForSlices<CoreSlices>,
+    event: MergedEventForSlices<Slices> | MergedEventForSlices<CoreSlices>,
   ): { eventIndex: number }[] {
     return this.addEvents([event]);
   }
@@ -518,7 +499,7 @@ export class AgentCore<
    * (e.g. to query some service to find out what the input schema for a certain trpc procedure tool is)
    */
   addEvents(
-    events: MergedEventInputForSlices<Slices>[] | MergedEventInputForSlices<CoreSlices>[],
+    events: MergedEventForSlices<Slices>[] | MergedEventForSlices<CoreSlices>[],
   ): { eventIndex: number }[] {
     // Check if initialized
     if (!this._initialized) {
@@ -529,7 +510,7 @@ export class AgentCore<
       const originalEvents = [...this._events];
       const originalState = { ...this._state };
       const eventsAddedThisBatch: Array<{
-        event: MergedEventForSlices<Slices>;
+        event: MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string };
         reducedState: MergedStateForSlices<Slices>;
       }> = [];
 
@@ -544,11 +525,12 @@ export class AgentCore<
             continue; // Skip this event
           }
 
-          const parsed = this.combinedEventInputSchema.parse({
-            ...ev,
+          const parsed = {
+            ...this.combinedEventSchema.parse(ev),
             eventIndex: this._events.length,
             createdAt: ev.createdAt ?? new Date().toISOString(),
-          }) as MergedEventForSlices<Slices>;
+            triggerLLMRequest: ev.triggerLLMRequest ?? false,
+          };
 
           // Add idempotency key to seen set if present
           if (parsed.idempotencyKey) {
@@ -685,7 +667,7 @@ export class AgentCore<
 
   private runReducersOnSingleEvent(
     currentState: MergedStateForSlices<Slices>,
-    event: MergedEventForSlices<Slices>,
+    event: MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string },
   ) {
     // First run built-in core reducer
     let newState = this.reduceCore(currentState, event) as MergedStateForSlices<Slices>;
@@ -701,7 +683,10 @@ export class AgentCore<
     return deepCloneWithFunctionRefs(newState);
   }
 
-  private reduceCore(state: CoreReducedState, event: AgentCoreEvent): CoreReducedState {
+  private reduceCore(
+    state: CoreReducedState,
+    event: AgentCoreEvent & { eventIndex: number; createdAt: string },
+  ): CoreReducedState {
     const next: CoreReducedState = { ...state };
 
     // Any event with triggerLLMRequest: true sets the state flag to true
@@ -964,6 +949,21 @@ export class AgentCore<
         break;
       }
 
+      case "CORE:MESSAGE_FROM_AGENT": {
+        const { fromAgentName, message } = event.data;
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `Message from agent ${fromAgentName}: ${message}`,
+            },
+          ],
+        });
+        break;
+      }
+
       case "CORE:PARTICIPANT_JOINED": {
         const { internalUserId, email, displayName, externalUserMapping, role } = event.data;
         const participant = {
@@ -1195,7 +1195,7 @@ export class AgentCore<
 
     const stream = openai.responses.stream(params);
 
-    const eventsFromStream: AgentCoreEventInput[] = [];
+    const eventsFromStream: AgentCoreEvent[] = [];
     for await (const evt of this.parseLLMResponseStreamToEvents(stream, thisRequestIndex)) {
       // Check if request has been cancelled before collecting more events
       if (this._state.llmRequestStartedAtIndex !== thisRequestIndex) {
@@ -1213,9 +1213,9 @@ export class AgentCore<
   private async *parseLLMResponseStreamToEvents(
     stream: AsyncIterable<OpenAI.Responses.ResponseStreamEvent>,
     requestIndex: number,
-  ): AsyncGenerator<AgentCoreEventInput> {
+  ): AsyncGenerator<AgentCoreEvent> {
     /** Promises that will resolve to *lists* of events (since tool calls sometimes add extra events) */
-    const eventPromises: Array<Promise<AgentCoreEventInput[]>> = [];
+    const eventPromises: Array<Promise<AgentCoreEvent[]>> = [];
     const rawChunks: OpenAI.Responses.ResponseOutputItemDoneEvent[] = [];
 
     // Track parallel execution metadata
@@ -1253,7 +1253,7 @@ export class AgentCore<
           item: Extract<typeof chunk.item, { type: "function_call" }>;
           result: Awaited<ReturnType<AgentCore<Slices>["tryInvokeLocalFunctionTool"]>>;
           executionTimeMs: number;
-        }): Promise<AgentCoreEventInput[]> => {
+        }): Promise<AgentCoreEvent[]> => {
           const lastNonFunctionCallItem = rawChunks.findLast(
             (c) => c.item.type !== "function_call",
           )?.item;
@@ -1272,7 +1272,7 @@ export class AgentCore<
               llmRequestStartEventIndex: requestIndex,
             },
             triggerLLMRequest,
-          } satisfies AgentCoreEventInput;
+          } satisfies AgentCoreEvent;
           return [ev, ...(result.addEvents ?? [])];
         };
 
@@ -1334,12 +1334,12 @@ export class AgentCore<
                 size: iterateFile.size,
                 mimeType: `image/${outputFormat}`,
               },
-            } satisfies AgentCoreEventInput;
+            } satisfies AgentCoreEvent;
           }
           return {
             type: "CORE:LLM_OUTPUT_ITEM",
             data: item,
-          } satisfies AgentCoreEventInput;
+          } satisfies AgentCoreEvent;
         };
         if (item.type === "function_call") {
           const startTime = performance.now();
@@ -1368,7 +1368,7 @@ export class AgentCore<
         const ev = {
           type: "CORE:LLM_REQUEST_END",
           data: { rawResponse: chunk },
-        } satisfies AgentCoreEventInput;
+        } satisfies AgentCoreEvent;
         if (eventPromises.length > 0) {
           eventPromises.push(Promise.resolve([ev]));
         } else {
@@ -1401,13 +1401,13 @@ export class AgentCore<
         success: true;
         output: JSONSerializable;
         triggerLLMRequest?: boolean;
-        addEvents?: MergedEventInputForSlices<Slices>[];
+        addEvents?: MergedEventForSlices<Slices>[];
       }
     | {
         success: false;
         error: string;
         triggerLLMRequest?: boolean;
-        addEvents?: MergedEventInputForSlices<Slices>[];
+        addEvents?: MergedEventForSlices<Slices>[];
       }
   > {
     const tools = this.state.runtimeTools;
@@ -1559,7 +1559,6 @@ export function defineAgentCoreSlice<Spec extends AgentCoreSliceSpec>(def: {
   name: string;
   dependencies?: SliceDependsOnOf<Spec>;
   eventSchema: SliceEventSchemaOf<Spec>;
-  eventInputSchema?: SliceEventInputSchemaOf<Spec>; // optional per rules – default later
   initialState?: SliceStateOf<Spec>;
   reduce: (
     state: Readonly<
@@ -1577,12 +1576,11 @@ export function defineAgentCoreSlice<Spec extends AgentCoreSliceSpec>(def: {
       MergedStateForSlices<SliceDependsOnOf<Spec>, z.input<SliceEventInputSchemaOf<Spec>>>
   > | void;
 }): AgentCoreSlice<Spec> {
-  const { eventSchema, eventInputSchema, initialState, reduce } = def;
+  const { eventSchema, initialState, reduce } = def;
 
   return {
     name: def.name,
     eventSchema,
-    eventInputSchema: (eventInputSchema ?? eventSchema) as SliceEventInputSchemaOf<Spec>,
     initialState,
     reduce,
   };

@@ -5,6 +5,7 @@
     "types": ["@cloudflare/workers-types", "node", "vite/client"],
     "lib": ["es2023", "dom"],
     "sourceMap": false,
+    "lib": ["ESNext", "DOM"],
     "declaration": true,
     "declarationMap": false,
     "exactOptionalPropertyTypes": false,

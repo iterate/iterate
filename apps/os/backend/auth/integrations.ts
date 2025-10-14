@@ -13,15 +13,13 @@ import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
-import { IterateAgent } from "../agent/iterate-agent.ts";
-import { SlackAgent } from "../agent/slack-agent.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
+import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
 import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
-  "app_mentions:read",
   "channels:history",
   "channels:join",
   "channels:read",
@@ -147,10 +145,10 @@ export const integrationsPlugin = () =>
               db,
               agentInstanceName: state.agentDurableObject.durableObjectName,
             };
-            const agentStub =
-              state.agentDurableObject.className === "SlackAgent"
-                ? await SlackAgent.getStubByName(params)
-                : await IterateAgent.getStubByName(params);
+            const agentStub = await getAgentStubByName(
+              toAgentClassName(state.agentDurableObject.className),
+              params,
+            );
 
             await agentStub.addEvents([
               {
@@ -165,6 +163,7 @@ export const integrationsPlugin = () =>
                     oauthClientId: state.clientId,
                     oauthCode: code,
                   },
+                  triggerLLMRequestOnEstablishedConnection: false,
                 },
               },
             ]);
@@ -715,10 +714,10 @@ export const integrationsPlugin = () =>
               db,
               agentInstanceName: agentDurableObject.durableObjectName,
             };
-            const agentStub =
-              agentDurableObject.className === "SlackAgent"
-                ? await SlackAgent.getStubByName(params)
-                : await IterateAgent.getStubByName(params);
+            const agentStub = await getAgentStubByName(
+              toAgentClassName(agentDurableObject.className),
+              params,
+            );
             await agentStub.addEvents([
               {
                 type: "CORE:LLM_INPUT_ITEM",

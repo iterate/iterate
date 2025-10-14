@@ -1,3 +1,4 @@
+import { eq } from "drizzle-orm";
 import dedent from "dedent";
 import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
@@ -5,6 +6,8 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
+import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
+import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
 
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
@@ -63,7 +66,37 @@ export const createUserOrganizationAndEstate = async (
     throw new Error("Failed to create estate");
   }
 
+  const agentName = `${estate.id}-Onboarding`;
+
+  // Update the estate with the onboarding agent name
+  await db
+    .update(schema.estate)
+    .set({
+      onboardingAgentName: agentName,
+    })
+    .where(eq(schema.estate.id, estate.id));
+
   const result = { organization, estate };
+
+  waitUntil(
+    (async () => {
+      try {
+        await createStripeCustomerAndSubscriptionForOrganization(db, result.organization, user);
+
+        const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
+          db,
+          estateId: estate.id,
+          agentInstanceName: agentName,
+          reason: "Auto-provisioned OnboardingAgent during estate creation",
+        });
+        // We need to call some method on the stub, otherwise the agent durable object
+        // wouldn't boot up. Obtaining a stub doesn't in itself do anything.
+        await onboardingAgent.doNothing();
+      } catch (error) {
+        logger.error("Failed to create stripe customer and start onboarding agent", error);
+      }
+    })(),
+  );
 
   // Send Slack notification to our own slack instance, unless suppressed for test users
   // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id

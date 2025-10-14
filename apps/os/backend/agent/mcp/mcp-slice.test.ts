@@ -18,11 +18,11 @@ import {
   mcpSlice,
   parseConnectionKey,
   type MCPConnection,
-  type MCPConnectionErrorEventInput,
-  type MCPConnectionEstablishedEventInput,
-  type MCPConnectRequestEventInput,
-  type MCPDisconnectRequestEventInput,
-  type MCPOAuthRequiredEventInput,
+  type MCPConnectionErrorEvent,
+  type MCPConnectionEstablishedEvent,
+  type MCPConnectRequestEvent,
+  type MCPDisconnectRequestEvent,
+  type MCPOAuthRequiredEvent,
   type MCPSliceDeps,
 } from "./mcp-slice.ts";
 
@@ -112,7 +112,7 @@ describe("mcp-slice", () => {
 
     describe("event schemas", () => {
       it("should validate MCP:CONNECT_REQUEST event", () => {
-        const validEvent: MCPConnectRequestEventInput = {
+        const validEvent: MCPConnectRequestEvent = {
           type: "MCP:CONNECT_REQUEST",
           data: {
             serverUrl: "https://github.com/mcp",
@@ -125,11 +125,11 @@ describe("mcp-slice", () => {
           triggerLLMRequest: false,
         };
 
-        expect(() => mcpSlice.eventInputSchema.parse(validEvent)).not.toThrow();
+        expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
       });
 
       it("should validate MCP:CONNECTION_ESTABLISHED event", () => {
-        const validEvent: MCPConnectionEstablishedEventInput = {
+        const validEvent: MCPConnectionEstablishedEvent = {
           type: "MCP:CONNECTION_ESTABLISHED",
           data: {
             connectionKey: "https://github.com/mcp::company",
@@ -155,11 +155,11 @@ describe("mcp-slice", () => {
           triggerLLMRequest: false,
         };
 
-        expect(() => mcpSlice.eventInputSchema.parse(validEvent)).not.toThrow();
+        expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
       });
 
       it("should validate MCP:DISCONNECT_REQUEST event", () => {
-        const validEvent: MCPDisconnectRequestEventInput = {
+        const validEvent: MCPDisconnectRequestEvent = {
           type: "MCP:DISCONNECT_REQUEST",
           data: {
             connectionKey: MCPConnectionKey.parse("https://github.com/mcp::company"),
@@ -168,11 +168,11 @@ describe("mcp-slice", () => {
           triggerLLMRequest: false,
         };
 
-        expect(() => mcpSlice.eventInputSchema.parse(validEvent)).not.toThrow();
+        expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
       });
 
       it("should validate MCP:CONNECTION_ERROR event", () => {
-        const validEvent: MCPConnectionErrorEventInput = {
+        const validEvent: MCPConnectionErrorEvent = {
           type: "MCP:CONNECTION_ERROR",
           data: {
             connectionKey: MCPConnectionKey.parse("https://github.com/mcp::company"),
@@ -183,11 +183,11 @@ describe("mcp-slice", () => {
           triggerLLMRequest: false,
         };
 
-        expect(() => mcpSlice.eventInputSchema.parse(validEvent)).not.toThrow();
+        expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
       });
 
       it("should validate MCP:OAUTH_REQUIRED event", () => {
-        const validEvent: MCPOAuthRequiredEventInput = {
+        const validEvent: MCPOAuthRequiredEvent = {
           type: "MCP:OAUTH_REQUIRED",
           data: {
             connectionKey: "https://github.com/mcp::personal::user123",
@@ -202,7 +202,7 @@ describe("mcp-slice", () => {
           triggerLLMRequest: false,
         };
 
-        expect(() => mcpSlice.eventInputSchema.parse(validEvent)).not.toThrow();
+        expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
       });
     });
   });
@@ -809,8 +809,8 @@ describe("mcp-slice", () => {
           (item: any) => item.type === "message" && item.role === "developer",
         );
         expect(devMessages).toHaveLength(1);
-        expect(devMessages[0].content[0].text).toContain("Authorization needed to access");
-        expect(devMessages[0].content[0].text).toContain("https://github.com/oauth/authorize");
+        expect(devMessages[0].content[0].text).toContain("User is being prompted to authorize");
+        expect(devMessages[0].content[0].text).toContain("github");
       });
 
       test6("should handle missing oauthUrl gracefully", async ({ h }) => {
@@ -1257,7 +1257,7 @@ describe("mcp-slice", () => {
         await h.agentCore.addEvent({
           type: "MCP:DISCONNECT_REQUEST",
           data: {
-            connectionKey,
+            connectionKey: MCPConnectionKey.parse(connectionKey),
           },
         });
 

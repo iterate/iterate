@@ -13,14 +13,14 @@ import {
   getGithubRepoForEstate,
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
-import { IterateAgent } from "../../agent/iterate-agent.ts";
-import { SlackAgent } from "../../agent/slack-agent.ts";
 import { MCPParam } from "../../agent/tool-schemas.ts";
+import { getMCPVerificationKey } from "../../agent/mcp/mcp-oauth-provider.ts";
 import {
   getGithubUserAccessTokenForEstate,
   getSlackAccessTokenForEstate,
 } from "../../auth/token-utils.ts";
-import { getRoutingKey } from "../../integrations/slack/slack.ts";
+import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -715,13 +715,31 @@ export const integrationsRouter = router({
 
         // Only delete the account if it's not used by any other estate
         if (!otherEstates) {
-          // Also check if the account belongs to the current user
           const acc = await ctx.db.query.account.findFirst({
             where: eq(account.id, connectionId),
           });
 
           if (acc && acc.userId === ctx.user.id) {
-            await ctx.db.delete(account).where(eq(account.id, connectionId));
+            await ctx.db.transaction(async (tx) => {
+              const clientInfo = await tx.query.dynamicClientInfo.findFirst({
+                where: and(
+                  eq(schemas.dynamicClientInfo.providerId, acc.providerId),
+                  eq(schemas.dynamicClientInfo.userId, ctx.user.id),
+                ),
+              });
+              if (clientInfo) {
+                const verificationKey = getMCPVerificationKey(acc.providerId, clientInfo.clientId);
+
+                await tx
+                  .delete(schemas.verification)
+                  .where(eq(schemas.verification.identifier, verificationKey));
+                await tx
+                  .delete(schemas.dynamicClientInfo)
+                  .where(eq(schemas.dynamicClientInfo.id, clientInfo.id));
+              }
+
+              await tx.delete(account).where(eq(account.id, connectionId));
+            });
           }
         }
       }
@@ -947,10 +965,10 @@ export const integrationsRouter = router({
         agentInstanceName: agentDurableObject.durableObjectName,
       };
 
-      const agentStub =
-        agentDurableObject.className === "SlackAgent"
-          ? await SlackAgent.getStubByName(params)
-          : await IterateAgent.getStubByName(params);
+      const agentStub = await getAgentStubByName(
+        toAgentClassName(agentDurableObject.className),
+        params,
+      );
 
       if (!agentStub) {
         throw new TRPCError({
@@ -1069,53 +1087,19 @@ export const integrationsRouter = router({
   startThreadWithAgent: estateProtectedProcedure
     .input(
       z.object({
-        channel: z.string().describe("The Slack channel ID"),
+        channel: z.string().describe("The Slack channel ID or name"),
         firstMessage: z.string().optional().describe("The message text to send to Slack"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const { estateId, channel, firstMessage } = input;
 
-      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
-      if (!accessToken) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "No Slack integration found for this estate",
-        });
-      }
-
-      const slackAPI = new WebClient(accessToken);
-
-      const chatResult = await slackAPI.chat.postMessage({
-        channel: channel,
-        text: firstMessage || "",
-      });
-      if (!chatResult.ok || !chatResult.ts) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to post message to Slack",
-        });
-      }
-
-      const routingKey = getRoutingKey({
-        estateId: estateId,
-        threadTs: chatResult.ts,
-      });
-
-      const slackAgent = (await SlackAgent.getOrCreateStubByRoute({
+      return await startSlackAgentInChannel({
         db: ctx.db,
         estateId: estateId,
-        route: routingKey,
-        reason: "Start thread with agent",
-      })) as unknown as SlackAgent;
-
-      const events = await slackAgent.initSlack(channel, chatResult.ts);
-      await slackAgent.addEvents(events);
-
-      return {
-        success: true,
-        threadTs: chatResult.ts,
-      };
+        slackChannelIdOrName: channel,
+        firstMessage: firstMessage,
+      });
     }),
 
   listSlackChannels: estateProtectedProcedure

@@ -7,20 +7,21 @@ import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
 import { normalizeNullableFields } from "../utils/type-helpers.ts";
 import {
-  AgentCoreEventInput,
-  FileSharedEventInput,
+  AgentCoreEvent,
+  FileSharedEvent,
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
-// import type { MergedEventForSlices } from "./agent-core.ts";
 import { IterateAgent } from "./iterate-agent.ts";
-import { SlackAgent, type SlackAgentSlices } from "./slack-agent.ts";
+import { type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import type { MergedEventForSlices } from "./agent-core.ts";
-import { MCPEventInput } from "./mcp/mcp-slice.ts";
-import { SlackEventInput } from "./slack-slice.ts";
-// import type { SlackAgentSlices } from "./slack-agent.ts";
-// import { SlackEventInput } from "./slack-slice.ts";
-// import type { IterateAgentState } from "./iterate-agent.ts";
+import { MCPEvent } from "./mcp/mcp-slice.ts";
+import { SlackSliceEvent } from "./slack-slice.ts";
+import {
+  getOrCreateAgentStubByName,
+  toAgentClassName,
+  type GetOrCreateStubByNameParams,
+} from "./agents/stub-getters.ts";
 
 const agentStubProcedure = protectedProcedure
   .input(
@@ -28,7 +29,7 @@ const agentStubProcedure = protectedProcedure
       estateId: z.string().describe("The estate this agent belongs to"),
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent", "SlackAgent"])
+        .enum(["IterateAgent", "SlackAgent", "OnboardingAgent"])
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
@@ -37,17 +38,17 @@ const agentStubProcedure = protectedProcedure
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    const getOrCreateStubParams: Parameters<typeof IterateAgent.getOrCreateStubByName>[0] = {
+    const getOrCreateStubParams: GetOrCreateStubByNameParams = {
       db: ctx.db,
       estateId,
       agentInstanceName: input.agentInstanceName,
       reason: input.reason || "Created via agents router",
     };
     // Always use getOrCreateStubByName - agents are created on demand
-    const agent =
-      input.agentClassName === "SlackAgent"
-        ? await SlackAgent.getOrCreateStubByName(getOrCreateStubParams)
-        : await IterateAgent.getOrCreateStubByName(getOrCreateStubParams);
+    const agent = await getOrCreateAgentStubByName(
+      toAgentClassName(input.agentClassName),
+      getOrCreateStubParams,
+    );
 
     // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
 
@@ -74,10 +75,10 @@ const ContextRule = z.object({
 });
 
 export const AllAgentEventInputSchemas = z.union([
-  AgentCoreEventInput,
-  FileSharedEventInput,
-  SlackEventInput as unknown as z.ZodNever, // too complex for typescirpt to handle
-  MCPEventInput,
+  AgentCoreEvent,
+  FileSharedEvent,
+  SlackSliceEvent as unknown as z.ZodNever, // too complex for typescirpt to handle
+  MCPEvent,
 ]);
 export type AllAgentEventInputs = z.input<typeof AllAgentEventInputSchemas>;
 
@@ -213,26 +214,6 @@ export const agentsRouter = router({
       )) as AugmentedCoreReducedState;
     }),
 
-  // listAgentInstances: protectedProcedure
-  //   .input(
-  //     z.object({
-  //       limit: z.number().optional().default(50),
-  //       offset: z.number().optional().default(0),
-  //     }),
-  //   )
-  //   .query(async ({ input }) => {
-  //     const instances = await listPersistedAgents({
-  //       db,
-  //       table: durableObjectInstances,
-  //       ...input,
-  //     });
-
-  //     return {
-  //       instances,
-  //       total: instances.length,
-  //     };
-  //   }),
-
   injectToolCall: agentStubProcedure
     .meta({
       description: "Inject a tool call directly into an agent instance",
@@ -365,23 +346,4 @@ export const agentsRouter = router({
         results,
       };
     }),
-
-  // Check if an agent exists without creating it
-  // checkAgentExists: protectedProcedure
-  //   .input(
-  //     z.object({
-  //       agentInstanceName: z.string(),
-  //       agentClassName: z.string(),
-  //     }),
-  //   )
-  //   .query(async ({ input }) => {
-  //     const { agentInstanceName, agentClassName } = input;
-
-  //     const exists = await checkPersistedAgentWithNameExists(agentInstanceName, agentClassName, {
-  //       db,
-  //       table: durableObjectInstances,
-  //     });
-
-  //     return { exists };
-  //   }),
 });

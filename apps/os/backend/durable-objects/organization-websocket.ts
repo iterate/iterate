@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { z } from "zod";
+import { typeid } from "typeid-js";
 import { APIError } from "better-auth/api";
 import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
 import { getAuth, type AuthSession } from "../auth/auth.ts";
 import { getUserEstateAccess } from "../trpc/trpc.ts";
-import { logger } from "../tag-logger.ts";
+import { logger, withLoggerContext } from "../tag-logger.ts";
 
 // Event schemas for WebSocket communication
 export const InvalidateInfo = z.discriminatedUnion("type", [
@@ -44,6 +45,12 @@ export type PushControllerEvent = z.infer<typeof PushControllerEvent>;
 export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+
+    return withLoggerContext(this, logger, (methodName) => ({
+      userId: undefined,
+      methodName,
+      traceId: typeid("req").toString(),
+    }));
   }
 
   async fetch(request: Request): Promise<Response> {

@@ -94,12 +94,11 @@ export const DEFAULT_MODEL_OPTS: ModelOpts = {
 // Prefer this over zod extend for typescript inference performance reasons
 export const agentCoreBaseEventFields = {
   type: z.string(),
-  data: z.object({}).default({}),
-  metadata: z.record(z.string(), JSONSerializable).default({}),
-
-  triggerLLMRequest: z.boolean().default(false),
-  createdAt: z.string(),
-  eventIndex: z.number(),
+  data: z.object({}).optional(),
+  metadata: z.record(z.string(), JSONSerializable).optional(),
+  triggerLLMRequest: z.boolean().optional(),
+  createdAt: z.string().optional(),
+  eventIndex: z.number().optional(),
   idempotencyKey: z.string().optional(),
 };
 
@@ -107,13 +106,6 @@ export const AgentCoreBaseEvent = z.object({
   ...agentCoreBaseEventFields,
 });
 export type AgentCoreBaseEvent = z.infer<typeof AgentCoreBaseEvent>;
-
-export const agentCoreBaseEventInputFields = {
-  ...agentCoreBaseEventFields,
-  // Make createdAt and eventIndex optional for event _inputs_
-  createdAt: agentCoreBaseEventFields.createdAt.optional(),
-  eventIndex: agentCoreBaseEventFields.eventIndex.optional(),
-};
 
 // ------------------------- Event Schemas -------------------------
 
@@ -149,10 +141,6 @@ export const LocalFunctionToolCallEvent = z.object({
   ...agentCoreBaseEventFields,
   ...localFunctionToolCallEventFields,
 });
-export const LocalFunctionToolCallEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...localFunctionToolCallEventFields,
-});
 
 export const ApprovalKey = z.string().brand("ApprovalKey");
 export type ApprovalKey = z.infer<typeof ApprovalKey>;
@@ -169,10 +157,6 @@ export const ToolCallApprovalRequestedEvent = z.object({
   ...agentCoreBaseEventFields,
   ...toolCallApprovalRequestedEventFields,
 });
-export const ToolCallApprovalRequestedEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...toolCallApprovalRequestedEventFields,
-});
 
 const toolCallApprovalEventFields = {
   type: z.literal("CORE:TOOL_CALL_APPROVAL"),
@@ -183,10 +167,6 @@ const toolCallApprovalEventFields = {
 };
 export const ToolCallApprovalEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...toolCallApprovalEventFields,
-});
-export const ToolCallApprovalEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...toolCallApprovalEventFields,
 });
 
@@ -204,10 +184,6 @@ export const LlmRequestStartEvent = z.object({
   ...agentCoreBaseEventFields,
   ...llmRequestStartEventFields,
 });
-export const LlmRequestStartEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...llmRequestStartEventFields,
-});
 
 // CORE:LLM_REQUEST_END
 const llmRequestEndEventFields = {
@@ -222,10 +198,6 @@ export const LlmRequestEndEvent = z.object({
   ...agentCoreBaseEventFields,
   ...llmRequestEndEventFields,
 });
-export const LlmRequestEndEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...llmRequestEndEventFields,
-});
 
 // CORE:LLM_REQUEST_CANCEL
 const llmRequestCancelEventFields = {
@@ -234,10 +206,6 @@ const llmRequestCancelEventFields = {
 };
 export const LlmRequestCancelEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...llmRequestCancelEventFields,
-});
-export const LlmRequestCancelEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...llmRequestCancelEventFields,
 });
 
@@ -250,10 +218,6 @@ export const LlmInputItemEvent = z.object({
   ...agentCoreBaseEventFields,
   ...llmInputItemEventFields,
 });
-export const LlmInputItemEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...llmInputItemEventFields,
-});
 
 // CORE:LLM_OUTPUT_ITEM
 const llmOutputItemEventFields = {
@@ -262,10 +226,6 @@ const llmOutputItemEventFields = {
 };
 export const LlmOutputItemEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...llmOutputItemEventFields,
-});
-export const LlmOutputItemEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...llmOutputItemEventFields,
 });
 
@@ -278,10 +238,6 @@ export const SetSystemPromptEvent = z.object({
   ...agentCoreBaseEventFields,
   ...setSystemPromptEventFields,
 });
-export const SetSystemPromptEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...setSystemPromptEventFields,
-});
 
 // CORE:SET_MODEL_OPTS
 const setModelOptsEventFields = {
@@ -292,10 +248,6 @@ export const SetModelOptsEvent = z.object({
   ...agentCoreBaseEventFields,
   ...setModelOptsEventFields,
 });
-export const SetModelOptsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...setModelOptsEventFields,
-});
 
 // CORE:SET_METADATA
 const setMetadataEventFields = {
@@ -304,10 +256,6 @@ const setMetadataEventFields = {
 };
 export const SetMetadataEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...setMetadataEventFields,
-});
-export const SetMetadataEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...setMetadataEventFields,
 });
 
@@ -322,10 +270,6 @@ export const AddLabelEvent = z.object({
   ...agentCoreBaseEventFields,
   ...addLabelEventFields,
 });
-export const AddLabelEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...addLabelEventFields,
-});
 
 // CORE:ADD_TOOL_SPECS
 const addToolSpecsEventFields = {
@@ -334,10 +278,6 @@ const addToolSpecsEventFields = {
 };
 export const AddToolSpecsEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...addToolSpecsEventFields,
-});
-export const AddToolSpecsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...addToolSpecsEventFields,
 });
 
@@ -349,12 +289,7 @@ export const AddContextRulesEvent = z.object({
   ...agentCoreBaseEventFields,
   ...addContextRulesEventFields,
 });
-export const AddContextRulesEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...addContextRulesEventFields,
-});
 export type AddContextRulesEvent = z.infer<typeof AddContextRulesEvent>;
-export type AddContextRulesEventInput = z.input<typeof AddContextRulesEventInput>;
 
 // CORE:REMOVE_TOOL_SPECS
 const removeToolSpecsEventFields = {
@@ -365,9 +300,18 @@ export const RemoveToolSpecsEvent = z.object({
   ...agentCoreBaseEventFields,
   ...removeToolSpecsEventFields,
 });
-export const RemoveToolSpecsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...removeToolSpecsEventFields,
+
+// CORE:MESSAGE_FROM_AGENT
+const messageFromAgentEventFields = {
+  type: z.literal("CORE:MESSAGE_FROM_AGENT"),
+  data: z.object({
+    fromAgentName: z.string(),
+    message: z.string(),
+  }),
+};
+export const MessageFromAgentEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...messageFromAgentEventFields,
 });
 
 // CORE:INTERNAL_ERROR
@@ -377,10 +321,6 @@ const internalErrorEventFields = {
 };
 export const InternalErrorEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...internalErrorEventFields,
-});
-export const InternalErrorEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...internalErrorEventFields,
 });
 
@@ -393,10 +333,6 @@ export const LogEvent = z.object({
   ...agentCoreBaseEventFields,
   ...logEventFields,
 });
-export const LogEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...logEventFields,
-});
 
 // CORE:INITIALIZED_WITH_EVENTS
 const initializedWithEventsEventFields = {
@@ -407,10 +343,6 @@ export const InitializedWithEventsEvent = z.object({
   ...agentCoreBaseEventFields,
   ...initializedWithEventsEventFields,
 });
-export const InitializedWithEventsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...initializedWithEventsEventFields,
-});
 
 // CORE:PAUSE_LLM_REQUESTS
 const pauseLLMRequestsEventFields = {
@@ -418,10 +350,6 @@ const pauseLLMRequestsEventFields = {
 };
 export const PauseLLMRequestsEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...pauseLLMRequestsEventFields,
-});
-export const PauseLLMRequestsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...pauseLLMRequestsEventFields,
 });
 
@@ -451,10 +379,6 @@ export const ParticipantJoinedEvent = z.object({
   ...agentCoreBaseEventFields,
   ...participantJoinedEventFields,
 });
-export const ParticipantJoinedEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...participantJoinedEventFields,
-});
 
 // CORE:PARTICIPANT_LEFT
 const participantLeftEventFields = {
@@ -465,10 +389,6 @@ const participantLeftEventFields = {
 };
 export const ParticipantLeftEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...participantLeftEventFields,
-});
-export const ParticipantLeftEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...participantLeftEventFields,
 });
 
@@ -498,10 +418,6 @@ export const ParticipantMentionedEvent = z.object({
   ...agentCoreBaseEventFields,
   ...participantMentionedEventFields,
 });
-export const ParticipantMentionedEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...participantMentionedEventFields,
-});
 
 // CORE:RESUME_LLM_REQUESTS
 const resumeLLMRequestsEventFields = {
@@ -509,10 +425,6 @@ const resumeLLMRequestsEventFields = {
 };
 export const ResumeLLMRequestsEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...resumeLLMRequestsEventFields,
-});
-export const ResumeLLMRequestsEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...resumeLLMRequestsEventFields,
 });
 
@@ -532,10 +444,6 @@ const fileSharedEventFields = {
 };
 export const FileSharedEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...fileSharedEventFields,
-});
-export const FileSharedEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...fileSharedEventFields,
 });
 
@@ -561,40 +469,11 @@ export const agentCoreEventSchemasUndiscriminated = [
   PauseLLMRequestsEvent,
   ResumeLLMRequestsEvent,
   FileSharedEvent,
+  MessageFromAgentEvent,
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantMentionedEvent,
 ] as const;
-
-export const agentCoreEventInputSchemasUndiscriminated = [
-  LocalFunctionToolCallEventInput,
-  LlmRequestStartEventInput,
-  ToolCallApprovalRequestedEventInput,
-  ToolCallApprovalEventInput,
-  LlmRequestEndEventInput,
-  LlmRequestCancelEventInput,
-  LlmInputItemEventInput,
-  LlmOutputItemEventInput,
-  SetSystemPromptEventInput,
-  SetMetadataEventInput,
-  AddLabelEventInput,
-  AddContextRulesEventInput,
-  SetModelOptsEventInput,
-  InternalErrorEventInput,
-  LogEventInput,
-  InitializedWithEventsEventInput,
-  PauseLLMRequestsEventInput,
-  ResumeLLMRequestsEventInput,
-  FileSharedEventInput,
-  ParticipantJoinedEventInput,
-  ParticipantLeftEventInput,
-  ParticipantMentionedEventInput,
-] as const;
-
-export const AgentCoreEventInput = z.discriminatedUnion(
-  "type",
-  agentCoreEventInputSchemasUndiscriminated,
-);
 
 export const AgentCoreEvent = z.discriminatedUnion("type", agentCoreEventSchemasUndiscriminated);
 
@@ -642,71 +521,52 @@ export function hashToolSpec(spec: ToolSpec): string {
 // ---------------------------------------------------------------------------
 
 export type AgentCoreEvent = z.infer<typeof AgentCoreEvent>;
-export type AgentCoreEventInput = z.input<typeof AgentCoreEventInput>;
 
 // Capital first letter event type exports
 export type LocalFunctionToolCallEvent = z.infer<typeof LocalFunctionToolCallEvent>;
-export type LocalFunctionToolCallEventInput = z.infer<typeof LocalFunctionToolCallEventInput>;
 
 export type LlmRequestStartEvent = z.infer<typeof LlmRequestStartEvent>;
-export type LlmRequestStartEventInput = z.infer<typeof LlmRequestStartEventInput>;
 
 export type LlmRequestEndEvent = z.infer<typeof LlmRequestEndEvent>;
-export type LlmRequestEndEventInput = z.infer<typeof LlmRequestEndEventInput>;
 
 export type LlmRequestCancelEvent = z.infer<typeof LlmRequestCancelEvent>;
-export type LlmRequestCancelEventInput = z.infer<typeof LlmRequestCancelEventInput>;
 
 export type LlmInputItemEvent = z.infer<typeof LlmInputItemEvent>;
-export type LlmInputItemEventInput = z.infer<typeof LlmInputItemEventInput>;
 
 export type LlmOutputItemEvent = z.infer<typeof LlmOutputItemEvent>;
-export type LlmOutputItemEventInput = z.infer<typeof LlmOutputItemEventInput>;
 
 export type SetSystemPromptEvent = z.infer<typeof SetSystemPromptEvent>;
-export type SetSystemPromptEventInput = z.infer<typeof SetSystemPromptEventInput>;
 
 export type AddToolSpecsEvent = z.infer<typeof AddToolSpecsEvent>;
-export type AddToolSpecsEventInput = z.infer<typeof AddToolSpecsEventInput>;
 
 export type RemoveToolSpecsEvent = z.infer<typeof RemoveToolSpecsEvent>;
-export type RemoveToolSpecsEventInput = z.infer<typeof RemoveToolSpecsEventInput>;
 
 export type SetModelOptsEvent = z.infer<typeof SetModelOptsEvent>;
-export type SetModelOptsEventInput = z.infer<typeof SetModelOptsEventInput>;
 
 export type AddLabelEvent = z.infer<typeof AddLabelEvent>;
-export type AddLabelEventInput = z.infer<typeof AddLabelEventInput>;
 
 export type InternalErrorEvent = z.infer<typeof InternalErrorEvent>;
-export type InternalErrorEventInput = z.infer<typeof InternalErrorEventInput>;
 
 export type LogEvent = z.infer<typeof LogEvent>;
-export type LogEventInput = z.infer<typeof LogEventInput>;
 
 export type InitializedWithEventsEvent = z.infer<typeof InitializedWithEventsEvent>;
-export type InitializedWithEventsEventInput = z.infer<typeof InitializedWithEventsEventInput>;
 
 export type PauseLLMRequestsEvent = z.infer<typeof PauseLLMRequestsEvent>;
-export type PauseLLMRequestsEventInput = z.infer<typeof PauseLLMRequestsEventInput>;
 
 export type ResumeLLMRequestsEvent = z.infer<typeof ResumeLLMRequestsEvent>;
-export type ResumeLLMRequestsEventInput = z.infer<typeof ResumeLLMRequestsEventInput>;
 
 export type FileSharedEvent = z.infer<typeof FileSharedEvent>;
-export type FileSharedEventInput = z.infer<typeof FileSharedEventInput>;
+export type MessageFromAgentEvent = z.infer<typeof MessageFromAgentEvent>;
 
 export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
-export type ParticipantJoinedEventInput = z.infer<typeof ParticipantJoinedEventInput>;
 
 export type ParticipantMentionedEvent = z.infer<typeof ParticipantMentionedEvent>;
-export type ParticipantMentionedEventInput = z.infer<typeof ParticipantMentionedEventInput>;
 
 // ---------------------------------------------------------------------------
 //  Reduced State
 // ---------------------------------------------------------------------------
 
-export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
+export interface CoreReducedState<TEventInput = AgentCoreEvent> {
   systemPrompt: string;
   inputItems: Array<
     OpenAI.Responses.ResponseInputItem & {
@@ -745,10 +605,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEventInput> {
    * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
    * This is *partially* derived from contextRules, but also from other sources like MCP servers. Might want rethinking some day for that reason.
    */
-  groupedRuntimeTools: Record<
-    "context-rule" | "mcp",
-    RuntimeTool<TEventInput | AgentCoreEventInput>[]
-  >;
+  groupedRuntimeTools: Record<"context-rule" | "mcp", RuntimeTool<TEventInput | AgentCoreEvent>[]>;
   llmRequestStartedAtIndex: number | null;
   paused: boolean;
   /**
@@ -774,7 +631,7 @@ with the agent.
   mentionedParticipants: Record<string, Participant>;
 }
 
-export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
+export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
   extends CoreReducedState<TEventInput> {
   enabledContextRules: ContextRule[];
   /**
@@ -783,7 +640,7 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEventInput>
   toolSpecs: ToolSpec[];
 
   /** Flat list of runtime tools available for the agent. Derived from groupedRuntimeTools. */
-  runtimeTools: RuntimeTool<TEventInput | AgentCoreEventInput>[];
+  runtimeTools: RuntimeTool<TEventInput | AgentCoreEvent>[];
   /**
    * MCP servers available for this agent conversation. Derived from contextRules.
    */
