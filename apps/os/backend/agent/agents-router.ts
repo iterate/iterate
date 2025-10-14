@@ -7,16 +7,16 @@ import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
 import { normalizeNullableFields } from "../utils/type-helpers.ts";
 import {
-  AgentCoreEventInput,
-  FileSharedEventInput,
+  AgentCoreEvent,
+  FileSharedEvent,
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import { IterateAgent } from "./iterate-agent.ts";
 import { type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import type { MergedEventForSlices } from "./agent-core.ts";
-import { MCPEventInput } from "./mcp/mcp-slice.ts";
-import { SlackEventInput } from "./slack-slice.ts";
+import { MCPEvent } from "./mcp/mcp-slice.ts";
+import { SlackSliceEvent } from "./slack-slice.ts";
 import {
   getOrCreateAgentStubByName,
   toAgentClassName,
@@ -75,10 +75,10 @@ const ContextRule = z.object({
 });
 
 export const AllAgentEventInputSchemas = z.union([
-  AgentCoreEventInput,
-  FileSharedEventInput,
-  SlackEventInput as unknown as z.ZodNever, // too complex for typescirpt to handle
-  MCPEventInput,
+  AgentCoreEvent,
+  FileSharedEvent,
+  SlackSliceEvent as unknown as z.ZodNever, // too complex for typescirpt to handle
+  MCPEvent,
 ]);
 export type AllAgentEventInputs = z.input<typeof AllAgentEventInputSchemas>;
 

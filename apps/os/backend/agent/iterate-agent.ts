@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
+import type { ToFileInput } from "openai/uploads";
 import { logger, withLoggerContext } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -56,14 +57,9 @@ import {
   type AgentCoreSlice,
   type MergedDepsForSlices,
   type MergedEventForSlices,
-  type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import {
-  AgentCoreEvent,
-  type AddContextRulesEvent,
-  type AugmentedCoreReducedState,
-} from "./agent-core-schemas.ts";
+import { AgentCoreEvent, type AugmentedCoreReducedState } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -74,7 +70,7 @@ import {
   type MCPConnectionQueues,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEvent } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
@@ -350,7 +346,9 @@ export class IterateAgent<
         agentCoreState: state,
         durableObjectClassName: this.constructor.name,
       }),
-      storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
+      storeEvents: (
+        events: ReadonlyArray<AgentCoreEvent & { eventIndex: number; createdAt: string }>,
+      ) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
           this.sql`
@@ -602,7 +600,7 @@ export class IterateAgent<
     }
   }
 
-  async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
+  async getAddContextRulesEvent() {
     const rules = ContextRule.array().parse(await this.getContextRules());
     return {
       type: "CORE:ADD_CONTEXT_RULES",
@@ -640,7 +638,7 @@ export class IterateAgent<
     });
   }
 
-  getEvents(): MergedEventForSlices<Slices>[] {
+  getEvents(): (MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string })[] {
     const rawEvents = this.sql`
       SELECT 
         event_type as type,
@@ -653,7 +651,10 @@ export class IterateAgent<
       FROM agent_events 
       ORDER BY event_index ASC
     `;
-    return parseEventRows(rawEvents) as MergedEventForSlices<Slices>[];
+    return parseEventRows(rawEvents) as (MergedEventForSlices<Slices> & {
+      eventIndex: number;
+      createdAt: string;
+    })[];
   }
 
   /**
@@ -741,11 +742,11 @@ export class IterateAgent<
     return result[0]?.role;
   }
 
-  addEvent(event: MergedEventInputForSlices<Slices>): { eventIndex: number }[] {
+  addEvent(event: MergedEventForSlices<Slices>): { eventIndex: number }[] {
     return this.agentCore.addEvent(event);
   }
 
-  addEvents(events: MergedEventInputForSlices<Slices>[]): { eventIndex: number }[] {
+  addEvents(events: MergedEventForSlices<Slices>[]): { eventIndex: number }[] {
     return this.agentCore.addEvents(events);
   }
 
@@ -851,7 +852,7 @@ export class IterateAgent<
       },
     ]);
 
-    const events: MergedEventInputForSlices<Slices>[] = [];
+    const events: MergedEventForSlices<Slices>[] = [];
 
     // Check if the agent is paused and resume it if needed
     // This ensures reminders can trigger LLM responses even if the agent was previously paused
@@ -1353,7 +1354,7 @@ export class IterateAgent<
       userId: input.onBehalfOfIterateUserId,
     });
 
-    const connectRequestEvent: MCPConnectRequestEventInput = {
+    const connectRequestEvent: MCPConnectRequestEvent = {
       type: "MCP:CONNECT_REQUEST",
       data: {
         ...mcpServer,
@@ -1527,9 +1528,11 @@ export class IterateAgent<
         db: this.db,
         estateId: this.databaseRecord.estateId,
       });
-      inputReference = await toFile(content, fileRecord.filename ?? undefined, {
-        type: fileRecord.mimeType ?? undefined,
-      });
+      inputReference = await toFile(
+        content as unknown as ToFileInput,
+        fileRecord.filename ?? undefined,
+        { type: fileRecord.mimeType ?? undefined },
+      );
     }
 
     const video = await openai.videos.create({

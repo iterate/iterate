@@ -67,7 +67,7 @@ import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AgentReducedState } from "./agent-reduced-state.tsx";
 import { PagerDialog } from "./pager-dialog.tsx";
 
-type AgentEvent = AgentCoreEvent | SlackSliceEvent;
+type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
 
 export interface AgentDetailDataGetters {
   getFileUrl: (iterateFileId: string, disposition?: "inline" | "attachment") => string;

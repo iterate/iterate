@@ -2,8 +2,7 @@ import { z } from "zod/v4";
 import { defineAgentCoreSlice } from "../agent-core.ts";
 import {
   agentCoreBaseEventFields,
-  agentCoreBaseEventInputFields,
-  type AgentCoreEventInput,
+  type AgentCoreEvent,
   type CoreReducedState,
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
@@ -108,11 +107,6 @@ export const MCPConnectRequestEvent = z.object({
   ...mcpConnectRequestFields,
 });
 
-export const MCPConnectRequestEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpConnectRequestFields,
-});
-
 const mcpConnectionEstablishedFields = {
   type: z.literal("MCP:CONNECTION_ESTABLISHED"),
   data: z.object({
@@ -135,11 +129,6 @@ export const MCPConnectionEstablishedEvent = z.object({
   ...mcpConnectionEstablishedFields,
 });
 
-export const MCPConnectionEstablishedEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpConnectionEstablishedFields,
-});
-
 const mcpDisconnectRequestFields = {
   type: z.literal("MCP:DISCONNECT_REQUEST"),
   data: z.object({
@@ -154,11 +143,6 @@ export const MCPDisconnectRequestEvent = z.object({
   ...mcpDisconnectRequestFields,
 });
 
-export const MCPDisconnectRequestEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpDisconnectRequestFields,
-});
-
 const mcpToolsChangedFields = {
   type: z.literal("MCP:TOOLS_CHANGED"),
   data: z.object({
@@ -170,11 +154,6 @@ const mcpToolsChangedFields = {
 
 export const MCPToolsChanged = z.object({
   ...agentCoreBaseEventFields,
-  ...mcpToolsChangedFields,
-});
-
-export const MCPToolsChangedInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...mcpToolsChangedFields,
 });
 
@@ -193,11 +172,6 @@ export const MCPConnectionErrorEvent = z.object({
   ...mcpConnectionErrorFields,
 });
 
-export const MCPConnectionErrorEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpConnectionErrorFields,
-});
-
 const mcpOAuthRequiredFields = {
   type: z.literal("MCP:OAUTH_REQUIRED"),
   data: z.object({
@@ -213,11 +187,6 @@ const mcpOAuthRequiredFields = {
 
 export const MCPOAuthRequiredEvent = z.object({
   ...agentCoreBaseEventFields,
-  ...mcpOAuthRequiredFields,
-});
-
-export const MCPOAuthRequiredEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
   ...mcpOAuthRequiredFields,
 });
 
@@ -240,11 +209,6 @@ export const MCPParamsRequiredEvent = z.object({
   ...mcpParamsRequiredFields,
 });
 
-export const MCPParamsRequiredEventInput = z.object({
-  ...agentCoreBaseEventInputFields,
-  ...mcpParamsRequiredFields,
-});
-
 // ------------------------- Discriminated Unions -------------------------
 
 export const MCPEvent = z.discriminatedUnion("type", [
@@ -257,16 +221,6 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPParamsRequiredEvent,
 ]);
 
-export const MCPEventInput = z.discriminatedUnion("type", [
-  MCPConnectRequestEventInput,
-  MCPConnectionEstablishedEventInput,
-  MCPDisconnectRequestEventInput,
-  MCPToolsChangedInput,
-  MCPConnectionErrorEventInput,
-  MCPOAuthRequiredEventInput,
-  MCPParamsRequiredEventInput,
-]);
-
 // ------------------------- Types -------------------------
 
 export type MCPConnectRequestEvent = z.infer<typeof MCPConnectRequestEvent>;
@@ -276,15 +230,7 @@ export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
 export type MCPParamsRequiredEvent = z.infer<typeof MCPParamsRequiredEvent>;
 
-export type MCPConnectRequestEventInput = z.infer<typeof MCPConnectRequestEventInput>;
-export type MCPDisconnectRequestEventInput = z.infer<typeof MCPDisconnectRequestEventInput>;
-export type MCPConnectionEstablishedEventInput = z.infer<typeof MCPConnectionEstablishedEventInput>;
-export type MCPConnectionErrorEventInput = z.infer<typeof MCPConnectionErrorEventInput>;
-export type MCPOAuthRequiredEventInput = z.infer<typeof MCPOAuthRequiredEventInput>;
-export type MCPParamsRequiredEventInput = z.infer<typeof MCPParamsRequiredEventInput>;
-
 export type MCPEvent = z.infer<typeof MCPEvent>;
-export type MCPEventInput = z.input<typeof MCPEventInput>;
 
 // ------------------------- Helper Functions -------------------------
 
@@ -314,7 +260,7 @@ export function parseConnectionKey(key: MCPConnectionKey) {
 /**
  * Update runtime tools from MCP connections
  */
-function updateRuntimeTools<TEventInput = AgentCoreEventInput>(params: {
+function updateRuntimeTools<TEventInput = AgentCoreEvent>(params: {
   state: CoreReducedState<TEventInput> & MCPSliceState;
   newConnections: Record<MCPConnectionKey, MCPConnection>;
   deps: MCPSliceDeps;
@@ -359,12 +305,10 @@ export type { MCPManagerCache } from "./mcp-event-hooks.ts";
 export const mcpSlice = defineAgentCoreSlice<{
   SliceState: MCPSliceState;
   EventSchema: typeof MCPEvent;
-  EventInputSchema: typeof MCPEventInput;
   SliceDeps: MCPSliceDeps;
 }>({
   name: "mcp-slice",
   eventSchema: MCPEvent,
-  eventInputSchema: MCPEventInput,
   initialState: {
     mcpConnections: {},
   },

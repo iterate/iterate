@@ -4,6 +4,7 @@
     "target": "esnext",
     "types": ["@cloudflare/workers-types", "node", "vite/client"],
     "sourceMap": false,
+    "lib": ["ESNext", "DOM"],
     "declaration": true,
     "declarationMap": false,
     "exactOptionalPropertyTypes": false,
