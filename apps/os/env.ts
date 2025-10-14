@@ -1,4 +1,3 @@
- 
 import { logger } from "./backend/tag-logger.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment

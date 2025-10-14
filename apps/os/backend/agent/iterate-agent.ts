@@ -193,7 +193,7 @@ export class IterateAgent<
     // Persist base metadata on the durable object instance so every wrapped method inherits it
     try {
       // setLoggerMetadata is installed by withLoggerContext()
-       
+
       (this as any).setLoggerMetadata?.({
         agentId: params.record.id,
         estateId: params.record.estateId,
