@@ -321,7 +321,7 @@ export function withLoggerContext<T extends object>(
   // Also instrument the prototype chain to catch calls that bypass the instance proxy
   try {
     const ctor = (target as any).constructor as Function;
-    instrumentPrototypeWithLoggerContext(ctor, loggerInstance, getMetadata);
+    instrumentPrototypeWithLoggerContext(target, ctor, loggerInstance, getMetadata);
   } catch (_err) {
     // ignore
   }
@@ -389,6 +389,7 @@ export function withLoggerContext<T extends object>(
 }
 
 function instrumentPrototypeWithLoggerContext<T extends object>(
+  target: T,
   ctor: Function,
   loggerInstance: TagLogger,
   getMetadata: (methodName: string, args: unknown[], instance: T) => TagLogger.Context["metadata"],
@@ -405,9 +406,9 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
       const fn = desc.value as Function & { [key: symbol]: unknown };
       if ((fn as any)[LOGGER_METHOD_WRAPPED]) continue;
 
-      const wrapped = function (this: T, ...args: unknown[]) {
-        const base = getInstanceLoggerMetadata(this as unknown as object);
-        const callMetadata = getMetadata(name, args, this);
+      const wrapped = function (...args: unknown[]) {
+        const base = getInstanceLoggerMetadata(target as unknown as object);
+        const callMetadata = getMetadata(name, args, target);
         const mergedMetadata: LoggerMetadata = {
           ...base,
           ...(callMetadata || {}),
@@ -420,7 +421,7 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
 
           (loggerInstance as any).addMetadata?.(overlay);
           try {
-            return (fn as any).apply(this, args);
+            return (fn as any).apply(target, args);
           } finally {
             for (const key of Object.keys(overlay)) {
               if (!(key in (before || {}))) {
@@ -432,7 +433,7 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
         }
 
         return (loggerInstance as any).runInContext?.(mergedMetadata, () =>
-          (fn as any).apply(this, args),
+          (fn as any).apply(target, args),
         );
       } as unknown as Function;
 
