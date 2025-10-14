@@ -354,7 +354,7 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list messages for",
             },
@@ -398,7 +398,7 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to modify messages for",
             },
@@ -418,7 +418,7 @@ export const defaultContextRules = defineRules([
         overrideInputJSONSchema: {
           type: "object",
           properties: {
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list labels for",
             },
@@ -454,7 +454,7 @@ export const defaultContextRules = defineRules([
               },
               required: ["name"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create labels for",
             },
@@ -484,7 +484,7 @@ export const defaultContextRules = defineRules([
               },
               required: ["labelId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete labels for",
             },
@@ -568,7 +568,7 @@ export const defaultContextRules = defineRules([
               },
               required: ["summary", "start", "end"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create events for",
             },
@@ -614,7 +614,7 @@ export const defaultContextRules = defineRules([
               },
               required: ["maxResults"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list events for",
             },
@@ -658,7 +658,7 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to update events for",
             },
@@ -683,7 +683,7 @@ export const defaultContextRules = defineRules([
               },
               required: ["eventId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete events for",
             },
