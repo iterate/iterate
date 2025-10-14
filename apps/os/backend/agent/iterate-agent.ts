@@ -324,8 +324,7 @@ export class IterateAgent<
 
     return withLoggerContext(this, logger, (methodName) => ({
       userId: undefined, // Will be set via tracing in initIterateAgent
-      methodName: methodName,
-      url: "",
+      methodName,
       traceId: typeid("req").toString(),
     }));
   }
