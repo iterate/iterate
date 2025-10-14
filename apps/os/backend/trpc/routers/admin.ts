@@ -405,6 +405,13 @@ export const adminRouter = router({
         ownerMembership.user,
       );
 
+      if (!customer) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to create Stripe customer",
+        });
+      }
+
       return {
         success: true,
         stripeCustomerId: customer.id,

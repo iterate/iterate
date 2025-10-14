@@ -16,7 +16,7 @@ export default function Investors() {
     { name: "OpenAI", role: "Research Lab", url: "https://openai.com" },
     {
       name: "Index Ventures",
-      role: "Carlos Gonzales-Cadenas",
+      role: "Carlos Gonzalez-Cadenas",
       url: "https://indexventures.com/team/carlos-gonzalez-cadenas",
     },
     { name: "Lachy Groom", role: "LFG Fund", url: "https://twitter.com/lachygroom" },

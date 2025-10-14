@@ -14,6 +14,7 @@ const V2_STRIPE_VERSION = "2025-09-30.preview";
 type Organization = {
   id: string;
   name: string;
+  stripeCustomerId: string | null;
 };
 
 type User = {
@@ -236,6 +237,13 @@ export async function createStripeCustomerAndSubscriptionForOrganization(
   organization: Organization,
   user: User,
 ) {
+  if (organization.stripeCustomerId) {
+    logger.info("Stripe customer already exists for organization - skipping", {
+      organizationId: organization.id,
+    });
+    return;
+  }
+
   try {
     // Create the customer first
     const customer = await createStripeCustomer(organization, user);

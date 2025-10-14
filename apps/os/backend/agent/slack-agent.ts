@@ -3,8 +3,7 @@ import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
-import { waitUntil } from "cloudflare:workers";
-import { env as _env, env } from "../../env.ts";
+import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import * as schema from "../db/schema.ts";
@@ -47,6 +46,8 @@ import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
 import type { MergedEventForSlices } from "./agent-core.ts";
+import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
+import type { ContextRule } from "./context-schemas.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -58,17 +59,8 @@ type Inputs = typeof slackAgentTools.$infer.inputTypes;
 import type { AgentInitParams } from "./iterate-agent.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
-  static getNamespace() {
-    // cast necessary to avoid typescript error:
-    // Class static side 'typeof SlackAgent' incorrectly extends base class static side 'typeof IterateAgent'.
-    // The types returned by 'getNamespace()' are incompatible between these types.
-
-    // tradeoff: types for some other static methods inherited from IterateAgent like getOrCreateStubByName
-    // are for IterateAgent, rather than SlackAgent, so a cast is necessary if you want to call slack-specific methods on a stub.
-    return env.SLACK_AGENT as unknown as typeof env.ITERATE_AGENT;
-  }
-
   protected slackAPI!: WebClient;
+  private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
 
   // Track Slack message timestamps for MCP connection status buttons
   // Maps from serverId or connectionKey to message timestamp
@@ -131,6 +123,25 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         // For clearing (status === null), omit loading_messages entirely.
         ...(status ? { loading_messages: [`${status}...`] } : {}),
       });
+
+      if (this.slackStatusClearTimeout) {
+        clearTimeout(this.slackStatusClearTimeout);
+      }
+
+      if (status) {
+        const scheduleClear = () => {
+          if (this.agentCore.llmRequestInProgress()) {
+            this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
+            return;
+          }
+          this.slackStatusClearTimeout = null;
+          this.updateSlackThreadStatus({ status: undefined });
+        };
+
+        this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
+      } else {
+        this.slackStatusClearTimeout = null;
+      }
     } catch (error) {
       // log error but don't crash DO
       logger.error("Failed to update Slack status:", error);
@@ -166,6 +177,35 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ...iterateAgentTools,
       ...slackAgentTools,
     };
+  }
+
+  protected async getContextRules(): Promise<ContextRule[]> {
+    const rules = await super.getContextRules();
+
+    // Check if estate has an onboarding agent configured
+    if (this.estate.onboardingAgentName) {
+      try {
+        // Get a stub for the onboarding agent
+        const onboardingAgentStub = await getOrCreateAgentStubByName("OnboardingAgent", {
+          db: this.db,
+          estateId: this.estate.id,
+          agentInstanceName: this.estate.onboardingAgentName,
+        });
+
+        // Call onboardingPromptFragment on the stub
+        const onboardingPrompt = await (onboardingAgentStub as any).onboardingPromptFragment();
+
+        // Add the onboarding context as a context rule
+        rules.push({
+          key: "onboarding-context",
+          prompt: onboardingPrompt,
+        });
+      } catch (error) {
+        logger.warn(`Failed to get onboarding context for estate ${this.estate.id}:`, error);
+      }
+    }
+
+    return rules;
   }
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
@@ -994,7 +1034,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // return an empty object to conserve tokens in the success case, plus magic flags if any
     return {
-      ...(result.ok ? {} : result),
+      ...(result.ok
+        ? {
+            // If we just return {} to save tokens, the LLM will sometimes try sending the message again
+            status: "message sent",
+          }
+        : result),
       ...magic,
     };
   }

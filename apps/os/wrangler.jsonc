@@ -55,6 +55,10 @@
         "class_name": "SlackAgent",
       },
       {
+        "name": "ONBOARDING_AGENT",
+        "class_name": "OnboardingAgent",
+      },
+      {
         "name": "ORGANIZATION_WEBSOCKET",
         "class_name": "OrganizationWebSocket",
       },
@@ -76,6 +80,10 @@
     {
       "tag": "2025-01-sandbox",
       "new_sqlite_classes": ["Sandbox"],
+    },
+    {
+      "tag": "2025-02-onboarding-agent",
+      "new_sqlite_classes": ["OnboardingAgent"],
     },
   ],
   "triggers": {
