@@ -408,7 +408,7 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
 
           (loggerInstance as any).addMetadata?.(overlay);
           try {
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+             
             return (fn as any).apply(this, args);
           } finally {
             for (const key of Object.keys(overlay)) {
@@ -420,7 +420,7 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
           }
         }
 
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+         
         return (loggerInstance as any).runInContext?.(mergedMetadata, () =>
           (fn as any).apply(this, args),
         );
