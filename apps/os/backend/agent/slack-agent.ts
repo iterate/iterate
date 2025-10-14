@@ -484,14 +484,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`,
           yamlArgs === "{}" ? "" : `Arguments:\n\n${yamlArgs}`,
         ];
-        const result = await this.rawSendSlackMessage({
-          text: message.filter(Boolean).join("\n\n"),
-        });
+        const text = message.filter(Boolean).join("\n\n");
+        const result = await this.rawSendSlackMessage({ text });
         if (!result.ts) throw new Error("Failed to send approval request message");
-        const options = ["+1", "-1"]; // add the options ahead of time to make it easy to react
-        for (const name of options) {
-          await this.addSlackReaction({ messageTs: result.ts!, name });
-        }
+
+        // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
+        await this.addSlackReaction({ messageTs: result.ts!, name: "+1" });
+        await this.addSlackReaction({ messageTs: result.ts!, name: "-1" });
 
         return ApprovalKey.parse(result.ts);
       },
