@@ -357,7 +357,12 @@ export function withLoggerContext<T extends object>(
 
             loggerInstance.addMetadata?.(overlay);
             try {
-              return value.apply(target, args);
+              try {
+                return value.apply(target, args);
+              } catch (error) {
+                loggerInstance.error(error as Error);
+                throw error;
+              }
             } finally {
               // Remove keys introduced by overlay which didn't exist before
               for (const key of Object.keys(overlay)) {
@@ -371,7 +376,14 @@ export function withLoggerContext<T extends object>(
           }
 
           // No existing context: create a fresh one for this call
-          return loggerInstance.runInContext?.(mergedMetadata, () => value.apply(target, args));
+          return loggerInstance.runInContext?.(mergedMetadata, () => {
+            try {
+              return value.apply(target, args);
+            } catch (error) {
+              loggerInstance.error(error as Error);
+              throw error;
+            }
+          });
         };
       },
     },
