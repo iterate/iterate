@@ -13,7 +13,7 @@ import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
-import { logger, withLoggerContext } from "../tag-logger.ts";
+import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -186,19 +186,6 @@ export class IterateAgent<
 
     await this.persistInitParams(params);
 
-    // Persist base metadata on the durable object instance so every wrapped method inherits it
-    // setLoggerMetadata is installed by withLoggerContext()
-    (this as ReturnType<typeof withLoggerContext<this>>).setLoggerMetadata?.({
-      agentId: params.record.id,
-      estateId: params.record.estateId,
-      organizationId: params.organization.id,
-      organizationName: params.organization.name,
-      agentClassName: params.record.className,
-      ...(params.tracing?.userId && { userId: params.tracing.userId }),
-      ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),
-      ...(params.tracing?.traceId && { traceId: params.tracing.traceId }),
-    });
-
     // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
     // These records (estate, organization, iterateConfig) change infrequently and callers
     // typically already fetched them. This also helps when the DO is not colocated with
@@ -300,12 +287,6 @@ export class IterateAgent<
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
-
-    return withLoggerContext(this, logger, (methodName) => ({
-      userId: undefined, // Will be set via tracing in initIterateAgent
-      methodName,
-      traceId: typeid("req").toString(),
-    }));
   }
 
   /**

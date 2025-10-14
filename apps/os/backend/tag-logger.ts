@@ -36,8 +36,6 @@ export type LoggerMetadata = TagLogger.Context["metadata"];
 
 // Symbol key to store durable-object-scoped base metadata on the instance
 export const LOGGER_METADATA_KEY: symbol = Symbol.for("iterate.logger.base_metadata");
-const LOGGER_CLASS_INSTRUMENTED: symbol = Symbol.for("iterate.logger.class_instrumented");
-const LOGGER_METHOD_WRAPPED: symbol = Symbol.for("iterate.logger.method_wrapped");
 
 /**
  * Get the instance's base logger metadata, creating it if missing.
@@ -267,198 +265,6 @@ export class TagLogger {
   }
 }
 
-/**
- * Creates a proxy that wraps all methods with logger context.
- * Call this at the end of your constructor and return it.
- *
- * Example:
- * ```typescript
- * class MyDurableObject {
- *   constructor() {
- *     // ... initialization
- *     return withLoggerContext(this, logger, (methodName, args) => ({
- *       userId: undefined,
- *       path: undefined,
- *       method: methodName,
- *       url: undefined,
- *       requestId: typeid("req").toString(),
- *     }));
- *   }
- * }
- * ```
- */
-export function withLoggerContext<T extends object>(
-  target: T,
-  loggerInstance: TagLogger,
-  getMetadata: (methodName: string, args: unknown[], instance: T) => TagLogger.Context["metadata"],
-): T & {
-  setLoggerMetadata: (partial: Partial<LoggerMetadata>) => void;
-  getLoggerMetadata: () => LoggerMetadata;
-} {
-  // Ensure instance has a place to store base metadata and convenience setters/getters
-  const anyTarget = target as Record<PropertyKey, unknown>;
-  if (!Object.prototype.hasOwnProperty.call(anyTarget, LOGGER_METADATA_KEY)) {
-    // Initialize base metadata store
-    getInstanceLoggerMetadata(anyTarget);
-  }
-  if (typeof anyTarget.setLoggerMetadata !== "function") {
-    Object.defineProperty(anyTarget, "setLoggerMetadata", {
-      value: (partial: Partial<LoggerMetadata>) => setInstanceLoggerMetadata(anyTarget, partial),
-      writable: false,
-      enumerable: false,
-      configurable: true,
-    });
-  }
-  if (typeof anyTarget.getLoggerMetadata !== "function") {
-    Object.defineProperty(anyTarget, "getLoggerMetadata", {
-      value: () => getInstanceLoggerMetadata(anyTarget),
-      writable: false,
-      enumerable: false,
-      configurable: true,
-    });
-  }
-
-  // Also instrument the prototype chain to catch calls that bypass the instance proxy
-  try {
-    const ctor = (target as any).constructor as Function;
-    instrumentPrototypeWithLoggerContext(target, ctor, loggerInstance, getMetadata);
-  } catch (_err) {
-    // ignore
-  }
-
-  return new Proxy(
-    target as T & {
-      setLoggerMetadata: (partial: Partial<LoggerMetadata>) => void;
-      getLoggerMetadata: () => LoggerMetadata;
-    },
-    {
-      get(target, prop, receiver) {
-        const value = Reflect.get(target, prop, receiver);
-
-        // If it's not a function, return as-is
-        if (typeof value !== "function") {
-          return value;
-        }
-
-        // Wrap the function with logger context
-        return (...args: unknown[]) => {
-          // Merge durable-object-scoped base metadata with per-call metadata
-          const base = getInstanceLoggerMetadata(target);
-          const callMetadata = getMetadata(String(prop), args, target) || ({} as LoggerMetadata);
-          const mergedMetadata: LoggerMetadata = { ...base, ...callMetadata } as LoggerMetadata;
-
-          // If a context already exists, temporarily overlay metadata (but preserve the outer traceId)
-          if (loggerInstance.hasContext()) {
-            const before = { ...loggerInstance.getMetadata() } as LoggerMetadata;
-            const overlay: LoggerMetadata = { ...mergedMetadata } as LoggerMetadata;
-            if (before?.traceId) overlay.traceId = before.traceId; // do not override existing traceId
-
-            loggerInstance.addMetadata?.(overlay);
-            try {
-              try {
-                return value.apply(target, args);
-              } catch (error) {
-                loggerInstance.error(error as Error);
-                throw error;
-              }
-            } finally {
-              // Remove keys introduced by overlay which didn't exist before
-              for (const key of Object.keys(overlay)) {
-                if (!(key in before)) {
-                  loggerInstance.removeMetadata?.(key);
-                }
-              }
-              // Restore previous values
-              loggerInstance.addMetadata?.(before);
-            }
-          }
-
-          // No existing context: create a fresh one for this call
-          return loggerInstance.runInContext?.(mergedMetadata, () => {
-            try {
-              return value.apply(target, args);
-            } catch (error) {
-              loggerInstance.error(error as Error);
-              throw error;
-            }
-          });
-        };
-      },
-    },
-  );
-}
-
-function instrumentPrototypeWithLoggerContext<T extends object>(
-  target: T,
-  ctor: Function,
-  loggerInstance: TagLogger,
-  getMetadata: (methodName: string, args: unknown[], instance: T) => TagLogger.Context["metadata"],
-) {
-  const anyCtor = ctor as any;
-  if (anyCtor[LOGGER_CLASS_INSTRUMENTED]) return;
-
-  let current = ctor.prototype;
-  while (current && current !== Object.prototype) {
-    for (const name of Object.getOwnPropertyNames(current)) {
-      if (name === "constructor") continue;
-      const desc = Object.getOwnPropertyDescriptor(current, name);
-      if (!desc || typeof desc.value !== "function") continue;
-      const fn = desc.value as Function & { [key: symbol]: unknown };
-      if ((fn as any)[LOGGER_METHOD_WRAPPED]) continue;
-
-      const wrapped = function (...args: unknown[]) {
-        const base = getInstanceLoggerMetadata(target as unknown as object);
-        const callMetadata = getMetadata(name, args, target);
-        const mergedMetadata: LoggerMetadata = {
-          ...base,
-          ...(callMetadata || {}),
-        } as LoggerMetadata;
-
-        if ((loggerInstance as any).hasContext?.()) {
-          const before = { ...(loggerInstance as any).getMetadata?.() } as LoggerMetadata;
-          const overlay: LoggerMetadata = { ...mergedMetadata } as LoggerMetadata;
-          if (before?.traceId) overlay.traceId = before.traceId;
-
-          (loggerInstance as any).addMetadata?.(overlay);
-          try {
-            return (fn as any).apply(target, args);
-          } finally {
-            for (const key of Object.keys(overlay)) {
-              if (!(key in (before || {}))) {
-                (loggerInstance as any).removeMetadata?.(key);
-              }
-            }
-            (loggerInstance as any).addMetadata?.(before);
-          }
-        }
-
-        return (loggerInstance as any).runInContext?.(mergedMetadata, () =>
-          (fn as any).apply(target, args),
-        );
-      } as unknown as Function;
-
-      Object.defineProperty(wrapped, LOGGER_METHOD_WRAPPED, {
-        value: true,
-        enumerable: false,
-      });
-      Object.defineProperty(current, name, {
-        value: wrapped,
-        writable: true,
-        configurable: true,
-        enumerable: false,
-      });
-    }
-    current = Object.getPrototypeOf(current);
-  }
-
-  Object.defineProperty(anyCtor, LOGGER_CLASS_INSTRUMENTED, {
-    value: true,
-    writable: false,
-    enumerable: false,
-    configurable: true,
-  });
-}
-
 function serializeError(error: unknown): any {
   if (error instanceof Error) {
     const plain: any = {
@@ -486,7 +292,7 @@ function serializeError(error: unknown): any {
 const replacer = (_: string, value: unknown) => serializeError(value);
 
 /* eslint-disable no-console -- this is the one place where we use console */
-export const logger = new TagLogger({
+export const consoleImplementation: TagLogger.Implementation = {
   debug: ({ message, metadata }) =>
     console.debug(JSON.stringify({ message, ...metadata }, replacer)),
   info: ({ message, metadata }) => console.info(JSON.stringify({ message, ...metadata }, replacer)),
@@ -496,4 +302,6 @@ export const logger = new TagLogger({
     console.error(
       JSON.stringify({ message, ...metadata, debugMemories, error: errorObject }, replacer),
     ),
-});
+};
+
+export const logger = new TagLogger(consoleImplementation);
