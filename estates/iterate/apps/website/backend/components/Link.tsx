@@ -3,7 +3,7 @@ import { cn } from "../utils/cn.ts";
 
 interface LinkProps extends RouterLinkProps {
   external?: boolean;
-  variant?: "default" | "underline" | "subtle";
+  variant?: "default" | "underline" | "subtle" | "none";
 }
 
 export function Link({
@@ -19,6 +19,7 @@ export function Link({
     default: "text-blue-600 hover:text-blue-700 hover:underline underline-offset-4",
     underline: "text-blue-600 hover:text-blue-700 underline underline-offset-4",
     subtle: "text-slate-600 hover:text-slate-900 hover:underline underline-offset-4",
+    none: "",
   };
 
   const linkClassName = cn(baseStyles, variantStyles[variant], className);

@@ -1,13 +1,14 @@
 import "./globals.css";
 import { Links, Meta, Outlet, Scripts, ScrollRestoration } from "react-router";
-import { PostHogProvider } from "./components/PostHogProvider.tsx";
+import { PostHogProvider } from "./components/posthog-provider.tsx";
+import { ThemeProvider } from "./components/theme-provider.tsx";
 import { Toaster } from "./components/ui/toaster.tsx";
 import ogImage from "./assets/og-image.png?url";
 import favicon from "./assets/favicon.ico?url";
 
 export function Layout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" suppressHydrationWarning>
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -47,12 +48,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Meta />
         <Links />
       </head>
-      <body
-        suppressHydrationWarning
-        className="min-h-screen font-mono text-slate-900 bg-white overflow-x-hidden"
-      >
-        <div className="min-h-screen bg-white">{children}</div>
-        <Toaster />
+      <body suppressHydrationWarning>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          enableSystem
+          disableTransitionOnChange
+        >
+          {children}
+          <Toaster />
+        </ThemeProvider>
         <script
           defer
           src="https://cloud.umami.is/script.js"

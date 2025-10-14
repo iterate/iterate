@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { cn } from "../utils/cn.ts";
-import EmailForm from "./EmailForm.tsx";
+import EmailForm from "./email-form.tsx";
 
 export default function TasksList() {
   const initialVisibleCount = 10;
