@@ -198,7 +198,10 @@ export async function processMCPContent(
           filename,
         });
       } catch (error) {
-        logger.error(`[MCP] Failed to upload ${contentItem.type} content:`, error);
+        logger.error(
+          `[MCP] Failed to upload ${contentItem.type} content:`,
+          error instanceof Error ? error : new Error(String(error)),
+        );
         // Add to processed content without data field as fallback
         const { data: _data, ...itemWithoutData } = contentItem;
         processedContent.push({
