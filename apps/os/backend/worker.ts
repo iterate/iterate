@@ -27,7 +27,7 @@ import { OrganizationWebSocket } from "./durable-objects/organization-websocket.
 import { runConfigInSandbox } from "./sandbox/run-config.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { buildCallbackApp } from "./integrations/github/build-callback.ts";
-import { logger, type TagLogger } from "./tag-logger.ts";
+import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 import { createLoggerMiddleware } from "./tag-logger-middleware.ts";

@@ -267,6 +267,8 @@ export class TagLogger {
           await posthog.shutdown();
         } catch (trackingError) {
           // Silently fail if error tracking fails
+          // Note: We can't use logger here as it would create infinite recursion
+          // eslint-disable-next-line no-console -- Cannot use logger here as it would create infinite recursion
           console.error("Failed to track error:", trackingError);
         }
       })(),
@@ -408,7 +410,6 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
 
           (loggerInstance as any).addMetadata?.(overlay);
           try {
-             
             return (fn as any).apply(this, args);
           } finally {
             for (const key of Object.keys(overlay)) {
@@ -420,7 +421,6 @@ function instrumentPrototypeWithLoggerContext<T extends object>(
           }
         }
 
-         
         return (loggerInstance as any).runInContext?.(mergedMetadata, () =>
           (fn as any).apply(this, args),
         );
