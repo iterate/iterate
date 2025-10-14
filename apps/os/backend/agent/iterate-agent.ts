@@ -486,7 +486,25 @@ export class IterateAgent<Slices extends readonly AgentCoreSlice[] = CoreAgentSl
 
     await this.persistInitParams(params);
 
-    // Add logger metadata now that we have the database records
+    // Persist base metadata on the durable object instance so every wrapped method inherits it
+    try {
+      // setLoggerMetadata is installed by withLoggerContext()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (this as any).setLoggerMetadata?.({
+        agentId: params.record.id,
+        estateId: params.record.estateId,
+        organizationId: params.organization.id,
+        estateName: params.estate.name,
+        agentClassName: params.record.className,
+        ...(params.tracing?.userId && { userId: params.tracing.userId }),
+        ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),
+        ...(params.tracing?.traceId && { traceId: params.tracing.traceId }),
+      });
+    } catch (_err) {
+      // no-op: metadata will still be added to current context below
+    }
+
+    // Also update the current async logger context so logs inside this call have the metadata immediately
     logger.addMetadata({
       agentId: params.record.id,
       estateId: params.record.estateId,
