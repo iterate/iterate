@@ -12,6 +12,7 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
+import type { ToFileInput } from "openai/uploads";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -50,11 +51,7 @@ import {
   type MergedEventForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import {
-  AgentCoreEvent,
-  type AddContextRulesEvent,
-  type AugmentedCoreReducedState,
-} from "./agent-core-schemas.ts";
+import { AgentCoreEvent, type AugmentedCoreReducedState } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -75,7 +72,6 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
-import type { ToFileInput } from "openai/uploads";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
