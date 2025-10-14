@@ -21,5 +21,3 @@ export const tools = {
   ...createDOToolFactory(iterateAgentTools),
   ...createDOToolFactory(slackAgentTools),
 };
-
-export { tutorialRules } from "./tutorial.ts";

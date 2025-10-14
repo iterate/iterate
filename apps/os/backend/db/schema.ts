@@ -161,6 +161,9 @@ export const estate = pgTable("estate", (t) => ({
   connectedRepoId: t.integer(),
   connectedRepoRef: t.text(),
   connectedRepoPath: t.text(),
+  // Onboarding agent name. Semantics: if null, user is done with onboarding.
+  // If not null, use that agent to get onboarding information from it.
+  onboardingAgentName: t.text(),
   ...withTimestamps,
 }));
 
@@ -333,15 +336,15 @@ export const agentInstance = pgTable(
       .text()
       .notNull()
       .references(() => estate.id, { onDelete: "cascade" }),
-    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent"
+    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
   (t) => [
-    // Global uniqueness for DO identifiers
-    uniqueIndex().on(t.durableObjectName),
+    // Ensure names are unique per estate while allowing duplicates across estates
+    uniqueIndex().on(t.estateId, t.durableObjectName),
     uniqueIndex().on(t.durableObjectId),
     // Listing helpers
     index().on(t.estateId),

@@ -1,4 +1,6 @@
-import { env as _env } from "cloudflare:workers";
+// eslint-disable-next-line iterate/no-direct-waituntil-import -- This file defines the waitUntil wrapper
+import { env as _env, waitUntil as _waitUntil } from "cloudflare:workers";
+import { logger } from "./backend/tag-logger.ts";
 
 export type CloudflareEnv = Env & {
   VITE_PUBLIC_URL: string;
@@ -45,3 +47,22 @@ export type CloudflareEnv = Env & {
 };
 
 export const env = _env as CloudflareEnv;
+
+/**
+ * Wrapper around cloudflare:workers waitUntil that catches and logs errors.
+ * Use this instead of importing waitUntil directly from "cloudflare:workers".
+ *
+ * @example
+ * import { waitUntil } from "../env.ts";
+ *
+ * waitUntil((async () => {
+ *   await someAsyncTask();
+ * })());
+ */
+export function waitUntil(promise: Promise<unknown>): void {
+  _waitUntil(
+    promise.catch((error) => {
+      logger.error("Error in waitUntil callback", error);
+    }),
+  );
+}

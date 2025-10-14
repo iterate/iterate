@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { eq, inArray } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { waitUntil } from "cloudflare:workers";
+import { waitUntil } from "../../../env.ts";
 import {
   protectedProcedure,
   router,

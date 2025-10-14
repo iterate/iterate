@@ -955,6 +955,21 @@ export class AgentCore<
         break;
       }
 
+      case "CORE:MESSAGE_FROM_AGENT": {
+        const { fromAgentName, message } = event.data;
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `Message from agent ${fromAgentName}: ${message}`,
+            },
+          ],
+        });
+        break;
+      }
+
       case "CORE:PARTICIPANT_JOINED": {
         const { internalUserId, email, displayName, externalUserMapping, role } = event.data;
         const participant = {

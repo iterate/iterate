@@ -2,9 +2,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
-import { waitUntil } from "cloudflare:workers";
 import * as R from "remeda";
-import { type CloudflareEnv } from "../../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -20,6 +19,7 @@ import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { shouldIncludeEventInConversation } from "../../agent/slack-agent-utils.ts";
 import type { AgentCoreEventInput } from "../../agent/agent-core.ts";
+import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
@@ -190,7 +190,7 @@ slackApp.post("/webhook", async (c) => {
   }
 
   const agentStub = agentRoute?.agentInstance?.estate
-    ? await SlackAgent.getStub({
+    ? await getAgentStub("SlackAgent", {
         agentInitParams: {
           record: agentRoute.agentInstance,
           estate: agentRoute.agentInstance.estate,
@@ -198,7 +198,7 @@ slackApp.post("/webhook", async (c) => {
           iterateConfig: agentRoute.agentInstance.estate.iterateConfigs?.[0]?.config ?? {},
         },
       })
-    : await SlackAgent.getOrCreateStubByRoute({
+    : await getOrCreateAgentStubByRoute("SlackAgent", {
         db,
         estateId,
         route: routingKey,
@@ -207,6 +207,10 @@ slackApp.post("/webhook", async (c) => {
 
   waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 
+  return c.text("ok");
+});
+
+slackApp.post("/interactive", async (c) => {
   return c.text("ok");
 });
 
@@ -849,7 +853,7 @@ async function handleBotChannelJoin(params: {
       );
 
       const [agentStub] = await Promise.allSettled([
-        SlackAgent.getOrCreateStubByRoute({
+        getOrCreateAgentStubByRoute("SlackAgent", {
           db,
           estateId,
           route: routingKey,
