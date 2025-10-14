@@ -111,6 +111,7 @@ slackApp.post("/webhook", async (c) => {
         handleBotChannelJoin({
           db,
           estateId,
+          teamId: body.team_id!,
           channelId: body.event.channel,
           botUserId,
         }),
@@ -354,12 +355,14 @@ export async function syncSlackChannels(
  *
  * Email handling strategy:
  * - Regular users: Use their actual Slack profile email (assumed to exist)
- * - Users without emails: Generate synthetic email: slack-connect-{slackUserId}@external.slack.iterate.com
+ * - Users without emails: Generate synthetic email: {slackUserId}@{teamId}.slack.iterate.com
+ * - Slackbot: Generate team-specific email: slackbot@{teamId}.slack.iterate.com
  */
 export async function syncSlackUsersInBackground(
   db: DB,
   botToken: string,
   estateId: string,
+  teamId: string,
 ): Promise<Set<string>> {
   try {
     const authedWebClient = new WebClient(botToken);
@@ -396,14 +399,19 @@ export async function syncSlackUsersInBackground(
       }
 
       // Create emails for all members
-      // Regular users: Use actual email from Slack profile (assumed to exist)
-      // Users without email: Generate unified synthetic email pattern
+      // Regular users: Use actual email from Slack profile
+      // Slackbot: Generate team-specific email slackbot@{teamId}.slack.iterate.com
+      // Other bots/users without email: Generate {userId}@{teamId}.slack.iterate.com
       const memberEmails = validMembers.map((m) => {
+        if (m.id === "USLACKBOT") {
+          // Special case: Team-scoped Slackbot email
+          return `slackbot@${teamId}.slack.iterate.com`;
+        }
         if (m.profile?.email) {
           return m.profile.email;
         }
-        // Synthetic email for users without email addresses (bots, etc.)
-        return `slack-connect-${m.id}@external.slack.iterate.com`;
+        // Synthetic email for bots and users without email addresses
+        return `${m.id}@${teamId}.slack.iterate.com`;
       });
 
       // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
@@ -448,7 +456,12 @@ export async function syncSlackUsersInBackground(
           providerId: "slack-bot" as const,
           internalUserId: user.id,
           externalId: member.id!,
-          providerMetadata: member,
+          estateId: estateId,
+          externalTeamId: null, // Internal users have no external team
+          providerMetadata: {
+            ...member,
+            sourceTeamId: teamId,
+          },
         });
 
         // Determine role based on Slack restrictions or bot status
@@ -468,7 +481,12 @@ export async function syncSlackUsersInBackground(
           .insert(schema.providerUserMapping)
           .values(mappingsToUpsert)
           .onConflictDoUpdate({
-            target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+            target: [
+              schema.providerUserMapping.providerId,
+              schema.providerUserMapping.estateId,
+              schema.providerUserMapping.externalId,
+              schema.providerUserMapping.externalTeamId,
+            ],
             set: {
               providerMetadata: sql`excluded.provider_metadata`,
             },
@@ -490,10 +508,78 @@ export async function syncSlackUsersInBackground(
       logger.info(
         `Slack sync complete: ${validMembers.length} members processed (${botCount} bots), ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
       );
+
+      // Proactively ensure Slackbot exists (it may not be in members list)
+      const slackbotEmail = `slackbot@${teamId}.slack.iterate.com`;
+      const slackbotExists = validMembers.some((m) => m.id === "USLACKBOT");
+
+      if (!slackbotExists) {
+        logger.info("Proactively creating Slackbot user record");
+
+        // Create Slackbot user
+        await tx
+          .insert(schema.user)
+          .values({
+            name: "Slackbot",
+            email: slackbotEmail,
+            emailVerified: true,
+            isBot: true,
+          })
+          .onConflictDoNothing();
+
+        // Get the Slackbot user
+        const slackbotUser = await tx.query.user.findFirst({
+          where: eq(schema.user.email, slackbotEmail),
+        });
+
+        if (slackbotUser) {
+          // Create provider mapping for Slackbot
+          await tx
+            .insert(schema.providerUserMapping)
+            .values({
+              providerId: "slack-bot",
+              internalUserId: slackbotUser.id,
+              externalId: "USLACKBOT",
+              estateId: estateId,
+              externalTeamId: null, // Slackbot is internal to the workspace
+              providerMetadata: {
+                isSlackbot: true,
+                sourceTeamId: teamId,
+                proactivelyCreated: true,
+              },
+            })
+            .onConflictDoUpdate({
+              target: [
+                schema.providerUserMapping.providerId,
+                schema.providerUserMapping.estateId,
+                schema.providerUserMapping.externalId,
+                schema.providerUserMapping.externalTeamId,
+              ],
+              set: {
+                providerMetadata: sql`excluded.provider_metadata`,
+              },
+            });
+
+          // Add Slackbot to organization (as a bot member)
+          await tx
+            .insert(schema.organizationUserMembership)
+            .values({
+              organizationId: estate.organizationId,
+              userId: slackbotUser.id,
+              role: "member",
+            })
+            .onConflictDoNothing();
+
+          logger.info("Slackbot user record created proactively");
+        }
+      }
     });
 
     // Return Set of all internal user IDs for Slack Connect detection
-    return new Set(validMembers.map((m) => m.id!));
+    // Include USLACKBOT explicitly
+    const allUserIds = new Set(validMembers.map((m) => m.id!));
+    allUserIds.add("USLACKBOT");
+    return allUserIds;
   } catch (error) {
     logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
     throw error;
@@ -510,6 +596,7 @@ export async function syncSlackForEstateInBackground(
   db: DB,
   botToken: string,
   estateId: string,
+  teamId: string,
 ): Promise<{
   channels: { count: number; sharedCount: number };
   users: { internalCount: number; externalCount: number };
@@ -521,7 +608,7 @@ export async function syncSlackForEstateInBackground(
     // Phase 1: Sync channels and internal users in parallel
     const [channelsResult, internalUserIds] = await Promise.all([
       syncSlackChannels(db, botToken, estateId),
-      syncSlackUsersInBackground(db, botToken, estateId),
+      syncSlackUsersInBackground(db, botToken, estateId, teamId),
     ]);
 
     const { sharedChannelIds } = channelsResult;
@@ -531,6 +618,7 @@ export async function syncSlackForEstateInBackground(
       db,
       botToken,
       estateId,
+      teamId,
       sharedChannelIds,
       internalUserIds,
     );
@@ -565,12 +653,13 @@ export async function syncSlackForEstateInBackground(
  *
  * Email handling strategy:
  * - External users with email: Use their actual Slack profile email
- * - External users without email: Generate synthetic email: slack-connect-{slackUserId}@external.slack.iterate.com
+ * - External users without email: Generate synthetic email: {slackUserId}@{externalTeamId}.slack.iterate.com
  */
 export async function syncSlackConnectUsers(
   db: DB,
   botToken: string,
   estateId: string,
+  iterateTeamId: string,
   sharedChannelIds: Set<string>,
   internalUserIds: Set<string>,
 ): Promise<{ externalUserCount: number; errors: string[] }> {
@@ -581,7 +670,10 @@ export async function syncSlackConnectUsers(
 
   const authedWebClient = new WebClient(botToken);
   const errors: string[] = [];
-  const externalUsersByIdMap = new Map<string, { userInfo: any; discoveredInChannels: string[] }>();
+  const externalUsersByIdMap = new Map<
+    string,
+    { userInfo: any; externalTeamId?: string; discoveredInChannels: string[] }
+  >();
 
   // Fetch members for each shared channel in parallel
   const channelMemberResults = await Promise.allSettled(
@@ -643,7 +735,12 @@ export async function syncSlackConnectUsers(
         if (!userInfoResponse.ok || !userInfoResponse.user) {
           throw new Error(`Failed to fetch user info: ${userInfoResponse.error}`);
         }
-        return { userId, userInfo: userInfoResponse.user };
+        // Extract team_id from user info - this is the external user's home team
+        const externalTeamId = userInfoResponse.user.team_id;
+        if (!externalTeamId) {
+          throw new Error(`No team_id found for external user ${userId}`);
+        }
+        return { userId, userInfo: userInfoResponse.user, externalTeamId };
       } catch (error) {
         const errorMsg = `Error fetching user info for ${userId}: ${error instanceof Error ? error.message : error}`;
         logger.error(errorMsg);
@@ -653,11 +750,13 @@ export async function syncSlackConnectUsers(
     }),
   );
 
-  // Update map with fetched user info
+  // Update map with fetched user info and team ID
   for (const result of userInfoResults) {
     if (result.status === "fulfilled" && result.value) {
-      const { userId, userInfo } = result.value;
-      externalUsersByIdMap.get(userId)!.userInfo = userInfo;
+      const { userId, userInfo, externalTeamId } = result.value;
+      const existing = externalUsersByIdMap.get(userId)!;
+      existing.userInfo = userInfo;
+      existing.externalTeamId = externalTeamId;
     }
   }
 
@@ -672,16 +771,24 @@ export async function syncSlackConnectUsers(
       throw new Error(`Estate ${estateId} not found`);
     }
 
-    for (const [externalUserId, { userInfo, discoveredInChannels }] of externalUsersByIdMap) {
+    for (const [
+      externalUserId,
+      { userInfo, externalTeamId, discoveredInChannels },
+    ] of externalUsersByIdMap) {
       if (!userInfo) {
         logger.warn(`Skipping external user ${externalUserId} - no user info available`);
         continue;
       }
 
+      if (!externalTeamId) {
+        logger.error(`Skipping external user ${externalUserId} - no team ID available`);
+        continue;
+      }
+
       // Use actual email from Slack profile, or generate synthetic email for users without one
-      // Pattern: slack-connect-{slackUserId}@external.slack.iterate.com (e.g., slack-connect-U06Q2Q2C2TX@external.slack.iterate.com)
+      // Pattern: {slackUserId}@{externalTeamId}.slack.iterate.com
       const email =
-        userInfo.profile?.email || `slack-connect-${externalUserId}@external.slack.iterate.com`;
+        userInfo.profile?.email || `${externalUserId}@${externalTeamId}.slack.iterate.com`;
 
       // Create or get user
       try {
@@ -717,14 +824,25 @@ export async function syncSlackConnectUsers(
           providerId: "slack-bot",
           internalUserId: user.id,
           externalId: externalUserId,
+          estateId: estateId, // The estate that discovered this external user
+          externalTeamId: externalTeamId, // Their actual home team
           providerMetadata: {
             ...userInfo,
+            sourceTeamId: externalTeamId,
             isSlackConnect: true,
-            discoveredInChannels,
+            discoveredInChannels: discoveredInChannels.map((channelId) => ({
+              channelId,
+              teamId: iterateTeamId,
+            })),
           },
         })
         .onConflictDoUpdate({
-          target: [schema.providerUserMapping.providerId, schema.providerUserMapping.externalId],
+          target: [
+            schema.providerUserMapping.providerId,
+            schema.providerUserMapping.estateId,
+            schema.providerUserMapping.externalId,
+            schema.providerUserMapping.externalTeamId,
+          ],
           set: {
             providerMetadata: sql`excluded.provider_metadata`,
           },
@@ -752,10 +870,11 @@ export async function syncSlackConnectUsers(
 async function handleBotChannelJoin(params: {
   db: DB;
   estateId: string;
+  teamId: string;
   channelId: string;
   botUserId: string;
 }) {
-  const { db, estateId, channelId, botUserId } = params;
+  const { db, estateId, teamId, channelId, botUserId } = params;
 
   const slackToken = await getSlackAccessTokenForEstate(db, estateId);
   if (!slackToken) {
@@ -875,9 +994,24 @@ async function handleBotChannelJoin(params: {
 
       if (agentStub.status === "fulfilled") {
         const initEvents = await agentStub.value.initSlack(channelId, threadTs);
-        const participantEvents = mentionMessage?.user
-          ? await agentStub.value.getParticipantJoinedEvents(mentionMessage.user, botUserId)
-          : [];
+
+        // Extract team ID from mention message (Slack Connect users have user_team, regular users use teamId param)
+        let mentionUserTeamId: string = teamId;
+        if (mentionMessage && "user_team" in mentionMessage) {
+          const userTeam = mentionMessage.user_team;
+          if (typeof userTeam === "string") {
+            mentionUserTeamId = userTeam;
+          }
+        }
+
+        const participantEvents =
+          mentionMessage?.user && mentionUserTeamId
+            ? await agentStub.value.getParticipantJoinedEvents(
+                mentionMessage.user,
+                mentionUserTeamId,
+                botUserId,
+              )
+            : [];
 
         await agentStub.value.addEvents([...initEvents, ...participantEvents, ...contextEvents]);
       } else {
