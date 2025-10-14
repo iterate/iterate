@@ -120,6 +120,7 @@ export const getGoogleAccessTokenForUser = async (db: DB, userId: string) => {
       accessToken: schema.account.accessToken,
       refreshToken: schema.account.refreshToken,
       accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
+      scope: schema.account.scope,
     })
     .from(schema.account)
     .where(and(eq(schema.account.providerId, "google"), eq(schema.account.userId, userId)))
@@ -161,14 +162,14 @@ export const getGoogleAccessTokenForUser = async (db: DB, userId: string) => {
       })
       .where(eq(schema.account.id, result.id));
 
-    return newTokenData.access_token;
+    return { token: newTokenData.access_token, scope: newTokenData.scope };
   }
 
   if (!result.accessToken) {
     throw new Error(`Google access token not found for user ${userId}`);
   }
 
-  return result.accessToken;
+  return { token: result.accessToken, scope: result.scope };
 };
 
 export const getGoogleOAuthURL = async ({
