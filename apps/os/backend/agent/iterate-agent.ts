@@ -76,6 +76,8 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
+import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
+import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1873,10 +1875,15 @@ export class IterateAgent<
 
     let accessToken: string;
     try {
-      const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
-      accessToken = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      const accessTokenResult = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      accessToken = accessTokenResult.token;
+      const scopes = accessTokenResult.scope?.split(" ") || [];
+      const requiredScopes = GOOGLE_INTEGRATION_SCOPES;
+      const missingScope = requiredScopes.find((scope) => !scopes.includes(scope));
+      if (missingScope) {
+        throw new Error(`User is missing scope: ${missingScope}. They need to re-authorize.`);
+      }
     } catch (error) {
-      const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
       const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
         durableObjectInstanceName: this.databaseRecord.durableObjectName,
       });
