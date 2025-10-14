@@ -187,7 +187,7 @@ export const slackSlice = defineAgentCoreSlice<{
       next.contextRules["slack-context"] = {
         key: "slack-context",
         prompt: createSlackContextForState({
-          state: next as never,
+          state: next as CoreReducedState<SlackSliceEvent> & SlackSliceState,
           botUserId: next.botUserId,
         }),
       };
