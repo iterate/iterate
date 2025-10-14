@@ -10,7 +10,7 @@ RUN apt-get remove -y nodejs npm && \
     ln -sf /usr/local/bin/npx /usr/bin/npx
 
 # Install pnpm, tsx and openai codex using Node 24
-RUN npm install -g pnpm tsx @openai/codex
+RUN npm install -g pnpm@10.18 tsx@4.20 @openai/codex@0.46
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
