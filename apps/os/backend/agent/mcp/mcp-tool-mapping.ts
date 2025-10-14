@@ -397,6 +397,15 @@ export function createRuntimeToolFromMCPTool(params: {
     };
   }
 
+  const mostProps = {
+    type: "function",
+    name: toolName,
+    description: tool.description || `MCP tool from ${integrationSlug}`,
+    parameters: modifiedParameters,
+    strict: false,
+    metadata: { source: "mcp" },
+  } satisfies Omit<LocalFunctionRuntimeTool, "wrappers" | "execute">;
+
   const lazyConnectionWrapper: LocalFunctionRuntimeTool["wrappers"][number] = (next) => {
     return async (_call, args: any) => {
       console.log("running mcp lazy connection wrapper");
@@ -587,12 +596,7 @@ export function createRuntimeToolFromMCPTool(params: {
   };
 
   return {
-    type: "function",
-    name: toolName,
-    description: tool.description || `MCP tool from ${integrationSlug}`,
-    parameters: modifiedParameters,
-    strict: false,
-    metadata: { source: "mcp" },
+    ...mostProps,
     wrappers: [lazyConnectionWrapper],
     async execute() {
       // input args aren't use, we rely on the middleware to process them and get what we need from async local storage
