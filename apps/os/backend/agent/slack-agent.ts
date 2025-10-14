@@ -3,6 +3,7 @@ import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
+import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import * as schema from "../db/schema.ts";
@@ -26,6 +27,7 @@ import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldIncludeEventInConversation, shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
 import type {
   AgentCoreEvent,
   CoreReducedState,
@@ -43,6 +45,7 @@ import {
 import type { MagicAgentInstructions } from "./magic.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
+import type { MergedEventForSlices } from "./agent-core.ts";
 import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
 // Inherit generic static helpers from IterateAgent
@@ -58,6 +61,10 @@ import type { AgentInitParams } from "./iterate-agent.ts";
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
   private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  // Track Slack message timestamps for MCP connection status buttons
+  // Maps from serverId or connectionKey to message timestamp
+  private mcpConnectionMessages = new Map<string, string>();
 
   protected get slackChannelId(): string {
     const { slackChannelId } = this.getReducedState() as SlackSliceState;
@@ -239,7 +246,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       }) => {
         deps?.onEventAdded?.(payload);
 
-        const event = payload.event as AgentCoreEvent;
+        const event = payload.event as MergedEventForSlices<SlackAgentSlices>;
         switch (event.type) {
           case "CORE:LLM_REQUEST_START":
             this.updateSlackThreadStatus({ status: "🧠 thinking" });
@@ -269,6 +276,162 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 text: `There was an internal error; the debug URL is ${url.debugURL}.\n\n${errorMessage.slice(0, 256)}${errorMessage.length > 256 ? "..." : ""}`,
               }),
             );
+            break;
+          }
+          case "MCP:OAUTH_REQUIRED": {
+            const { oauthUrl, connectionKey, serverUrl } = event.data;
+
+            const hostname = new URL(serverUrl).hostname;
+
+            waitUntil(
+              this.slackAPI.chat
+                .postMessage({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  thread_ts: this.agentCore.state.slackThreadId as string,
+                  text: `Authorize ${hostname}`,
+                  blocks: [
+                    {
+                      type: "actions",
+                      elements: [
+                        {
+                          type: "button",
+                          text: {
+                            type: "plain_text",
+                            text: `Authorize ${hostname}`,
+                          },
+                          url: oauthUrl,
+                          style: "primary",
+                        },
+                      ],
+                    },
+                  ],
+                })
+                .then((result) => {
+                  if (result.ok && result.ts) {
+                    this.mcpConnectionMessages.set(connectionKey, result.ts);
+                  }
+                }),
+            );
+            break;
+          }
+          case "MCP:PARAMS_REQUIRED": {
+            const { paramsCollectionUrl, connectionKey, serverUrl } = event.data;
+
+            const hostname = new URL(serverUrl).hostname;
+
+            waitUntil(
+              this.slackAPI.chat
+                .postMessage({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  thread_ts: this.agentCore.state.slackThreadId as string,
+                  text: `Authorize ${hostname}`,
+                  blocks: [
+                    {
+                      type: "actions",
+                      elements: [
+                        {
+                          type: "button",
+                          text: {
+                            type: "plain_text",
+                            text: `Authorize ${hostname}`,
+                          },
+                          url: paramsCollectionUrl,
+                          style: "primary",
+                        },
+                      ],
+                    },
+                  ],
+                })
+                .then((result) => {
+                  if (result.ok && result.ts) {
+                    this.mcpConnectionMessages.set(connectionKey, result.ts);
+                  }
+                }),
+            );
+            break;
+          }
+          case "MCP:CONNECT_REQUEST": {
+            const { serverUrl, mode, userId } = event.data;
+
+            const connectionKey = getConnectionKey({ serverUrl, mode, userId });
+
+            const messageTs = this.mcpConnectionMessages.get(connectionKey);
+            if (messageTs) {
+              waitUntil(
+                this.slackAPI.chat.update({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  ts: messageTs,
+                  text: `🔄 Connecting to ${serverUrl}...`,
+                  blocks: [
+                    {
+                      type: "section",
+                      text: {
+                        type: "mrkdwn",
+                        text: `🔄 Connecting to ${serverUrl}...`,
+                      },
+                    },
+                  ],
+                }),
+              );
+            }
+            break;
+          }
+          case "MCP:CONNECTION_ESTABLISHED": {
+            const { connectionKey, serverUrl } = event.data;
+
+            const messageTs = this.mcpConnectionMessages.get(connectionKey);
+
+            if (messageTs) {
+              waitUntil(
+                this.slackAPI.chat
+                  .update({
+                    channel: this.agentCore.state.slackChannelId as string,
+                    ts: messageTs,
+                    text: `✅ Connected to ${serverUrl}`,
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `✅ Connected to ${serverUrl}`,
+                        },
+                      },
+                    ],
+                  })
+                  .then(() => {
+                    this.mcpConnectionMessages.delete(connectionKey);
+                  }),
+              );
+            }
+            break;
+          }
+          case "MCP:CONNECTION_ERROR": {
+            const { connectionKey, error } = event.data;
+
+            const messageTs = connectionKey && this.mcpConnectionMessages.get(connectionKey);
+
+            if (messageTs) {
+              waitUntil(
+                this.slackAPI.chat
+                  .update({
+                    channel: this.agentCore.state.slackChannelId as string,
+                    ts: messageTs,
+                    text: `❌ Connection failed`,
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `❌ *Connection failed*\n${error}`,
+                        },
+                      },
+                    ],
+                  })
+                  .then(() => {
+                    this.mcpConnectionMessages.delete(connectionKey);
+                  }),
+              );
+            }
             break;
           }
         }
