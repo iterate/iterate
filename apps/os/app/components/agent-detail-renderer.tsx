@@ -27,7 +27,6 @@ import type OpenAI from "openai";
 import type {
   AgentCoreEvent,
   AugmentedCoreReducedState,
-  StoredEvent,
 } from "../../backend/agent/agent-core-schemas.ts";
 import type { SlackSliceEvent, SlackSliceState } from "../../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../../backend/agent/slack.types.ts";
@@ -68,7 +67,7 @@ import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AgentReducedState } from "./agent-reduced-state.tsx";
 import { PagerDialog } from "./pager-dialog.tsx";
 
-type AgentEvent = StoredEvent<AgentCoreEvent | SlackSliceEvent>;
+type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
 
 export interface AgentDetailDataGetters {
   getFileUrl: (iterateFileId: string, disposition?: "inline" | "attachment") => string;

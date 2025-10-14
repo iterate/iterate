@@ -91,7 +91,8 @@ export const DEFAULT_MODEL_OPTS: ModelOpts = {
 } as const;
 
 // Base schemas - these are splatted into all other schemas
-export const AgentCoreBaseEvent = z.object({
+// Prefer this over zod extend for typescript inference performance reasons
+export const agentCoreBaseEventFields = {
   type: z.string(),
   data: z.object({}).optional(),
   metadata: z.record(z.string(), JSONSerializable).optional(),
@@ -99,22 +100,12 @@ export const AgentCoreBaseEvent = z.object({
   createdAt: z.string().optional(),
   eventIndex: z.number().optional(),
   idempotencyKey: z.string().optional(),
-});
-// Prefer this over zod extend for typescript inference performance reasons
-export const agentCoreBaseEventFields = AgentCoreBaseEvent.shape;
+};
 
+export const AgentCoreBaseEvent = z.object({
+  ...agentCoreBaseEventFields,
+});
 export type AgentCoreBaseEvent = z.infer<typeof AgentCoreBaseEvent>;
-
-export const AgentCoreStoredEvent = z.object({
-  ...AgentCoreBaseEvent.shape,
-  createdAt: z.string(),
-  eventIndex: z.number(),
-  triggerLLMRequest: z.boolean(),
-});
-
-export type AgentCoreStoredEvent = z.infer<typeof AgentCoreStoredEvent>;
-
-export type StoredEvent<T> = T & AgentCoreStoredEvent;
 
 // ------------------------- Event Schemas -------------------------
 
