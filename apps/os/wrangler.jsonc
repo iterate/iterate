@@ -6,7 +6,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "os",
   "compatibility_date": "2025-04-04",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_flags": ["nodejs_compat", "enable_ctx_exports"],
   "main": "./backend/worker.ts",
   "observability": {
     "enabled": true,

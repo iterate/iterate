@@ -50,6 +50,7 @@ import {
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
+import { reallyWaitUntil } from "../utils/really-wait-until.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -375,28 +376,8 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        const start = Date.now();
-        const interval = setInterval(async () => {
-          try {
-            await this.ctx.storage.setAlarm(new Date(Date.now() + 60000));
-            const response = await this.env.SLACK_AGENT.getByName(this.name).fetch(
-              "http://self/doNothing",
-            );
-            const text = await response.text();
-            console.log(
-              "Background task running for " + (Date.now() - start) / 1000 + "s",
-              text,
-              response.status,
-            );
-          } catch (err) {
-            console.error("Error setting alarm", err);
-          }
-        }, 10000);
-        this.ctx.waitUntil(
-          fn().finally(() => {
-            clearInterval(interval);
-          }),
-        );
+        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
+        reallyWaitUntil(this, fn());
       },
 
       getOpenAIClient: async () => {
