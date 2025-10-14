@@ -3,8 +3,8 @@ import { Agent as CloudflareAgent } from "agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
-import { Zip, ZipPassThrough, strToU8 } from "fflate";
 import { typeid } from "typeid-js";
+import * as fflate from "fflate/browser";
 import { permalink as getPermalink } from "braintrust/browser";
 
 // Parent directory imports
@@ -1011,7 +1011,7 @@ export class IterateAgent<
     };
 
     const zipPromise = new Promise<void>((resolve) => (zipResolve = resolve));
-    const zip = new Zip(async (err, chunk, final) => {
+    const zip = new fflate.Zip(async (err, chunk, final) => {
       if (err) {
         zipError = err;
         zipResolve?.();
@@ -1051,9 +1051,9 @@ export class IterateAgent<
       }
     });
 
-    const exportJsonFile = new ZipPassThrough("export.json");
+    const exportJsonFile = new fflate.ZipPassThrough("export.json");
     zip.add(exportJsonFile);
-    exportJsonFile.push(strToU8(JSON.stringify(exportData, null, 2)), true);
+    exportJsonFile.push(fflate.strToU8(JSON.stringify(exportData, null, 2)), true);
 
     for (const fileId of fileIds) {
       const r2Key = `files/${fileId}`;
@@ -1063,7 +1063,7 @@ export class IterateAgent<
         throw new Error(`File not found in storage: ${fileId}`);
       }
 
-      const fileStream = new ZipPassThrough(`files/${fileId}`);
+      const fileStream = new fflate.ZipPassThrough(`files/${fileId}`);
       zip.add(fileStream);
 
       const reader = object.body.getReader();
