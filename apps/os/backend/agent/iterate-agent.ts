@@ -51,6 +51,7 @@ import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { reallyWaitUntil } from "../utils/really-wait-until.ts";
+import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -2213,26 +2214,6 @@ function parseEventRows(rawSqlResults: unknown[]) {
   return parsedEvents;
 }
 
-async function getSecret<T extends keyof CloudflareEnv>(
-  env: CloudflareEnv,
-  key: T,
-): Promise<string> {
-  if (typeof env[key] === "string") {
-    return env[key];
-  }
-  const secret = env[key];
-  if (!secret) {
-    throw new Error(`Binding ${key} is missing from env`);
-  }
-  if ("get" in secret) {
-    // @ts-expect-error - we know that the secret is a function that returns a string but TypeScript doesn't
-    const secretValue = await secret.get();
-    // @ts-expect-error - we know that the secret is a function that returns a string but TypeScript doesn't
-    return secretValue as string;
-  }
-  throw new Error(`Secret ${key} is not a string or a function that returns a string`);
-}
-
 /**
  * Execute a command with streaming output by making a direct fetch request to the container
  * This bypasses the RPC layer and goes directly to the container's SSE endpoint
@@ -2264,6 +2245,7 @@ export async function execStreamOnContainer(
   const { responseToAsyncIterable } = await import("@cloudflare/sandbox");
 
   // Construct the request to the container's streaming endpoint
+  // we do this rather than using the RPC layer because the RPC layer adds unnecessary extra serialization
   const request = new Request("http://container/api/execute/stream", {
     method: "POST",
     headers: {
