@@ -1,3 +1,4 @@
+// @ts-nocheck
 import * as fs from "fs";
 import { defineConfig } from "vitest/config";
 import EvaliteReporter from "evalite/reporter";

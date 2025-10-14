@@ -354,12 +354,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list messages for",
             },
           },
-          required: ["userId"],
+          required: ["impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/messages",
@@ -398,12 +398,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to modify messages for",
             },
           },
-          required: ["pathParams", "body", "userId"],
+          required: ["pathParams", "body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/messages/[messageId]/modify",
@@ -418,12 +418,12 @@ export const defaultContextRules = defineRules([
         overrideInputJSONSchema: {
           type: "object",
           properties: {
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list labels for",
             },
           },
-          required: ["userId"],
+          required: ["impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels",
@@ -454,12 +454,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["name"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create labels for",
             },
           },
-          required: ["body", "userId"],
+          required: ["body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels",
@@ -484,12 +484,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["labelId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete labels for",
             },
           },
-          required: ["pathParams", "userId"],
+          required: ["pathParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/gmail/v1/users/me/labels/[labelId]",
@@ -568,12 +568,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["summary", "start", "end"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to create events for",
             },
           },
-          required: ["body", "userId"],
+          required: ["body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events",
@@ -614,12 +614,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["maxResults"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to list events for",
             },
           },
-          required: ["queryParams", "userId"],
+          required: ["queryParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events",
@@ -658,12 +658,12 @@ export const defaultContextRules = defineRules([
                 },
               },
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to update events for",
             },
           },
-          required: ["pathParams", "body", "userId"],
+          required: ["pathParams", "body", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events/[eventId]",
@@ -683,12 +683,12 @@ export const defaultContextRules = defineRules([
               },
               required: ["eventId"],
             },
-            userId: {
+            impersonateUserId: {
               type: "string",
               description: "The ID of the user to delete events for",
             },
           },
-          required: ["pathParams", "userId"],
+          required: ["pathParams", "impersonateUserId"],
         },
         passThroughArgs: {
           endpoint: "/calendar/v3/calendars/primary/events/[eventId]",

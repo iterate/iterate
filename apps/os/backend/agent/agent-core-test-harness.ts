@@ -6,13 +6,13 @@
 
 import type { OpenAI } from "openai";
 import { test as base, vi } from "vitest";
-import type { AgentCoreEvent, AgentCoreEventInput } from "./agent-core-schemas.ts";
+import type { AgentCoreEvent } from "./agent-core-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
   type AgentCoreSlice,
   type MergedDepsForSlices,
-  type MergedEventInputForSlices,
+  type MergedEventForSlices,
 } from "./agent-core.ts";
 import type { LocalFunctionRuntimeTool, RuntimeTool, ToolSpec } from "./tool-schemas.ts";
 
@@ -183,12 +183,9 @@ class MockOpenAIClient {
 
 // Main test harness
 export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> {
-  private events: AgentCoreEvent[] = [];
+  private events: (AgentCoreEvent & { eventIndex: number; createdAt: string })[] = [];
   public openAIClient = new MockOpenAIClient();
-  private mockedTools = new Map<
-    string,
-    LocalFunctionRuntimeTool<MergedEventInputForSlices<Slices>>
-  >();
+  private mockedTools = new Map<string, LocalFunctionRuntimeTool<MergedEventForSlices<Slices>>>();
   private isInitialized = false;
   private backgroundPromises: Promise<void>[] = [];
 
@@ -293,7 +290,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
     vi.clearAllMocks();
   }
 
-  getEvents(): ReadonlyArray<AgentCoreEvent> {
+  getEvents(): ReadonlyArray<AgentCoreEvent & { eventIndex: number; createdAt: string }> {
     return this.events;
   }
 
@@ -325,9 +322,9 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
   // Tool management
   registerMockTool(
     name: string,
-    execute: LocalFunctionRuntimeTool<MergedEventInputForSlices<Slices>>["execute"],
+    execute: LocalFunctionRuntimeTool<MergedEventForSlices<Slices>>["execute"],
   ): void {
-    const tool: LocalFunctionRuntimeTool<MergedEventInputForSlices<Slices>> = {
+    const tool: LocalFunctionRuntimeTool<MergedEventForSlices<Slices>> = {
       type: "function",
       name,
       description: `Mock tool ${name}`,
@@ -401,7 +398,7 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
 }
 
 // Helper factory functions
-export function makeUserInputTextEvent(text: string): AgentCoreEventInput {
+export function makeUserInputTextEvent(text: string): AgentCoreEvent {
   return {
     type: "CORE:LLM_INPUT_ITEM",
     data: {

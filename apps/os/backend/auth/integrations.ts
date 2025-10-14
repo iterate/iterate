@@ -163,6 +163,7 @@ export const integrationsPlugin = () =>
                     oauthClientId: state.clientId,
                     oauthCode: code,
                   },
+                  triggerLLMRequestOnEstablishedConnection: false,
                 },
               },
             ]);

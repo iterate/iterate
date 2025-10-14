@@ -1,6 +1,21 @@
-// eslint-disable-next-line iterate/no-direct-waituntil-import -- This file defines the waitUntil wrapper
-import { env as _env, waitUntil as _waitUntil } from "cloudflare:workers";
 import { logger } from "./backend/tag-logger.ts";
+
+// Conditionally import cloudflare:workers - it's not available in test environment
+let _env: any;
+let _waitUntil: any;
+
+try {
+  const cloudflareWorkers = await import("cloudflare:workers");
+  _env = cloudflareWorkers.env;
+  _waitUntil = cloudflareWorkers.waitUntil;
+} catch {
+  // In test environment or when cloudflare:workers is not available, provide mocks
+  _env = {};
+  _waitUntil = (promise: Promise<unknown>) => {
+    // In tests, just run the promise and ignore errors
+    promise.catch(() => {});
+  };
+}
 
 export type CloudflareEnv = Env & {
   VITE_PUBLIC_URL: string;

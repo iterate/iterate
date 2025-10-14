@@ -12,7 +12,8 @@ import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
-import { logger } from "../tag-logger.ts";
+import type { ToFileInput } from "openai/uploads";
+import { logger, withLoggerContext } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
@@ -30,6 +31,12 @@ export type AgentInitParams = {
   // Optional props forwarded to PartyKit when setting the room name
   // Used to pass initial metadata for the room/server initialisation
   props?: Record<string, unknown>;
+  // Optional tracing information for logger context
+  tracing?: {
+    userId?: string;
+    parentSpan?: string;
+    traceId?: string;
+  };
 };
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
@@ -40,6 +47,8 @@ import {
   uploadFileFromURL,
 } from "../file-handlers.ts";
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
+import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
+import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -48,14 +57,9 @@ import {
   type AgentCoreSlice,
   type MergedDepsForSlices,
   type MergedEventForSlices,
-  type MergedEventInputForSlices,
   type MergedStateForSlices,
 } from "./agent-core.ts";
-import {
-  AgentCoreEvent,
-  type AddContextRulesEvent,
-  type AugmentedCoreReducedState,
-} from "./agent-core-schemas.ts";
+import { AgentCoreEvent, type AugmentedCoreReducedState } from "./agent-core-schemas.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -66,7 +70,7 @@ import {
   type MCPConnectionQueues,
 } from "./mcp/mcp-event-hooks.ts";
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
-import { MCPConnectRequestEventInput } from "./mcp/mcp-slice.ts";
+import { MCPConnectRequestEvent } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
 import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
@@ -182,6 +186,19 @@ export class IterateAgent<
 
     await this.persistInitParams(params);
 
+    // Persist base metadata on the durable object instance so every wrapped method inherits it
+    // setLoggerMetadata is installed by withLoggerContext()
+    (this as ReturnType<typeof withLoggerContext<this>>).setLoggerMetadata?.({
+      agentId: params.record.id,
+      estateId: params.record.estateId,
+      organizationId: params.organization.id,
+      organizationName: params.organization.name,
+      agentClassName: params.record.className,
+      ...(params.tracing?.userId && { userId: params.tracing.userId }),
+      ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),
+      ...(params.tracing?.traceId && { traceId: params.tracing.traceId }),
+    });
+
     // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
     // These records (estate, organization, iterateConfig) change infrequently and callers
     // typically already fetched them. This also helps when the DO is not colocated with
@@ -283,6 +300,12 @@ export class IterateAgent<
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+
+    return withLoggerContext(this, logger, (methodName) => ({
+      userId: undefined, // Will be set via tracing in initIterateAgent
+      methodName,
+      traceId: typeid("req").toString(),
+    }));
   }
 
   /**
@@ -323,7 +346,9 @@ export class IterateAgent<
         agentCoreState: state,
         durableObjectClassName: this.constructor.name,
       }),
-      storeEvents: (events: ReadonlyArray<AgentCoreEvent>) => {
+      storeEvents: (
+        events: ReadonlyArray<AgentCoreEvent & { eventIndex: number; createdAt: string }>,
+      ) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
           this.sql`
@@ -575,7 +600,7 @@ export class IterateAgent<
     }
   }
 
-  async getAddContextRulesEvent(): Promise<AddContextRulesEvent> {
+  async getAddContextRulesEvent() {
     const rules = ContextRule.array().parse(await this.getContextRules());
     return {
       type: "CORE:ADD_CONTEXT_RULES",
@@ -613,7 +638,7 @@ export class IterateAgent<
     });
   }
 
-  getEvents(): MergedEventForSlices<Slices>[] {
+  getEvents(): (MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string })[] {
     const rawEvents = this.sql`
       SELECT 
         event_type as type,
@@ -626,7 +651,10 @@ export class IterateAgent<
       FROM agent_events 
       ORDER BY event_index ASC
     `;
-    return parseEventRows(rawEvents) as MergedEventForSlices<Slices>[];
+    return parseEventRows(rawEvents) as (MergedEventForSlices<Slices> & {
+      eventIndex: number;
+      createdAt: string;
+    })[];
   }
 
   /**
@@ -714,11 +742,11 @@ export class IterateAgent<
     return result[0]?.role;
   }
 
-  addEvent(event: MergedEventInputForSlices<Slices>): { eventIndex: number }[] {
+  addEvent(event: MergedEventForSlices<Slices>): { eventIndex: number }[] {
     return this.agentCore.addEvent(event);
   }
 
-  addEvents(events: MergedEventInputForSlices<Slices>[]): { eventIndex: number }[] {
+  addEvents(events: MergedEventForSlices<Slices>[]): { eventIndex: number }[] {
     return this.agentCore.addEvents(events);
   }
 
@@ -824,7 +852,7 @@ export class IterateAgent<
       },
     ]);
 
-    const events: MergedEventInputForSlices<Slices>[] = [];
+    const events: MergedEventForSlices<Slices>[] = [];
 
     // Check if the agent is paused and resume it if needed
     // This ensures reminders can trigger LLM responses even if the agent was previously paused
@@ -1326,7 +1354,7 @@ export class IterateAgent<
       userId: input.onBehalfOfIterateUserId,
     });
 
-    const connectRequestEvent: MCPConnectRequestEventInput = {
+    const connectRequestEvent: MCPConnectRequestEvent = {
       type: "MCP:CONNECT_REQUEST",
       data: {
         ...mcpServer,
@@ -1500,9 +1528,11 @@ export class IterateAgent<
         db: this.db,
         estateId: this.databaseRecord.estateId,
       });
-      inputReference = await toFile(content, fileRecord.filename ?? undefined, {
-        type: fileRecord.mimeType ?? undefined,
-      });
+      inputReference = await toFile(
+        content as unknown as ToFileInput,
+        fileRecord.filename ?? undefined,
+        { type: fileRecord.mimeType ?? undefined },
+      );
     }
 
     const video = await openai.videos.create({
@@ -1750,10 +1780,10 @@ export class IterateAgent<
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
-        logger.error({
-          message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
-          result: resultInit,
-        });
+        logger.error(
+          "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+          resultInit,
+        );
       }
 
       // ------------------------------------------------------------------------
@@ -1766,10 +1796,7 @@ export class IterateAgent<
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!_resultExec.success) {
-        logger.error({
-          message: `Error running \`${commandExec}\` in sandbox`,
-          result: _resultExec,
-        });
+        logger.error(`Error running \`${commandExec}\` in sandbox`, _resultExec);
       }
 
       return _resultExec;
@@ -1873,10 +1900,15 @@ export class IterateAgent<
 
     let accessToken: string;
     try {
-      const { getGoogleAccessTokenForUser } = await import("../auth/token-utils.ts");
-      accessToken = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      const accessTokenResult = await getGoogleAccessTokenForUser(this.db, impersonateUserId);
+      accessToken = accessTokenResult.token;
+      const scopes = accessTokenResult.scope?.split(" ") || [];
+      const requiredScopes = GOOGLE_INTEGRATION_SCOPES;
+      const missingScope = requiredScopes.find((scope) => !scopes.includes(scope));
+      if (missingScope) {
+        throw new Error(`User is missing scope: ${missingScope}. They need to re-authorize.`);
+      }
     } catch (error) {
-      const { getGoogleOAuthURL } = await import("../auth/token-utils.ts");
       const callbackUrl = await this.agentCore.getFinalRedirectUrl?.({
         durableObjectInstanceName: this.databaseRecord.durableObjectName,
       });

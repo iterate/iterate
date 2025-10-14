@@ -99,10 +99,12 @@ async function runConfigInSandboxInternal(
     timeout: 360 * 1000, // 360 seconds total timeout
   });
   if (!resultInit.success) {
-    logger.error({
-      message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
-      result: resultInit,
-    });
+    logger.error(
+      JSON.stringify({
+        message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+        result: resultInit,
+      }),
+    );
   }
 
   // Prepare arguments as a JSON object
@@ -123,10 +125,12 @@ async function runConfigInSandboxInternal(
   });
 
   if (!resultBuild.success) {
-    logger.error({
-      message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
-      result: resultInit,
-    });
+    logger.error(
+      JSON.stringify({
+        message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
+        result: resultBuild,
+      }),
+    );
   }
 
   // If callback URL is provided, the script will handle the callback

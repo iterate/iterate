@@ -17,8 +17,8 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
   const autocompleteItems = useMemo(() => {
     return Object.keys(reducedState)
       .map((key) => ({
-        value: `agentCoreState.${key}`,
-        label: `agentCoreState.${key}`,
+        value: key,
+        label: key,
       }))
       .filter((item) => item.value.startsWith(searchValue));
   }, [reducedState, searchValue]);
@@ -27,9 +27,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
     const jsonataMatcher = selectedValue || searchValue;
     if (!jsonataMatcher) return { value: reducedState };
     try {
-      const evaluated = jsonata(jsonataMatcher).evaluate({
-        agentCoreState: reducedState,
-      });
+      const evaluated = jsonata(jsonataMatcher).evaluate(reducedState);
       return { value: evaluated };
     } catch (error) {
       return { value: reducedState, error: (error as Error).message };

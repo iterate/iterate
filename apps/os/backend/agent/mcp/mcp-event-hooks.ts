@@ -19,15 +19,13 @@ import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
   type MCPConnection,
-  type MCPConnectionErrorEventInput,
-  type MCPConnectionEstablishedEventInput,
+  type MCPConnectionErrorEvent,
+  type MCPConnectionEstablishedEvent,
   MCPConnectionKey,
   type MCPConnectRequestEvent,
-  type MCPConnectRequestEventInput,
   type MCPDisconnectRequestEvent,
-  type MCPDisconnectRequestEventInput,
-  type MCPOAuthRequiredEventInput,
-  type MCPParamsRequiredEventInput,
+  type MCPOAuthRequiredEvent,
+  type MCPParamsRequiredEvent,
 } from "./mcp-slice.ts";
 
 // ------------------------- Types -------------------------
@@ -35,12 +33,12 @@ import {
 type HookedMCPEvent = MCPConnectRequestEvent | MCPDisconnectRequestEvent;
 
 export type MCPEventHookReturnEvent =
-  | MCPConnectRequestEventInput
-  | MCPDisconnectRequestEventInput
-  | MCPConnectionEstablishedEventInput
-  | MCPConnectionErrorEventInput
-  | MCPOAuthRequiredEventInput
-  | MCPParamsRequiredEventInput;
+  | MCPConnectRequestEvent
+  | MCPDisconnectRequestEvent
+  | MCPConnectionEstablishedEvent
+  | MCPConnectionErrorEvent
+  | MCPOAuthRequiredEvent
+  | MCPParamsRequiredEvent;
 
 interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> {
   event: TEvent;
