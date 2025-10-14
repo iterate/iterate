@@ -191,29 +191,12 @@ export class IterateAgent<
     await this.persistInitParams(params);
 
     // Persist base metadata on the durable object instance so every wrapped method inherits it
-    try {
-      // setLoggerMetadata is installed by withLoggerContext()
-
-      (this as any).setLoggerMetadata?.({
-        agentId: params.record.id,
-        estateId: params.record.estateId,
-        organizationId: params.organization.id,
-        estateName: params.estate.name,
-        agentClassName: params.record.className,
-        ...(params.tracing?.userId && { userId: params.tracing.userId }),
-        ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),
-        ...(params.tracing?.traceId && { traceId: params.tracing.traceId }),
-      });
-    } catch (_err) {
-      // no-op: metadata will still be added to current context below
-    }
-
-    // Also update the current async logger context so logs inside this call have the metadata immediately
-    logger.addMetadata({
+    // setLoggerMetadata is installed by withLoggerContext()
+    (this as ReturnType<typeof withLoggerContext<this>>).setLoggerMetadata?.({
       agentId: params.record.id,
       estateId: params.record.estateId,
       organizationId: params.organization.id,
-      estateName: params.estate.name,
+      organizationName: params.organization.name,
       agentClassName: params.record.className,
       ...(params.tracing?.userId && { userId: params.tracing.userId }),
       ...(params.tracing?.parentSpan && { parentSpan: params.tracing.parentSpan }),

@@ -116,8 +116,8 @@ export class TagLogger {
     this.context.metadata[key] = undefined;
   }
 
-  getMetadata(key?: string) {
-    return key ? this.context.metadata[key] : this.context.metadata;
+  getMetadata() {
+    return this.context.metadata;
   }
 
   _log({ level, args }: { level: TagLogger.Level; args: unknown[] }) {
@@ -293,7 +293,10 @@ export function withLoggerContext<T extends object>(
   target: T,
   loggerInstance: TagLogger,
   getMetadata: (methodName: string, args: unknown[], instance: T) => TagLogger.Context["metadata"],
-): T {
+): T & {
+  setLoggerMetadata: (partial: Partial<LoggerMetadata>) => void;
+  getLoggerMetadata: () => LoggerMetadata;
+} {
   // Ensure instance has a place to store base metadata and convenience setters/getters
   const anyTarget = target as Record<PropertyKey, unknown>;
   if (!Object.prototype.hasOwnProperty.call(anyTarget, LOGGER_METADATA_KEY)) {
@@ -325,50 +328,54 @@ export function withLoggerContext<T extends object>(
     // ignore
   }
 
-  return new Proxy(target, {
-    get(target, prop, receiver) {
-      const value = Reflect.get(target, prop, receiver);
+  return new Proxy(
+    target as T & {
+      setLoggerMetadata: (partial: Partial<LoggerMetadata>) => void;
+      getLoggerMetadata: () => LoggerMetadata;
+    },
+    {
+      get(target, prop, receiver) {
+        const value = Reflect.get(target, prop, receiver);
 
-      // If it's not a function, return as-is
-      if (typeof value !== "function") {
-        return value;
-      }
-
-      // Wrap the function with logger context
-      return (...args: unknown[]) => {
-        // Merge durable-object-scoped base metadata with per-call metadata
-        const base = getInstanceLoggerMetadata(target);
-        const callMetadata = getMetadata(String(prop), args, target) || ({} as LoggerMetadata);
-        const mergedMetadata: LoggerMetadata = { ...base, ...callMetadata } as LoggerMetadata;
-
-        // If a context already exists, temporarily overlay metadata (but preserve the outer traceId)
-        if ((loggerInstance as any).hasContext?.()) {
-          const before = { ...(loggerInstance as any).getMetadata?.() } as LoggerMetadata;
-          const overlay: LoggerMetadata = { ...mergedMetadata } as LoggerMetadata;
-          if (before?.traceId) overlay.traceId = before.traceId; // do not override existing traceId
-
-          (loggerInstance as any).addMetadata?.(overlay);
-          try {
-            return (value as any).apply(target, args);
-          } finally {
-            // Remove keys introduced by overlay which didn't exist before
-            for (const key of Object.keys(overlay)) {
-              if (!(key in before)) {
-                (loggerInstance as any).removeMetadata?.(key);
-              }
-            }
-            // Restore previous values
-            (loggerInstance as any).addMetadata?.(before);
-          }
+        // If it's not a function, return as-is
+        if (typeof value !== "function") {
+          return value;
         }
 
-        // No existing context: create a fresh one for this call
-        return (loggerInstance as any).runInContext?.(mergedMetadata, () =>
-          (value as any).apply(target, args),
-        );
-      };
+        // Wrap the function with logger context
+        return (...args: unknown[]) => {
+          // Merge durable-object-scoped base metadata with per-call metadata
+          const base = getInstanceLoggerMetadata(target);
+          const callMetadata = getMetadata(String(prop), args, target) || ({} as LoggerMetadata);
+          const mergedMetadata: LoggerMetadata = { ...base, ...callMetadata } as LoggerMetadata;
+
+          // If a context already exists, temporarily overlay metadata (but preserve the outer traceId)
+          if (loggerInstance.hasContext()) {
+            const before = { ...loggerInstance.getMetadata() } as LoggerMetadata;
+            const overlay: LoggerMetadata = { ...mergedMetadata } as LoggerMetadata;
+            if (before?.traceId) overlay.traceId = before.traceId; // do not override existing traceId
+
+            loggerInstance.addMetadata?.(overlay);
+            try {
+              return value.apply(target, args);
+            } finally {
+              // Remove keys introduced by overlay which didn't exist before
+              for (const key of Object.keys(overlay)) {
+                if (!(key in before)) {
+                  loggerInstance.removeMetadata?.(key);
+                }
+              }
+              // Restore previous values
+              loggerInstance.addMetadata?.(before);
+            }
+          }
+
+          // No existing context: create a fresh one for this call
+          return loggerInstance.runInContext?.(mergedMetadata, () => value.apply(target, args));
+        };
+      },
     },
-  });
+  );
 }
 
 function instrumentPrototypeWithLoggerContext<T extends object>(
