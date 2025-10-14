@@ -349,7 +349,27 @@ export const adminRouter = router({
         });
       }
 
-      return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
+      // Get team ID from provider estate mapping
+      const estateMapping = await ctx.db.query.providerEstateMapping.findFirst({
+        where: and(
+          eq(schema.providerEstateMapping.internalEstateId, input.estateId),
+          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        ),
+      });
+
+      if (!estateMapping) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack team mapping found for this estate",
+        });
+      }
+
+      return await syncSlackForEstateInBackground(
+        ctx.db,
+        slackToken,
+        input.estateId,
+        estateMapping.externalId,
+      );
     }),
   syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     return await syncSlackForAllEstatesHelper(ctx.db);
@@ -439,7 +459,29 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
         };
       }
 
-      const result = await syncSlackForEstateInBackground(db, slackToken, estate.id);
+      // Get team ID from provider estate mapping
+      const estateMapping = await db.query.providerEstateMapping.findFirst({
+        where: and(
+          eq(schema.providerEstateMapping.internalEstateId, estate.id),
+          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        ),
+      });
+
+      if (!estateMapping) {
+        return {
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: "No Slack team mapping found",
+        };
+      }
+
+      const result = await syncSlackForEstateInBackground(
+        db,
+        slackToken,
+        estate.id,
+        estateMapping.externalId,
+      );
 
       return {
         estateId: estate.id,

@@ -578,13 +578,22 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const isBotMessageThatShouldBeIgnored =
       isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
 
+    // Extract team ID for user identity
+    // For Slack Connect: use source_team or user_team from event
+    // For regular workspace: use team_id from payload
+    const userTeamId =
+      ("source_team" in slackEvent && slackEvent.source_team) ||
+      ("user_team" in slackEvent && slackEvent.user_team) ||
+      slackWebhookPayload.team_id;
+
     const eventsLists = await Promise.all([
-      slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
-        ? this.getParticipantJoinedEvents(slackEvent.user, botUserId)
+      slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user && userTeamId
+        ? this.getParticipantJoinedEvents(slackEvent.user, userTeamId, botUserId)
         : Promise.resolve([]),
-      slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
+      slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text && userTeamId
         ? this.getParticipantMentionedEvents(
             slackEvent.text,
+            userTeamId,
             "user" in slackEvent ? slackEvent.user : undefined,
             botUserId,
           )
@@ -608,11 +617,97 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   /**
+   * Helper function to query Slack users from the database.
+   *
+   * Strategy:
+   * 1. Query by estateId + externalId (most common case)
+   * 2. If multiple results found (can happen if user appears as both internal and external),
+   *    use externalTeamId to disambiguate
+   *
+   * Schema semantics:
+   * - estateId: The estate that discovered this user (always set)
+   * - externalTeamId: The user's home team, only set if external (Slack Connect)
+   *   - null = user is from estate's own workspace (internal)
+   *   - set = user is from different workspace (external)
+   */
+  private async querySlackUsersByExternalId(params: {
+    slackUserIds: string[];
+    slackTeamId: string;
+    estateId: string;
+  }) {
+    const { slackUserIds, slackTeamId, estateId } = params;
+
+    // Query all mappings for this estate and these user IDs
+    const allResults = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        slackTeamId: providerUserMapping.externalTeamId,
+        mappingEstateId: providerUserMapping.estateId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.estateId, estateId),
+          inArray(providerUserMapping.externalId, slackUserIds),
+        ),
+      );
+
+    // Group results by Slack user ID
+    const resultsByUserId = new Map<string, typeof allResults>();
+    for (const result of allResults) {
+      const existing = resultsByUserId.get(result.slackUserId);
+      if (!existing) {
+        resultsByUserId.set(result.slackUserId, [result]);
+      } else {
+        existing.push(result);
+      }
+    }
+
+    // For each Slack user ID, disambiguate if necessary
+    const finalResults: typeof allResults = [];
+    for (const [slackUserId, results] of resultsByUserId) {
+      if (results.length === 1) {
+        // No collision, use the single result
+        finalResults.push(results[0]);
+      } else {
+        // Multiple mappings for same user in same estate (rare but possible)
+        // Prefer matching by externalTeamId, fallback to internal (null externalTeamId)
+        const matchingExternal = results.filter((r) => r.slackTeamId === slackTeamId);
+        const matchingInternal = results.filter((r) => r.slackTeamId === null);
+
+        if (matchingExternal.length > 0) {
+          finalResults.push(matchingExternal[0]);
+        } else if (matchingInternal.length > 0) {
+          // Fallback to internal user if no external team match
+          finalResults.push(matchingInternal[0]);
+        } else {
+          logger.warn(
+            `[SlackAgent] User ${slackUserId} has multiple mappings in estate ${estateId} but none match team ${slackTeamId}`,
+          );
+        }
+      }
+    }
+
+    return finalResults;
+  }
+
+  /**
    * Adds a participant to the conversation when they send a message.
    * This is crucial for MCP personal connections to work properly.
    */
   public async getParticipantJoinedEvents(
     slackUserId: string,
+    slackTeamId: string,
     botUserId?: string,
   ): Promise<ParticipantJoinedEvent[]> {
     if (slackUserId === botUserId) {
@@ -629,38 +724,21 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const estateId = this.databaseRecord.estateId;
 
-    const result = await this.db
-      .select({
-        userId: user.id,
-        userEmail: user.email,
-        userName: user.name,
-        orgRole: organizationUserMembership.role,
-        slackUserId: providerUserMapping.externalId,
-        providerMetadata: providerUserMapping.providerMetadata,
-      })
-      .from(providerUserMapping)
-      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
-      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
-      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
-      .innerJoin(estate, eq(organization.id, estate.organizationId))
-      .where(
-        and(
-          eq(providerUserMapping.providerId, "slack-bot"),
-          eq(providerUserMapping.externalId, slackUserId),
-          eq(estate.id, estateId),
-        ),
-      )
-      .limit(1);
+    const results = await this.querySlackUsersByExternalId({
+      slackUserIds: [slackUserId],
+      slackTeamId,
+      estateId,
+    });
 
     // If no result, user either doesn't exist or doesn't have access to this estate
-    if (!result[0]) {
+    if (results.length === 0) {
       logger.info(
         `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
       );
       return [];
     }
 
-    const userInfo = result[0];
+    const userInfo = results[0];
 
     if (currentState.participants[userInfo.userId]) {
       return [];
@@ -701,9 +779,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   /**
    * Creates PARTICIPANT_MENTIONED events for users mentioned in a message.
    * These are lightweight participants who haven't actively participated yet.
+   *
+   * Uses collision detection: first tries to find users without team constraint,
+   * then disambiguates by team ID if multiple identities exist (Slack Connect scenarios).
    */
   protected async getParticipantMentionedEvents(
     messageText: string,
+    slackTeamId: string,
     currentSlackUserId?: string,
     botUserId?: string,
   ): Promise<ParticipantMentionedEvent[]> {
@@ -734,27 +816,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const estateId = this.databaseRecord.estateId;
 
-    const userMappings = await this.db
-      .select({
-        userId: user.id,
-        userEmail: user.email,
-        userName: user.name,
-        orgRole: organizationUserMembership.role,
-        slackUserId: providerUserMapping.externalId,
-        providerMetadata: providerUserMapping.providerMetadata,
-      })
-      .from(providerUserMapping)
-      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
-      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
-      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
-      .innerJoin(estate, eq(organization.id, estate.organizationId))
-      .where(
-        and(
-          eq(providerUserMapping.providerId, "slack-bot"),
-          inArray(providerUserMapping.externalId, newMentionedUserIds),
-          eq(estate.id, estateId),
-        ),
-      );
+    // Query users with collision detection/disambiguation
+    const userMappings = await this.querySlackUsersByExternalId({
+      slackUserIds: newMentionedUserIds,
+      slackTeamId,
+      estateId,
+    });
 
     return userMappings.map((userMapping): ParticipantMentionedEvent => {
       return {

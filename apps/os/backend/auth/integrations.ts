@@ -550,7 +550,13 @@ export const integrationsPlugin = () =>
           if (estateId) {
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
-            waitUntil(syncSlackForEstateInBackground(db, tokens.access_token, estateId));
+            if (!tokens.team?.id) {
+              return ctx.json({ error: "Failed to get Slack team ID" });
+            }
+
+            waitUntil(
+              syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
+            );
 
             await db
               .insert(schema.estateAccountsPermissions)
@@ -564,7 +570,7 @@ export const integrationsPlugin = () =>
               .insert(schema.providerEstateMapping)
               .values({
                 internalEstateId: estateId,
-                externalId: tokens.team?.id,
+                externalId: tokens.team.id,
                 providerId: "slack-bot",
                 providerMetadata: {
                   botUserId,
