@@ -1,4 +1,4 @@
-import { Link } from "../Link";
+import { Link } from "../link.tsx";
 import { Button } from "./button";
 
 export function NotFound() {

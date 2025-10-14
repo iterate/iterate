@@ -1,5 +1,5 @@
 import logoAsset from "../assets/logo.svg?url";
-import { Link } from "./Link.tsx";
+import { Link } from "./link.tsx";
 
 interface LogoProps {
   width?: number;
@@ -8,14 +8,8 @@ interface LogoProps {
 
 export default function Logo({ width, height }: LogoProps): React.ReactElement {
   return (
-    <Link to="/" className="inline-block" variant="subtle">
-      <img
-        src={logoAsset}
-        width={width ?? 40}
-        height={height ?? 40}
-        className="sm:w-[48px] sm:h-[48px]"
-        alt="Iterate"
-      />
+    <Link to="/" className="inline-flex" variant="none">
+      <img src={logoAsset} width={width ?? 40} height={height ?? 40} alt="Iterate" />
     </Link>
   );
 }
