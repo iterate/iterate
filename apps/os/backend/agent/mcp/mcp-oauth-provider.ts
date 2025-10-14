@@ -35,6 +35,10 @@ import { env } from "../../../env.ts";
  * Congrats, we successfully connected to the MCP server.
  */
 
+export function getMCPVerificationKey(providerId: string, clientId: string): string {
+  return `mcp-verifier-${providerId}-${clientId}`;
+}
+
 export class MCPOAuthProvider implements AgentsOAuthProvider {
   clientId: string | undefined;
   serverId: string | undefined;
@@ -64,14 +68,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     return this.params.integrationSlug;
   }
 
-  async resetClientAndTokens() {
-    const dynamicClientInfo = await this.params.db.query.dynamicClientInfo.findFirst({
-      where: and(
-        eq(schema.dynamicClientInfo.userId, this.params.userId),
-        eq(schema.dynamicClientInfo.providerId, this.providerId),
-      ),
-    });
-
+  async resetTokens() {
     await this.params.db
       .delete(schema.account)
       .where(
@@ -80,21 +77,6 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           eq(schema.account.providerId, this.providerId),
         ),
       );
-    await this.params.db
-      .delete(schema.dynamicClientInfo)
-      .where(
-        and(
-          eq(schema.dynamicClientInfo.userId, this.params.userId),
-          eq(schema.dynamicClientInfo.providerId, this.providerId),
-        ),
-      );
-
-    if (dynamicClientInfo?.clientId) {
-      const verificationKey = `mcp-verifier-${this.providerId}-${dynamicClientInfo.clientId}`;
-      await this.params.db
-        .delete(schema.verification)
-        .where(eq(schema.verification.identifier, verificationKey));
-    }
   }
 
   async tokens() {
@@ -236,7 +218,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     if (!clientInformation) {
       throw new Error("Cannot save code verifier without client information");
     }
-    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes for OAuth flow
 
     await this.params.db
@@ -308,7 +290,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     if (!clientInformation) {
       throw new Error("Cannot get code verifier without client information");
     }
-    const verificationKey = `mcp-verifier-${this.providerId}-${clientInformation.client_id}`;
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
     const verification = await this.params.db.query.verification.findFirst({
       where: eq(schema.verification.identifier, verificationKey),
     });

@@ -14,6 +14,7 @@ import {
   getGithubInstallationToken,
 } from "../../integrations/github/github-utils.ts";
 import { MCPParam } from "../../agent/tool-schemas.ts";
+import { getMCPVerificationKey } from "../../agent/mcp/mcp-oauth-provider.ts";
 import {
   getGithubUserAccessTokenForEstate,
   getSlackAccessTokenForEstate,
@@ -714,13 +715,31 @@ export const integrationsRouter = router({
 
         // Only delete the account if it's not used by any other estate
         if (!otherEstates) {
-          // Also check if the account belongs to the current user
           const acc = await ctx.db.query.account.findFirst({
             where: eq(account.id, connectionId),
           });
 
           if (acc && acc.userId === ctx.user.id) {
-            await ctx.db.delete(account).where(eq(account.id, connectionId));
+            await ctx.db.transaction(async (tx) => {
+              const clientInfo = await tx.query.dynamicClientInfo.findFirst({
+                where: and(
+                  eq(schemas.dynamicClientInfo.providerId, acc.providerId),
+                  eq(schemas.dynamicClientInfo.userId, ctx.user.id),
+                ),
+              });
+              if (clientInfo) {
+                const verificationKey = getMCPVerificationKey(acc.providerId, clientInfo.clientId);
+
+                await tx
+                  .delete(schemas.verification)
+                  .where(eq(schemas.verification.identifier, verificationKey));
+                await tx
+                  .delete(schemas.dynamicClientInfo)
+                  .where(eq(schemas.dynamicClientInfo.id, clientInfo.id));
+              }
+
+              await tx.delete(account).where(eq(account.id, connectionId));
+            });
           }
         }
       }
