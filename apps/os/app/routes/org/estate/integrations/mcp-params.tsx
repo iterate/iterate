@@ -47,17 +47,13 @@ export default function MCPParams() {
     () => z.array(MCPParam).parse(JSON.parse(requiredParamsStr)),
     [requiredParamsStr],
   );
-  const durableObject = useMemo(() => {
-    if (!agentDurableObjectStr) {
-      return null;
-    }
-    const parseResult = AgentDurableObjectInfo.safeParse(JSON.parse(agentDurableObjectStr));
-    if (!parseResult.success) {
-      console.error("Failed to parse agentDurableObject:", parseResult.error);
-      return null;
-    }
-    return parseResult.data;
-  }, [agentDurableObjectStr]);
+  const durableObject = useMemo(
+    () =>
+      agentDurableObjectStr
+        ? AgentDurableObjectInfo.parse(JSON.parse(agentDurableObjectStr))
+        : null,
+    [agentDurableObjectStr],
+  );
 
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};

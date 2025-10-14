@@ -3,6 +3,7 @@ import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray } from "drizzle-orm";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
+import { waitUntil } from "cloudflare:workers";
 import { env as _env, env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
@@ -238,38 +239,39 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "MCP:OAUTH_REQUIRED": {
-            const { oauthUrl, serverId, connectionKey, serverUrl } = event.data;
+            const { oauthUrl, connectionKey, serverUrl } = event.data;
 
             const hostname = new URL(serverUrl).hostname;
 
-            void this.slackAPI.chat
-              .postMessage({
-                channel: this.agentCore.state.slackChannelId as string,
-                thread_ts: this.agentCore.state.slackThreadId as string,
-                text: `Authorize ${hostname}`,
-                blocks: [
-                  {
-                    type: "actions",
-                    elements: [
-                      {
-                        type: "button",
-                        text: {
-                          type: "plain_text",
-                          text: `Authorize ${hostname}`,
+            waitUntil(
+              this.slackAPI.chat
+                .postMessage({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  thread_ts: this.agentCore.state.slackThreadId as string,
+                  text: `Authorize ${hostname}`,
+                  blocks: [
+                    {
+                      type: "actions",
+                      elements: [
+                        {
+                          type: "button",
+                          text: {
+                            type: "plain_text",
+                            text: `Authorize ${hostname}`,
+                          },
+                          url: oauthUrl,
+                          style: "primary",
                         },
-                        url: oauthUrl,
-                        style: "primary",
-                      },
-                    ],
-                  },
-                ],
-              })
-              .then((result) => {
-                if (result.ok && result.ts) {
-                  this.mcpConnectionMessages.set(serverId, result.ts);
-                  this.mcpConnectionMessages.set(connectionKey, result.ts);
-                }
-              });
+                      ],
+                    },
+                  ],
+                })
+                .then((result) => {
+                  if (result.ok && result.ts) {
+                    this.mcpConnectionMessages.set(connectionKey, result.ts);
+                  }
+                }),
+            );
             break;
           }
           case "MCP:PARAMS_REQUIRED": {
@@ -277,33 +279,35 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
             const hostname = new URL(serverUrl).hostname;
 
-            void this.slackAPI.chat
-              .postMessage({
-                channel: this.agentCore.state.slackChannelId as string,
-                thread_ts: this.agentCore.state.slackThreadId as string,
-                text: `Authorize ${hostname}`,
-                blocks: [
-                  {
-                    type: "actions",
-                    elements: [
-                      {
-                        type: "button",
-                        text: {
-                          type: "plain_text",
-                          text: `Authorize ${hostname}`,
+            waitUntil(
+              this.slackAPI.chat
+                .postMessage({
+                  channel: this.agentCore.state.slackChannelId as string,
+                  thread_ts: this.agentCore.state.slackThreadId as string,
+                  text: `Authorize ${hostname}`,
+                  blocks: [
+                    {
+                      type: "actions",
+                      elements: [
+                        {
+                          type: "button",
+                          text: {
+                            type: "plain_text",
+                            text: `Authorize ${hostname}`,
+                          },
+                          url: paramsCollectionUrl,
+                          style: "primary",
                         },
-                        url: paramsCollectionUrl,
-                        style: "primary",
-                      },
-                    ],
-                  },
-                ],
-              })
-              .then((result) => {
-                if (result.ok && result.ts) {
-                  this.mcpConnectionMessages.set(connectionKey, result.ts);
-                }
-              });
+                      ],
+                    },
+                  ],
+                })
+                .then((result) => {
+                  if (result.ok && result.ts) {
+                    this.mcpConnectionMessages.set(connectionKey, result.ts);
+                  }
+                }),
+            );
             break;
           }
           case "MCP:CONNECT_REQUEST": {
@@ -313,50 +317,51 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
             const messageTs = this.mcpConnectionMessages.get(connectionKey);
             if (messageTs) {
-              void this.slackAPI.chat.update({
-                channel: this.agentCore.state.slackChannelId as string,
-                ts: messageTs,
-                text: `🔄 Connecting to ${serverUrl}...`,
-                blocks: [
-                  {
-                    type: "section",
-                    text: {
-                      type: "mrkdwn",
-                      text: `🔄 Connecting to ${serverUrl}...`,
-                    },
-                  },
-                ],
-              });
-            }
-            break;
-          }
-          case "MCP:CONNECTION_ESTABLISHED": {
-            const { serverId, connectionKey, serverUrl } = event.data;
-
-            const messageTs =
-              this.mcpConnectionMessages.get(serverId) ||
-              this.mcpConnectionMessages.get(connectionKey);
-
-            if (messageTs) {
-              void this.slackAPI.chat
-                .update({
+              waitUntil(
+                this.slackAPI.chat.update({
                   channel: this.agentCore.state.slackChannelId as string,
                   ts: messageTs,
-                  text: `✅ Connected to ${serverUrl}`,
+                  text: `🔄 Connecting to ${serverUrl}...`,
                   blocks: [
                     {
                       type: "section",
                       text: {
                         type: "mrkdwn",
-                        text: `✅ Connected to ${serverUrl}`,
+                        text: `🔄 Connecting to ${serverUrl}...`,
                       },
                     },
                   ],
-                })
-                .then(() => {
-                  this.mcpConnectionMessages.delete(serverId);
-                  this.mcpConnectionMessages.delete(connectionKey);
-                });
+                }),
+              );
+            }
+            break;
+          }
+          case "MCP:CONNECTION_ESTABLISHED": {
+            const { connectionKey, serverUrl } = event.data;
+
+            const messageTs = this.mcpConnectionMessages.get(connectionKey);
+
+            if (messageTs) {
+              waitUntil(
+                this.slackAPI.chat
+                  .update({
+                    channel: this.agentCore.state.slackChannelId as string,
+                    ts: messageTs,
+                    text: `✅ Connected to ${serverUrl}`,
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `✅ Connected to ${serverUrl}`,
+                        },
+                      },
+                    ],
+                  })
+                  .then(() => {
+                    this.mcpConnectionMessages.delete(connectionKey);
+                  }),
+              );
             }
             break;
           }
@@ -366,24 +371,26 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             const messageTs = connectionKey && this.mcpConnectionMessages.get(connectionKey);
 
             if (messageTs) {
-              void this.slackAPI.chat
-                .update({
-                  channel: this.agentCore.state.slackChannelId as string,
-                  ts: messageTs,
-                  text: `❌ Connection failed`,
-                  blocks: [
-                    {
-                      type: "section",
-                      text: {
-                        type: "mrkdwn",
-                        text: `❌ *Connection failed*\n${error}`,
+              waitUntil(
+                this.slackAPI.chat
+                  .update({
+                    channel: this.agentCore.state.slackChannelId as string,
+                    ts: messageTs,
+                    text: `❌ Connection failed`,
+                    blocks: [
+                      {
+                        type: "section",
+                        text: {
+                          type: "mrkdwn",
+                          text: `❌ *Connection failed*\n${error}`,
+                        },
                       },
-                    },
-                  ],
-                })
-                .then(() => {
-                  this.mcpConnectionMessages.delete(connectionKey);
-                });
+                    ],
+                  })
+                  .then(() => {
+                    this.mcpConnectionMessages.delete(connectionKey);
+                  }),
+              );
             }
             break;
           }
