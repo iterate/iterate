@@ -49,12 +49,8 @@ export function getInstanceLoggerMetadata(target: object): LoggerMetadata {
   if (!base) {
     base = {
       userId: undefined,
-      path: "",
-      httpMethod: "",
-      methodName: "",
-      url: "",
       traceId: "",
-    } as LoggerMetadata;
+    } satisfies LoggerMetadata;
     Object.defineProperty(anyTarget, LOGGER_METADATA_KEY, {
       value: base,
       writable: true,
@@ -89,9 +85,6 @@ export class TagLogger {
       level: "info",
       metadata: {
         userId: undefined,
-        path: "",
-        httpMethod: "",
-        url: "",
         traceId: "",
       },
       logs: [],
