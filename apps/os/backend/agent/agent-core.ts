@@ -405,8 +405,8 @@ export class AgentCore<
         for (const event of existing) {
           // Validate the event
           const _validated = this.combinedEventSchema.parse(event);
-          if (!_validated.eventIndex || !_validated.createdAt) {
-            throw new Error("Event index and createdAt are required");
+          if (_validated.eventIndex === undefined || !_validated.createdAt) {
+            throw new Error(`eventIndex and createdAt are required: ${JSON.stringify(event)}`);
           }
           const validated = _validated as MergedEventForSlices<Slices> & {
             eventIndex: number;
@@ -520,6 +520,7 @@ export class AgentCore<
             ...this.combinedEventSchema.parse(ev),
             eventIndex: this._events.length,
             createdAt: ev.createdAt ?? new Date().toISOString(),
+            triggerLLMRequest: ev.triggerLLMRequest ?? false,
           };
 
           // Add idempotency key to seen set if present
