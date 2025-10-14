@@ -843,7 +843,7 @@ async function handleBotChannelJoin(params: {
               },
             ],
           },
-          triggerLLMRequest: true,
+          triggerLLMRequest: `true:bot-just-joined-channel-in-existing-thread-so-should-say-something`,
         },
       ];
 

@@ -118,7 +118,7 @@ export class OnboardingAgent
               },
             ],
           },
-          triggerLLMRequest: true,
+          triggerLLMRequest: `true:`,
         },
       ]);
     }

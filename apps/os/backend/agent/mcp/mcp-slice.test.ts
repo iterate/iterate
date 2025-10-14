@@ -122,7 +122,7 @@ describe("mcp-slice", () => {
             triggerLLMRequestOnEstablishedConnection: false,
           },
           metadata: {},
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:mcp-connect-request`,
         };
 
         expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
@@ -152,7 +152,7 @@ describe("mcp-slice", () => {
             resources: [],
           },
           metadata: {},
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:mcp-connection-established`,
         };
 
         expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
@@ -165,7 +165,7 @@ describe("mcp-slice", () => {
             connectionKey: MCPConnectionKey.parse("https://github.com/mcp::company"),
           },
           metadata: {},
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:`,
         };
 
         expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
@@ -180,7 +180,7 @@ describe("mcp-slice", () => {
             error: "Connection failed",
           },
           metadata: {},
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:`,
         };
 
         expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
@@ -199,7 +199,7 @@ describe("mcp-slice", () => {
             serverId: "server-123",
           },
           metadata: {},
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:`,
         };
 
         expect(() => mcpSlice.eventSchema.parse(validEvent)).not.toThrow();
@@ -432,7 +432,7 @@ describe("mcp-slice", () => {
             prompts: [],
             resources: [],
           },
-          triggerLLMRequest: false, // Event doesn't trigger, but reducer should
+          triggerLLMRequest: `false:`, // Event doesn't trigger, but reducer should
         });
 
         // Check that LLM was triggered by the reducer
@@ -745,7 +745,7 @@ describe("mcp-slice", () => {
             serverUrl: "https://github.com/mcp",
             error: "Authentication failed",
           },
-          triggerLLMRequest: false, // Event doesn't trigger, but reducer should
+          triggerLLMRequest: `false:`, // Event doesn't trigger, but reducer should
         });
 
         // Check that LLM was triggered by the reducer

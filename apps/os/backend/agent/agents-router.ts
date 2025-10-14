@@ -11,6 +11,7 @@ import {
   FileSharedEvent,
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
+import { TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 import { IterateAgent } from "./iterate-agent.ts";
 import { type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
@@ -222,10 +223,8 @@ export const agentsRouter = router({
       z.object({
         toolName: z.string().describe("The name of the tool to call"),
         args: z.any().describe("The arguments to pass to the tool"),
-        triggerLLMRequest: z
-          .boolean()
-          .optional()
-          .default(true)
+        triggerLLMRequest: TriggerLLMRequest.optional()
+          .default(`true:injectToolCall-default`)
           .describe("Whether to trigger an LLM request after the tool call"),
       }),
     )

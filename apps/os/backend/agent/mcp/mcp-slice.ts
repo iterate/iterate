@@ -355,7 +355,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           mcpConnections: newConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, connectionMessage],
-          triggerLLMRequest: true,
+          triggerLLMRequest: `true:MCPConnectionEstablished-so-trigger-llm-request`,
         };
       }
 
@@ -419,7 +419,7 @@ export const mcpSlice = defineAgentCoreSlice<{
           mcpConnections: newConnections,
           groupedRuntimeTools: updatedRuntimeTools,
           inputItems: [...state.inputItems, errorMessage],
-          triggerLLMRequest: true,
+          triggerLLMRequest: `true:mcp-connection-error`,
         };
       }
 
@@ -457,7 +457,7 @@ export const mcpSlice = defineAgentCoreSlice<{
             },
           },
           inputItems: [...state.inputItems, oauthMessage],
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:mcp-oauth-required-from-user`,
         };
         return newState;
       }
@@ -491,7 +491,7 @@ export const mcpSlice = defineAgentCoreSlice<{
             },
           },
           inputItems: [...state.inputItems, paramsRequiredMessage],
-          triggerLLMRequest: false,
+          triggerLLMRequest: `false:mcp-params-required-from-user`,
         };
         return newState;
       }

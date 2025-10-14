@@ -30,6 +30,7 @@ import type {
   AgentCoreEvent,
   AugmentedCoreReducedState,
 } from "../../backend/agent/agent-core-schemas.ts";
+import type { TriggerLLMRequest } from "../../backend/agent/TriggerLLMRequest.ts";
 import type { SlackSliceEvent } from "../../backend/agent/slack-slice.ts";
 
 type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
@@ -172,7 +173,9 @@ function ToolCallInjector({
 }) {
   const [selectedToolIndex, setSelectedToolIndex] = useState<number | null>(null);
   const [formData, setFormData] = useState<Record<string, any>>({});
-  const [triggerLLMRequest, setTriggerLLMRequest] = useState(true);
+  const [triggerLLMRequest, setTriggerLLMRequest] = useState<TriggerLLMRequest>(
+    `true:tool-call-injector-default`,
+  );
 
   const trpc = useTRPC();
 
@@ -345,8 +348,14 @@ function ToolCallInjector({
                     <div className="flex items-center space-x-2 mb-4">
                       <Checkbox
                         id="trigger-llm"
-                        checked={triggerLLMRequest}
-                        onCheckedChange={(checked) => setTriggerLLMRequest(checked as boolean)}
+                        checked={triggerLLMRequest.startsWith("true")}
+                        onCheckedChange={(checked) =>
+                          setTriggerLLMRequest(
+                            checked
+                              ? `true:tool-call-injector-trigger-llm-request-checked`
+                              : `false:tool-call-injector-trigger-llm-request-unchecked`,
+                          )
+                        }
                       />
                       <Label htmlFor="trigger-llm" className="text-sm">
                         Trigger LLM request after tool execution
@@ -769,19 +778,19 @@ export default function AgentsPage() {
   const actions: AgentDetailActions = {
     onSendMessage: async ({ text, role }) => {
       const promptMessage = {
-        type: "CORE:LLM_INPUT_ITEM" as const,
+        type: "CORE:LLM_INPUT_ITEM",
         data: {
-          type: "message" as const,
+          type: "message",
           role: role,
           content: [
             {
-              type: "input_text" as const,
+              type: "input_text",
               text: text || "",
             },
           ],
         },
-        triggerLLMRequest: true,
-      };
+        triggerLLMRequest: `true:message-should-get-response`,
+      } satisfies AgentCoreEvent;
 
       await addEventsMutation.mutateAsync({
         estateId,

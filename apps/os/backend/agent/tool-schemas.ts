@@ -3,6 +3,7 @@ import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 import { JSONSerializable } from "../utils/type-helpers.ts";
 import { FunctionCall, OpenAIBuiltinTool } from "./openai-response-schemas.ts";
 import type { AgentCoreEvent } from "./agent-core-schemas.ts";
+import { TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 export const IntegrationMode = z.enum(["personal", "company"]);
 export type IntegrationMode = z.infer<typeof IntegrationMode>;
 
@@ -31,7 +32,7 @@ export const AgentDurableObjectToolSpec = z.object({
   overrideDescription: z.string().nullable().optional(),
   overrideInputJSONSchema: z.any().nullable().optional(),
   strict: z.boolean().default(false).optional(), // When true (default), OpenAI returns a model error if the arguments don't validate. Set to false for fuzzy matching.
-  triggerLLMRequest: z.boolean().default(true).optional(), // When true (default), the tool call triggers an LLM request after execution
+  triggerLLMRequest: TriggerLLMRequest.default(`true:default-do-tool-value`).optional(), // When true (default), the tool call triggers an LLM request after execution
   hideOptionalInputs: z.boolean().default(false).optional(), // When true, filters out optional fields from the JSON schema before execution
   statusIndicatorText: z.string().nullable().optional(), // Text to show in Slack typing indicator when this tool is being called
 });
@@ -40,7 +41,9 @@ export type AgentDurableObjectToolSpec = z.infer<typeof AgentDurableObjectToolSp
 export const OpenAIBuiltinToolSpec = z.object({
   type: z.literal("openai_builtin"),
   openAITool: OpenAIBuiltinTool,
-  triggerLLMRequest: z.boolean().default(true).optional(), // When true (default), the tool call triggers an LLM request after execution
+  triggerLLMRequest: TriggerLLMRequest.default(
+    `true:default-openai-builting-tool-value`,
+  ).optional(), // When true (default), the tool call triggers an LLM request after execution
   hideOptionalInputs: z.boolean().default(false).optional(), // When true, filters out optional fields from the JSON schema before execution
 });
 export type OpenAIBuiltinToolSpec = z.infer<typeof OpenAIBuiltinToolSpec>;
@@ -69,7 +72,7 @@ export const MCPServer = z.object({
   allowedTools: z.array(z.string()).optional(),
   allowedPrompts: z.array(z.string()).optional(),
   allowedResources: z.array(z.string()).optional(),
-  triggerLLMRequest: z.boolean().default(true).optional(),
+  triggerLLMRequest: TriggerLLMRequest.default(`true:default-mcp-server-value`).optional(),
   requiresParams: z.array(MCPParam).optional(),
 });
 export type MCPServer = z.infer<typeof MCPServer>;
@@ -81,7 +84,7 @@ export type MCPServerInput = z.input<typeof MCPServer>;
  */
 export type LocalFunctionToolExecuteResult<TEventInput = AgentCoreEvent> = {
   toolCallResult: JSONSerializable;
-  triggerLLMRequest?: boolean;
+  triggerLLMRequest?: TriggerLLMRequest;
   addEvents?: TEventInput[];
 };
 

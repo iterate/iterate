@@ -411,7 +411,7 @@ export function makeUserInputTextEvent(text: string): AgentCoreEvent {
         },
       ],
     },
-    triggerLLMRequest: true,
+    triggerLLMRequest: `true:user-input-text-event-should-trigger-llm-request`,
   };
 }
 

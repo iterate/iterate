@@ -24,11 +24,11 @@ import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
 import { getConnectionKey } from "./mcp/mcp-slice.ts";
-import type {
-  AgentCoreEvent,
-  CoreReducedState,
-  ParticipantJoinedEvent,
-  ParticipantMentionedEvent,
+import {
+  type AgentCoreEvent,
+  type CoreReducedState,
+  type ParticipantJoinedEvent,
+  type ParticipantMentionedEvent,
 } from "./agent-core-schemas.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
@@ -51,6 +51,7 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 import type { AgentInitParams } from "./iterate-agent.ts";
+import { triggerLLMRequest } from "./TriggerLLMRequest.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
@@ -498,18 +499,21 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
       const fileEvents = fileResults
         .filter((result): result is NonNullable<typeof result> => result !== null)
-        .map((fileData) => ({
-          type: "CORE:FILE_SHARED" as const,
-          data: {
-            direction: "from-user-to-agent" as const,
-            iterateFileId: fileData.iterateFileId,
-            originalFilename: fileData.originalFilename,
-            size: fileData.size,
-            mimeType: fileData.mimeType,
-            openAIFileId: fileData.openAIFileId,
-          },
-          triggerLLMRequest: false,
-        }));
+        .map(
+          (fileData) =>
+            ({
+              type: "CORE:FILE_SHARED",
+              data: {
+                direction: "from-user-to-agent",
+                iterateFileId: fileData.iterateFileId,
+                originalFilename: fileData.originalFilename,
+                size: fileData.size,
+                mimeType: fileData.mimeType,
+                openAIFileId: fileData.openAIFileId,
+              },
+              triggerLLMRequest: `false:file-shared-from-user-to-agent`,
+            }) satisfies AgentCoreEvent,
+        );
       return fileEvents;
     }
     return [];
@@ -599,8 +603,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         payload: slackWebhookPayload as {},
         updateThreadIds: true,
       },
-      triggerLLMRequest:
-        shouldTriggerLLM && slackEvent.type === "message" && !isBotMessageThatShouldBeIgnored,
+      triggerLLMRequest: triggerLLMRequest.and(
+        shouldTriggerLLM ? `true:shouldTriggerLLM-true` : `false:shouldTriggerLLM-false`,
+        slackEvent.type === "message"
+          ? `true:slackEventType-message`
+          : `false:slackEventType-${slackEvent.type}`,
+        isBotMessageThatShouldBeIgnored
+          ? `false:botMessageThatShouldBeIgnored`
+          : `true:notABotMessageThatShouldBeIgnored`,
+      ),
       idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
     });
 
@@ -692,7 +703,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             },
           },
         },
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:participantJoined`,
         metadata: {},
       },
     ];
@@ -774,7 +785,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             },
           },
         },
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:participantMentioned`,
         metadata: {},
       };
     });
@@ -817,7 +828,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         slackThreadId: threadTs,
         slackChannel,
       },
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:updateSlackSliceState`,
     });
     return events;
   }
@@ -949,7 +960,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           this.addEvents([
             {
               type: "CORE:RESUME_LLM_REQUESTS",
-              triggerLLMRequest: false,
+              triggerLLMRequest: `false:resumeLLMRequests`,
             },
           ]);
         }
@@ -1007,7 +1018,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const magic: MagicAgentInstructions = {};
     if (endTurn) {
-      magic.__triggerLLMRequest = false;
+      magic.__triggerLLMRequest = `false:end-turn`;
     }
 
     // return an empty object to conserve tokens in the success case, plus magic flags if any
@@ -1062,7 +1073,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     }
     return {
       __pauseAgentUntilMentioned: true,
-      __triggerLLMRequest: false,
+      __triggerLLMRequest: `false:stopRespondingUntilMentioned`,
     } satisfies MagicAgentInstructions;
   }
 

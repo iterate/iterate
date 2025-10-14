@@ -11,6 +11,7 @@ import type { Participant } from "./participant-schemas.ts";
 import type { PromptFragment } from "./prompt-fragments.ts";
 import { type MCPServer, type RuntimeTool, ToolSpec } from "./tool-schemas.ts";
 import { ContextRule } from "./context-schemas.ts";
+import { TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 
 // ------------------------- Models -------------------------
 
@@ -96,7 +97,7 @@ export const agentCoreBaseEventFields = {
   type: z.string(),
   data: z.object({}).optional(),
   metadata: z.record(z.string(), JSONSerializable).optional(),
-  triggerLLMRequest: z.boolean().optional(),
+  triggerLLMRequest: TriggerLLMRequest.optional(),
   createdAt: z.string().optional(),
   eventIndex: z.number().optional(),
   idempotencyKey: z.string().optional(),
@@ -571,7 +572,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
    * Whether an LLM request should be triggered. This is managed as reduced state
    * to allow slices to control whether their events can trigger LLM requests.
    */
-  triggerLLMRequest: boolean;
+  triggerLLMRequest: TriggerLLMRequest;
   /**
    * Arbitrary key-value metadata associated with the agent conversation.
    * Consumers can store lightweight state here across events.
@@ -629,7 +630,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,
-  triggerLLMRequest: false,
+  triggerLLMRequest: `false:initial-state-nothing-to-do-yet`,
   metadata: {},
   participants: {},
   mentionedParticipants: {},

@@ -161,7 +161,7 @@ export async function handleMCPConnectRequest(
         error: "Personal connections require userId",
       },
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:`,
     });
     return events;
   }
@@ -225,7 +225,7 @@ export async function handleMCPConnectRequest(
           paramsCollectionUrl,
         },
         metadata: {},
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:`,
       });
       return events;
     }
@@ -298,7 +298,7 @@ export async function handleMCPConnectRequest(
         error: String(error),
       },
       metadata: { error: String(error) },
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:`,
     });
     return events;
   }
@@ -324,7 +324,7 @@ export async function handleMCPConnectRequest(
         serverId: result.id,
       },
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:`,
     });
     return events;
   }
@@ -366,7 +366,9 @@ export async function handleMCPConnectRequest(
       requiresParams,
     },
     metadata: {},
-    triggerLLMRequest: triggerLLMRequestOnEstablishedConnection,
+    triggerLLMRequest: triggerLLMRequestOnEstablishedConnection
+      ? `true:triggerLLMRequestOnEstablishedConnection-true`
+      : `false:triggerLLMRequestOnEstablishedConnection-false`,
   });
 
   return events;
@@ -610,7 +612,7 @@ export async function rehydrateExistingMCPConnection(params: {
       eventIndex: 0,
       createdAt: new Date().toISOString(),
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:rehydrateExistingMCPConnection`,
     },
   });
 

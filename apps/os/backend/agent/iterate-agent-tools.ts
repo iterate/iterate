@@ -2,6 +2,7 @@ import dedent from "dedent";
 import z from "zod";
 import { defineDOTools } from "./do-tools.ts";
 import { IntegrationMode, MCPParam } from "./tool-schemas.ts";
+import { TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 
 export type IterateAgentToolInterface = typeof iterateAgentTools.$infer.interface;
 export type IterateAgentToolInputs = typeof iterateAgentTools.$infer.inputTypes;
@@ -267,10 +268,9 @@ export const iterateAgentTools = defineDOTools({
       agentName: z.string().describe("The name of the target agent to send the message to"),
       message: z.string().describe("The message content to send"),
       // could in the future expand to model whether or not to interrupt agent, etc
-      triggerLLMRequest: z
-        .boolean()
-        .default(true)
-        .describe("Whether to trigger an LLM request in the target agent (default: true)"),
+      triggerLLMRequest: TriggerLLMRequest.default(
+        `true:messageAgent-called-without-explicit-triggerLLMRequest`,
+      ).describe("Whether to trigger an LLM request in the target agent (default: true)"),
     }),
   },
 });

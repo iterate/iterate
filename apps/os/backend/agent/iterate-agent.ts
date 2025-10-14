@@ -60,6 +60,7 @@ import {
   type MergedStateForSlices,
 } from "./agent-core.ts";
 import { AgentCoreEvent, type AugmentedCoreReducedState } from "./agent-core-schemas.ts";
+import { type TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import {
   runMCPEventHooks,
@@ -80,6 +81,7 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
+import type { MagicAgentInstructions } from "./magic.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -502,7 +504,9 @@ export class IterateAgent<
             posthog,
             data: {
               event,
-              reducedState,
+              reducedState: reducedState as Parameters<
+                typeof processPosthogAgentCoreEvent
+              >[0]["data"]["reducedState"],
             },
           }),
         );
@@ -587,7 +591,7 @@ export class IterateAgent<
       type: "CORE:ADD_CONTEXT_RULES",
       data: { rules },
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:just-adding-some-context-rules`,
       createdAt: new Date().toISOString(),
       eventIndex: this.getEvents().length,
     } satisfies AgentCoreEvent;
@@ -731,7 +735,7 @@ export class IterateAgent<
     return this.agentCore.addEvents(events);
   }
 
-  async messageAgent(params: { agentName: string; message: string; triggerLLMRequest?: boolean }) {
+  async messageAgent(params: Inputs["messageAgent"]) {
     const { agentName, message, triggerLLMRequest } = params;
 
     const targetRecord = await this.db.query.agentInstance.findFirst({
@@ -757,7 +761,8 @@ export class IterateAgent<
         fromAgentName: this.databaseRecord.durableObjectName,
         message,
       },
-      triggerLLMRequest: triggerLLMRequest === true,
+      triggerLLMRequest:
+        triggerLLMRequest ?? `false:messageAgent-called-without-explicit-triggerLLMRequest`,
     });
   }
 
@@ -782,11 +787,11 @@ export class IterateAgent<
   async injectToolCall({
     toolName,
     args,
-    triggerLLMRequest = true,
+    triggerLLMRequest = `true:injectToolCall-triggers-by-default`,
   }: {
     toolName: string;
     args: JSONSerializable;
-    triggerLLMRequest?: boolean;
+    triggerLLMRequest?: TriggerLLMRequest;
   }) {
     // Create a mock function call object that matches OpenAI's format
     const functionCall = {
@@ -840,7 +845,7 @@ export class IterateAgent<
     if (this.agentCore.state.paused) {
       events.push({
         type: "CORE:RESUME_LLM_REQUESTS",
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:handleReminder-resuming-agent`, // should this be true tho? comment above suggests so
       });
     }
 
@@ -852,7 +857,7 @@ export class IterateAgent<
         role: "developer",
         content: [{ type: "input_text", text: message }],
       },
-      triggerLLMRequest: true,
+      triggerLLMRequest: `true:handleReminder-adding-llm-input-item`,
     });
     await this.addEvents(events);
 
@@ -1125,9 +1130,7 @@ export class IterateAgent<
     return { reversed: input.message.split("").reverse().join("") };
   }
   doNothing() {
-    return {
-      __triggerLLMRequest: false,
-    };
+    return { __triggerLLMRequest: `false:doNothing` } satisfies MagicAgentInstructions;
   }
   async getEstate() {
     return {
@@ -1343,7 +1346,7 @@ export class IterateAgent<
         userId: input.onBehalfOfIterateUserId,
       },
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:just-doing-a-mcp-connect-request`,
     };
     const result = await getOrCreateMCPConnection({
       connectionKey,
@@ -1549,7 +1552,7 @@ export class IterateAgent<
       triggerLLMRequest,
     }: {
       text: string;
-      triggerLLMRequest: boolean;
+      triggerLLMRequest: TriggerLLMRequest;
     }) => {
       this.agentCore.addEvent({
         type: "CORE:LLM_INPUT_ITEM",
@@ -1572,7 +1575,7 @@ export class IterateAgent<
       logger.info("video polling timeout reached:", { videoId: data.videoId });
       addDeveloperMessage({
         text: `Video generation polling timeout reached for video ${data.videoId}. The video generation is taking longer than expected (>10 minutes).`,
-        triggerLLMRequest: true,
+        triggerLLMRequest: `true:video-polling-timeout-reached`,
       });
       return;
     }
@@ -1593,7 +1596,7 @@ export class IterateAgent<
       // Add developer message about video progress
       addDeveloperMessage({
         text: `Video ${data.videoId} has status ${video.status} and is ${video.progress}% complete`,
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:video-polling-progress`,
       });
 
       if (video.status === "failed") {
@@ -1602,7 +1605,7 @@ export class IterateAgent<
           : "Unknown error";
         addDeveloperMessage({
           text: `Video generation failed for video ${data.videoId}: ${errorMessage}`,
-          triggerLLMRequest: true,
+          triggerLLMRequest: `true:generating-video-failed-so-may-need-to-tell-user`,
         });
         return;
       }
@@ -1638,7 +1641,7 @@ export class IterateAgent<
             metadata: {
               openaiSoraVideoId: data.videoId,
             },
-            triggerLLMRequest: true,
+            triggerLLMRequest: `true:agent-shared-video-so-should-tell-user`,
           });
         } else {
           throw new Error(`Video content download failed: ${contentRes.status}`);
@@ -1651,7 +1654,7 @@ export class IterateAgent<
       logger.error("video polling error:", err);
       addDeveloperMessage({
         text: `Video generation polling error for video ${data.videoId}: ${err}`,
-        triggerLLMRequest: true,
+        triggerLLMRequest: `true:video-polling-error-so-may-need-to-tell-user`,
       });
       return;
     }
@@ -1813,18 +1816,18 @@ export class IterateAgent<
                 status: "completed", // ← Changed from "pending"
               },
               result: {
-                success: resultExec.success,
+                success: resultExec.success as true,
                 output: {},
               },
             },
-            triggerLLMRequest: false,
-          });
+            triggerLLMRequest: `false:exec-result`,
+          } satisfies AgentCoreEvent);
         });
 
       // TODO: this doesn't work
       return {
         __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
-        __triggerLLMRequest: false,
+        __triggerLLMRequest: `false:sandbox-starting`,
       };
     }
 
@@ -2087,7 +2090,10 @@ function parseEventRows(rawSqlResults: unknown[]) {
     type: event.type,
     data: JSON.parse(event.data_json),
     metadata: JSON.parse(event.metadata_json),
-    triggerLLMRequest: event.trigger_llm_request === 1,
+    triggerLLMRequest:
+      event.trigger_llm_request === 1
+        ? `true:event-trigger-llm-request`
+        : `false:event-no-trigger-llm-request`,
     createdAt: event.created_at,
     eventIndex: event.event_index,
     idempotencyKey: event.idempotency_key || undefined,

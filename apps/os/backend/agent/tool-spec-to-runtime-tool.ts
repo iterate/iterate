@@ -28,20 +28,20 @@ export function sanitizeToolName(name: string): string {
 /** Extract magic properties and compose final response */
 function processMagic(rawResult: unknown, toolSpec: ToolSpec) {
   const { magic, cleanedResult } = parseMagicAgentInstructions(rawResult);
-  let addEvents = magic.__addAgentCoreEvents;
+  let addEvents = magic.__addAgentCoreEvents as AgentCoreEvent[] | undefined;
   if (magic.__pauseAgentUntilMentioned) {
     (addEvents ||= []).push({
       type: "CORE:PAUSE_LLM_REQUESTS",
       data: {},
       metadata: {},
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:pause-llm-requests`,
     });
   }
-  let triggerLLMRequest = true;
-  if (typeof magic.__triggerLLMRequest === "boolean") {
+  let triggerLLMRequest = `true:processMagic-default`;
+  if (magic.__triggerLLMRequest) {
     triggerLLMRequest = magic.__triggerLLMRequest;
   } else if (toolSpec.type === "agent_durable_object_tool") {
-    triggerLLMRequest = toolSpec.triggerLLMRequest !== false;
+    triggerLLMRequest = toolSpec.triggerLLMRequest;
   }
 
   return {

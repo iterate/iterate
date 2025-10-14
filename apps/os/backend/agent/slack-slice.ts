@@ -10,6 +10,7 @@ import {
   isBotMentionedInMessage,
 } from "./slack-agent-utils.ts";
 import { f, PromptFragment, renderPromptFragment } from "./prompt-fragments.ts";
+import { triggerLLMRequest } from "./TriggerLLMRequest.ts";
 
 // SLACK:WEBHOOK_EVENT_RECEIVED
 export const slackWebhookEventReceivedFields = {
@@ -175,7 +176,13 @@ export const slackSlice = defineAgentCoreSlice<{
           if (slackUserId === "UALICE" || slackUserId === "UBOB") userIsJoinedParticipant = true;
         }
 
-        next.triggerLLMRequest = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
+        next.triggerLLMRequest = triggerLLMRequest.and(
+          shouldTriggerLLM ? `true:shouldTriggerLLM-true` : `false:shouldTriggerLLM-false`,
+          next.paused ? `false:paused` : `true:not-paused`,
+          userIsJoinedParticipant
+            ? `true:userIsJoinedParticipant-true`
+            : `false:userIsJoinedParticipant-false`,
+        )!;
         break;
       }
     }

@@ -731,7 +731,7 @@ export const integrationsPlugin = () =>
                     },
                   ],
                 },
-                triggerLLMRequest: true,
+                triggerLLMRequest: `true:google-oauth-completed`,
               },
             ]);
           }

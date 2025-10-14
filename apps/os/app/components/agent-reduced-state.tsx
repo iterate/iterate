@@ -34,6 +34,10 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
     }
   }, [selectedValue, searchValue, reducedState]);
 
+  const reducedStateData = useMemo(() => {
+    const { triggerLLMRequest, ...rest } = matchedState.value ?? reducedState;
+    return { triggerLLMRequest, ...rest };
+  }, [matchedState.value, reducedState]);
   // Calculate counts for badges
   return (
     <div className={className}>
@@ -52,7 +56,7 @@ export function AgentReducedState({ reducedState, className }: AgentReducedState
         <div className="text-red-500 w-[30%]">{matchedState.error}</div>
         {/* <SerializedObjectCodeBlock data={matchedState.value} className="h-full" /> */}
       </div>
-      <SerializedObjectCodeBlock data={matchedState.value ?? reducedState} className="h-full" />
+      <SerializedObjectCodeBlock data={reducedStateData} className="h-full" />
     </div>
   );
 }

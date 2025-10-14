@@ -486,7 +486,7 @@ export function createRuntimeToolFromMCPTool(params: {
               content: [],
               textSummary: `Tool call failed`,
             },
-            triggerLLMRequest: true,
+            triggerLLMRequest: `true:mcp-tool-call-failed`,
           };
         }
       }
@@ -547,7 +547,7 @@ export function createRuntimeToolFromMCPTool(params: {
 
           return {
             toolCallResult: result,
-            triggerLLMRequest: true,
+            triggerLLMRequest: `true:mcp-resource-link-found`,
             addEvents: [...additionalMCPEvents, ...fileEvents],
           };
         } catch (error) {
@@ -581,7 +581,7 @@ export function createRuntimeToolFromMCPTool(params: {
 
       return {
         toolCallResult: result,
-        triggerLLMRequest: true,
+        triggerLLMRequest: `true:mcp-tool-call-succeeded`,
         addEvents: [...additionalMCPEvents, ...fileEvents] as any,
       };
     },

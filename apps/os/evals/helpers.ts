@@ -102,7 +102,7 @@ export async function createTestHelper({
     {
       type: "SLACK:UPDATE_SLICE_STATE",
       data: { slackChannelId: channel, slackThreadId: threadTs },
-      triggerLLMRequest: false,
+      triggerLLMRequest: `false:slack-slice-updated`,
     },
   ]);
 
@@ -125,7 +125,7 @@ export async function createTestHelper({
       {
         type: "CORE:ADD_CONTEXT_RULES",
         data: { rules: [{ key: ruleKey, tools: toolSpecs }] },
-        triggerLLMRequest: false,
+        triggerLLMRequest: `false:added-context-rules`,
       },
     ]);
   }
@@ -198,7 +198,7 @@ export async function createTestHelper({
         data: {
           payload: { event: override(buildSlackMessageEvent(message)) },
         },
-        triggerLLMRequest: true,
+        triggerLLMRequest: `true:send-user-message-slack-webhook-event-received`,
       },
     ]);
 

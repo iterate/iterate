@@ -1,12 +1,13 @@
 import * as R from "remeda";
 import { z } from "zod";
+import { TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 
 const EventLike = z.looseObject({ type: z.string() });
 
 export const MagicAgentInstructions = z.object({
   __addAgentCoreEvents: z.array(z.lazy(() => EventLike)).optional(), // Careful - we use this for non-agent core events too!
   __pauseAgentUntilMentioned: z.boolean().optional(),
-  __triggerLLMRequest: z.boolean().optional(),
+  __triggerLLMRequest: TriggerLLMRequest.optional(),
 });
 export type MagicAgentInstructions = z.infer<typeof MagicAgentInstructions>;
 

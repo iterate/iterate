@@ -98,7 +98,9 @@ export const ContextItem = z.object({
   key: z.string(),
   description: z.string().optional(),
   prompt: PromptFragment.optional(),
-  tools: z.array(ToolSpec).optional(),
+  get tools() {
+    return z.lazy(() => z.array(ToolSpec).optional());
+  },
 }) satisfies z.ZodType<{
   [K in keyof ContextItem]: ContextItem[K];
 }>;

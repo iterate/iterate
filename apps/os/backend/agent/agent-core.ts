@@ -38,6 +38,7 @@ import {
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
 } from "./agent-core-schemas.js";
+import { type TriggerLLMRequest } from "./TriggerLLMRequest.ts";
 import { renderPromptFragment } from "./prompt-fragments.js";
 import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
@@ -436,8 +437,8 @@ export class AgentCore<
         metadata: {},
         eventIndex: this._events.length,
         createdAt: new Date().toISOString(),
-        triggerLLMRequest: false,
-      } as const;
+        triggerLLMRequest: "false:just-initializing",
+      } satisfies AgentCoreEvent;
       // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
       this._events.push(initializedEvent);
       this._state = this.runReducersOnSingleEvent(this._state, initializedEvent);
@@ -520,7 +521,8 @@ export class AgentCore<
             ...this.combinedEventSchema.parse(ev),
             eventIndex: this._events.length,
             createdAt: ev.createdAt ?? new Date().toISOString(),
-            triggerLLMRequest: ev.triggerLLMRequest ?? false,
+            triggerLLMRequest:
+              ev.triggerLLMRequest ?? `false:event-was-added-without-triggerLLMRequest`,
           };
 
           // Add idempotency key to seen set if present
@@ -563,8 +565,8 @@ export class AgentCore<
           metadata: {},
           eventIndex: this._events.length,
           createdAt: new Date().toISOString(),
-          triggerLLMRequest: false,
-        } as const;
+          triggerLLMRequest: `false:error-occurred-adding-events`,
+        } satisfies AgentCoreEvent;
 
         // Add the error event to the events array
         // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
@@ -583,7 +585,7 @@ export class AgentCore<
       }
 
       // Handle LLM request triggering if needed
-      if (this._state.triggerLLMRequest) {
+      if (this._state.triggerLLMRequest.startsWith("true")) {
         // Check if paused before starting
         if (this._state.paused) {
           this.deps.console.warn("[AgentCore] LLM request trigger ignored - requests are paused");
@@ -606,8 +608,8 @@ export class AgentCore<
               metadata: {},
               eventIndex: this._events.length,
               createdAt: new Date().toISOString(),
-              triggerLLMRequest: false,
-            } as const;
+              triggerLLMRequest: `false:superseded`,
+            } satisfies AgentCoreEvent;
             // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
             this._events.push(cancelEvent);
             this._state = this.runReducersOnSingleEvent(this._state, cancelEvent);
@@ -626,7 +628,7 @@ export class AgentCore<
             createdAt: new Date().toISOString(),
             data: { rawRequest: responsesAPIParams },
             metadata: {},
-            triggerLLMRequest: false,
+            triggerLLMRequest: `false:llm-request-start`,
           } satisfies AgentCoreEvent;
           // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
           this._events.push(startEvent);
@@ -682,8 +684,8 @@ export class AgentCore<
 
     // Any event with triggerLLMRequest: true sets the state flag to true
     // UNLESS we are paused
-    if (event.triggerLLMRequest && !state.paused) {
-      next.triggerLLMRequest = true;
+    if (event.triggerLLMRequest?.startsWith("true") && !state.paused) {
+      next.triggerLLMRequest = event.triggerLLMRequest;
     }
 
     if (!event.type.startsWith("CORE:")) {
@@ -750,7 +752,7 @@ export class AgentCore<
 
       case "CORE:LLM_REQUEST_START":
         next.llmRequestStartedAtIndex = event.eventIndex;
-        next.triggerLLMRequest = false; // Consume the trigger
+        next.triggerLLMRequest = `false:llm-request-start-cant-trigger-another-ffs`; // Consume the trigger
         break;
 
       case "CORE:LOCAL_FUNCTION_TOOL_CALL": {
@@ -807,7 +809,7 @@ export class AgentCore<
 
       case "CORE:PAUSE_LLM_REQUESTS":
         next.paused = true;
-        next.triggerLLMRequest = false; // Clear any pending trigger when pausing
+        next.triggerLLMRequest = `false:pausing-clears-pending-trigger`;
         break;
 
       case "CORE:RESUME_LLM_REQUESTS":
@@ -1191,7 +1193,8 @@ export class AgentCore<
           )?.item;
           const associatedReasoningItem =
             lastNonFunctionCallItem?.type === "reasoning" ? lastNonFunctionCallItem : undefined;
-          const triggerLLMRequest = result.triggerLLMRequest !== false;
+          const triggerLLMRequest =
+            result.triggerLLMRequest ?? `true:tool-call-result-triggers-llm-request-by-default`;
           const ev = {
             type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
             data: {
@@ -1332,13 +1335,13 @@ export class AgentCore<
     | {
         success: true;
         output: JSONSerializable;
-        triggerLLMRequest?: boolean;
+        triggerLLMRequest?: TriggerLLMRequest;
         addEvents?: MergedEventForSlices<Slices>[];
       }
     | {
         success: false;
         error: string;
-        triggerLLMRequest?: boolean;
+        triggerLLMRequest?: TriggerLLMRequest;
         addEvents?: MergedEventForSlices<Slices>[];
       }
   > {
