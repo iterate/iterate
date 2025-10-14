@@ -8,7 +8,5 @@
     "dev": "doppler run -- sh -c 'ngrok http --url=https://$ITERATE_USER.dev.iterate.com 5173 --log=stdout --log-level=warn'"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "packageManager": "pnpm@10.18.0"
+  "author": ""
 }
