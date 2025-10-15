@@ -1446,7 +1446,9 @@ export class AgentCore<
             args: args as {},
             toolCallId: call.call_id,
           }).catch((e) => {
-            throw new Error(`failed to request approval?? ${e}`);
+            const error = e instanceof Error ? e : new Error(String(e));
+            error.message = `Failed to request approval: ${error.message}`;
+            throw error;
           });
           return {
             toolCallResult: {

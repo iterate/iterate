@@ -1,4 +1,4 @@
-import type { SlackEvent } from "@slack/types";
+import type { KnownBlock, SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray, lt } from "drizzle-orm";
 import * as YAML from "yaml";
@@ -498,13 +498,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       requestApprovalForToolCall: async (
         payload: Parameters<NonNullable<AgentCoreDeps["requestApprovalForToolCall"]>>[0],
       ) => {
-        const yamlArgs = YAML.stringify(payload.args || {}).trim();
-        const message = [
-          `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`,
-          yamlArgs === "{}" ? "" : `Arguments:\n\n${yamlArgs}`,
-        ];
-        const text = message.filter(Boolean).join("\n\n");
-        const result = await this.sendSlackMessage({ text });
+        const prettyArgs = YAML.stringify(payload.args || {}, (key, value) => {
+          if (key === "impersonateUserId") return undefined;
+          return value;
+        }).trim();
+
+        const message = `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`;
+        const blocks = [{ type: "markdown", text: message }];
+        if (prettyArgs !== "{}") {
+          blocks.push({ type: "mrkdwn", text: `Arguments:\n\n\`\`\`\n${prettyArgs}\`\`\`` });
+        }
+
+        const result = await this.sendSlackMessage({ blocks } as {} as { text: string });
         if (!result.ts) throw new Error("Failed to send approval request message");
 
         // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
@@ -1148,17 +1153,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error("Slack thread ID and channel ID must be strings");
     }
 
-    const { endTurn, ...sendInput } = input;
+    const { endTurn, ...rest } = input;
+    const sendInput = rest as Partial<typeof rest> & ({ text: string } | { blocks: KnownBlock[] });
 
-    const doUnfurl = shouldUnfurlSlackMessage({
-      text: sendInput.text,
-      unfurl: sendInput.unfurl,
-    });
+    const doUnfurl =
+      !!sendInput.text &&
+      shouldUnfurlSlackMessage({
+        text: sendInput.text,
+        unfurl: sendInput.unfurl,
+      });
 
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
-      text: sendInput.text,
+      ...(sendInput.text ? { text: sendInput.text } : ({ blocks: sendInput.blocks } as never)),
       // for some reason, I have to set both of these to the same value to get unfurling to stop
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
