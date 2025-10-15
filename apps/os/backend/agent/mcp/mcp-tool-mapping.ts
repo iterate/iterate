@@ -405,9 +405,11 @@ export function createRuntimeToolFromMCPTool(params: {
     parameters: modifiedParameters,
     strict: false,
     metadata: { source: "mcp" },
-  } satisfies Omit<LocalFunctionRuntimeTool, "wrappers" | "execute">;
+  } satisfies Omit<LocalFunctionRuntimeTool, "execute">;
 
-  const lazyConnectionWrapper: LocalFunctionRuntimeTool["wrappers"][number] = (next) => {
+  const lazyConnectionWrapper: NonNullable<LocalFunctionRuntimeTool["wrappers"]>[number] = (
+    next,
+  ) => {
     return async (_call, args: any) => {
       const { impersonateUserId, ...toolArgs } = args;
 

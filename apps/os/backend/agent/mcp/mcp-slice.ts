@@ -6,7 +6,7 @@ import {
   type CoreReducedState,
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
-import { IntegrationMode } from "../tool-schemas.ts";
+import { IntegrationMode, type RuntimeTool } from "../tool-schemas.ts";
 import { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { MCPParam } from "../tool-schemas.ts";
@@ -275,7 +275,10 @@ function updateRuntimeTools<TEventInput = AgentCoreEvent>(params: {
     deps.lazyConnectionDeps,
   );
 
-  return { ...params.state.groupedRuntimeTools, mcp: newRuntimeTools };
+  return {
+    ...params.state.groupedRuntimeTools,
+    mcp: newRuntimeTools as RuntimeTool<TEventInput | AgentCoreEvent>[],
+  };
 }
 
 // ------------------------- Slice Dependencies -------------------------

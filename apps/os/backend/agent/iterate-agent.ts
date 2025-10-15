@@ -555,7 +555,7 @@ export class IterateAgent<
             posthog,
             data: {
               event,
-              reducedState,
+              reducedState: reducedState as {},
             },
           }),
         );
