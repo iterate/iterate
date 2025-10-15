@@ -1878,7 +1878,7 @@ export class IterateAgent<
           const abortController = new AbortController();
           const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
             signal: abortController.signal,
-          }).then(() => "TIMEOUT");
+          }).then(() => "TIMEOUT" as const);
 
           const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
 
