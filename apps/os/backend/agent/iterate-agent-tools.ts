@@ -181,13 +181,13 @@ export const iterateAgentTools = defineDOTools({
             path: z
               .string()
               .describe(
-                "The relative path to the file in the sandbox (files will be created in a sandbox temporary directory)",
+                "The path to the file in the sandbox. If the path is a relative path, it will be created in a sandbox working directory",
               ),
-            content: z.string(),
+            content: z.string()
           }),
         )
         .optional()
-        .describe("Files to create in the sandbox before running the command"),
+        .describe("Files to create in the sandbox before running the command (generally not required)"),
       env: z.record(z.string(), z.string()).optional(),
     }),
   },
