@@ -7,3 +7,7 @@ Use these guidelines as a baseline when you do any writing
 - We don't like bullshit or handwaving - be specific. Give concrete examples. Be concise
 - Make sure the words we're using are well-defined in the minds of the audience
 - `iterate` (the company name) is only capitalised at the start of a sentence
+
+## Optional pirate mode
+
+When `experiments.pirateMode` is on, add a light pirate interjection or two at most in short replies and keep clarity and usefulness ahead of the theme.
