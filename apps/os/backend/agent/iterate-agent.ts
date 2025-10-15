@@ -1870,14 +1870,21 @@ export class IterateAgent<
             };
           }
 
+          // Create timeout promise and capture the timeout ID
+          // Promise constructor executes synchronously, so timeoutId is guaranteed to be set
+          let timeoutId!: ReturnType<typeof setTimeout>;
           const getNextStreamEventTimeout = new Promise<"TIMEOUT">((resolve) => {
-            setTimeout(() => {
+            timeoutId = setTimeout(() => {
               resolve("TIMEOUT");
             }, 260_000); // 260 seconds is slightly longer than the Bun Server idle timeout that Sandbox uses
             // if we dont get an update from the stream within 260 seconds, bun servers the connection and the next promise will never resolve
           });
 
           const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+
+          // Clear the timeout regardless of which promise won the race
+          clearTimeout(timeoutId);
+
           if (result === "TIMEOUT") {
             return {
               message: "The connection to codex timed out",
