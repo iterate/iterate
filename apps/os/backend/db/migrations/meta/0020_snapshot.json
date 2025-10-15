@@ -1,5 +1,5 @@
 {
-  "id": "3482de38-c50b-4b0b-9a23-fb2e527bfd60",
+  "id": "539ad792-17bb-415f-a609-0a1256ff390a",
   "prevId": "727c7760-91ed-4a81-9311-24f3ea513c1b",
   "version": "7",
   "dialect": "postgresql",
@@ -1274,10 +1274,10 @@
           "name": "estate_id",
           "type": "text",
           "primaryKey": false,
-          "notNull": true
+          "notNull": false
         },
-        "external_team_id": {
-          "name": "external_team_id",
+        "external_user_team_id": {
+          "name": "external_user_team_id",
           "type": "text",
           "primaryKey": false,
           "notNull": false
@@ -1305,8 +1305,8 @@
         }
       },
       "indexes": {
-        "provider_user_mapping_provider_id_estate_id_external_id_external_team_id_index": {
-          "name": "provider_user_mapping_provider_id_estate_id_external_id_external_team_id_index",
+        "provider_user_mapping_provider_id_estate_id_external_id_index": {
+          "name": "provider_user_mapping_provider_id_estate_id_external_id_index",
           "columns": [
             {
               "expression": "provider_id",
@@ -1322,12 +1322,6 @@
             },
             {
               "expression": "external_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "external_team_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
