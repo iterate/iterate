@@ -83,7 +83,6 @@ import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
-import type { Connection, ConnectionContext } from "agents";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -269,7 +268,7 @@ export class IterateAgent<
 
     // disabling broadcast functionality because it breaks with better-wait-until keep alive websockets
     const newBroadcast = (_msg: string, _without: string[] | undefined) => {
-      console.log("web socket broadcast is a no op for now");
+      logger.info("web socket broadcast is a no op for now");
     };
     this.broadcast = newBroadcast;
     this.constructor.prototype.broadcast = newBroadcast;
@@ -1853,7 +1852,7 @@ export class IterateAgent<
           }
           await sandbox.renewActivityTimeout();
         } catch (err) {
-          console.error("Error renewing activity timeout", err);
+          logger.error("Error renewing activity timeout", err);
         }
       }, 5000);
 
@@ -1861,7 +1860,7 @@ export class IterateAgent<
       try {
         while (true) {
           if (!sandboxHealthy) {
-            console.warn("Sandbox is not healthy, exiting");
+            logger.warn("Sandbox is not healthy, exiting");
             return {
               success: false,
               message: "Sandbox crashed after completing this work",
@@ -1889,7 +1888,7 @@ export class IterateAgent<
             };
           }
           if (result.done) {
-            console.log("Exec readable exhausted without complete event", {
+            logger.info("Exec readable exhausted without complete event", {
               input,
               stdout,
               stderr,
@@ -1907,15 +1906,15 @@ export class IterateAgent<
           switch (event.type) {
             case "stdout":
               stdout += event.data;
-              console.log(`Exec stdout: ${event.data}`);
+              logger.info(`Exec stdout: ${event.data}`);
               break;
             case "stderr":
               stderr += event.data;
-              console.log(`Exec stderr: ${event.data}`);
+              logger.info(`Exec stderr: ${event.data}`);
               break;
             case "error":
               stderr += event.data;
-              console.log(`Exec error: ${event.data}`);
+              logger.info(`Exec error: ${event.data}`);
               logger.error(`Error running \`${commandExec}\` in sandbox`, event);
               return {
                 message: "Execution errors occurred",
@@ -1925,7 +1924,7 @@ export class IterateAgent<
                 exitCode: 1,
               };
             case "complete":
-              console.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
+              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
               return {
                 message:
                   event.exitCode === 0
@@ -1960,7 +1959,7 @@ export class IterateAgent<
     const resultExec = await execInSandbox();
 
     if (!resultExec.success) {
-      console.error("Exec failed", resultExec);
+      logger.error("Exec failed", resultExec);
       return {
         success: false,
         error: dedent`
@@ -1976,7 +1975,7 @@ export class IterateAgent<
       };
     }
 
-    console.log("Exec succeeded 1", resultExec);
+    logger.info("Exec succeeded 1", resultExec);
     return {
       success: true,
       output: {
