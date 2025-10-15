@@ -230,18 +230,6 @@ export const estateRouter = router({
             ctx.env.ITERATE_BOT_GITHUB_TOKEN,
         );
       }
-      const { Octokit } = await import("octokit");
-      const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
-      const me = await github.rest.users.getAuthenticated();
-      console.log({
-        me: me.data,
-        url: `https://api.github.com/repos/${input.repositoryNameWithOwner}/zipball/${input.refName}`,
-      });
-      const repo = await github.rest.repos.get({
-        owner: input.repositoryNameWithOwner.split("/")[0],
-        repo: input.repositoryNameWithOwner.split("/")[1],
-      });
-      console.log({ repo: repo.data });
 
       const zipballResponse = await fetch(
         `https://api.github.com/repos/${input.repositoryNameWithOwner}/zipball/${input.refName}`,
@@ -261,10 +249,12 @@ export const estateRouter = router({
       const unzipped = fflate.unzipSync(new Uint8Array(zipball));
 
       const filesystem: Record<string, string> = Object.fromEntries(
-        Object.entries(unzipped).map(([filename, data]) => [
-          filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
-          fflate.strFromU8(data),
-        ]),
+        Object.entries(unzipped)
+          .map(([filename, data]) => [
+            filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+            fflate.strFromU8(data),
+          ])
+          .filter(([k, v]) => !k.endsWith("/") && v.trim()),
       );
       const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
       return { filesystem, sha };

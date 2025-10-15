@@ -7,10 +7,17 @@ import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
 import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { useTheme } from "next-themes";
-import { File, Folder } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/utils.ts";
 import { useTRPC } from "../../lib/trpc.ts";
+
+interface FileTreeNode {
+  name: string;
+  path: string;
+  type: "file" | "folder";
+  children?: FileTreeNode[];
+}
 
 interface CodeEditorProps {
   value: string;
@@ -41,6 +48,7 @@ function CodeEditor({ value, onChange, language }: CodeEditorProps) {
         lang,
         search({ top: true }),
         keymap.of(searchKeymap),
+        EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             onChange(update.state.doc.toString());
@@ -72,6 +80,150 @@ function CodeEditor({ value, onChange, language }: CodeEditorProps) {
   return <div ref={containerRef} className="h-full" />;
 }
 
+// Build a tree structure from flat file paths
+function buildFileTree(filePaths: string[]): FileTreeNode[] {
+  const root: FileTreeNode[] = [];
+  const nodeMap = new Map<string, FileTreeNode>();
+
+  // Filter out empty files and sort
+  const validPaths = filePaths.filter((path) => path.trim() !== "").sort();
+
+  for (const path of validPaths) {
+    const parts = path.split("/");
+    let currentPath = "";
+
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const parentPath = currentPath;
+      currentPath = currentPath ? `${currentPath}/${part}` : part;
+
+      if (!nodeMap.has(currentPath)) {
+        const isFile = i === parts.length - 1;
+        const node: FileTreeNode = {
+          name: part,
+          path: currentPath,
+          type: isFile ? "file" : "folder",
+          children: isFile ? undefined : [],
+        };
+
+        nodeMap.set(currentPath, node);
+
+        if (parentPath) {
+          const parentNode = nodeMap.get(parentPath);
+          if (parentNode?.children) {
+            parentNode.children.push(node);
+          }
+        } else {
+          root.push(node);
+        }
+      }
+    }
+  }
+
+  // Sort: folders first, then files, both alphabetically
+  const sortNodes = (nodes: FileTreeNode[]) => {
+    nodes.sort((a, b) => {
+      if (a.type !== b.type) {
+        return a.type === "folder" ? -1 : 1;
+      }
+      return a.name.localeCompare(b.name);
+    });
+    nodes.forEach((node) => {
+      if (node.children) {
+        sortNodes(node.children);
+      }
+    });
+  };
+
+  sortNodes(root);
+  return root;
+}
+
+interface FileTreeViewProps {
+  nodes: FileTreeNode[];
+  selectedFile: string | null;
+  onFileSelect: (path: string) => void;
+  isFileEdited: (path: string) => boolean;
+  collapsedFolders: Set<string>;
+  onToggleFolder: (path: string) => void;
+  level?: number;
+}
+
+function FileTreeView({
+  nodes,
+  selectedFile,
+  onFileSelect,
+  isFileEdited,
+  collapsedFolders,
+  onToggleFolder,
+  level = 0,
+}: FileTreeViewProps) {
+  return (
+    <>
+      {nodes.map((node) => {
+        const isCollapsed = collapsedFolders.has(node.path);
+        const hasChildren = node.children && node.children.length > 0;
+
+        return (
+          <div key={node.path}>
+            <button
+              onClick={() => {
+                if (node.type === "folder") {
+                  onToggleFolder(node.path);
+                } else {
+                  onFileSelect(node.path);
+                }
+              }}
+              className={cn(
+                "w-full text-left px-2 py-1 text-xs flex items-center gap-1 hover:bg-accent rounded-sm",
+                selectedFile === node.path && node.type === "file" && "bg-accent",
+              )}
+              style={{ paddingLeft: `${level * 12 + 8}px` }}
+            >
+              {node.type === "folder" ? (
+                <>
+                  {hasChildren ? (
+                    isCollapsed ? (
+                      <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                    )
+                  ) : (
+                    <span className="w-3" />
+                  )}
+                  <Folder className="h-3 w-3 flex-shrink-0" />
+                </>
+              ) : (
+                <>
+                  <span className="w-3" />
+                  <File className="h-3 w-3 flex-shrink-0" />
+                </>
+              )}
+              <span className="truncate flex-1">
+                {node.name}
+                {node.type === "file" && isFileEdited(node.path) && (
+                  <span className="text-orange-500">*</span>
+                )}
+              </span>
+            </button>
+            {node.type === "folder" && node.children && !isCollapsed && (
+              <FileTreeView
+                nodes={node.children}
+                selectedFile={selectedFile}
+                onFileSelect={onFileSelect}
+                isFileEdited={isFileEdited}
+                collapsedFolders={collapsedFolders}
+                onToggleFolder={onToggleFolder}
+                level={level + 1}
+              />
+            )}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
 interface IDEProps {
   repositoryNameWithOwner: string;
   refName: string;
@@ -99,6 +251,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
   const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContents, setFileContents] = useState<Record<string, string>>(filesystem);
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
 
   // Update file contents when filesystem prop changes
   useEffect(() => {
@@ -109,8 +262,21 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
     }
   }, [filesystem, selectedFile]);
 
-  const files = Object.keys(fileContents).sort();
+  // Build file tree from filesystem
+  const fileTree = buildFileTree(Object.keys(fileContents));
   const currentContent = selectedFile ? fileContents[selectedFile] : "";
+
+  const handleToggleFolder = (path: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  };
 
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
@@ -152,31 +318,21 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
   return (
     <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden">
-      {/* Left sidebar - File list */}
-      <div className="w-64 flex-shrink-0 border-r bg-muted/50 overflow-y-auto">
-        <div className="p-4">
-          <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
-            <Folder className="h-4 w-4" />
+      {/* Left sidebar - File tree */}
+      <div className="w-48 flex-shrink-0 border-r bg-muted/50 overflow-y-auto">
+        <div className="p-2">
+          <h3 className="text-xs font-semibold mb-2 px-2 py-1 flex items-center gap-1">
+            <Folder className="h-3 w-3" />
             Files
           </h3>
-          <div className="space-y-1">
-            {files.map((filename) => (
-              <button
-                key={filename}
-                onClick={() => setSelectedFile(filename)}
-                className={cn(
-                  "w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 hover:bg-accent",
-                  selectedFile === filename && "bg-accent",
-                )}
-              >
-                <File className="h-4 w-4" />
-                <span>
-                  {filename}
-                  {isFileEdited(filename) && <span className="text-orange-500">*</span>}
-                </span>
-              </button>
-            ))}
-          </div>
+          <FileTreeView
+            nodes={fileTree}
+            selectedFile={selectedFile}
+            onFileSelect={setSelectedFile}
+            isFileEdited={isFileEdited}
+            collapsedFolders={collapsedFolders}
+            onToggleFolder={handleToggleFolder}
+          />
         </div>
       </div>
 
