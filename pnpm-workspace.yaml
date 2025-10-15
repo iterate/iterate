@@ -11,7 +11,7 @@ minimumReleaseAgeExclude:
   - miniflare
   - wrangler
   - better-wait-until
-  - "cloudflare/sandbox"
+  - '@cloudflare/sandbox'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

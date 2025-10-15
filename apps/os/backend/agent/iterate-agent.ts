@@ -1,4 +1,3 @@
-import { type ExecEvent } from "@cloudflare/sandbox";
 import pMemoize from "p-suite/p-memoize";
 import { enableDebug } from "better-wait-until";
 import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
@@ -51,7 +50,6 @@ import {
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
-import { reallyWaitUntil } from "../utils/really-wait-until.ts";
 import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
@@ -1836,16 +1834,16 @@ export class IterateAgent<
       // Run exec
       // ------------------------------------------------------------------------
 
-      // Run the exec command
+      // Run the exec command in streaming mode
       const commandExec = input.command;
-
       const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-        timeout: 360 * 1000, // 360 seconds total timeout
+        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
       });
       let stdout = "";
       let stderr = "";
       const stream = resultStream[Symbol.asyncIterator]();
 
+      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
       let sandboxHealthy = true;
       const interval = setInterval(async () => {
         try {
@@ -1858,11 +1856,12 @@ export class IterateAgent<
           console.error("Error renewing activity timeout", err);
         }
       }, 5000);
+
+      // try finallyblock to close the interval
       try {
-        let e: Promise<IteratorResult<ExecEvent, any>> | undefined;
         while (true) {
           if (!sandboxHealthy) {
-            console.log("Sandbox is not healthy, exiting");
+            console.warn("Sandbox is not healthy, exiting");
             return {
               success: false,
               message: "Sandbox crashed after completing this work",
@@ -1871,22 +1870,24 @@ export class IterateAgent<
               exitCode: 1,
             };
           }
-          const timeout = new Promise<"TIMEOUT">((resolve) => {
+
+          const getNextStreamEventTimeout = new Promise<"TIMEOUT">((resolve) => {
             setTimeout(() => {
               resolve("TIMEOUT");
-            }, 10000);
+            }, 260_000); // 260 seconds is slightly longer than the Bun Server idle timeout that Sandbox uses
+            // if we dont get an update from the stream within 260 seconds, bun servers the connection and the next promise will never resolve
           });
-          if (!e) {
-            e = stream.next();
-          }
 
-          const result = await Promise.race([e, timeout]);
+          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
           if (result === "TIMEOUT") {
-            console.log("Exec timeout, looping");
-            continue;
+            return {
+              message: "The connection to codex timed out",
+              success: false,
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
           }
-          // have to reset e
-          e = undefined;
           if (result.done) {
             console.log("Exec readable exhausted without complete event", {
               input,
