@@ -7,10 +7,20 @@ import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
 import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { useTheme } from "next-themes";
-import { ChevronDown, ChevronRight, File, Folder } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  File,
+  FileCode,
+  FileJson,
+  FileText,
+  Braces,
+  Settings,
+} from "lucide-react";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/utils.ts";
 import { useTRPC } from "../../lib/trpc.ts";
+import { IterateLetterI } from "../../components/ui/iterate-logos.tsx";
 
 interface FileTreeNode {
   name: string;
@@ -78,6 +88,37 @@ function CodeEditor({ value, onChange, language }: CodeEditorProps) {
   }, [value]);
 
   return <div ref={containerRef} className="h-full" />;
+}
+
+// Get appropriate icon for file type
+function getFileIcon(filename: string) {
+  // Special case for iterate.config.ts
+  if (filename === "iterate.config.ts") {
+    return <IterateLetterI className="h-3 w-3 flex-shrink-0" />;
+  }
+
+  const extension = filename.split(".").pop()?.toLowerCase();
+
+  switch (extension) {
+    case "md":
+    case "markdown":
+      return <FileText className="h-3 w-3 flex-shrink-0 text-blue-500" />;
+    case "ts":
+    case "tsx":
+      return <FileCode className="h-3 w-3 flex-shrink-0 text-blue-600" />;
+    case "js":
+    case "jsx":
+      return <FileCode className="h-3 w-3 flex-shrink-0 text-yellow-500" />;
+    case "json":
+      return <FileJson className="h-3 w-3 flex-shrink-0 text-yellow-600" />;
+    case "yaml":
+    case "yml":
+      return <Braces className="h-3 w-3 flex-shrink-0 text-purple-500" />;
+    case "toml":
+      return <Settings className="h-3 w-3 flex-shrink-0 text-gray-500" />;
+    default:
+      return <File className="h-3 w-3 flex-shrink-0" />;
+  }
 }
 
 // Build a tree structure from flat file paths
@@ -191,13 +232,9 @@ function FileTreeView({
                   ) : (
                     <span className="w-3" />
                   )}
-                  <Folder className="h-3 w-3 flex-shrink-0" />
                 </>
               ) : (
-                <>
-                  <span className="w-3" />
-                  <File className="h-3 w-3 flex-shrink-0" />
-                </>
+                <>{getFileIcon(node.name)}</>
               )}
               <span className="truncate flex-1">
                 {node.name}
@@ -321,10 +358,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
       {/* Left sidebar - File tree */}
       <div className="w-48 flex-shrink-0 border-r bg-muted/50 overflow-y-auto">
         <div className="p-2">
-          <h3 className="text-xs font-semibold mb-2 px-2 py-1 flex items-center gap-1">
-            <Folder className="h-3 w-3" />
-            Files
-          </h3>
+          <h3 className="text-xs font-semibold mb-2 px-2 py-1">Files</h3>
           <FileTreeView
             nodes={fileTree}
             selectedFile={selectedFile}
