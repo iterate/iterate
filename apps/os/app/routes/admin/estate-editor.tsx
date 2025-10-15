@@ -191,10 +191,16 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
               </span>
               <Button
                 onClick={handleSave}
-                disabled={!hasUnsavedChanges || saveFileMutation.isPending}
+                disabled={
+                  !hasUnsavedChanges ||
+                  saveFileMutation.isPending ||
+                  getRepoFileSystemQuery.isPending
+                }
                 size="sm"
               >
-                {saveFileMutation.isPending ? "Saving..." : "Save"}
+                {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+                  ? "Saving..."
+                  : "Save"}
               </Button>
             </div>
             <div className="flex-1 overflow-hidden">

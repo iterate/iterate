@@ -197,11 +197,13 @@ export const estateRouter = router({
       };
     }),
 
-  updateRepo: publicProcedure.input(CreateCommitOnBranchInput).mutation(async ({ input, ctx }) => {
-    const { Octokit } = await import("octokit");
-    const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
-    const result = await github.graphql(
-      `
+  updateRepo: protectedProcedure
+    .input(CreateCommitOnBranchInput)
+    .mutation(async ({ input, ctx }) => {
+      const { Octokit } = await import("octokit");
+      const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
+      const result = await github.graphql(
+        `
         mutation ($input: CreateCommitOnBranchInput!) {
           createCommitOnBranch(input: $input) {
             commit {
@@ -210,10 +212,11 @@ export const estateRouter = router({
           }
         }
       `,
-      { input },
-    );
-  }),
-  getRepoFilesystem: publicProcedure
+        { input },
+      );
+      return result;
+    }),
+  getRepoFilesystem: protectedProcedure
     .input(
       z.object({
         repositoryNameWithOwner: z.string(),
