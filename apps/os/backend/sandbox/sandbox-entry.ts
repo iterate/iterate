@@ -80,7 +80,6 @@ function parseInstallDependenciesArgs(): { sessionDir: string } {
   }
 }
 
-
 /**
  * Parse command line arguments, expects JSON string containing args as the second argument
  */
@@ -330,8 +329,6 @@ async function subcommandInit(args: InitArgs) {
           process.exit(1);
         }
       }
-
-
     }
   } catch (error) {
     // Catch any unexpected errors
