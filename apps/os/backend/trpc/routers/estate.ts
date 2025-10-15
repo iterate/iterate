@@ -1,3 +1,4 @@
+import * as fflate from "fflate";
 import { z } from "zod";
 import { eq, desc, and } from "drizzle-orm";
 import {
@@ -5,6 +6,7 @@ import {
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
+  publicProcedure,
 } from "../trpc.ts";
 import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
 import {
@@ -182,6 +184,33 @@ export const estateRouter = router({
         updatedAt: updatedEstate[0].updatedAt,
       };
     }),
+
+  getRepoFilesystem: publicProcedure.query(async () => {
+    const zipballResponse = await fetch(
+      `https://api.github.com/repos/iterate/estate-template/zipball/main`,
+      {
+        headers: {
+          Accept: "application/vnd.github+json",
+          "User-Agent": "Iterate OS",
+        },
+      },
+    );
+
+    if (!zipballResponse.ok) {
+      throw new Error(`Failed to fetch zipball: ${zipballResponse.statusText}`);
+    }
+
+    const zipball = await zipballResponse.arrayBuffer();
+    const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+
+    const filesystem: Record<string, string> = Object.fromEntries(
+      Object.entries(unzipped).map(([filename, data]) => [
+        filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+        fflate.strFromU8(data),
+      ]),
+    );
+    return filesystem;
+  }),
 
   // Get builds for an estate
   getBuilds: estateProtectedProcedure

@@ -1,0 +1,290 @@
+import * as fflate from "fflate/browser";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useState, useEffect, useRef } from "react";
+import { basicSetup, EditorView } from "codemirror";
+import { javascript } from "@codemirror/lang-javascript";
+import { markdown } from "@codemirror/lang-markdown";
+import { search, searchKeymap } from "@codemirror/search";
+import { keymap } from "@codemirror/view";
+import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
+import { useTheme } from "next-themes";
+import { File, Folder } from "lucide-react";
+import { Button } from "../../components/ui/button.tsx";
+import { cn } from "../../lib/utils.ts";
+import { useTRPC } from "../../lib/trpc.ts";
+
+interface CodeEditorProps {
+  value: string;
+  onChange: (value: string) => void;
+  language: "typescript" | "markdown";
+}
+
+function CodeEditor({ value, onChange, language }: CodeEditorProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const viewRef = useRef<EditorView | null>(null);
+  const { resolvedTheme } = useTheme();
+
+  useEffect(() => {
+    if (!containerRef.current) {
+      return;
+    }
+
+    viewRef.current?.destroy();
+
+    const lang = language === "typescript" ? javascript({ typescript: true }) : markdown();
+    const codeMirrorTheme = resolvedTheme === "dark" ? vsCodeDark : vsCodeLight;
+
+    const view = new EditorView({
+      doc: value,
+      extensions: [
+        basicSetup,
+        codeMirrorTheme,
+        lang,
+        search({ top: true }),
+        keymap.of(searchKeymap),
+        EditorView.updateListener.of((update) => {
+          if (update.docChanged) {
+            onChange(update.state.doc.toString());
+          }
+        }),
+        EditorView.contentAttributes.of({ tabindex: "0" }),
+      ],
+      parent: containerRef.current,
+    });
+
+    viewRef.current = view;
+
+    return () => {
+      viewRef.current?.destroy();
+      viewRef.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- value and onChange excluded to avoid recreating editor on every change
+  }, [language, resolvedTheme]);
+
+  // Update document when value changes externally
+  useEffect(() => {
+    if (viewRef.current && viewRef.current.state.doc.toString() !== value) {
+      viewRef.current.dispatch({
+        changes: { from: 0, to: viewRef.current.state.doc.length, insert: value },
+      });
+    }
+  }, [value]);
+
+  return <div ref={containerRef} className="h-full" />;
+}
+
+interface IDEProps {
+  filesystem: Record<string, string>;
+}
+
+function IDE({ filesystem }: IDEProps) {
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [fileContents, setFileContents] = useState<Record<string, string>>(filesystem);
+
+  // Update file contents when filesystem prop changes
+  useEffect(() => {
+    setFileContents(filesystem);
+    // If current file doesn't exist in new filesystem, reset selection
+    if (selectedFile && !(selectedFile in filesystem)) {
+      setSelectedFile(null);
+    }
+  }, [filesystem, selectedFile]);
+
+  const saveFileMutation = useMutation({
+    mutationFn: async ({ path, content }: { path: string; content: string }) => {
+      // Later: use GitHub API to save
+      console.log("pretending to save", { path, content });
+      return { success: true };
+    },
+  });
+
+  const files = Object.keys(fileContents).sort();
+  const currentContent = selectedFile ? fileContents[selectedFile] : "";
+
+  // Check if a file has been edited
+  const isFileEdited = (filename: string): boolean => {
+    return fileContents[filename] !== filesystem[filename];
+  };
+
+  // Check if current file has unsaved changes
+  const hasUnsavedChanges = selectedFile ? isFileEdited(selectedFile) : false;
+
+  const handleContentChange = (newContent: string) => {
+    if (selectedFile) {
+      setFileContents((prev) => ({
+        ...prev,
+        [selectedFile]: newContent,
+      }));
+    }
+  };
+
+  const handleSave = () => {
+    if (selectedFile) {
+      saveFileMutation.mutate({
+        path: selectedFile,
+        content: fileContents[selectedFile],
+      });
+    }
+  };
+
+  const getLanguage = (filename: string): "typescript" | "markdown" => {
+    if (filename.endsWith(".md")) return "markdown";
+    return "typescript";
+  };
+
+  return (
+    <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden">
+      {/* Left sidebar - File list */}
+      <div className="w-64 border-r bg-muted/50 overflow-y-auto">
+        <div className="p-4">
+          <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
+            <Folder className="h-4 w-4" />
+            Files
+          </h3>
+          <div className="space-y-1">
+            {files.map((filename) => (
+              <button
+                key={filename}
+                onClick={() => setSelectedFile(filename)}
+                className={cn(
+                  "w-full text-left px-3 py-2 rounded-md text-sm flex items-center gap-2 hover:bg-accent",
+                  selectedFile === filename && "bg-accent",
+                )}
+              >
+                <File className="h-4 w-4" />
+                <span>
+                  {filename}
+                  {isFileEdited(filename) && <span className="text-orange-500">*</span>}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Main panel - Editor */}
+      <div className="flex-1 flex flex-col">
+        {selectedFile ? (
+          <>
+            <div className="border-b p-3 flex items-center justify-between bg-background">
+              <span className="text-sm font-medium">
+                {selectedFile}
+                {hasUnsavedChanges && <span className="text-orange-500">*</span>}
+              </span>
+              <Button
+                onClick={handleSave}
+                disabled={!hasUnsavedChanges || saveFileMutation.isPending}
+                size="sm"
+              >
+                {saveFileMutation.isPending ? "Saving..." : "Save"}
+              </Button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              <CodeEditor
+                value={currentContent}
+                onChange={handleContentChange}
+                language={getLanguage(selectedFile)}
+              />
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+            Select a file to edit
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Hook to get estate filesystem
+// Later: use GitHub API to fetch actual estate files
+function useEstateFilesystem() {
+  const trpc = useTRPC();
+  return useSuspenseQuery(trpc.estate.getRepoFilesystem.queryOptions());
+  return useSuspenseQuery({
+    queryKey: ["estate-filesystem"],
+    queryFn: async () => {
+      const zipballResponse = await fetch(
+        `https://api.github.com/repos/iterate/estate-template/zipball/main`,
+      );
+      const zipball = await zipballResponse.arrayBuffer();
+      const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+      // Hardcoded filesystem for now
+      const filesystem: Record<string, string> = Object.fromEntries(
+        Object.entries(unzipped).map(([filename, data]) => [filename, fflate.strFromU8(data)]),
+      ) || {
+        "README.md": `# Estate Template
+
+This is a template estate for iterate.
+
+## Getting Started
+
+1. Clone this estate
+2. Customize the rules in the \`rules/\` directory
+3. Update \`iterate.config.ts\` with your configuration
+
+## Structure
+
+- \`rules/\` - Markdown files containing context rules
+- \`iterate.config.ts\` - Configuration file for iterate
+`,
+        "iterate.config.ts": `import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";
+
+const config = defineConfig({
+  contextRules: [
+    // You can use "matchers" to conditionally apply rules
+    // For example to only be active when certain MCP connections are present
+    {
+      key: "how-we-use-linear",
+      prompt: "Tag any new issues with the label \`iterate-tutorial\`",
+      match: matchers.hasMCPConnection("linear"),
+    },
+
+    // Or when a certain user is on a thread
+    {
+      key: "jonas-rules",
+      prompt: "When Jonas is on a thread, remind him to lock in",
+      match: matchers.hasParticipant("jonas"),
+    },
+
+    // You can also use mathcers.and, matchers.or and matchers.not
+    {
+      key: "jonas-in-the-evening",
+      prompt: "It's between 22:00 - 06:00, remind jonas to go to sleep",
+      match: matchers.and(
+        matchers.hasParticipant("jonas"),
+        matchers.timeWindow({
+          timeOfDay: { start: "22:00", end: "06:00" },
+        }),
+      ),
+    },
+    // This file is "just typescript", so you can do whatever you want
+    // e.g. structure your rules in markdown, too, and use a helper to load them
+    ...contextRulesFromFiles("rules/**/*.md"),
+  ],
+});
+export default config;
+`,
+      };
+
+      return filesystem;
+    },
+  }) as never;
+}
+
+export default function EstateEditor() {
+  const { data: filesystem } = useEstateFilesystem();
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        <h1 className="text-2xl font-bold">Estate Editor</h1>
+        <p className="text-muted-foreground">
+          Edit estate configuration files. Changes will be saved to GitHub.
+        </p>
+      </div>
+      <IDE filesystem={filesystem} />
+    </div>
+  );
+}
