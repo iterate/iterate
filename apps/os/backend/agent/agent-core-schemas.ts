@@ -142,6 +142,8 @@ export const LocalFunctionToolCallEvent = z.object({
   ...localFunctionToolCallEventFields,
 });
 
+export const ParticipantRole = z.enum(["member", "admin", "owner", "guest", "external"]);
+
 export const ApprovalKey = z.string().brand("ApprovalKey");
 export type ApprovalKey = z.infer<typeof ApprovalKey>;
 const toolCallApprovalRequestedEventFields = {
@@ -163,13 +165,17 @@ const toolCallApprovalEventFields = {
   data: z.object({
     approvalKey: ApprovalKey,
     approved: z.boolean(),
-    approvedBy: z.string(),
+    approvedBy: z.object({
+      userId: z.string(),
+      orgRole: ParticipantRole.optional(),
+    }),
   }),
 };
 export const ToolCallApprovalEvent = z.object({
   ...agentCoreBaseEventFields,
   ...toolCallApprovalEventFields,
 });
+export type ToolCallApprovalEvent = z.infer<typeof ToolCallApprovalEvent>;
 
 // CORE:LLM_REQUEST_START
 const llmRequestStartEventFields = {
@@ -361,7 +367,7 @@ const participantJoinedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -400,7 +406,7 @@ const participantMentionedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -563,7 +569,7 @@ export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
 
 export type ParticipantMentionedEvent = z.infer<typeof ParticipantMentionedEvent>;
 
-export type ToolCallApprovalStatus = {
+export type ToolCallApprovalState = {
   toolCallId: string;
   status: "pending" | "approved" | "rejected";
   toolName: string;
@@ -598,7 +604,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
   contextRules: Record<string, ContextRule>;
 
-  toolCallApprovals: Record<ApprovalKey, ToolCallApprovalStatus>;
+  toolCallApprovals: Record<ApprovalKey, ToolCallApprovalState>;
 
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
