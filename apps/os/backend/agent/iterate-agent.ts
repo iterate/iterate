@@ -1772,7 +1772,17 @@ export class IterateAgent<
       const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
       // Ensure that the session directory exists
       const sessionDir = `/tmp/session-${sessionId}`;
-      await sandbox.mkdir(sessionDir, { recursive: true });
+      try {
+        await sandbox.mkdir(sessionDir, { recursive: true });
+      } catch (err) {
+        logger.error("Error creating session directory", err);
+        const { success, exitCode } = await sandbox.listFiles(sessionDir);
+        if (success && exitCode === 0) {
+          // continue with the session
+        } else {
+          throw new Error("Error creating session directory");
+        }
+      }
 
       // Create an isolated session
       const sandboxSession = await sandbox.createSession({
