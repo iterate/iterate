@@ -1,3 +1,4 @@
+import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import pMemoize from "p-suite/p-memoize";
 import { enableDebug } from "better-wait-until";
 import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
@@ -1870,20 +1871,19 @@ export class IterateAgent<
             };
           }
 
-          // Create timeout promise and capture the timeout ID
-          // Promise constructor executes synchronously, so timeoutId is guaranteed to be set
-          let timeoutId!: ReturnType<typeof setTimeout>;
-          const getNextStreamEventTimeout = new Promise<"TIMEOUT">((resolve) => {
-            timeoutId = setTimeout(() => {
-              resolve("TIMEOUT");
-            }, 260_000); // 260 seconds is slightly longer than the Bun Server idle timeout that Sandbox uses
-            // if we dont get an update from the stream within 260 seconds, bun servers the connection and the next promise will never resolve
-          });
+          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
+          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
+          // an event we probably will never get one but we don't get an error either from
+          // sandbox sdk
+          const abortController = new AbortController();
+          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
+            signal: abortController.signal,
+          }).then(() => "TIMEOUT");
 
           const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
 
-          // Clear the timeout regardless of which promise won the race
-          clearTimeout(timeoutId);
+          // Clean up the timeout regardless of which promise won the race
+          abortController.abort();
 
           if (result === "TIMEOUT") {
             return {
