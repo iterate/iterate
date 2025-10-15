@@ -1,10 +1,9 @@
-import type { KnownBlock, SlackEvent } from "@slack/types";
+import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray, lt } from "drizzle-orm";
 import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
-import { match, P } from "ts-pattern";
 import { env as _env, waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
