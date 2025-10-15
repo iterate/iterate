@@ -1,4 +1,5 @@
-# include AGENTS.md in here (override default gitignore)
+# The iterate agent uses the committed AGENTS.md to know what to do when working on your estate repository.
+# Do not remove AGENTS.md from git.
 !AGENTS.md
 
 node_modules/
