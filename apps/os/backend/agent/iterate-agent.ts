@@ -1,5 +1,7 @@
+import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import pMemoize from "p-suite/p-memoize";
-import { Agent as CloudflareAgent } from "agents";
+import { enableDebug } from "better-wait-until";
+import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
@@ -49,6 +51,7 @@ import {
 import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
+import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
@@ -80,6 +83,7 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
+import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -262,6 +266,14 @@ export class IterateAgent<
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+
+    // disabling broadcast functionality because it breaks with better-wait-until keep alive websockets
+    const newBroadcast = (_msg: string, _without: string[] | undefined) => {
+      logger.info("web socket broadcast is a no op for now");
+    };
+    this.broadcast = newBroadcast;
+    this.constructor.prototype.broadcast = newBroadcast;
+
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
     this.mcpManagerCache = createMCPManagerCache();
@@ -374,7 +386,9 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        void fn();
+        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
+        enableDebug();
+        this.ctx.waitUntil(fn());
       },
 
       getOpenAIClient: async () => {
@@ -1663,6 +1677,31 @@ export class IterateAgent<
     });
   }
 
+  async execCodex(input: Inputs["execCodex"]) {
+    const instructions: string = input.command;
+
+    const instructionsFilePath = `/tmp/instructions-${R.randomInteger(0, 99999)}.txt`;
+    const newInput: Inputs["exec"] = {
+      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
+      files: [
+        {
+          path: instructionsFilePath,
+          content: instructions,
+        },
+      ],
+      env: {
+        // this tells codex to use the openai api key
+        // setting OPENAI_API_KEY is not enough, because codex will not use it
+        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
+      },
+    };
+    const result = await this.exec(newInput);
+    // TODO: filter the json here and make it token efficient
+    return {
+      ...result,
+    };
+  }
+
   async exec(input: Inputs["exec"]) {
     // ------------------------------------------------------------------------
     // Get config
@@ -1725,13 +1764,14 @@ export class IterateAgent<
     // Retrieve the sandbox
     const { getSandbox } = await import("@cloudflare/sandbox");
 
-    const sandboxId = `agent-sandbox-${estateId}`;
+    // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
+      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
       // Ensure that the session directory exists
-      const sessionId = estateId;
-      const sessionDir = `/tmp/session-${estateId}`;
+      const sessionDir = `/tmp/session-${sessionId}`;
       await sandbox.mkdir(sessionDir, { recursive: true });
 
       // Create an isolated session
@@ -1739,6 +1779,9 @@ export class IterateAgent<
         id: sessionId,
         cwd: sessionDir,
         isolation: true,
+        env: {
+          ...input.env,
+        },
       });
 
       // Determine the checkout target and whether it's a commit hash
@@ -1756,31 +1799,154 @@ export class IterateAgent<
       // Escape the JSON string for shell
       const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
       // Init the sandbox (ignore any errors)
-      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-      const resultInit = await sandboxSession.exec(commandInit, {
+      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}' && node /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
+      using resultInit = await sandboxSession.exec(commandInit, {
         timeout: 360 * 1000, // 360 seconds total timeout
       });
       if (!resultInit.success) {
         logger.error(
-          "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+          "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
           resultInit,
         );
       }
+
+      if (input.command.length > 256) {
+        if (!input.files) {
+          input.files = [];
+        }
+        const commandId = R.randomInteger(0, 99999);
+        input.files.push({
+          path: `/tmp/command-id-${commandId}.sh`,
+          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
+        });
+        input.command = `bash /tmp/command-id-${commandId}.sh`;
+      }
+      // ------------------------------------------------------------------------
+      // Write files
+      // ------------------------------------------------------------------------
+      await Promise.all(
+        (input.files ?? []).map(async (file) => {
+          await sandboxSession.writeFile(file.path, file.content);
+        }),
+      );
 
       // ------------------------------------------------------------------------
       // Run exec
       // ------------------------------------------------------------------------
 
-      // Run the exec command
+      // Run the exec command in streaming mode
       const commandExec = input.command;
-      const _resultExec = await sandboxSession.exec(commandExec, {
-        timeout: 360 * 1000, // 360 seconds total timeout
+      const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
+        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
       });
-      if (!_resultExec.success) {
-        logger.error(`Error running \`${commandExec}\` in sandbox`, _resultExec);
-      }
+      let stdout = "";
+      let stderr = "";
+      const stream = resultStream[Symbol.asyncIterator]();
 
-      return _resultExec;
+      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
+      let sandboxHealthy = true;
+      const interval = setInterval(async () => {
+        try {
+          const state = await sandbox.getState();
+          if (state.status !== "healthy") {
+            sandboxHealthy = false;
+          }
+          await sandbox.renewActivityTimeout();
+        } catch (err) {
+          logger.error("Error renewing activity timeout", err);
+        }
+      }, 5000);
+
+      // try finallyblock to close the interval
+      try {
+        while (true) {
+          if (!sandboxHealthy) {
+            logger.warn("Sandbox is not healthy, exiting");
+            return {
+              success: false,
+              message: "Sandbox crashed after completing this work",
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
+          }
+
+          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
+          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
+          // an event we probably will never get one but we don't get an error either from
+          // sandbox sdk
+          const abortController = new AbortController();
+          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
+            signal: abortController.signal,
+          }).then(() => "TIMEOUT" as const);
+
+          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+
+          // Clean up the timeout regardless of which promise won the race
+          abortController.abort();
+
+          if (result === "TIMEOUT") {
+            return {
+              message: "The connection to codex timed out",
+              success: false,
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
+          }
+          if (result.done) {
+            logger.info("Exec readable exhausted without complete event", {
+              input,
+              stdout,
+              stderr,
+            });
+            // should not get here
+            return {
+              success: false,
+              message: "Result stream terminated before process completion signal was received",
+              stdout,
+              stderr,
+              exitCode: 1,
+            };
+          }
+          const event = result.value;
+          switch (event.type) {
+            case "stdout":
+              stdout += event.data;
+              logger.info(`Exec stdout: ${event.data}`);
+              break;
+            case "stderr":
+              stderr += event.data;
+              logger.info(`Exec stderr: ${event.data}`);
+              break;
+            case "error":
+              stderr += event.data;
+              logger.info(`Exec error: ${event.data}`);
+              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+              return {
+                message: "Execution errors occurred",
+                success: false,
+                stdout,
+                stderr,
+                exitCode: 1,
+              };
+            case "complete":
+              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
+              return {
+                message:
+                  event.exitCode === 0
+                    ? "Execution completed successfully"
+                    : "Execution completed with errors",
+                success: event.exitCode === 0,
+                stdout,
+                stderr,
+                exitCode: event.exitCode,
+              };
+          }
+        }
+      } finally {
+        clearInterval(interval);
+      }
     };
 
     // If sandbox is not ready, start it, and schedule exec after it boots up.
@@ -1793,49 +1959,18 @@ export class IterateAgent<
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
     if (sandboxState.status !== "healthy") {
-      void sandbox
-        .startAndWaitForPorts(3000) // default sandbox port
-        .then(execInSandbox)
-        .then((resultExec) => {
-          // Inject a tool call event that will be processed by the agent
-          // TODO: this doesn't work
-          (this as any).addEvent({
-            type: "CORE:LOCAL_FUNCTION_TOOL_CALL",
-            data: {
-              call: {
-                type: "function_call",
-                call_id: `exec-result-${Date.now()}`,
-                name: "sendSlackMessage",
-                arguments: JSON.stringify({
-                  text: `✅ Command executed:\n\`\`\`\n${resultExec.stdout || "(no output)"}\n\`\`\``,
-                  endTurn: true,
-                }),
-                status: "completed", // ← Changed from "pending"
-              },
-              result: {
-                success: resultExec.success,
-                output: {},
-              },
-            },
-            triggerLLMRequest: false,
-          });
-        });
-
-      // TODO: this doesn't work
-      return {
-        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "starting" } }],
-        __triggerLLMRequest: false,
-      };
+      await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
 
     if (!resultExec.success) {
+      logger.error("Exec failed", resultExec);
       return {
         success: false,
         error: dedent`
-          Command failed with exit code ${resultExec.exitCode}
+          Command failed with exit code ${resultExec.exitCode} and message "${resultExec.message}"
 
           stdout:
           ${resultExec.stdout || "(empty)"}
@@ -1847,10 +1982,12 @@ export class IterateAgent<
       };
     }
 
+    logger.info("Exec succeeded 1", resultExec);
     return {
       success: true,
       output: {
-        message: resultExec.stdout,
+        message: resultExec.message,
+        stdout: resultExec.stdout,
         stderr: resultExec.stderr,
       },
       __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
