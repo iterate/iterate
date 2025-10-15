@@ -65,6 +65,21 @@ function parseInitArgs(): InitArgs {
   }
 }
 
+function parseInstallDependenciesArgs(): { sessionDir: string } {
+  const jsonArg = process.argv[3];
+  if (!jsonArg) {
+    throw new Error("Missing JSON arguments");
+  }
+  try {
+    const parsed = JSON.parse(jsonArg) as { sessionDir: string };
+    return parsed;
+  } catch (error) {
+    throw new Error(
+      `Failed to parse JSON arguments: ${error instanceof Error ? error.message : "Unknown error"}`,
+    );
+  }
+}
+
 /**
  * Parse command line arguments, expects JSON string containing args as the second argument
  */
@@ -219,6 +234,10 @@ async function main() {
     const args = parseInitArgs();
     return subcommandInit(args);
   }
+  if (subCommand === "install-dependencies") {
+    const args = parseInstallDependenciesArgs();
+    return subcommandInstallDependencies(args);
+  }
   if (subCommand === "build") {
     const args = parseBuildArgs();
     return subcommandBuild(args);
@@ -316,6 +335,21 @@ async function subcommandInit(args: InitArgs) {
     const errorMsg = error instanceof Error ? error.message : "Unknown error occurred";
     console.error(`ERROR: ${errorMsg}`);
     process.exit(1);
+  }
+}
+async function subcommandInstallDependencies({ sessionDir }: { sessionDir: string }) {
+  // Install dependencies (optimized: prefer offline cache for speed)
+  console.error("=== Installing dependencies ===");
+  const installResult = await execCommand("pnpm", ["i", "--prefer-offline"], {
+    cwd: sessionDir,
+  });
+
+  if (installResult.exitCode !== 0) {
+    const errorMsg = "Failed to install dependencies";
+    const fullError = [installResult.stdout, installResult.stderr].filter(Boolean).join("\n");
+    console.error(`ERROR: ${errorMsg}`);
+    console.error(fullError);
+    process.exit(installResult.exitCode);
   }
 }
 
