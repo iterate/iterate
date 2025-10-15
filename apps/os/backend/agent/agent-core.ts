@@ -1447,7 +1447,8 @@ export class AgentCore<
       if (call.call_id.startsWith("injected-")) needsApproval = false;
 
       if (needsApproval) {
-        const approvalWrapper: (typeof tool.wrappers)[0] = (_next) => async (call, args) => {
+        const wrappers = tool.wrappers?.slice() || []; // slice to avoid mutating the original array
+        wrappers.push((_next) => async (call, args) => {
           const approvalKey = await this.deps.requestApprovalForToolCall!({
             toolName: call.name,
             args: args as {},
@@ -1475,8 +1476,8 @@ export class AgentCore<
               },
             ],
           };
-        };
-        tool = { ...tool, wrappers: [...tool.wrappers, approvalWrapper] };
+        });
+        tool = { ...tool, wrappers };
       }
 
       const result = await executeLocalFunctionTool(tool, call, args);
