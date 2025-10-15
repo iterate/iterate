@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import dedent from "dedent";
 import * as yaml from "yaml";
 import { SearchRequest } from "../default-tools.ts";
+import { tools } from "../../sdk/index.ts";
 import type { ContextRule } from "./context-schemas.ts";
 import { createDOToolFactory, type DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -10,7 +11,6 @@ import type { CoreAgentSlices, IterateAgentState } from "./iterate-agent.ts";
 import { onboardingAgentTools } from "./onboarding-agent-tools.ts";
 import { startSlackAgentInChannel } from "./start-slack-agent-in-channel.ts";
 import { matchers } from "./context.ts";
-import { tools } from "../../sdk/index.ts";
 
 type ToolsInterface = typeof onboardingAgentTools.$infer.interface;
 type Inputs = typeof onboardingAgentTools.$infer.inputTypes;
@@ -74,7 +74,6 @@ export class OnboardingAgent
           // iterateAgentTool.generateVideo(),
           onboardingAgentTool.updateResults(),
           onboardingAgentTool.getResults(),
-          
         ],
       },
       {
