@@ -464,22 +464,28 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       },
       onToolCallApproved: async ({ data, replayToolCall }) => {
         const messageTs = data.approvalKey;
-        await Promise.all([
-          this.removeSlackReaction({ messageTs, name: "+1" }),
-          this.removeSlackReaction({ messageTs, name: "-1" }),
-          ...(data.approved
-            ? [this.addSlackReaction({ messageTs, name: "no_entry" })]
-            : [
-                this.addSlackReaction({ messageTs, name: "eyes" }),
-                replayToolCall(), // this injects the tool call into the LLM inputs again
-              ]),
-        ]);
-        if (data.approved) {
+        const removeReactions = () =>
+          Promise.all([
+            this.removeSlackReaction({ messageTs, name: "+1" }),
+            this.removeSlackReaction({ messageTs, name: "-1" }),
+          ]);
+        if (!data.approved) {
           await Promise.all([
-            this.removeSlackReaction({ messageTs, name: "eyes" }),
-            this.addSlackReaction({ messageTs, name: "white_check_mark" }),
+            removeReactions(),
+            this.addSlackReaction({ messageTs, name: "no_entry" }),
           ]);
         }
+
+        await Promise.all([
+          removeReactions(),
+          this.addSlackReaction({ messageTs, name: "eyes" }),
+          replayToolCall(),
+        ])
+          .then(() => this.addSlackReaction({ messageTs, name: "white_check_mark" }))
+          .catch((e) =>
+            this.addSlackReaction({ messageTs, name: "x" }).then(() => Promise.reject(e)),
+          )
+          .finally(() => this.removeSlackReaction({ messageTs, name: "eyes" }));
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
