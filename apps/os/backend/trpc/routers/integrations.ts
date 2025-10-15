@@ -1139,4 +1139,229 @@ export const integrationsRouter = router({
         channels: result.channels || [],
       };
     }),
+
+  // Slack Channel Estate Override Management
+  slackChannelOverrides: {
+    // List all overrides for an estate
+    list: estateProtectedProcedure.query(async ({ ctx, input }) => {
+      const { estateId } = input;
+
+      const overrides = await ctx.db.query.slackChannelEstateOverride.findMany({
+        where: eq(schemas.slackChannelEstateOverride.estateId, estateId),
+        orderBy: (override, { desc }) => [desc(override.createdAt)],
+      });
+
+      // Enrich with channel names if available
+      const enrichedOverrides = await Promise.all(
+        overrides.map(async (override) => {
+          const channel = await ctx.db.query.slackChannel.findFirst({
+            where: and(
+              eq(schemas.slackChannel.externalId, override.slackChannelId),
+              eq(schemas.slackChannel.estateId, estateId),
+            ),
+          });
+
+          return {
+            ...override,
+            channelName: channel?.name || null,
+          };
+        }),
+      );
+
+      return enrichedOverrides;
+    }),
+
+    // Create a new channel override
+    create: estateProtectedProcedure
+      .input(
+        z.object({
+          slackChannelId: z.string().describe("The Slack channel ID to override"),
+          slackTeamId: z.string().describe("The Slack team/workspace ID"),
+          targetEstateId: z.string().describe("The estate ID to route this channel to"),
+          reason: z.string().optional().describe("Optional reason for the override"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { estateId, slackChannelId, slackTeamId, targetEstateId, reason } = input;
+
+        // Verify the target estate exists and user has access
+        const targetEstate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, targetEstateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!targetEstate || targetEstate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to the target estate",
+          });
+        }
+
+        // Create the override
+        const [override] = await ctx.db
+          .insert(schemas.slackChannelEstateOverride)
+          .values({
+            slackChannelId,
+            slackTeamId,
+            estateId: targetEstateId,
+            reason: reason || `Created by ${ctx.user.name || ctx.user.email}`,
+            metadata: {
+              createdBy: ctx.user.id,
+              createdByEmail: ctx.user.email,
+            },
+          })
+          .returning();
+
+        logger.info(
+          `Created Slack channel override: channel=${slackChannelId}, team=${slackTeamId} → estate=${targetEstateId}`,
+        );
+
+        return override;
+      }),
+
+    // Update an existing override
+    update: estateProtectedProcedure
+      .input(
+        z.object({
+          overrideId: z.string().describe("The override ID to update"),
+          targetEstateId: z.string().optional().describe("New estate ID to route to"),
+          reason: z.string().optional().describe("Updated reason"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { overrideId, targetEstateId, reason } = input;
+
+        // Fetch the existing override
+        const existing = await ctx.db.query.slackChannelEstateOverride.findFirst({
+          where: eq(schemas.slackChannelEstateOverride.id, overrideId),
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Override not found",
+          });
+        }
+
+        // Verify user has access to the current estate
+        const currentEstate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, existing.estateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!currentEstate || currentEstate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to this override",
+          });
+        }
+
+        // If changing target estate, verify access
+        if (targetEstateId) {
+          const targetEstate = await ctx.db.query.estate.findFirst({
+            where: eq(schemas.estate.id, targetEstateId),
+            with: {
+              organization: {
+                with: {
+                  members: {
+                    where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                  },
+                },
+              },
+            },
+          });
+
+          if (!targetEstate || targetEstate.organization.members.length === 0) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "You don't have access to the target estate",
+            });
+          }
+        }
+
+        // Update the override
+        const updateData: Partial<typeof schemas.slackChannelEstateOverride.$inferInsert> = {};
+        if (targetEstateId) updateData.estateId = targetEstateId;
+        if (reason) updateData.reason = reason;
+
+        const [updated] = await ctx.db
+          .update(schemas.slackChannelEstateOverride)
+          .set(updateData)
+          .where(eq(schemas.slackChannelEstateOverride.id, overrideId))
+          .returning();
+
+        logger.info(`Updated Slack channel override: ${overrideId}`);
+
+        return updated;
+      }),
+
+    // Delete an override
+    delete: estateProtectedProcedure
+      .input(
+        z.object({
+          overrideId: z.string().describe("The override ID to delete"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { overrideId } = input;
+
+        // Fetch the existing override
+        const existing = await ctx.db.query.slackChannelEstateOverride.findFirst({
+          where: eq(schemas.slackChannelEstateOverride.id, overrideId),
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Override not found",
+          });
+        }
+
+        // Verify user has access
+        const estate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, existing.estateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!estate || estate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to this override",
+          });
+        }
+
+        // Delete the override
+        await ctx.db
+          .delete(schemas.slackChannelEstateOverride)
+          .where(eq(schemas.slackChannelEstateOverride.id, overrideId));
+
+        logger.info(`Deleted Slack channel override: ${overrideId}`);
+
+        return { success: true };
+      }),
+  },
 });

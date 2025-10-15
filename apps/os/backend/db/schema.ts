@@ -164,6 +164,9 @@ export const estate = pgTable("estate", (t) => ({
   // Onboarding agent name. Semantics: if null, user is done with onboarding.
   // If not null, use that agent to get onboarding information from it.
   onboardingAgentName: t.text(),
+  // If set, this estate is using a Slack Connect trial channel
+  // This links to the Slack channel ID in iterate's workspace
+  slackTrialConnectChannelId: t.text(),
   ...withTimestamps,
 }));
 
@@ -180,6 +183,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
   slackChannels: many(slackChannel),
+  slackChannelEstateOverrides: many(slackChannelEstateOverride),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -307,6 +311,55 @@ export const slackChannelRelations = relations(slackChannel, ({ one }) => ({
     references: [estate.id],
   }),
 }));
+
+/**
+ * Override table for routing Slack channels to specific estates.
+ * When a webhook is received for a channel with an entry in this table,
+ * the specified estate will be used instead of the default team_id → estate mapping.
+ *
+ * Use cases:
+ * - Route specific channels from a workspace to different estates
+ * - Handle shared Slack Connect channels with custom routing
+ * - Testing and development with specific channel routing
+ */
+export const slackChannelEstateOverride = pgTable(
+  "slack_channel_estate_override",
+  (t) => ({
+    id: iterateId("sceo"),
+    // The Slack channel ID to override routing for
+    slackChannelId: t.text().notNull(),
+    // The Slack team/workspace ID (for context/validation)
+    slackTeamId: t.text().notNull(),
+    // The estate ID to route this channel to
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    // Optional: reason for the override (for documentation)
+    reason: t.text(),
+    // Optional: metadata (e.g., who created it, when, why)
+    metadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Ensure each channel can only have one override
+    uniqueIndex().on(t.slackChannelId, t.slackTeamId),
+    // Index for fast lookups by channel
+    index().on(t.slackChannelId),
+    // Index for finding all overrides for an estate
+    index().on(t.estateId),
+  ],
+);
+
+export const slackChannelEstateOverrideRelations = relations(
+  slackChannelEstateOverride,
+  ({ one }) => ({
+    estate: one(estate, {
+      fields: [slackChannelEstateOverride.estateId],
+      references: [estate.id],
+    }),
+  }),
+);
 
 export const organizationUserMembership = pgTable(
   "organization_user_membership",

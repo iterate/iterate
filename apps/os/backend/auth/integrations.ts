@@ -22,6 +22,7 @@ import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-sta
 export const SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
+  "channels:manage", // Required for conversations.create
   "channels:read",
   "chat:write",
   "chat:write.public",
@@ -40,7 +41,7 @@ export const SLACK_BOT_SCOPES = [
   "users:read",
   "users:read.email",
   "assistant:write",
-  "conversations.connect:write",
+  "conversations.connect:write", // Required for Slack Connect invitations
 ];
 
 export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];

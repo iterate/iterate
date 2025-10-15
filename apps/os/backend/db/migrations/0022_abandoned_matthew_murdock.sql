@@ -1,0 +1,1 @@
+ALTER TABLE "estate" ADD COLUMN "slack_trial_connect_channel_id" text;

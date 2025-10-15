@@ -1,12 +1,19 @@
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, inArray, notInArray } from "drizzle-orm";
 import {
   protectedProcedure,
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
 } from "../trpc.ts";
-import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
+import {
+  estate,
+  builds,
+  agentInstance,
+  iterateConfig,
+  organizationUserMembership,
+  organization,
+} from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
   getGithubInstallationToken,
@@ -128,14 +135,61 @@ export const estateRouter = router({
     // The estate is already validated and available in context
     const userEstate = ctx.estate;
 
+    // Fetch the organization
+    const org = await ctx.db.query.organization.findFirst({
+      where: eq(organization.id, userEstate.organizationId),
+    });
+
     return {
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+          }
+        : undefined,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
     };
+  }),
+
+  // List all estates the user has access to
+  listAllForUser: protectedProcedure.query(async ({ ctx }) => {
+    // Get all organizations the user is a member of (excluding external and guest roles)
+    const memberships = await ctx.db.query.organizationUserMembership.findMany({
+      where: and(
+        eq(organizationUserMembership.userId, ctx.user.id),
+        notInArray(organizationUserMembership.role, ["external", "guest"]),
+      ),
+      with: {
+        organization: {
+          with: {
+            estates: true,
+          },
+        },
+      },
+    });
+
+    // Flatten estates from all organizations
+    const estates = memberships.flatMap((membership) =>
+      membership.organization.estates.map((est) => ({
+        id: est.id,
+        name: est.name,
+        organizationId: est.organizationId,
+        organization: {
+          id: membership.organization.id,
+          name: membership.organization.name,
+        },
+        slackTrialConnectChannelId: est.slackTrialConnectChannelId,
+        createdAt: est.createdAt,
+        updatedAt: est.updatedAt,
+      })),
+    );
+
+    return estates;
   }),
 
   getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {

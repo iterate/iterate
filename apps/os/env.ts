@@ -28,6 +28,7 @@ export type CloudflareEnv = Env & {
   SLACK_CLIENT_ID: string;
   SLACK_CLIENT_SECRET: string;
   SLACK_SIGNING_SECRET: string;
+  SLACK_ITERATE_TEAM_ID: string;
   GITHUB_APP_CLIENT_ID: string;
   GITHUB_APP_CLIENT_SECRET: string;
   GITHUB_APP_PRIVATE_KEY: string;

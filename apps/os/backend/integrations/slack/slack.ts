@@ -25,7 +25,48 @@ type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
 
-async function slackTeamIdToEstateId({ db, teamId }: { db: DB; teamId: string }) {
+/**
+ * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
+ *
+ * Resolution order:
+ * 1. If channelId is provided, check slackChannelEstateOverride table first
+ * 2. Fall back to providerEstateMapping (team_id → estate_id)
+ *
+ * @param db - Database connection
+ * @param teamId - Slack team/workspace ID
+ * @param channelId - Optional Slack channel ID for channel-specific routing
+ * @returns Estate ID or null if not found
+ */
+async function slackTeamIdToEstateId({
+  db,
+  teamId,
+  channelId,
+}: {
+  db: DB;
+  teamId: string;
+  channelId?: string;
+}): Promise<string | null> {
+  // First, check for channel-specific override if channelId is provided
+  if (channelId) {
+    const overrideResult = await db.query.slackChannelEstateOverride.findFirst({
+      where: and(
+        eq(schema.slackChannelEstateOverride.slackChannelId, channelId),
+        eq(schema.slackChannelEstateOverride.slackTeamId, teamId),
+      ),
+      columns: {
+        estateId: true,
+      },
+    });
+
+    if (overrideResult) {
+      logger.info(
+        `Using channel override routing: channel=${channelId}, team=${teamId} → estate=${overrideResult.estateId}`,
+      );
+      return overrideResult.estateId;
+    }
+  }
+
+  // Fall back to default team_id → estate_id mapping
   const result = await db
     .select({
       estateId: schema.providerEstateMapping.internalEstateId,
@@ -224,10 +265,15 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  const [estateId, messageMetadata] = await Promise.all([
-    slackTeamIdToEstateId({ db, teamId: body.team_id }),
-    getMessageMetadata(body.event, db),
-  ]);
+  // Get message metadata first to extract the channel
+  const messageMetadata = await getMessageMetadata(body.event, db);
+
+  // Resolve estate ID, checking channel override first if we have a channel
+  const estateId = await slackTeamIdToEstateId({
+    db,
+    teamId: body.team_id,
+    channelId: messageMetadata.channel,
+  });
 
   if (!estateId) {
     // console.warn(
@@ -252,6 +298,7 @@ slackApp.post("/webhook", async (c) => {
           estateId,
           channelId: body.event.channel,
           botUserId,
+          teamId: body.team_id,
         }),
       );
     }
@@ -1043,6 +1090,7 @@ async function handleBotChannelJoin(params: {
   estateId: string;
   channelId: string;
   botUserId: string;
+  teamId: string;
 }) {
   const { db, estateId, channelId, botUserId } = params;
 

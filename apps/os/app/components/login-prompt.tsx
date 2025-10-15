@@ -1,8 +1,9 @@
-import { useRef, type ComponentPropsWithRef } from "react";
+import { useRef, useState, type ComponentPropsWithRef } from "react";
 import { cn } from "../lib/utils.ts";
 import { AnimatedBeam } from "./ui/animated-beam.tsx";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
-import { LoginProviders } from "./auth-components.tsx";
+import { Button } from "./ui/button.tsx";
+import { OnboardingModal } from "./onboarding-modal.tsx";
 
 function LogoBox({ className, children, ref }: ComponentPropsWithRef<"div">) {
   return (
@@ -19,6 +20,7 @@ function LogoBox({ className, children, ref }: ComponentPropsWithRef<"div">) {
 }
 
 export function LoginPrompt() {
+  const [showOnboardingModal, setShowOnboardingModal] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
   const div1Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
   const div2Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
@@ -160,11 +162,28 @@ export function LoginPrompt() {
             </div>
           </div>
 
-          <div className="w-full flex flex-col items-center space-y-3 pb-8 sm:pb-4 max-w-sm mx-auto">
-            <LoginProviders />
+          <div className="w-full flex flex-col items-center space-y-6 pb-8 sm:pb-4 max-w-sm mx-auto">
+            <div className="space-y-2 text-center">
+              <h1 className="text-4xl font-bold tracking-tight">
+                Hi! I am{" "}
+                <span className="inline-flex items-baseline rounded bg-[#1264a3]/10 dark:bg-[#1264a3]/20 px-1 py-0.5 text-[#1264a3] dark:text-[#1d9bd1] font-semibold">
+                  @iterate
+                </span>
+              </h1>
+              <p className="text-muted-foreground text-lg">AI agent that works in your Slack</p>
+            </div>
+            <Button
+              onClick={() => setShowOnboardingModal(true)}
+              size="lg"
+              className="w-full h-14 text-lg"
+            >
+              Get Started
+            </Button>
           </div>
         </div>
       </div>
+
+      <OnboardingModal open={showOnboardingModal} onOpenChange={setShowOnboardingModal} />
     </div>
   );
 }
