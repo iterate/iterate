@@ -22,7 +22,7 @@ const config = defineConfig({
         - Use the exec tool for running git, gh and to check the agent's work using simple read-only shell commands.
       `,
       tools: [tools.execCodex(), tools.exec()],
-      match: matchers.slackChannel("#agents-with-sandboxes"),
+      match: matchers.always(), // slackChannel("#general"),
     },
   ],
 });
