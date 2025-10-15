@@ -14,13 +14,13 @@ import { getAuth } from "../../auth/auth.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
 import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
-import { deleteUserAccount } from "./user.ts";
 import {
   createTrialSlackConnectChannel,
   emailToChannelName,
   getIterateSlackEstateId,
 } from "../../utils/trial-channel-setup.ts";
 import { env } from "../../../env.ts";
+import { deleteUserAccount } from "./user.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
