@@ -159,7 +159,7 @@ export const ToolCallApprovalRequestedEvent = z.object({
 });
 
 const toolCallApprovalEventFields = {
-  type: z.literal("CORE:TOOL_CALL_APPROVAL"),
+  type: z.literal("CORE:TOOL_CALL_APPROVED"),
   data: z.object({
     approvalKey: ApprovalKey,
     approved: z.boolean(),
@@ -563,6 +563,13 @@ export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
 
 export type ParticipantMentionedEvent = z.infer<typeof ParticipantMentionedEvent>;
 
+export type ToolCallApprovalStatus = {
+  toolCallId: string;
+  status: "pending" | "approved" | "rejected";
+  toolName: string;
+  args: unknown;
+};
+
 // ---------------------------------------------------------------------------
 //  Reduced State
 // ---------------------------------------------------------------------------
@@ -591,15 +598,7 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
   contextRules: Record<string, ContextRule>;
 
-  toolCallApprovals: Record<
-    ApprovalKey,
-    {
-      toolCallId: string;
-      status: "pending" | "approved" | "rejected";
-      toolName: string;
-      args: unknown;
-    }
-  >;
+  toolCallApprovals: Record<ApprovalKey, ToolCallApprovalStatus>;
 
   /**
    * These are fully valid OpenAI function tools that are ready to be used.

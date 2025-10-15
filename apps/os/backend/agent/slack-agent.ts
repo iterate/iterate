@@ -275,61 +275,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             );
             break;
           }
-
-          case "CORE:TOOL_CALL_APPROVAL": {
-            // todo: make this a dependency function, with a callback for injectToolCall
-            const { data } = event;
-            const found = this.agentCore.state.toolCallApprovals[data.approvalKey];
-            if (!found) {
-              logger.error(`Tool call approval not found for key: ${data.approvalKey}`);
-              break;
-            }
-
-            this.ctx.waitUntil(
-              Promise.resolve().then(async () => {
-                const messageTs = data.approvalKey;
-                await Promise.all([
-                  this.removeSlackReaction({ messageTs, name: "+1" }),
-                  this.removeSlackReaction({ messageTs, name: "-1" }),
-                ]);
-                if (!data.approved) {
-                  await this.updateSlackMessage({
-                    ts: messageTs,
-                    text: `Tool call ${found.toolName} was rejected`,
-                  });
-                  await this.addSlackReaction({ messageTs, name: "no_entry" });
-                  return;
-                }
-
-                const userMatches = match(found.args)
-                  .with({ impersonateUserId: data.approvedBy }, () => true)
-                  .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
-                  .otherwise(() => true); // no impersonateUserId, allow anybody to approve???
-
-                if (!userMatches) {
-                  await this.updateSlackMessage({
-                    ts: messageTs,
-                    text: `User is not allowed to approve tool call for ${found.toolName}`,
-                  });
-                  await this.addSlackReaction({ messageTs, name: "no_entry" });
-                  logger.info(
-                    `User ${data.approvedBy} is not allowed to approve tool call for ${found.toolName}`,
-                  );
-                  return;
-                }
-
-                await this.addSlackReaction({ messageTs, name: "eyes" });
-                // todo: handle async calls well
-                // todo: move this elsewhere! makes no sense for slack-agent to be responsible for injecting the tool call
-                await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
-                await Promise.all([
-                  this.removeSlackReaction({ messageTs, name: "eyes" }),
-                  this.addSlackReaction({ messageTs, name: "white_check_mark" }),
-                ]);
-              }),
-            );
-            break;
-          }
           case "MCP:OAUTH_REQUIRED": {
             const { oauthUrl, connectionKey, serverUrl } = event.data;
 
@@ -503,13 +448,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return value;
         }).trim();
 
-        const message = `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`;
-        const blocks = [{ type: "markdown", text: message }];
+        let message = `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`;
         if (prettyArgs !== "{}") {
-          blocks.push({ type: "mrkdwn", text: `Arguments:\n\n\`\`\`\n${prettyArgs}\`\`\`` });
+          message += `\n\nArguments:\n\n\`\`\`\n${prettyArgs}\`\`\``;
         }
 
-        const result = await this.sendSlackMessage({ blocks } as {} as { text: string });
+        const result = await this.sendSlackMessage({ text: message });
         if (!result.ts) throw new Error("Failed to send approval request message");
 
         // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
@@ -517,6 +461,49 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         await this.addSlackReaction({ messageTs: result.ts!, name: "-1" });
 
         return ApprovalKey.parse(result.ts);
+      },
+      onToolCallApproved: async (
+        data: Parameters<NonNullable<AgentCoreDeps["onToolCallApproved"]>>[0],
+      ) => {
+        const messageTs = data.approvalKey;
+        const found = data.found;
+        await Promise.all([
+          this.removeSlackReaction({ messageTs, name: "+1" }),
+          this.removeSlackReaction({ messageTs, name: "-1" }),
+        ]);
+        if (!data.approved) {
+          await this.updateSlackMessage({
+            ts: messageTs,
+            text: `Tool call ${found.toolName} was rejected`,
+          });
+          await this.addSlackReaction({ messageTs, name: "no_entry" });
+          return;
+        }
+
+        const userMatches = match(found.args)
+          .with({ impersonateUserId: data.approvedBy }, () => true)
+          .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
+          .otherwise(() => true); // no impersonateUserId, allow anybody to approve???
+
+        if (!userMatches) {
+          await this.updateSlackMessage({
+            ts: messageTs,
+            text: `User is not allowed to approve tool call for ${found.toolName}`,
+          });
+          await this.addSlackReaction({ messageTs, name: "no_entry" });
+          logger.info(
+            `User ${data.approvedBy} is not allowed to approve tool call for ${found.toolName}`,
+          );
+          return;
+        }
+
+        await this.addSlackReaction({ messageTs, name: "eyes" });
+        // todo: handle async calls well
+        await data.replayToolCall();
+        await Promise.all([
+          this.removeSlackReaction({ messageTs, name: "eyes" }),
+          this.addSlackReaction({ messageTs, name: "white_check_mark" }),
+        ]);
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
@@ -1128,7 +1115,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       const userInfo = await this.getUserInfo(slackEvent.user, botUserId);
       if (userInfo?.userId) {
         currentEvents.push({
-          type: "CORE:TOOL_CALL_APPROVAL",
+          type: "CORE:TOOL_CALL_APPROVED",
           data: {
             approvalKey: ApprovalKey.parse(slackEvent.item.ts),
             approved: slackEvent.reaction === "+1",

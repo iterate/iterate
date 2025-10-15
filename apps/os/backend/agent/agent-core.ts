@@ -39,6 +39,7 @@ import {
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
+  type ToolCallApprovalStatus,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
 import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
@@ -181,6 +182,13 @@ export interface AgentCoreDeps {
     args: JSONSerializable;
     toolCallId: string;
   }) => Promise<ApprovalKey>;
+  onToolCallApproved?: (payload: {
+    found: ToolCallApprovalStatus;
+    approvalKey: ApprovalKey;
+    approved: boolean;
+    approvedBy: string;
+    replayToolCall: () => Promise<void>;
+  }) => Promise<void>;
   /** Provided console instance */
   console: Console | TagLogger;
 }
@@ -330,7 +338,7 @@ export class AgentCore<
   }
 
   // Dependencies & slices ---------------------------------------------------
-  private readonly deps: MergedDepsForSlices<Slices>;
+  readonly deps: MergedDepsForSlices<Slices>;
   private readonly slices: Readonly<Slices>;
 
   private readonly _mutex = new Mutex();
@@ -1067,7 +1075,7 @@ export class AgentCore<
         break;
       }
 
-      case "CORE:TOOL_CALL_APPROVAL": {
+      case "CORE:TOOL_CALL_APPROVED": {
         const { data } = event;
         const found = next.toolCallApprovals[data.approvalKey];
         // next.triggerLLMRequest = true;

@@ -498,6 +498,24 @@ export class IterateAgent<
           void this.refreshContextRules();
         }
 
+        if (event.type === "CORE:TOOL_CALL_APPROVED") {
+          void Promise.resolve().then(async () => {
+            const { data } = event;
+            const found = this.agentCore.state.toolCallApprovals[data.approvalKey];
+            if (!found) {
+              logger.error(`Tool call approval not found for key: ${data.approvalKey}`);
+              return;
+            }
+            await this.agentCore.deps.onToolCallApproved?.({
+              ...data,
+              found,
+              replayToolCall: async () => {
+                await this.injectToolCall({ args: found.args as {}, toolName: found.toolName });
+              },
+            });
+          });
+        }
+
         void posthogClient().then((posthog) =>
           processPosthogAgentCoreEvent({
             posthog,
