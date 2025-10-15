@@ -1077,7 +1077,6 @@ export class AgentCore<
       case "CORE:TOOL_CALL_APPROVED": {
         const { data } = event;
         const found = next.toolCallApprovals[data.approvalKey];
-        // next.triggerLLMRequest = true;
         if (!found) {
           next.inputItems.push({
             type: "message" as const,
@@ -1430,7 +1429,7 @@ export class AgentCore<
       this.deps.console.error("tool", JSON.stringify(tool, null, 2));
       return { success: false, error: `Tool not found or not local: ${call.name}` };
     }
-    tool.wrappers ||= [];
+
     try {
       const args = JSON.parse(call.arguments || "{}");
 

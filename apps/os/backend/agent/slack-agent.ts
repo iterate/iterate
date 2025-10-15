@@ -462,53 +462,24 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
         return ApprovalKey.parse(result.ts);
       },
-      onToolCallApproved: async ({ data, state, replayToolCall }) => {
+      onToolCallApproved: async ({ data, replayToolCall }) => {
         const messageTs = data.approvalKey;
-        const [permalink] = await Promise.all([
-          this.slackAPI.chat.getPermalink({
-            channel: this.slackChannelId,
-            message_ts: messageTs,
-          }),
+        await Promise.all([
           this.removeSlackReaction({ messageTs, name: "+1" }),
           this.removeSlackReaction({ messageTs, name: "-1" }),
+          ...(data.approved
+            ? [this.addSlackReaction({ messageTs, name: "no_entry" })]
+            : [
+                this.addSlackReaction({ messageTs, name: "eyes" }),
+                replayToolCall(), // this injects the tool call into the LLM inputs again
+              ]),
         ]);
-        const approvalMessageRef = permalink.ok
-          ? `<${permalink.permalink}|Tool call for ${state.toolName}>`
-          : `Tool call for ${state.toolName}`;
-
-        if (!data.approved) {
-          await this.addSlackReaction({ messageTs, name: "no_entry" });
-          return;
-        }
-
-        const userMatches = match(state.args)
-          .with({ impersonateUserId: data.approvedBy.userId }, () => true)
-          .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
-          .otherwise(
-            () =>
-              data.approvedBy.orgRole === "admin" ||
-              data.approvedBy.orgRole === "owner" ||
-              data.approvedBy.orgRole === "member",
-          ); // no impersonateUserId, allow any member to approve???
-
-        if (!userMatches) {
+        if (data.approved) {
           await Promise.all([
-            this.sendSlackMessage({ text: `User is not allowed to approve ${approvalMessageRef}` }),
-            this.addSlackReaction({ messageTs, name: "no_entry" }),
+            this.removeSlackReaction({ messageTs, name: "eyes" }),
+            this.addSlackReaction({ messageTs, name: "white_check_mark" }),
           ]);
-          logger.info(
-            `User ${data.approvedBy} is not allowed to approve tool call for ${state.toolName}`,
-          );
-          return;
         }
-
-        await this.addSlackReaction({ messageTs, name: "eyes" });
-        // todo: handle async calls well
-        await replayToolCall();
-        await Promise.all([
-          this.removeSlackReaction({ messageTs, name: "eyes" }),
-          this.addSlackReaction({ messageTs, name: "white_check_mark" }),
-        ]);
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
@@ -1147,20 +1118,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error("Slack thread ID and channel ID must be strings");
     }
 
-    const { endTurn, ...rest } = input;
-    const sendInput = rest as Partial<typeof rest> & ({ text: string } | { blocks: KnownBlock[] });
+    const { endTurn, ...sendInput } = input;
 
-    const doUnfurl =
-      !!sendInput.text &&
-      shouldUnfurlSlackMessage({
-        text: sendInput.text,
-        unfurl: sendInput.unfurl,
-      });
+    const doUnfurl = shouldUnfurlSlackMessage({
+      text: sendInput.text,
+      unfurl: sendInput.unfurl,
+    });
 
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
-      ...(sendInput.text ? { text: sendInput.text } : ({ blocks: sendInput.blocks } as never)),
+      text: sendInput.text,
       // for some reason, I have to set both of these to the same value to get unfurling to stop
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
