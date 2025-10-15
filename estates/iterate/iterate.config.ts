@@ -20,6 +20,10 @@ const config = defineConfig({
           - don't worry about authentication for git and gh, this is already configured
         - Use execCodex tool to delegate tasks to a Codex agent running in the sandbox, this is your primary interface to your estate repository.
         - Use the exec tool for running git, gh and to check the agent's work using simple read-only shell commands.
+        - after edits: git status -sb; nl -ba file | sed -n to inspect exact lines that changed
+        - branch flow: git checkout -b <branch-name>; git add -A; git commit; git push -u origin <branch-name>
+        - if gh pr create fails, check branch exists remotely (gh pr list --head); push first
+        - following running codex tools, give the user a summary of what codex did, espescially decisions codex made and issues it found. Then an update with next steps for the user.
       `,
       tools: [tools.execCodex(), tools.exec()],
       match: matchers.always(), // slackChannel("#general"),
