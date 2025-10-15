@@ -87,7 +87,7 @@ function CodeEditor({ value, onChange, language }: CodeEditorProps) {
     }
   }, [value]);
 
-  return <div ref={containerRef} className="h-full" />;
+  return <div ref={containerRef} className="h-full overflow-auto" />;
 }
 
 // Get appropriate icon for file type
