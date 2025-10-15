@@ -1,7 +1,7 @@
 import { useState, useRef } from "react";
 import { Link } from "react-router";
 import { ArrowLeft, Upload, Link as LinkIcon, Info } from "lucide-react";
-import { unzipSync, strFromU8 } from "fflate";
+import * as fflate from "fflate/browser";
 import { Button } from "../components/ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { Input } from "../components/ui/input.tsx";
@@ -29,14 +29,14 @@ interface ParsedArchiveData {
 }
 
 function parseArchive(zipData: Uint8Array): ParsedArchiveData {
-  const unzipped = unzipSync(zipData);
+  const unzipped = fflate.unzipSync(zipData);
 
   const exportJsonData = unzipped["export.json"];
   if (!exportJsonData) {
     throw new Error("Archive does not contain export.json");
   }
 
-  const traceData: AgentTraceExport = JSON.parse(strFromU8(exportJsonData));
+  const traceData: AgentTraceExport = JSON.parse(fflate.strFromU8(exportJsonData));
 
   const fileBlobs = new Map<string, Blob>();
   for (const [filename, data] of Object.entries(unzipped)) {

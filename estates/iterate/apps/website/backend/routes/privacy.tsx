@@ -1,6 +1,6 @@
 import * as React from "react";
-import BlogLayout from "../components/BlogLayout.tsx";
-import LegalPage from "../components/LegalPage.tsx";
+import BlogLayout from "../components/blog-layout.tsx";
+import LegalPage from "../components/legal-page.tsx";
 
 export default function PrivacyPolicy() {
   return (

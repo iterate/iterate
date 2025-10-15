@@ -1,6 +1,6 @@
 import type { ReactElement } from "react";
 import { cn } from "../utils/cn.ts";
-import { TwitterIcon, LinkedInIcon } from "./Icons.tsx";
+import { TwitterIcon, LinkedInIcon } from "./icons.tsx";
 
 interface Social {
   x?: string;
