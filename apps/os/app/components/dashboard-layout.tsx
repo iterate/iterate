@@ -17,10 +17,13 @@ import {
   Bug,
   Puzzle,
 } from "lucide-react";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
+import { useMemo, useState } from "react";
+import { fromString } from "typeid-js";
+import { toast } from "sonner";
 import { authClient } from "../lib/auth-client.ts";
-import { useTRPC } from "../lib/trpc.ts";
+import { trpcClient, useTRPC } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
@@ -49,8 +52,20 @@ import {
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip.tsx";
-import { useImpersonation } from "./impersonate.tsx";
+import { useDebounce } from "../hooks/use-debounced.ts";
+import { cn } from "../lib/utils.ts";
 import { OrganizationSwitcher } from "./organization-switcher.tsx";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
+import { Input } from "./ui/input.tsx";
+import { Button } from "./ui/button.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog.tsx";
+import { AutoComplete } from "./autocomplete.tsx";
 
 const estateNavigation: NavigationItem[] = [
   { title: "Home", icon: HomeIcon, path: "" },
@@ -102,10 +117,210 @@ function BillingPortalLink({ item }: { item: NavigationItem }) {
   );
 }
 
+interface ImpersonationDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (type: "email" | "user_id" | "estate_id", value: string) => void;
+  isPending?: boolean;
+}
+
+function ImpersonationDialog({
+  open,
+  onOpenChange,
+  onSubmit,
+  isPending,
+}: ImpersonationDialogProps) {
+  const [value, setValue] = useState("");
+  const [type, setType] = useState<"email" | "user_id" | "estate_id">("email");
+
+  const trpc = useTRPC();
+  const debouncedValue = useDebounce(value, 500);
+
+  const emailUsersQuery = useQuery(
+    trpc.admin.searchUsersByEmail.queryOptions(
+      {
+        searchEmail: debouncedValue,
+      },
+      {
+        enabled: debouncedValue.length > 0 && type === "email",
+        initialData: [],
+      },
+    ),
+  );
+
+  const handleSubmit = () => {
+    if (!value.trim()) return;
+    onSubmit(type, value.trim());
+  };
+
+  const isValid = useMemo(() => {
+    if (type === "email") {
+      return emailUsersQuery.data?.some((user) => user.email === value);
+    }
+    if (type === "user_id") {
+      try {
+        fromString(value, "usr");
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (type === "estate_id") {
+      try {
+        fromString(value, "est");
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }, [value, type, emailUsersQuery.data]);
+
+  const handleOpenChange = (newOpen: boolean) => {
+    if (!newOpen) {
+      // Reset form when closing
+      setValue("");
+      setType("email");
+    }
+    onOpenChange(newOpen);
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={handleOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Impersonate another user</DialogTitle>
+          <DialogDescription>How you want to identify the user to impersonate</DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <Tabs
+            defaultValue="email"
+            value={type}
+            onValueChange={(value) => {
+              setType(value as "email" | "user_id" | "estate_id");
+              setValue("");
+            }}
+          >
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="email">By Email</TabsTrigger>
+              <TabsTrigger value="user_id">By User ID</TabsTrigger>
+              <TabsTrigger value="estate_id">By Estate ID</TabsTrigger>
+            </TabsList>
+            <TabsContent value="email" className="mt-4">
+              <div className="w-full">
+                <AutoComplete
+                  items={emailUsersQuery.data?.map((user) => ({
+                    value: user.email,
+                    label: user.email,
+                  }))}
+                  placeholder="Start typing user's email"
+                  emptyMessage="No users found"
+                  isLoading={emailUsersQuery.isPending}
+                  selectedValue={value}
+                  onSelectedValueChange={(value) => setValue(value)}
+                  searchValue={value}
+                  onSearchValueChange={(value) => setValue(value)}
+                />
+              </div>
+            </TabsContent>
+            <TabsContent value="user_id" className="mt-4">
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="usr_xxxxxxxxxxxxxxxxxxxxxxxx"
+                className={cn({
+                  "border-destructive": value.length > 0 && !isValid,
+                })}
+                aria-invalid={value.length > 0 && !isValid}
+                disabled={isPending}
+              />
+            </TabsContent>
+            <TabsContent value="estate_id" className="mt-4">
+              <Input
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="est_xxxxxxxxxxxxxxxxxxxxxxxx"
+                className={cn({
+                  "border-destructive": value.length > 0 && !isValid,
+                })}
+                aria-invalid={value.length > 0 && !isValid}
+                disabled={isPending}
+              />
+            </TabsContent>
+          </Tabs>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
+              Cancel
+            </Button>
+            <Button onClick={handleSubmit} disabled={!isValid || isPending}>
+              {isPending ? "Impersonating..." : "Impersonate"}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+async function resolveImpersonation(type: "email" | "user_id" | "estate_id", value: string) {
+  if (type === "email") {
+    const user = await trpcClient.admin.findUserByEmail.query({ email: value });
+    if (!user) {
+      throw new Error("User not found");
+    }
+    return user.id;
+  }
+  if (type === "user_id") {
+    return value;
+  }
+  if (type === "estate_id") {
+    const estate = await trpcClient.admin.getEstateOwner.query({ estateId: value });
+    if (!estate) {
+      throw new Error("Estate not found");
+    }
+    return estate.userId;
+  }
+  throw new Error("Invalid type");
+}
+
 function UserSwitcher() {
+  const [impersonationDialogOpen, setImpersonationDialogOpen] = useState(false);
   const trpc = useTRPC();
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const impersonation = useImpersonation();
+  const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+
+  const startImpersonation = useMutation({
+    mutationFn: async (params: { type: "email" | "user_id" | "estate_id"; value: string }) => {
+      const userId = await resolveImpersonation(params.type, params.value);
+      await authClient.admin.impersonateUser({ userId });
+    },
+    onSuccess: () => {
+      window.location.reload();
+    },
+    onError: (error) => {
+      toast.error(
+        `Failed to impersonate user: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  });
+
+  const stopImpersonation = useMutation({
+    mutationFn: async () => {
+      await authClient.admin.stopImpersonating();
+    },
+    onSuccess: () => {
+      window.location.reload();
+    },
+    onError: (error) => {
+      toast.error(
+        `Failed to stop impersonation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+  });
+
+  const handleImpersonationSubmit = (type: "email" | "user_id" | "estate_id", value: string) => {
+    startImpersonation.mutate({ type, value });
+  };
 
   const handleLogout = async () => {
     try {
@@ -113,7 +328,6 @@ function UserSwitcher() {
       await authClient.signOut({
         fetchOptions: {
           onSuccess: () => {
-            // Redirect to login page after successful logout
             window.location.href = "/login";
           },
         },
@@ -135,7 +349,9 @@ function UserSwitcher() {
       .slice(0, 2);
   };
 
-  const tooltipContent = impersonation.impersonatedBy ? `Impersonating ${user.email}` : undefined;
+  const tooltipContent = impersonationInfo.impersonatedBy
+    ? `Impersonating ${user.email}`
+    : undefined;
 
   return (
     <SidebarMenu>
@@ -147,7 +363,7 @@ function UserSwitcher() {
                 <SidebarMenuButton
                   size="lg"
                   className={`data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground ${
-                    impersonation.impersonatedBy ? "border-2 border-destructive" : ""
+                    impersonationInfo.impersonatedBy ? "border-2 border-destructive" : ""
                   }`}
                 >
                   <Avatar className="h-8 w-8 rounded-lg">
@@ -165,17 +381,22 @@ function UserSwitcher() {
             {tooltipContent && <TooltipContent side="right">{tooltipContent}</TooltipContent>}
           </Tooltip>
           <DropdownMenuContent className="w-56" side="top" align="start">
-            {impersonation.isAdmin && (
-              <DropdownMenuItem onClick={() => impersonation.impersonate.mutate()}>
+            {impersonationInfo.isAdmin && (
+              <DropdownMenuItem onClick={() => setImpersonationDialogOpen(true)}>
                 Impersonate another user
               </DropdownMenuItem>
             )}
-            {impersonation.impersonatedBy && (
-              <DropdownMenuItem onClick={() => impersonation.unimpersonate.mutate()}>
-                Stop impersonating
+            {impersonationInfo.impersonatedBy && (
+              <DropdownMenuItem
+                onClick={() => stopImpersonation.mutate()}
+                disabled={stopImpersonation.isPending}
+              >
+                {stopImpersonation.isPending ? "Stopping..." : "Stop impersonating"}
               </DropdownMenuItem>
             )}
-            {(impersonation.isAdmin || impersonation.impersonatedBy) && <DropdownMenuSeparator />}
+            {(impersonationInfo.isAdmin || impersonationInfo.impersonatedBy) && (
+              <DropdownMenuSeparator />
+            )}
             <DropdownMenuItem asChild>
               <Link to="/user-settings">
                 <User className="mr-2 h-4 w-4" />
@@ -189,6 +410,16 @@ function UserSwitcher() {
           </DropdownMenuContent>
         </DropdownMenu>
       </SidebarMenuItem>
+
+      {/* Impersonation Dialog */}
+      {impersonationInfo.isAdmin && (
+        <ImpersonationDialog
+          open={impersonationDialogOpen}
+          onOpenChange={setImpersonationDialogOpen}
+          onSubmit={handleImpersonationSubmit}
+          isPending={startImpersonation.isPending}
+        />
+      )}
     </SidebarMenu>
   );
 }
