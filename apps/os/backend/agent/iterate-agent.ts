@@ -1691,7 +1691,7 @@ export class IterateAgent<
       env: {
         // this tells codex to use the openai api key
         // setting OPENAI_API_KEY is not enough, because codex will not use it
-        CODEX_API_KEY: await getSecret(env, "OPENAI_API_KEY"),
+        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
       },
     };
     const result = await this.exec(newInput);
