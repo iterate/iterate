@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq, desc } from "drizzle-orm";
+import { and, eq, desc, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
@@ -33,6 +33,26 @@ const findUserByEmail = adminProcedure
       where: eq(schema.user.email, input.email),
     });
     return user;
+  });
+
+const searchUsersByEmail = adminProcedure
+  .input(
+    z.object({
+      searchEmail: z.string(),
+    }),
+  )
+  .query(async ({ ctx, input }) => {
+    const users = await ctx.db.query.user.findMany({
+      where: like(schema.user.email, `%${input.searchEmail}%`),
+      columns: {
+        id: true,
+        email: true,
+        name: true,
+      },
+      limit: 10,
+    });
+
+    return users;
   });
 
 const getEstateOwner = adminProcedure
@@ -192,6 +212,7 @@ const allProcedureInputs = adminProcedure.query(async () => {
 
 export const adminRouter = router({
   findUserByEmail,
+  searchUsersByEmail,
   getEstateOwner,
   deleteUserByEmail,
   setupTestOnboardingUser,
