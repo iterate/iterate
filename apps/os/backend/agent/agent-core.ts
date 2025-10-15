@@ -43,7 +43,7 @@ import {
   type ToolCallApprovalState,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
-import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
+import { type LocalFunctionRuntimeTool, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
 
 /**
@@ -1480,11 +1480,7 @@ export class AgentCore<
         tool = { ...tool, wrappers: [...tool.wrappers, approvalWrapper] };
       }
 
-      const wrapped = (tool.wrappers || []).toReversed().reduce(
-        (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
-        tool.execute,
-      );
-      const result = await wrapped(call, args);
+      const result = await executeLocalFunctionTool(tool, call, args);
       return {
         success: true,
         output: stripNonSerializableProperties(result.toolCallResult),
@@ -1546,6 +1542,23 @@ export class AgentCore<
     return this.deps.getFinalRedirectUrl?.(payload);
   }
 }
+
+/**
+ * Calls `tool.execute` after applying all wrappers in the correct order.
+ * This utility function also gets rid of the stupid string from the type to protect against calling `.execute` directly by mistake.
+ */
+export const executeLocalFunctionTool = async (
+  tool: LocalFunctionRuntimeTool,
+  call: ResponseFunctionToolCall,
+  args: unknown,
+) => {
+  if (typeof tool.execute !== "function") throw new Error("Tool execute is not a function");
+  const wrapped = (tool.wrappers || []).toReversed().reduce(
+    (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
+    tool.execute,
+  );
+  return wrapped(call, args);
+};
 
 // -----------------------------------------------------------------------------
 // Helper conditional types exposed for slice authors
