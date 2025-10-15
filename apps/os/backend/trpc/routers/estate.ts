@@ -18,6 +18,18 @@ import type { DB } from "../../db/client.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { CreateCommitOnBranchInput } from "./CreateCommitOnBranchInput.ts";
+
+const iterateBotGithubProcedure = publicProcedure.use(async ({ ctx, next }) => {
+  ctx.env.ADMIN_EMAIL_HOSTS;
+  if (!import.meta.env.ITERATE_BOT_GITHUB_TOKEN.includes("pat_")) {
+    throw new Error(
+      "ITERATE_BOT_GITHUB_TOKEN is not a personal access token: " +
+        import.meta.env.ITERATE_BOT_GITHUB_TOKEN,
+    );
+  }
+  return next({ ctx });
+});
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -185,32 +197,75 @@ export const estateRouter = router({
       };
     }),
 
-  getRepoFilesystem: publicProcedure.query(async () => {
-    const zipballResponse = await fetch(
-      `https://api.github.com/repos/iterate/estate-template/zipball/main`,
-      {
-        headers: {
-          Accept: "application/vnd.github+json",
-          "User-Agent": "Iterate OS",
-        },
-      },
+  updateRepo: publicProcedure.input(CreateCommitOnBranchInput).mutation(async ({ input, ctx }) => {
+    const { Octokit } = await import("octokit");
+    const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
+    const result = await github.graphql(
+      `
+        mutation ($input: CreateCommitOnBranchInput!) {
+          createCommitOnBranch(input: $input) {
+            commit {
+              url
+            }
+          }
+        }
+      `,
+      { input },
     );
-
-    if (!zipballResponse.ok) {
-      throw new Error(`Failed to fetch zipball: ${zipballResponse.statusText}`);
-    }
-
-    const zipball = await zipballResponse.arrayBuffer();
-    const unzipped = fflate.unzipSync(new Uint8Array(zipball));
-
-    const filesystem: Record<string, string> = Object.fromEntries(
-      Object.entries(unzipped).map(([filename, data]) => [
-        filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
-        fflate.strFromU8(data),
-      ]),
-    );
-    return filesystem;
   }),
+  getRepoFilesystem: publicProcedure
+    .input(
+      z.object({
+        repositoryNameWithOwner: z.string(),
+        refName: z.string(),
+      }),
+    )
+    .query(async ({ input, ctx }) => {
+      if (!ctx.env.ITERATE_BOT_GITHUB_TOKEN) {
+        throw new Error(
+          "ITERATE_BOT_GITHUB_TOKEN is not a personal access token: " +
+            ctx.env.ITERATE_BOT_GITHUB_TOKEN,
+        );
+      }
+      const { Octokit } = await import("octokit");
+      const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
+      const me = await github.rest.users.getAuthenticated();
+      console.log({
+        me: me.data,
+        url: `https://api.github.com/repos/${input.repositoryNameWithOwner}/zipball/${input.refName}`,
+      });
+      const repo = await github.rest.repos.get({
+        owner: input.repositoryNameWithOwner.split("/")[0],
+        repo: input.repositoryNameWithOwner.split("/")[1],
+      });
+      console.log({ repo: repo.data });
+
+      const zipballResponse = await fetch(
+        `https://api.github.com/repos/${input.repositoryNameWithOwner}/zipball/${input.refName}`,
+        {
+          headers: {
+            Authorization: `Bearer ${ctx.env.ITERATE_BOT_GITHUB_TOKEN}`,
+            "User-Agent": "iterate.com OS",
+          },
+        },
+      );
+
+      if (!zipballResponse.ok) {
+        throw new Error(`Failed to fetch zipball: ${await zipballResponse.text()}`);
+      }
+
+      const zipball = await zipballResponse.arrayBuffer();
+      const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+
+      const filesystem: Record<string, string> = Object.fromEntries(
+        Object.entries(unzipped).map(([filename, data]) => [
+          filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+          fflate.strFromU8(data),
+        ]),
+      );
+      const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
+      return { filesystem, sha };
+    }),
 
   // Get builds for an estate
   getBuilds: estateProtectedProcedure

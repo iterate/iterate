@@ -1,5 +1,4 @@
-import * as fflate from "fflate/browser";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useRef } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { javascript } from "@codemirror/lang-javascript";
@@ -74,10 +73,30 @@ function CodeEditor({ value, onChange, language }: CodeEditorProps) {
 }
 
 interface IDEProps {
-  filesystem: Record<string, string>;
+  repositoryNameWithOwner: string;
+  refName: string;
 }
 
-function IDE({ filesystem }: IDEProps) {
+function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
+  const trpc = useTRPC();
+  const [bump, setBump] = useState(0);
+  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({
+    repositoryNameWithOwner,
+    refName,
+    ...({ bump } as {}),
+  });
+  const getRepoFileSystemQuery = useQuery({
+    ...getRepoFilesystemQueryOptions,
+    placeholderData: (old) => old,
+  });
+
+  const saveFileMutation = useMutation(
+    trpc.estate.updateRepo.mutationOptions({
+      onSuccess: () => setBump((prev) => prev + 1),
+    }),
+  );
+
+  const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [fileContents, setFileContents] = useState<Record<string, string>>(filesystem);
 
@@ -89,14 +108,6 @@ function IDE({ filesystem }: IDEProps) {
       setSelectedFile(null);
     }
   }, [filesystem, selectedFile]);
-
-  const saveFileMutation = useMutation({
-    mutationFn: async ({ path, content }: { path: string; content: string }) => {
-      // Later: use GitHub API to save
-      console.log("pretending to save", { path, content });
-      return { success: true };
-    },
-  });
 
   const files = Object.keys(fileContents).sort();
   const currentContent = selectedFile ? fileContents[selectedFile] : "";
@@ -121,8 +132,15 @@ function IDE({ filesystem }: IDEProps) {
   const handleSave = () => {
     if (selectedFile) {
       saveFileMutation.mutate({
-        path: selectedFile,
-        content: fileContents[selectedFile],
+        branch: {
+          repositoryNameWithOwner,
+          branchName: refName,
+        },
+        expectedHeadOid: sha,
+        message: { headline: `in-browser changes to ${selectedFile}` },
+        fileChanges: {
+          additions: [{ path: selectedFile, contents: btoa(fileContents[selectedFile]) }],
+        },
       });
     }
   };
@@ -135,7 +153,7 @@ function IDE({ filesystem }: IDEProps) {
   return (
     <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden">
       {/* Left sidebar - File list */}
-      <div className="w-64 border-r bg-muted/50 overflow-y-auto">
+      <div className="w-64 flex-shrink-0 border-r bg-muted/50 overflow-y-auto">
         <div className="p-4">
           <h3 className="text-sm font-semibold mb-2 flex items-center gap-2">
             <Folder className="h-4 w-4" />
@@ -163,7 +181,7 @@ function IDE({ filesystem }: IDEProps) {
       </div>
 
       {/* Main panel - Editor */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col">
         {selectedFile ? (
           <>
             <div className="border-b p-3 flex items-center justify-between bg-background">
@@ -197,85 +215,7 @@ function IDE({ filesystem }: IDEProps) {
   );
 }
 
-// Hook to get estate filesystem
-// Later: use GitHub API to fetch actual estate files
-function useEstateFilesystem() {
-  const trpc = useTRPC();
-  return useSuspenseQuery(trpc.estate.getRepoFilesystem.queryOptions());
-  return useSuspenseQuery({
-    queryKey: ["estate-filesystem"],
-    queryFn: async () => {
-      const zipballResponse = await fetch(
-        `https://api.github.com/repos/iterate/estate-template/zipball/main`,
-      );
-      const zipball = await zipballResponse.arrayBuffer();
-      const unzipped = fflate.unzipSync(new Uint8Array(zipball));
-      // Hardcoded filesystem for now
-      const filesystem: Record<string, string> = Object.fromEntries(
-        Object.entries(unzipped).map(([filename, data]) => [filename, fflate.strFromU8(data)]),
-      ) || {
-        "README.md": `# Estate Template
-
-This is a template estate for iterate.
-
-## Getting Started
-
-1. Clone this estate
-2. Customize the rules in the \`rules/\` directory
-3. Update \`iterate.config.ts\` with your configuration
-
-## Structure
-
-- \`rules/\` - Markdown files containing context rules
-- \`iterate.config.ts\` - Configuration file for iterate
-`,
-        "iterate.config.ts": `import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";
-
-const config = defineConfig({
-  contextRules: [
-    // You can use "matchers" to conditionally apply rules
-    // For example to only be active when certain MCP connections are present
-    {
-      key: "how-we-use-linear",
-      prompt: "Tag any new issues with the label \`iterate-tutorial\`",
-      match: matchers.hasMCPConnection("linear"),
-    },
-
-    // Or when a certain user is on a thread
-    {
-      key: "jonas-rules",
-      prompt: "When Jonas is on a thread, remind him to lock in",
-      match: matchers.hasParticipant("jonas"),
-    },
-
-    // You can also use mathcers.and, matchers.or and matchers.not
-    {
-      key: "jonas-in-the-evening",
-      prompt: "It's between 22:00 - 06:00, remind jonas to go to sleep",
-      match: matchers.and(
-        matchers.hasParticipant("jonas"),
-        matchers.timeWindow({
-          timeOfDay: { start: "22:00", end: "06:00" },
-        }),
-      ),
-    },
-    // This file is "just typescript", so you can do whatever you want
-    // e.g. structure your rules in markdown, too, and use a helper to load them
-    ...contextRulesFromFiles("rules/**/*.md"),
-  ],
-});
-export default config;
-`,
-      };
-
-      return filesystem;
-    },
-  }) as never;
-}
-
 export default function EstateEditor() {
-  const { data: filesystem } = useEstateFilesystem();
-
   return (
     <div className="flex flex-col gap-4">
       <div>
@@ -284,7 +224,7 @@ export default function EstateEditor() {
           Edit estate configuration files. Changes will be saved to GitHub.
         </p>
       </div>
-      <IDE filesystem={filesystem} />
+      <IDE repositoryNameWithOwner={"iterate-estates/mktest1"} refName={"main"} />
     </div>
   );
 }
