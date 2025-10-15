@@ -233,27 +233,23 @@ export const providerUserMapping = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     externalId: t.text().notNull(), // Slack user ID (e.g., U_NICK_123, USLACKBOT)
-    // REQUIRED: Which estate's sync discovered/created this mapping
+    // OPTIONAL: Which estate's sync discovered/created this mapping
     // This represents the "observing estate's perspective" on this user.
-    // Multiple estates can have mappings for the same external user.
-    estateId: t
-      .text()
-      .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+    // Nullable to allow existing rows from before this field was added.
+    estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
     // OPTIONAL: The user's actual home team ID, only set if external to the estate's workspace
     // - null = user is from the estate's own OAuth'd workspace (internal user)
     // - set = user is from a different workspace discovered via Slack Connect (external user)
     // Example: Estate A (owns T_ITERATE) syncs Slack Connect user from T_STRIPE
-    //   → estateId = estate_A, externalTeamId = T_STRIPE
-    externalTeamId: t.text(),
+    //   → estateId = estate_A, externalUserTeamId = T_STRIPE
+    externalUserTeamId: t.text(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
   (t) => [
-    // Global uniqueness: (provider, estate, externalId, externalTeamId)
-    // Allows same external user to have different mappings per estate
-    // NULL externalTeamId is treated as distinct value in unique constraint
-    uniqueIndex().on(t.providerId, t.estateId, t.externalId, t.externalTeamId),
+    // Global uniqueness: (provider, estate, externalId)
+    // Each external user can have only one mapping per estate
+    uniqueIndex().on(t.providerId, t.estateId, t.externalId),
   ],
 );
 export const providerUserMappingRelations = relations(providerUserMapping, ({ one }) => ({
