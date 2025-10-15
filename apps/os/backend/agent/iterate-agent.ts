@@ -1,6 +1,7 @@
-import { type ExecEvent, type Sandbox, type StreamOptions } from "@cloudflare/sandbox";
+import { type ExecEvent } from "@cloudflare/sandbox";
 import pMemoize from "p-suite/p-memoize";
-import { Agent as CloudflareAgent } from "agents";
+import { enableDebug } from "better-wait-until";
+import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
@@ -84,6 +85,7 @@ import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+import type { Connection, ConnectionContext } from "agents";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -266,6 +268,14 @@ export class IterateAgent<
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+
+    // disabling broadcast functionality because it breaks with better-wait-until keep alive websockets
+    const newBroadcast = (_msg: string, _without: string[] | undefined) => {
+      console.log("web socket broadcast is a no op for now");
+    };
+    this.broadcast = newBroadcast;
+    this.constructor.prototype.broadcast = newBroadcast;
+
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
     this.mcpManagerCache = createMCPManagerCache();
@@ -379,7 +389,8 @@ export class IterateAgent<
 
       background: (fn: () => Promise<void>) => {
         // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
-        reallyWaitUntil(this, fn());
+        enableDebug();
+        this.ctx.waitUntil(fn());
       },
 
       getOpenAIClient: async () => {
