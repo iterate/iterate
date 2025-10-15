@@ -1,16 +1,11 @@
 import { defineConfig, contextRulesFromFiles, tools, matchers, dedent } from "@iterate-com/sdk";
 
 const config = defineConfig({
-  // Experiments let us toggle optional behaviours across the estate.
-  experiments: {
-    // Light pirate flair remains opt-in until proven useful.
-    pirateMode: false,
-  },
   contextRules: [
     ...contextRulesFromFiles("rules/**/*.md"),
     {
       key: "pirate-mode-guidance",
-      match: matchers.jsonata("experiments.pirateMode = true"),
+      match: matchers.hasLabel("pirate-mode"), // Enabled via the thread label "pirate-mode".
       prompt: dedent`
           ### Pirate mode guidance
         - When pirate mode is enabled, add at most one or two light pirate interjections to short messages
