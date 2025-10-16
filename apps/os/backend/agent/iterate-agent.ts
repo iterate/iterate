@@ -15,6 +15,7 @@ import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
+import { match, P } from "ts-pattern";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -82,6 +83,7 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
+import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
 
@@ -511,12 +513,63 @@ export class IterateAgent<
           void this.refreshContextRules();
         }
 
+        if (event.type === "CORE:TOOL_CALL_APPROVED") {
+          void Promise.resolve().then(async () => {
+            const { data } = event;
+            const state = this.agentCore.state.toolCallApprovals[data.approvalKey];
+            if (!state) {
+              logger.error(`Tool call approval not found for key: ${data.approvalKey}`);
+              return;
+            }
+            const userMatches = match(state.args)
+              .with({ impersonateUserId: data.approvedBy.userId }, () => true)
+              .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
+              .otherwise(
+                () =>
+                  data.approvedBy.orgRole === "admin" ||
+                  data.approvedBy.orgRole === "owner" ||
+                  data.approvedBy.orgRole === "member",
+              ); // no impersonateUserId, allow any member to approve???
+
+            if (!userMatches) {
+              this.addEvent({
+                type: "CORE:LLM_INPUT_ITEM",
+                data: {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: dedent`
+                        User ${data.approvedBy.userId} is not allowed to approve tool call for ${state.toolName}.
+                      `,
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              });
+              return;
+            }
+
+            await this.agentCore.deps.onToolCallApproved?.({
+              data,
+              state,
+              replayToolCall: async () => {
+                await this.injectToolCall({
+                  args: state.args as {},
+                  toolName: state.toolName,
+                });
+              },
+            });
+          });
+        }
+
         void posthogClient().then((posthog) =>
           processPosthogAgentCoreEvent({
             posthog,
             data: {
               event,
-              reducedState,
+              reducedState: reducedState as {},
             },
           }),
         );
@@ -1139,9 +1192,7 @@ export class IterateAgent<
     return { reversed: input.message.split("").reverse().join("") };
   }
   doNothing() {
-    return {
-      __triggerLLMRequest: false,
-    };
+    return { __triggerLLMRequest: false } satisfies MagicAgentInstructions;
   }
   async getEstate() {
     return {

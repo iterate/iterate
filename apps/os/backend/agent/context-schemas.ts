@@ -82,6 +82,13 @@ export const TimeWindow = z.object({
     .optional(),
 });
 export type TimeWindow = z.infer<typeof TimeWindow>;
+
+export const ToolApprovalPolicy = z.object({
+  approvalRequired: z.boolean(),
+  matcher: z.string().optional(),
+});
+export type ToolApprovalPolicy = z.infer<typeof ToolApprovalPolicy>;
+
 /**
  * Represents context (such as prompts and tool specs) to be provided to
  * an LLM via our AgentCore class
@@ -90,6 +97,7 @@ export type TimeWindow = z.infer<typeof TimeWindow>;
 export type ContextItem = RequireAtLeastOne<{
   prompt: PromptFragment;
   tools: ToolSpec[];
+  toolApprovalPolicies: ToolApprovalPolicy[];
 }> & {
   key: string;
   description?: string;
@@ -99,6 +107,7 @@ export const ContextItem = z.object({
   description: z.string().optional(),
   prompt: PromptFragment.optional(),
   tools: z.array(ToolSpec).optional(),
+  toolApprovalPolicies: ToolApprovalPolicy.array().optional(),
 }) satisfies z.ZodType<{
   [K in keyof ContextItem]: ContextItem[K];
 }>;
