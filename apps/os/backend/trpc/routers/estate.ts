@@ -276,7 +276,7 @@ export const estateRouter = router({
         .filter(([k, v]) => !k.endsWith("/") && v.trim()),
     );
     const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
-    return { filesystem, sha };
+    return { repoData: ctx.repoData, filesystem, sha };
   }),
 
   getDTS: protectedProcedure

@@ -14,6 +14,10 @@ import {
   Braces,
   Settings,
   Upload,
+  FilePlus,
+  FolderPlus,
+  Folder,
+  FolderOpen,
 } from "lucide-react";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
@@ -125,6 +129,8 @@ interface FileTreeViewProps {
   isFileEdited: (path: string) => boolean;
   collapsedFolders: Set<string>;
   onToggleFolder: (path: string) => void;
+  onNewFile: (folderPath: string) => void;
+  onNewFolder: (folderPath: string) => void;
   level?: number;
 }
 
@@ -135,52 +141,87 @@ function FileTreeView({
   isFileEdited,
   collapsedFolders,
   onToggleFolder,
+  onNewFile,
+  onNewFolder,
   level = 0,
 }: FileTreeViewProps) {
+  const [hoveredFolder, setHoveredFolder] = useState<string | null>(null);
+
   return (
     <>
       {nodes.map((node) => {
         const isCollapsed = collapsedFolders.has(node.path);
         const hasChildren = node.children && node.children.length > 0;
+        const isHovered = hoveredFolder === node.path;
 
         return (
           <div key={node.path}>
-            <button
-              onClick={() => {
-                if (node.type === "folder") {
-                  onToggleFolder(node.path);
-                } else {
-                  onFileSelect(node.path);
-                }
-              }}
-              className={cn(
-                "w-full text-left px-2 py-1 text-xs flex items-center gap-1 hover:bg-accent rounded-sm",
-                selectedFile === node.path && node.type === "file" && "bg-accent",
-              )}
-              style={{ paddingLeft: `${level * 12 + 8}px` }}
+            <div
+              className="group relative"
+              onMouseEnter={() => node.type === "folder" && setHoveredFolder(node.path)}
+              onMouseLeave={() => node.type === "folder" && setHoveredFolder(null)}
             >
-              {node.type === "folder" ? (
-                <>
-                  {hasChildren ? (
-                    isCollapsed ? (
-                      <ChevronRight className="h-3 w-3 flex-shrink-0" />
-                    ) : (
-                      <ChevronDown className="h-3 w-3 flex-shrink-0" />
-                    )
-                  ) : (
-                    <span className="w-3" />
-                  )}
-                </>
-              ) : (
-                <>{getFileIcon(node.name)}</>
-              )}
-              <span className="truncate flex-1">
-                {node.name}
-                {node.type === "file" && isFileEdited(node.path) && (
-                  <span className="text-orange-500">*</span>
+              <button
+                onClick={() => {
+                  if (node.type === "folder") {
+                    onToggleFolder(node.path);
+                  } else {
+                    onFileSelect(node.path);
+                  }
+                }}
+                className={cn(
+                  "w-full text-left px-2 py-1 text-xs flex items-center gap-1 hover:bg-accent rounded-sm",
+                  selectedFile === node.path && node.type === "file" && "bg-accent",
                 )}
-              </span>
-            </button>
+                style={{ paddingLeft: `${level === 0 ? 2 : level * 12 + 8}px` }}
+              >
+                {node.type === "folder" ? (
+                  <>
+                    {hasChildren ? (
+                      isCollapsed ? (
+                        <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                      ) : (
+                        <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                      )
+                    ) : (
+                      <span className="w-3" />
+                    )}
+                  </>
+                ) : (
+                  <>{getFileIcon(node.name)}</>
+                )}
+                <span className="truncate flex-1">
+                  {node.name}
+                  {node.type === "file" && isFileEdited(node.path) && (
+                    <span className="text-orange-500">*</span>
+                  )}
+                </span>
+              </button>
+              {node.type === "folder" && isHovered && (
+                <div className="absolute right-1 top-1 flex gap-0.5 bg-background/80 backdrop-blur-sm rounded">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNewFile(node.path);
+                    }}
+                    className="p-0.5 hover:bg-accent rounded"
+                    title="New File"
+                  >
+                    <FilePlus className="h-3 w-3" />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onNewFolder(node.path);
+                    }}
+                    className="p-0.5 hover:bg-accent rounded"
+                    title="New Folder"
+                  >
+                    <FolderPlus className="h-3 w-3" />
+                  </button>
+                </div>
+              )}
+            </div>
             {node.type === "folder" && node.children && !isCollapsed && (
               <FileTreeView
                 nodes={node.children}
@@ -189,6 +230,8 @@ function FileTreeView({
                 isFileEdited={isFileEdited}
                 collapsedFolders={collapsedFolders}
                 onToggleFolder={onToggleFolder}
+                onNewFile={onNewFile}
+                onNewFolder={onNewFolder}
                 level={level + 1}
               />
             )}
@@ -257,7 +300,12 @@ export function IDE() {
     }),
     enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
   });
-  const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
+  const { filesystem, sha, repoData } = getRepoFileSystemQuery.data || {
+    filesystem: {},
+    sha: "",
+    repoData: null,
+  };
+  const repoName = repoData?.full_name?.split("/")[1] || "repository";
 
   // Derive file contents by merging filesystem with local edits
   const fileContents = useMemo(() => ({ ...filesystem, ...localEdits }), [filesystem, localEdits]);
@@ -273,17 +321,61 @@ export function IDE() {
     return null;
   }, [selectedFile, fileContents]);
 
-  // Build file tree from filesystem
-  const fileTree = useMemo(() => buildFileTree(Object.keys(fileContents)), [fileContents]);
+  // Build file tree from filesystem and wrap in root folder
+  const fileTree = useMemo(() => {
+    const tree = buildFileTree(Object.keys(fileContents));
+    // Wrap in root folder based on repo name
+    return [
+      {
+        name: repoName,
+        path: "",
+        type: "folder" as const,
+        children: tree,
+      },
+    ];
+  }, [fileContents, repoName]);
   const currentContent = validSelectedFile ? fileContents[validSelectedFile] : "";
 
   const handleToggleFolder = (path: string) => {
     setCollapsedFolders((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
+  const handleNewFile = (folderPath: string) => {
+    const fileName = prompt("Enter file name:");
+    if (!fileName) return;
+
+    const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
+    setLocalEdits((prev) => ({
+      ...prev,
+      [fullPath]: "",
+    }));
+    setSelectedFile(fullPath);
+    // Expand the folder if it's collapsed
+    if (folderPath && collapsedFolders.has(folderPath)) {
+      handleToggleFolder(folderPath);
+    }
+  };
+
+  const handleNewFolder = (parentPath: string) => {
+    const folderName = prompt("Enter folder name:");
+    if (!folderName) return;
+
+    const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
+    // Create a placeholder file in the folder to make it appear
+    const placeholderPath = `${fullPath}/.gitkeep`;
+    setLocalEdits((prev) => ({
+      ...prev,
+      [placeholderPath]: "",
+    }));
+    // Expand parent folder
+    if (parentPath && collapsedFolders.has(parentPath)) {
+      handleToggleFolder(parentPath);
+    }
+  };
+
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
-    return fileContents[filename] !== filesystem[filename];
+    return fileContents[filename] !== (filesystem as Record<string, string>)[filename];
   };
 
   // Check if current file has unsaved changes
@@ -463,6 +555,8 @@ export function IDE() {
             isFileEdited={isFileEdited}
             collapsedFolders={collapsedFolders}
             onToggleFolder={handleToggleFolder}
+            onNewFile={handleNewFile}
+            onNewFolder={handleNewFolder}
           />
         </div>
       </div>
@@ -496,12 +590,12 @@ export function IDE() {
               monaco.languages.typescript.JsxEmit.Preserve;
               monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
                 ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+                ...compilerOptions,
                 strict: false,
-                lib: ["es6"],
+                lib: ["es6", "DOM"],
                 allowJs: true,
                 allowImportingTsExtensions: true,
                 allowSyntheticDefaultImports: true,
-                ...compilerOptions,
                 // verbatimModuleSyntax: false, // causes problems with our fake node_modules
                 typeRoots: ["file:///node_modules"],
               });
