@@ -480,11 +480,26 @@ export function IDE() {
             theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
             options={{ wordWrap: "on", fixedOverflowWidgets: true }}
             beforeMount={(monaco) => {
+              const tsconfig = JSON.parse(
+                getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
+              ) as import("type-fest").TsConfigJson;
+              const {
+                // stupid monaco demands enum values and won't accept perfectly good strings
+                jsx,
+                module,
+                moduleResolution,
+                newLine,
+                target,
+                plugins,
+                ...compilerOptions
+              } = tsconfig.compilerOptions || {};
               monaco.languages.typescript.JsxEmit.Preserve;
               monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
                 ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
                 strict: false,
                 lib: ["es6"],
+                ...compilerOptions,
+                // verbatimModuleSyntax: false, // causes problems with our fake node_modules
                 typeRoots: ["file:///node_modules"],
               });
             }}
