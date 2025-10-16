@@ -14,6 +14,7 @@ import {
   FileText,
   Braces,
   Settings,
+  Upload,
 } from "lucide-react";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/utils.ts";
@@ -287,6 +288,7 @@ export function IDE() {
   };
 
   const handleSave = () => {
+    console.log("handleSave", { validSelectedFile });
     if (validSelectedFile) {
       saveFileMutation.mutate(
         {
@@ -295,11 +297,10 @@ export function IDE() {
             expectedHeadOid: sha,
             message: { headline: `in-browser changes to ${validSelectedFile}` },
             fileChanges: {
-              additions: [
-                { path: validSelectedFile, contents: btoa(fileContents[validSelectedFile]) },
-              ],
+              additions: [{ path: validSelectedFile, contents: fileContents[validSelectedFile] }],
             },
           },
+          format: "plaintext",
         },
         {
           onSuccess: () => {
@@ -382,8 +383,23 @@ export function IDE() {
     <div className="flex h-[calc(100vh-8rem)] overflow-hidden">
       {/* Left sidebar - File tree */}
       <div className="w-48 flex-shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+        <div className="p-2 border-b">
+          <Button
+            onClick={handleSave}
+            disabled={
+              !hasUnsavedChanges || saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+            }
+            size="sm"
+            variant="ghost"
+            className="w-full h-7 text-xs gap-1.5"
+          >
+            <Upload className="h-3 w-3" />
+            {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+              ? "Pushing..."
+              : "Push to GitHub"}
+          </Button>
+        </div>
         <div className="p-2 flex-1 overflow-y-auto">
-          <h3 className="text-xs font-semibold mb-2 px-2 py-1">Files</h3>
           <FileTreeView
             nodes={fileTree}
             selectedFile={validSelectedFile}
@@ -392,20 +408,6 @@ export function IDE() {
             collapsedFolders={collapsedFolders}
             onToggleFolder={handleToggleFolder}
           />
-        </div>
-        <div className="p-2 border-t">
-          <Button
-            onClick={handleSave}
-            disabled={
-              !hasUnsavedChanges || saveFileMutation.isPending || getRepoFileSystemQuery.isPending
-            }
-            size="sm"
-            className="w-full"
-          >
-            {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
-              ? "Pushing..."
-              : "Push to GitHub"}
-          </Button>
         </div>
       </div>
 

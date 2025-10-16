@@ -220,9 +220,15 @@ export const estateRouter = router({
     .input(
       z.object({
         commit: CreateCommitOnBranchInput.omit({ branch: true }),
+        format: z.enum(["base64", "plaintext"]),
       }),
     )
     .mutation(async ({ input, ctx }) => {
+      if (input.format === "plaintext") {
+        input.commit.fileChanges.additions?.forEach((addition) => {
+          addition.contents = Buffer.from(addition.contents).toString("base64");
+        });
+      }
       const github = new Octokit({ auth: ctx.installationToken });
       const result = await github.graphql(
         dedent`
