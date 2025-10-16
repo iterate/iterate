@@ -323,8 +323,8 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
   const editorRef = useRef<Parameters<OnMount> | null>(null);
 
-  const getEditor = () => editorRef.current!!![0];
-  const getMonaco = () => editorRef.current!!![1];
+  const _getEditor = () => editorRef.current!!![0];
+  const _getMonaco = () => editorRef.current!!![1];
 
   const { resolvedTheme } = useTheme();
 
