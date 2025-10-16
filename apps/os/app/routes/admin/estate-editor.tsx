@@ -26,122 +26,11 @@ import { cn } from "../../lib/utils.ts";
 import { useTRPC } from "../../lib/trpc.ts";
 import { IterateLetterI } from "../../components/ui/iterate-logos.tsx";
 
-type MonacoType = Parameters<OnMount>[1];
-
 interface FileTreeNode {
   name: string;
   path: string;
   type: "file" | "folder";
   children?: FileTreeNode[];
-}
-
-interface CodeEditorProps {
-  value: string;
-  onChange: (value: string) => void;
-  language: "typescript" | "markdown";
-}
-
-function CodeEditor({ value, onChange, language }: CodeEditorProps) {
-  const editorRef = useRef<Parameters<OnMount> | null>(null);
-
-  const getEditor = () => editorRef.current!!![0];
-  const getMonaco = () => editorRef.current!!![1];
-
-  const { resolvedTheme } = useTheme();
-
-  // // Update document when value changes externally
-  // useEffect(() => {
-  //   if (viewRef.current && viewRef.current.state.doc.toString() !== value) {
-  //     viewRef.current.dispatch({
-  //       changes: { from: 0, to: viewRef.current.state.doc.length, insert: value },
-  //     });
-  //   }
-  // }, [value]);
-  const onMount = useCallback<OnMount>((...params) => {
-    editorRef.current = params;
-  }, []);
-
-  useEffect(() => {
-    // capture cmd-s/ctrl-s
-    const onKeyDown = (e: KeyboardEvent): void => {
-      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
-        e.preventDefault();
-      }
-    };
-    document.addEventListener("keydown", onKeyDown, false);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, []);
-
-  // return JSON.stringify({ language, value });
-
-  return (
-    <Editor
-      // make the editor (roughly) full window height minus the navbar at the top
-      height="calc(100vh - 240px)"
-      defaultLanguage={language || "markdown"}
-      language={language}
-      onChange={(val) => onChange(val || "")}
-      value={value}
-      theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-      // options={{
-      //   quickSuggestions: false,
-      //   suggest: { showKeywords: false },
-      //   wordBasedSuggestions: false,
-      //   wordWrap: "on",
-      //   colorDecorators: true,
-      // }}
-      beforeMount={(monaco) => {
-        monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-          ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
-          types: ["node_modules/*"],
-          strict: true,
-          lib: ["es6"],
-        });
-        monaco.languages.typescript.typescriptDefaults.addExtraLib(
-          "export const a: 1",
-          "file:///node_modules/@types/testmodule/index.d.ts",
-        );
-        // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-        //   dedent`
-        //     export const matchers: {foo: string}
-        //   `,
-        //   `inmemory://model/types.d.ts`,
-        // );
-        // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-        //   dedent`
-        //     export const matchers: {foo: string}
-        //   `,
-        //   `file:///node_modules/axios/index.d.ts`,
-        // );
-        // // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-        //   dedent`
-        //     export const matchers: {foo: string}
-        //   `,
-        //   `file:///node_modules/axios/index.d.ts`,
-        // )
-        monaco.editor.createModel(
-          dedent`
-            declare module "myModule" {
-              export type MyType = 'myValue';
-              export const myValue = 'myValue';
-            }
-          `,
-          "typescript",
-          monaco.Uri.file("/myModule.d.ts"),
-        );
-        monaco.editor.createModel(
-          dedent`
-            declare module "@iterate-com/sdk" {
-              ${sdkdts}
-            }
-          `,
-          "typescript",
-          monaco.Uri.file("/iterate-com-sdk.d.ts"),
-        );
-      }}
-      onMount={onMount}
-    />
-  );
 }
 
 // Get appropriate icon for file type
@@ -436,6 +325,38 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
     return "markdown";
   };
 
+  const editorRef = useRef<Parameters<OnMount> | null>(null);
+
+  const getEditor = () => editorRef.current!!![0];
+  const getMonaco = () => editorRef.current!!![1];
+
+  const { resolvedTheme } = useTheme();
+
+  // // Update document when value changes externally
+  // useEffect(() => {
+  //   if (viewRef.current && viewRef.current.state.doc.toString() !== value) {
+  //     viewRef.current.dispatch({
+  //       changes: { from: 0, to: viewRef.current.state.doc.length, insert: value },
+  //     });
+  //   }
+  // }, [value]);
+  const onMount = useCallback<OnMount>((...params) => {
+    editorRef.current = params;
+  }, []);
+
+  useEffect(() => {
+    // capture cmd-s/ctrl-s
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "s") {
+        e.preventDefault();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, false);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  const language = getLanguage(validSelectedFile || "");
+
   return (
     <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden">
       {/* Left sidebar - File tree */}
@@ -476,11 +397,72 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                   : "Save"}
               </Button>
             </div>
-            <div className="flex-1 overflow-hidden">
-              <CodeEditor
+            <div className="flex-1">
+              <Editor
+                // make the editor (roughly) full window height minus the navbar at the top
+                height="calc(100vh - 240px)"
+                defaultLanguage={language || "markdown"}
+                language={language}
+                onChange={(val) => handleContentChange(val || "")}
                 value={currentContent}
-                onChange={handleContentChange}
-                language={getLanguage(validSelectedFile)}
+                theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+                // options={{
+                //   quickSuggestions: false,
+                //   suggest: { showKeywords: false },
+                //   wordBasedSuggestions: false,
+                //   wordWrap: "on",
+                //   colorDecorators: true,
+                // }}
+                beforeMount={(monaco) => {
+                  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+                    ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+                    types: ["node_modules/*"],
+                    strict: true,
+                    lib: ["es6"],
+                  });
+                  monaco.languages.typescript.typescriptDefaults.addExtraLib(
+                    "export const a: 1",
+                    "file:///node_modules/@types/testmodule/index.d.ts",
+                  );
+                  // monaco.languages.typescript.typescriptDefaults.addExtraLib(
+                  //   dedent`
+                  //     export const matchers: {foo: string}
+                  //   `,
+                  //   `inmemory://model/types.d.ts`,
+                  // );
+                  // monaco.languages.typescript.typescriptDefaults.addExtraLib(
+                  //   dedent`
+                  //     export const matchers: {foo: string}
+                  //   `,
+                  //   `file:///node_modules/axios/index.d.ts`,
+                  // );
+                  // // monaco.languages.typescript.typescriptDefaults.addExtraLib(
+                  //   dedent`
+                  //     export const matchers: {foo: string}
+                  //   `,
+                  //   `file:///node_modules/axios/index.d.ts`,
+                  // )
+                  monaco.editor.createModel(
+                    dedent`
+                      declare module "myModule" {
+                        export type MyType = 'myValue';
+                        export const myValue = 'myValue';
+                      }
+                    `,
+                    "typescript",
+                    monaco.Uri.file("/myModule.d.ts"),
+                  );
+                  monaco.editor.createModel(
+                    dedent`
+                      declare module "@iterate-com/sdk" {
+                        ${sdkdts}
+                      }
+                    `,
+                    "typescript",
+                    monaco.Uri.file("/iterate-com-sdk.d.ts"),
+                  );
+                }}
+                onMount={onMount}
               />
             </div>
           </>
@@ -515,6 +497,7 @@ import z$3, { z as z$2 } from "zod/v4";
 import { RequireAtLeastOne } from "type-fest";
 
 //#region backend/utils/type-helpers.d.ts
+export declare const sss: z$2.ZodString;
 declare const JSONSerializable: z$2.ZodType<JSONSerializable>;
 interface JSONSerializableArray extends ReadonlyArray<JSONSerializable> {}
 interface JSONSerializableObject {
