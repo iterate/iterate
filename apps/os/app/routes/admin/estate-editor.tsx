@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { basicSetup, EditorView } from "codemirror";
 import { javascript } from "@codemirror/lang-javascript";
 import { markdown } from "@codemirror/lang-markdown";
@@ -287,21 +287,23 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
   const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [fileContents, setFileContents] = useState<Record<string, string>>(filesystem);
+  const [localEdits, setLocalEdits] = useState<Record<string, string>>({});
   const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
 
-  // Update file contents when filesystem prop changes
-  useEffect(() => {
-    setFileContents(filesystem);
-    // If current file doesn't exist in new filesystem, reset selection
-    if (selectedFile && !(selectedFile in filesystem)) {
-      setSelectedFile(null);
+  // Derive file contents by merging filesystem with local edits
+  const fileContents = useMemo(() => ({ ...filesystem, ...localEdits }), [filesystem, localEdits]);
+
+  // Derive valid selected file (reset if file no longer exists)
+  const validSelectedFile = useMemo(() => {
+    if (selectedFile && selectedFile in fileContents) {
+      return selectedFile;
     }
-  }, [filesystem, selectedFile]);
+    return null;
+  }, [selectedFile, fileContents]);
 
   // Build file tree from filesystem
-  const fileTree = buildFileTree(Object.keys(fileContents));
-  const currentContent = selectedFile ? fileContents[selectedFile] : "";
+  const fileTree = useMemo(() => buildFileTree(Object.keys(fileContents)), [fileContents]);
+  const currentContent = validSelectedFile ? fileContents[validSelectedFile] : "";
 
   const handleToggleFolder = (path: string) => {
     setCollapsedFolders((prev) => {
@@ -321,30 +323,44 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
   };
 
   // Check if current file has unsaved changes
-  const hasUnsavedChanges = selectedFile ? isFileEdited(selectedFile) : false;
+  const hasUnsavedChanges = validSelectedFile ? isFileEdited(validSelectedFile) : false;
 
   const handleContentChange = (newContent: string) => {
-    if (selectedFile) {
-      setFileContents((prev) => ({
+    if (validSelectedFile) {
+      setLocalEdits((prev) => ({
         ...prev,
-        [selectedFile]: newContent,
+        [validSelectedFile]: newContent,
       }));
     }
   };
 
   const handleSave = () => {
-    if (selectedFile) {
-      saveFileMutation.mutate({
-        branch: {
-          repositoryNameWithOwner,
-          branchName: refName,
+    if (validSelectedFile) {
+      saveFileMutation.mutate(
+        {
+          branch: {
+            repositoryNameWithOwner,
+            branchName: refName,
+          },
+          expectedHeadOid: sha,
+          message: { headline: `in-browser changes to ${validSelectedFile}` },
+          fileChanges: {
+            additions: [
+              { path: validSelectedFile, contents: btoa(fileContents[validSelectedFile]) },
+            ],
+          },
         },
-        expectedHeadOid: sha,
-        message: { headline: `in-browser changes to ${selectedFile}` },
-        fileChanges: {
-          additions: [{ path: selectedFile, contents: btoa(fileContents[selectedFile]) }],
+        {
+          onSuccess: () => {
+            // Clear local edits for the saved file
+            setLocalEdits((prev) => {
+              const next = { ...prev };
+              delete next[validSelectedFile];
+              return next;
+            });
+          },
         },
-      });
+      );
     }
   };
 
@@ -361,7 +377,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
           <h3 className="text-xs font-semibold mb-2 px-2 py-1">Files</h3>
           <FileTreeView
             nodes={fileTree}
-            selectedFile={selectedFile}
+            selectedFile={validSelectedFile}
             onFileSelect={setSelectedFile}
             isFileEdited={isFileEdited}
             collapsedFolders={collapsedFolders}
@@ -372,11 +388,11 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
       {/* Main panel - Editor */}
       <div className="flex-1 min-w-0 flex flex-col">
-        {selectedFile ? (
+        {validSelectedFile ? (
           <>
             <div className="border-b p-3 flex items-center justify-between bg-background">
               <span className="text-sm font-medium">
-                {selectedFile}
+                {validSelectedFile}
                 {hasUnsavedChanges && <span className="text-orange-500">*</span>}
               </span>
               <Button
@@ -397,7 +413,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
               <CodeEditor
                 value={currentContent}
                 onChange={handleContentChange}
-                language={getLanguage(selectedFile)}
+                language={getLanguage(validSelectedFile)}
               />
             </div>
           </>
