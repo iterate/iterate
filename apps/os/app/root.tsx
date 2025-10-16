@@ -8,9 +8,9 @@ import {
   ScrollRestoration,
 } from "react-router";
 import { ThemeProvider } from "next-themes";
-import { Suspense } from "react";
+import { Suspense, type PropsWithChildren } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { PostHogProvider, PostHogErrorBoundary } from "posthog-js/react";
+import { PostHogProvider as _PostHogProvider, PostHogErrorBoundary } from "posthog-js/react";
 import type { Route } from "./+types/root";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
@@ -39,9 +39,19 @@ export function Layout({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Fills up the network traffic with useless events in dev
+const PostHogProvider = !import.meta.env.DEV
+  ? _PostHogProvider
+  : ({ children }: PropsWithChildren) => <>{children}</>;
+
 export default function App() {
   return (
-    <PostHogProvider apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY}>
+    <PostHogProvider
+      apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY}
+      options={{
+        api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
+      }}
+    >
       <PostHogErrorBoundary fallback={<PostHogErrorFallback />}>
         <QueryClientProvider client={queryClient}>
           <TrpcContext.TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>

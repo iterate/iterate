@@ -1,9 +1,10 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray, lt } from "drizzle-orm";
+import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
-import { waitUntil } from "../../env.ts";
+import { env as _env, waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import * as schema from "../db/schema.ts";
@@ -24,12 +25,12 @@ import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
-import { getConnectionKey } from "./mcp/mcp-slice.ts";
-import type {
-  AgentCoreEvent,
-  CoreReducedState,
-  ParticipantJoinedEvent,
-  ParticipantMentionedEvent,
+import {
+  ApprovalKey,
+  type AgentCoreEvent,
+  type CoreReducedState,
+  type ParticipantJoinedEvent,
+  type ParticipantMentionedEvent,
 } from "./agent-core-schemas.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
@@ -52,6 +53,7 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 import type { AgentInitParams } from "./iterate-agent.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
@@ -438,6 +440,53 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
       },
+      requestApprovalForToolCall: async (
+        payload: Parameters<NonNullable<AgentCoreDeps["requestApprovalForToolCall"]>>[0],
+      ) => {
+        const prettyArgs = YAML.stringify(payload.args || {}, (key, value) => {
+          if (key === "impersonateUserId") return undefined;
+          return value;
+        }).trim();
+
+        let message = `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`;
+        if (prettyArgs !== "{}") {
+          message += `\n\nArguments:\n\n\`\`\`\n${prettyArgs}\`\`\``;
+        }
+
+        const result = await this.sendSlackMessage({ text: message });
+        if (!result.ts) throw new Error("Failed to send approval request message");
+
+        // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
+        await this.addSlackReaction({ messageTs: result.ts!, name: "+1" });
+        await this.addSlackReaction({ messageTs: result.ts!, name: "-1" });
+
+        return ApprovalKey.parse(result.ts);
+      },
+      onToolCallApproved: async ({ data, replayToolCall }) => {
+        const messageTs = data.approvalKey;
+        const removeReactions = () =>
+          Promise.all([
+            this.removeSlackReaction({ messageTs, name: "+1" }),
+            this.removeSlackReaction({ messageTs, name: "-1" }),
+          ]);
+        if (!data.approved) {
+          await Promise.all([
+            removeReactions(),
+            this.addSlackReaction({ messageTs, name: "no_entry" }),
+          ]);
+        }
+
+        await Promise.all([
+          removeReactions(),
+          this.addSlackReaction({ messageTs, name: "eyes" }),
+          replayToolCall(),
+        ])
+          .then(() => this.addSlackReaction({ messageTs, name: "white_check_mark" }))
+          .catch((e) =>
+            this.addSlackReaction({ messageTs, name: "x" }).then(() => Promise.reject(e)),
+          )
+          .finally(() => this.removeSlackReaction({ messageTs, name: "eyes" }));
+      },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
@@ -448,7 +497,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           return await this.getSlackPermalink();
         },
       },
-    };
+    } satisfies Partial<AgentCoreDeps> & Record<string, unknown>;
   }
 
   // Turn any files shared with the bot into iterate files that can be used by the LLM
@@ -606,6 +655,64 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     });
 
     return events;
+  }
+
+  private async getUserInfo(slackUserId: string, botUserId: string | undefined) {
+    if (slackUserId === botUserId) {
+      return null;
+    }
+    const currentState = this.agentCore.state;
+
+    const existingParticipant = Object.values(currentState.participants || {}).find(
+      (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+    );
+    if (existingParticipant) {
+      return {
+        status: "existing-participant" as const,
+        userId: existingParticipant.internalUserId,
+        userEmail: existingParticipant.email,
+        userName: existingParticipant.displayName,
+        orgRole: existingParticipant.role,
+      };
+    }
+
+    const estateId = this.databaseRecord.estateId;
+
+    const result = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
+      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
+      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.externalId, slackUserId),
+          eq(estate.id, estateId),
+        ),
+      )
+      .limit(1);
+
+    // If no result, user either doesn't exist or doesn't have access to this estate
+    if (!result[0]) {
+      logger.info(
+        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
+      );
+      return null;
+    }
+
+    return {
+      status: "new-participant" as const,
+      ...result[0],
+    };
   }
 
   /**
@@ -1139,6 +1246,37 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // Process current webhook
     const currentEvents = await this.extractEventsFromWebhook(slackWebhookPayload, botUserId, true);
+
+    // Determine who authored the message and whether it mentions our bot
+    const isBotMessage =
+      botUserId &&
+      (("user" in slackEvent && slackEvent.user === botUserId) || "bot_id" in slackEvent);
+    const isFromOurBot = botUserId && "user" in slackEvent && slackEvent.user === botUserId;
+    // We always ignore our own bot's messages
+    // We ignore other bot messages unless they explicitly mention our bot - to avoid two bots getting in an infinite loop talking to each other
+    const isBotMessageThatShouldBeIgnored =
+      isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
+
+    if (
+      slackEvent.type === "reaction_added" &&
+      !isBotMessageThatShouldBeIgnored &&
+      slackEvent.item.ts in currentState.toolCallApprovals &&
+      currentState.toolCallApprovals[slackEvent.item.ts as ApprovalKey]?.status === "pending" &&
+      (slackEvent.reaction === "+1" || slackEvent.reaction === "-1")
+    ) {
+      const userInfo = await this.getUserInfo(slackEvent.user, botUserId);
+      if (userInfo) {
+        currentEvents.push({
+          type: "CORE:TOOL_CALL_APPROVED",
+          data: {
+            approvalKey: ApprovalKey.parse(slackEvent.item.ts),
+            approved: slackEvent.reaction === "+1",
+            approvedBy: userInfo,
+          },
+        });
+      }
+    }
+
     this.addEvents(currentEvents);
 
     return {
@@ -1174,21 +1312,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error(`Failed to send Slack message: ${result.error}`);
     }
 
-    const magic: MagicAgentInstructions = {};
-    if (endTurn) {
-      magic.__triggerLLMRequest = false;
-    }
+    const magic: MagicAgentInstructions = input.endTurn ? { __triggerLLMRequest: false } : {};
 
-    // return an empty object to conserve tokens in the success case, plus magic flags if any
-    return {
-      ...(result.ok
-        ? {
-            // If we just return {} to save tokens, the LLM will sometimes try sending the message again
-            status: "message sent",
-          }
-        : result),
-      ...magic,
-    };
+    // don't include full slack API response to conserve tokens in the success case. need some properties though so the LLM knows the message was sent
+    return { ok: true, ts: result.ts, ...magic };
   }
 
   async addSlackReaction(input: Inputs["addSlackReaction"]) {

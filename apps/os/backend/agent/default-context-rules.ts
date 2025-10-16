@@ -298,6 +298,12 @@ export const defaultContextRules = defineRules([
     match: matchers.sandboxStatus("starting"),
   },
   {
+    key: "policies",
+    toolApprovalPolicies: [
+      { approvalRequired: true, matcher: '$contains(name, "list_issues")' }, //
+    ],
+  },
+  {
     key: "google-gmail-tools",
     prompt: dedent`
       You have access to Gmail tools to send, read, reply to, and forward emails.
@@ -306,6 +312,8 @@ export const defaultContextRules = defineRules([
       - Use simple, plain text by default
       - Only use HTML formatting when explicitly requested
       - Keep emails concise and professional
+      - If recipient/subject/body are not provided, assume the user wants to test out this functionality and send a test email to themselves with subject 'hello from iterate' and something witty in the body.
+      - The user will prompted for approval so there's no risk of unwanted emails being sent, so use the sendGmail tool freely.
 
       When replying to emails:
       - Use sendGmail with threadId and inReplyTo (messageId) from getGmailMessage
@@ -326,8 +334,17 @@ export const defaultContextRules = defineRules([
       - Respect user privacy and only access what's needed
     `,
     match: matchers.and(matchers.forAgentClass("SlackAgent"), matchers.hasLabel("GMAIL")),
+    toolApprovalPolicies: [
+      { approvalRequired: true, matcher: '$contains(name, "sendGmail")' },
+      { approvalRequired: false, matcher: '$contains(name, "sendGmailWithoutApproval")' },
+    ],
     tools: [
       iterateAgentTool.sendGmail(),
+      iterateAgentTool.sendGmail({
+        overrideName: "sendGmailWithoutApproval",
+        overrideDescription:
+          "Send an email without approval. ONLY do this if the user has explicitly asked you to do so, using the full tool name.",
+      }),
       // requires unapproved scope: gmail.modify
       iterateAgentTool.callGoogleAPI({
         overrideName: "listGmailMessages",

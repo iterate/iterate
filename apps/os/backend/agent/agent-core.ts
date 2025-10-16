@@ -21,6 +21,7 @@
  */
 
 import { Mutex } from "async-mutex";
+import jsonata from "jsonata/sync";
 import type { OpenAI } from "openai";
 import type {
   ResponseFunctionToolCall,
@@ -34,12 +35,15 @@ import type { TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
+  type ApprovalKey,
   type AugmentedCoreReducedState,
   CORE_INITIAL_REDUCED_STATE,
   type CoreReducedState,
+  type ToolCallApprovalEvent,
+  type ToolCallApprovalState,
 } from "./agent-core-schemas.js";
 import { renderPromptFragment } from "./prompt-fragments.js";
-import { type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
+import { type LocalFunctionRuntimeTool, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
 
 /**
@@ -174,6 +178,16 @@ export interface AgentCoreDeps {
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
+  requestApprovalForToolCall?: (payload: {
+    toolName: string;
+    args: JSONSerializable;
+    toolCallId: string;
+  }) => Promise<ApprovalKey>;
+  onToolCallApproved?: (params: {
+    data: ToolCallApprovalEvent["data"];
+    state: ToolCallApprovalState;
+    replayToolCall: () => Promise<void>;
+  }) => Promise<void>;
   /** Provided console instance */
   console: Console | TagLogger;
 }
@@ -277,6 +291,7 @@ export class AgentCore<
   ): MergedStateForSlices<Slices> & MergedStateForSlices<CoreSlices> & AugmentedCoreReducedState {
     const next: AugmentedCoreReducedState = {
       ...inputState,
+      enabledContextRules: [],
       runtimeTools: [],
       ephemeralPromptFragments: {},
       toolSpecs: [],
@@ -288,6 +303,7 @@ export class AgentCore<
       const matchAgainst = this.deps.getRuleMatchData(next);
       return evaluateContextRuleMatchers({ contextRule, matchAgainst });
     });
+    next.enabledContextRules = enabledContextRules;
     // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
     // into the LLM instructions for this request. These are ephemeral and recomputed per request.
     next.ephemeralPromptFragments = Object.fromEntries(
@@ -321,7 +337,7 @@ export class AgentCore<
   }
 
   // Dependencies & slices ---------------------------------------------------
-  private readonly deps: MergedDepsForSlices<Slices>;
+  readonly deps: MergedDepsForSlices<Slices>;
   private readonly slices: Readonly<Slices>;
 
   private readonly _mutex = new Mutex();
@@ -1036,6 +1052,69 @@ export class AgentCore<
         break;
       }
 
+      case "CORE:TOOL_CALL_APPROVAL_REQUESTED": {
+        const { data } = event;
+        next.toolCallApprovals = {
+          ...next.toolCallApprovals,
+          [data.approvalKey]: {
+            ...event.data,
+            status: "pending",
+          },
+        };
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `A tool call has been requested: ${data.toolName} with args: ${JSON.stringify(data.args)}. Awaiting approval from the user.`,
+            },
+          ],
+        });
+        break;
+      }
+
+      case "CORE:TOOL_CALL_APPROVED": {
+        const { data } = event;
+        const found = next.toolCallApprovals[data.approvalKey];
+        if (!found) {
+          next.inputItems.push({
+            type: "message" as const,
+            role: "developer" as const,
+            content: [
+              {
+                type: "input_text" as const,
+                text: `Tool call approval not found for key: ${data.approvalKey}. This should not have happened. Existing approval keys: ${Object.keys(next.toolCallApprovals).join(", ")}`,
+              },
+            ],
+          });
+          break;
+        }
+        if (found.status !== "pending") {
+          // already approved/rejected. ignore.
+          break;
+        }
+        next.toolCallApprovals = {
+          ...next.toolCallApprovals,
+          [data.approvalKey]: {
+            ...next.toolCallApprovals[data.approvalKey],
+            status: data.approved ? "approved" : "rejected",
+          },
+        };
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [
+            {
+              type: "input_text" as const,
+              text: `Tool call ${found.toolName} with args: ${JSON.stringify(found.args)} has been ${data.approved ? "approved" : "rejected"}.`,
+            },
+          ],
+        });
+        next.triggerLLMRequest = true;
+        break;
+      }
+
       case "CORE:INTERNAL_ERROR":
       case "CORE:INITIALIZED_WITH_EVENTS":
       case "CORE:LOG":
@@ -1343,16 +1422,65 @@ export class AgentCore<
       }
   > {
     const tools = this.state.runtimeTools;
-    const tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
+    let tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
       this.deps.console.error("Tool not found or not local:", tool);
       this.deps.console.error("runtime tools:", tools);
       this.deps.console.error("tool", JSON.stringify(tool, null, 2));
       return { success: false, error: `Tool not found or not local: ${call.name}` };
     }
+
     try {
       const args = JSON.parse(call.arguments || "{}");
-      const result = await tool.execute(call, args);
+
+      const policies = this.state.enabledContextRules.flatMap(
+        (rule) => rule.toolApprovalPolicies || [],
+      );
+      let needsApproval = false;
+      for (const policy of policies) {
+        const evaluator = jsonata(policy.matcher || "true");
+        const result = evaluator.evaluate(call);
+        if (result) {
+          needsApproval = policy.approvalRequired;
+        }
+      }
+      if (call.call_id.startsWith("injected-")) needsApproval = false;
+
+      if (needsApproval) {
+        const wrappers = tool.wrappers?.slice() || []; // slice to avoid mutating the original array
+        wrappers.push((_next) => async (call, args) => {
+          const approvalKey = await this.deps.requestApprovalForToolCall!({
+            toolName: call.name,
+            args: args as {},
+            toolCallId: call.call_id,
+          }).catch((e) => {
+            const error = e instanceof Error ? e : new Error(String(e));
+            error.message = `Failed to request approval: ${error.message}`;
+            throw error;
+          });
+          return {
+            toolCallResult: {
+              success: true,
+              output: { message: "Tool call needs approval" },
+            },
+            triggerLLMRequest: false,
+            addEvents: [
+              {
+                type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
+                data: {
+                  approvalKey,
+                  toolName: call.name,
+                  args,
+                  toolCallId: call.call_id,
+                },
+              },
+            ],
+          };
+        });
+        tool = { ...tool, wrappers };
+      }
+
+      const result = await executeLocalFunctionTool(tool, call, args);
       return {
         success: true,
         output: stripNonSerializableProperties(result.toolCallResult),
@@ -1414,6 +1542,23 @@ export class AgentCore<
     return this.deps.getFinalRedirectUrl?.(payload);
   }
 }
+
+/**
+ * Calls `tool.execute` after applying all wrappers in the correct order.
+ * This utility function also gets rid of the stupid string from the type to protect against calling `.execute` directly by mistake.
+ */
+export const executeLocalFunctionTool = async (
+  tool: LocalFunctionRuntimeTool,
+  call: ResponseFunctionToolCall,
+  args: unknown,
+) => {
+  if (typeof tool.execute !== "function") throw new Error("Tool execute is not a function");
+  const wrapped = (tool.wrappers || []).toReversed().reduce(
+    (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
+    tool.execute,
+  );
+  return wrapped(call, args);
+};
 
 // -----------------------------------------------------------------------------
 // Helper conditional types exposed for slice authors
