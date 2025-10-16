@@ -1,3 +1,4 @@
+import { useSessionStorage } from "usehooks-ts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useMemo } from "react";
 import { basicSetup, EditorView } from "codemirror";
@@ -286,9 +287,23 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
   );
 
   const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
-  const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [localEdits, setLocalEdits] = useState<Record<string, string>>({});
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [selectedFile, setSelectedFile] = useSessionStorage<string | null>(
+    "iterate-selected-file",
+    null,
+  );
+  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string>>(
+    "iterate-local-edits",
+    {},
+  );
+  const [collapsedFoldersRecord, setCollapsedFolders] = useSessionStorage<Record<string, boolean>>(
+    "iterate-collapsed-folders",
+    {},
+  );
+  const collapsedFolders = useMemo(
+    () =>
+      new Set(Object.keys(collapsedFoldersRecord).filter((path) => collapsedFoldersRecord[path])),
+    [collapsedFoldersRecord],
+  );
 
   // Derive file contents by merging filesystem with local edits
   const fileContents = useMemo(() => ({ ...filesystem, ...localEdits }), [filesystem, localEdits]);
@@ -306,15 +321,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
   const currentContent = validSelectedFile ? fileContents[validSelectedFile] : "";
 
   const handleToggleFolder = (path: string) => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(path)) {
-        next.delete(path);
-      } else {
-        next.add(path);
-      }
-      return next;
-    });
+    setCollapsedFolders((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
   // Check if a file has been edited
