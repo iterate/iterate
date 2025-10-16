@@ -12,7 +12,6 @@ import {
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
-  publicProcedure,
 } from "../trpc.ts";
 import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
 import {
