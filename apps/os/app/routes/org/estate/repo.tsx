@@ -72,6 +72,7 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet.tsx";
 import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
+import { IDE } from "../../admin/estate-editor.tsx"; // todo: move file to not admin/
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -437,6 +438,8 @@ function EstateContent() {
           </CardContent>
         </Card>
       </div>
+
+      <IDE />
 
       {/* Build History */}
       {connectedRepo && (

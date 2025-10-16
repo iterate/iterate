@@ -5,6 +5,7 @@ import * as tarStream from "tar-stream";
 import * as fflate from "fflate";
 import { z } from "zod";
 import { eq, desc, and } from "drizzle-orm";
+import dedent from "dedent";
 import {
   protectedProcedure,
   estateProtectedProcedure,
@@ -24,16 +25,50 @@ import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { CreateCommitOnBranchInput } from "./CreateCommitOnBranchInput.ts";
 
-const iterateBotGithubProcedure = publicProcedure.use(async ({ ctx, next }) => {
-  ctx.env.ADMIN_EMAIL_HOSTS;
-  if (!import.meta.env.ITERATE_BOT_GITHUB_TOKEN.includes("pat_")) {
-    throw new Error(
-      "ITERATE_BOT_GITHUB_TOKEN is not a personal access token: " +
-        import.meta.env.ITERATE_BOT_GITHUB_TOKEN,
-    );
+const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
+  const githubStuff = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
+  if (!githubStuff) {
+    throw new Error("GitHub installation not found for this estate");
   }
-  return next({ ctx });
+  if (!ctx.estate.connectedRepoId) {
+    throw new Error("No GitHub repository connected to this estate");
+  }
+  const { repoData, installationToken } = await getRepoDetails(
+    ctx.estate.connectedRepoId,
+    githubStuff.accountId,
+  );
+  return next({
+    ctx: { ...ctx, repoData, installationToken, refName: ctx.estate.connectedRepoRef },
+  });
 });
+
+async function getRepoDetails(repoId: number, installationId: string) {
+  const installationToken = await getGithubInstallationToken(installationId);
+
+  // Get repository details
+  const repoResponse = await fetch(`https://api.github.com/repositories/${repoId}`, {
+    headers: {
+      Authorization: `Bearer ${installationToken}`,
+      Accept: "application/vnd.github+json",
+      "User-Agent": "Iterate OS",
+    },
+  });
+
+  if (!repoResponse.ok) {
+    throw new Error("Failed to fetch repository details");
+  }
+
+  const repoData = z
+    .object({
+      id: z.number(),
+      full_name: z.string(),
+      html_url: z.string(),
+      clone_url: z.string(),
+    })
+    .parse(await repoResponse.json());
+
+  return { repoData, installationToken };
+}
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -62,32 +97,10 @@ export async function triggerEstateRebuild(params: {
   }
 
   // Get installation token
-  const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-  // Get repository details
-  const repoResponse = await fetch(
-    `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}`,
-    {
-      headers: {
-        Authorization: `Bearer ${installationToken}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Iterate OS",
-      },
-    },
+  const { repoData, installationToken } = await getRepoDetails(
+    estateWithRepo.connectedRepoId,
+    githubInstallation.accountId,
   );
-
-  if (!repoResponse.ok) {
-    throw new Error("Failed to fetch repository details");
-  }
-
-  const repoData = z
-    .object({
-      id: z.number(),
-      full_name: z.string(),
-      html_url: z.string(),
-      clone_url: z.string(),
-    })
-    .parse(await repoResponse.json());
 
   // Use the common build trigger function
   return await triggerGithubBuild({
@@ -201,68 +214,59 @@ export const estateRouter = router({
       };
     }),
 
-  updateRepo: protectedProcedure
-    .input(CreateCommitOnBranchInput)
+  updateRepo: iterateBotGithubProcedure
+    .input(CreateCommitOnBranchInput.omit({ branch: true }))
     .mutation(async ({ input, ctx }) => {
       const { Octokit } = await import("octokit");
-      const github = new Octokit({ auth: ctx.env.ITERATE_BOT_GITHUB_TOKEN });
+      const github = new Octokit({ auth: ctx.installationToken });
       const result = await github.graphql(
-        `
-        mutation ($input: CreateCommitOnBranchInput!) {
-          createCommitOnBranch(input: $input) {
-            commit {
-              url
+        dedent`
+          mutation ($input: CreateCommitOnBranchInput!) {
+            createCommitOnBranch(input: $input) {
+              commit {
+                url
+              }
             }
           }
-        }
-      `,
-        { input },
+        `,
+        {
+          input: {
+            ...input,
+            branch: {
+              branchName: ctx.estate.connectedRepoRef!,
+              repositoryNameWithOwner: ctx.repoData.full_name,
+            },
+          } satisfies CreateCommitOnBranchInput,
+        },
       );
       return result;
     }),
-  getRepoFilesystem: protectedProcedure
-    .input(
-      z.object({
-        repositoryNameWithOwner: z.string(),
-        refName: z.string(),
-      }),
-    )
-    .query(async ({ input, ctx }) => {
-      if (!ctx.env.ITERATE_BOT_GITHUB_TOKEN) {
-        throw new Error(
-          "ITERATE_BOT_GITHUB_TOKEN is not a personal access token: " +
-            ctx.env.ITERATE_BOT_GITHUB_TOKEN,
-        );
-      }
+  getRepoFilesystem: iterateBotGithubProcedure.query(async ({ ctx }) => {
+    const zipballResponse = await fetch(
+      `https://api.github.com/repos/${ctx.repoData.full_name}/zipball/${ctx.refName}`,
+      { headers: { Authorization: `Bearer ${ctx.installationToken}`, "User-Agent": "Iterate OS" } },
+    );
 
-      const zipballResponse = await fetch(
-        `https://api.github.com/repos/${input.repositoryNameWithOwner}/zipball/${input.refName}`,
-        {
-          headers: {
-            Authorization: `Bearer ${ctx.env.ITERATE_BOT_GITHUB_TOKEN}`,
-            "User-Agent": "iterate.com OS",
-          },
-        },
+    if (!zipballResponse.ok) {
+      throw new Error(
+        `Failed to fetch zipball ${zipballResponse.url}: ${await zipballResponse.text()}`,
       );
+    }
 
-      if (!zipballResponse.ok) {
-        throw new Error(`Failed to fetch zipball: ${await zipballResponse.text()}`);
-      }
+    const zipball = await zipballResponse.arrayBuffer();
+    const unzipped = fflate.unzipSync(new Uint8Array(zipball));
 
-      const zipball = await zipballResponse.arrayBuffer();
-      const unzipped = fflate.unzipSync(new Uint8Array(zipball));
-
-      const filesystem: Record<string, string> = Object.fromEntries(
-        Object.entries(unzipped)
-          .map(([filename, data]) => [
-            filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
-            fflate.strFromU8(data),
-          ])
-          .filter(([k, v]) => !k.endsWith("/") && v.trim()),
-      );
-      const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
-      return { filesystem, sha };
-    }),
+    const filesystem: Record<string, string> = Object.fromEntries(
+      Object.entries(unzipped)
+        .map(([filename, data]) => [
+          filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+          fflate.strFromU8(data),
+        ])
+        .filter(([k, v]) => !k.endsWith("/") && v.trim()),
+    );
+    const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
+    return { filesystem, sha };
+  }),
 
   getDTS: protectedProcedure
     .input(
