@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { executeLocalFunctionTool } from "../agent-core.ts";
 import {
   createCacheKey,
   createMCPManagerCache,
@@ -808,7 +809,8 @@ describe("mcp-tool-mapping", () => {
         lazyConnectionDeps: mockLazyConnectionDeps,
       });
 
-      const result = await runtimeTool.execute(
+      const result = await executeLocalFunctionTool(
+        runtimeTool,
         { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
         { query: "test" },
       );
@@ -851,7 +853,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
           { query: "test" },
         ),
@@ -882,7 +885,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           {
             id: "call-123",
             name: "github_search_repos",
@@ -916,7 +920,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
           { query: "test" },
         ),

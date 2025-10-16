@@ -142,6 +142,41 @@ export const LocalFunctionToolCallEvent = z.object({
   ...localFunctionToolCallEventFields,
 });
 
+export const ParticipantRole = z.enum(["member", "admin", "owner", "guest", "external"]);
+
+export const ApprovalKey = z.string().brand("ApprovalKey");
+export type ApprovalKey = z.infer<typeof ApprovalKey>;
+const toolCallApprovalRequestedEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVAL_REQUESTED"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    toolName: z.string(),
+    toolCallId: z.string(),
+    args: z.unknown(),
+  }),
+};
+export const ToolCallApprovalRequestedEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalRequestedEventFields,
+});
+
+const toolCallApprovalEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVED"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    approved: z.boolean(),
+    approvedBy: z.object({
+      userId: z.string(),
+      orgRole: ParticipantRole.optional(),
+    }),
+  }),
+};
+export const ToolCallApprovalEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalEventFields,
+});
+export type ToolCallApprovalEvent = z.infer<typeof ToolCallApprovalEvent>;
+
 // CORE:LLM_REQUEST_START
 const llmRequestStartEventFields = {
   type: z.literal("CORE:LLM_REQUEST_START"),
@@ -332,7 +367,7 @@ const participantJoinedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -371,7 +406,7 @@ const participantMentionedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -423,6 +458,8 @@ export const FileSharedEvent = z.object({
 
 export const agentCoreEventSchemasUndiscriminated = [
   LocalFunctionToolCallEvent,
+  ToolCallApprovalRequestedEvent,
+  ToolCallApprovalEvent,
   LlmRequestStartEvent,
   LlmRequestEndEvent,
   LlmRequestCancelEvent,
@@ -532,6 +569,13 @@ export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
 
 export type ParticipantMentionedEvent = z.infer<typeof ParticipantMentionedEvent>;
 
+export type ToolCallApprovalState = {
+  toolCallId: string;
+  status: "pending" | "approved" | "rejected";
+  toolName: string;
+  args: unknown;
+};
+
 // ---------------------------------------------------------------------------
 //  Reduced State
 // ---------------------------------------------------------------------------
@@ -559,6 +603,9 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
 
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
   contextRules: Record<string, ContextRule>;
+
+  toolCallApprovals: Record<ApprovalKey, ToolCallApprovalState>;
+
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
    * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
@@ -592,6 +639,7 @@ with the agent.
 
 export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
   extends CoreReducedState<TEventInput> {
+  enabledContextRules: ContextRule[];
   /**
    * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
    */
@@ -626,6 +674,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   contextRules: {},
+  toolCallApprovals: {},
   groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,
