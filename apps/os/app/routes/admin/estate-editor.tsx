@@ -417,10 +417,11 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                   getRepoFileSystemQuery.isPending
                 }
                 size="sm"
+                className="min-w-48"
               >
                 {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
-                  ? "Saving..."
-                  : "Save"}
+                  ? "Pushing..."
+                  : "Push to GitHub"}
               </Button>
             </div>
             <div className="flex-1">
