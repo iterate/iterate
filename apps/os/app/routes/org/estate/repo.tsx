@@ -106,7 +106,6 @@ export async function loader({ params }: Route.LoaderArgs) {
   const db = getDb();
 
   const githubInstallation = await getGithubInstallationForEstate(db, estateId);
-  getGithubInstallationForEstate(db, estateId);
 
   if (!githubInstallation) {
     return data({
