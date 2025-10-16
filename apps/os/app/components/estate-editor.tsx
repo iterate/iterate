@@ -377,6 +377,29 @@ export function IDE() {
     });
   }, [dts.data, validSelectedFile]);
 
+  useEffect(() => {
+    const monaco = getMonaco();
+    if (!monaco) return;
+    if (!getRepoFileSystemQuery.data) return;
+    Object.entries(getRepoFileSystemQuery.data.filesystem).forEach(([filename, content]) => {
+      if (filename.endsWith(".ts") || filename.endsWith(".tsx")) {
+        console.log("adding extra lib", filename);
+        monaco.languages.typescript.typescriptDefaults.addExtraLib(
+          content,
+          `inmemory://model/${filename}`,
+        );
+        monaco.languages.typescript.typescriptDefaults.addExtraLib(
+          content,
+          `file:///app/${filename}`,
+        );
+      }
+    });
+    // monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+    //   ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+    //   typeRoots: ["file:///node_modules"],
+    // });
+  }, [getRepoFileSystemQuery.data]);
+
   const { resolvedTheme } = useTheme();
 
   const onMount = useCallback<OnMount>((...params) => {
@@ -448,7 +471,7 @@ export function IDE() {
       <div className="flex-1 min-w-0">
         {validSelectedFile ? (
           <Editor
-            path={validSelectedFile ? `/app/${validSelectedFile}` : undefined}
+            path={validSelectedFile ? `file:///app/${validSelectedFile}` : undefined}
             height="100%"
             defaultLanguage={language || "markdown"}
             language={language}
