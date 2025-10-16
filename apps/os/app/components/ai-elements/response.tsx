@@ -1,22 +1,13 @@
 import { type ComponentProps, memo } from "react";
-import type { Streamdown as StreamdownType } from "streamdown";
-import { cn } from "../../lib/utils.ts";
+import Markdown from "react-markdown";
 
-type ResponseProps = ComponentProps<typeof StreamdownType>;
-
-let Streamdown: typeof StreamdownType;
-if (import.meta.env.SSR) {
-  Streamdown = memo(({ ...props }: ResponseProps) => <div {...props} />);
-} else {
-  Streamdown = await import("streamdown").then((m) => m.Streamdown);
-}
+type ResponseProps = ComponentProps<typeof Markdown>;
 
 export const Response = memo(
-  ({ className, ...props }: ResponseProps) => (
-    <Streamdown
-      className={cn("size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
-      {...props}
-    />
+  ({ className, ...props }: ResponseProps & { className?: string }) => (
+    <div className={className}>
+      <Markdown {...props} />
+    </div>
   ),
   (prevProps, nextProps) => prevProps.children === nextProps.children,
 );
