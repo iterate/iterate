@@ -498,6 +498,9 @@ export function IDE() {
                 ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
                 strict: false,
                 lib: ["es6"],
+                allowJs: true,
+                allowImportingTsExtensions: true,
+                allowSyntheticDefaultImports: true,
                 ...compilerOptions,
                 // verbatimModuleSyntax: false, // causes problems with our fake node_modules
                 typeRoots: ["file:///node_modules"],
