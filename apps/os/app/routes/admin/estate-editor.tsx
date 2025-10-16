@@ -381,8 +381,8 @@ export function IDE() {
   return (
     <div className="flex h-[calc(100vh-8rem)] overflow-hidden">
       {/* Left sidebar - File tree */}
-      <div className="w-48 flex-shrink-0 border-r bg-muted/30 overflow-y-auto">
-        <div className="p-2">
+      <div className="w-48 flex-shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+        <div className="p-2 flex-1 overflow-y-auto">
           <h3 className="text-xs font-semibold mb-2 px-2 py-1">Files</h3>
           <FileTreeView
             nodes={fileTree}
@@ -393,74 +393,47 @@ export function IDE() {
             onToggleFolder={handleToggleFolder}
           />
         </div>
+        <div className="p-2 border-t">
+          <Button
+            onClick={handleSave}
+            disabled={
+              !hasUnsavedChanges || saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+            }
+            size="sm"
+            className="w-full"
+          >
+            {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+              ? "Pushing..."
+              : "Push to GitHub"}
+          </Button>
+        </div>
       </div>
 
       {/* Main panel - Editor */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0">
         {validSelectedFile ? (
-          <>
-            <div className="p-3 flex items-center justify-between">
-              <span className="text-sm font-medium">
-                {validSelectedFile}
-                {hasUnsavedChanges && <span className="text-orange-500">*</span>}
-              </span>
-              <Button
-                onClick={handleSave}
-                disabled={
-                  !hasUnsavedChanges ||
-                  saveFileMutation.isPending ||
-                  getRepoFileSystemQuery.isPending
-                }
-                size="sm"
-                className="min-w-48"
-              >
-                {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
-                  ? "Pushing..."
-                  : "Push to GitHub"}
-              </Button>
-            </div>
-            <div className="flex-1 -mt-3">
-              <Editor
-                path={validSelectedFile + (dts.data?.length || "") || undefined}
-                // make the editor (roughly) full window height minus the navbar at the top
-                height="calc(100vh - 240px)"
-                defaultLanguage={language || "markdown"}
-                language={language}
-                onChange={(val) => handleContentChange(val || "")}
-                value={currentContent}
-                theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-                options={{ wordWrap: "on" }}
-                // options={{
-                //   quickSuggestions: false,
-                //   suggest: { showKeywords: false },
-                //   wordBasedSuggestions: false,
-                //   wordWrap: "on",
-                //   colorDecorators: true,
-                // }}
-                beforeMount={(monaco) => {
-                  // todo: helper to transform actual tsconfig.json to stupid monaco editor compatible enums
-                  // const tsconfig = JSON5.parse(
-                  //   getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
-                  // ) as import("type-fest").TsConfigJson;
-                  // const compilerOptions = tsconfig.compilerOptions || {};
-                  // const compilerOptionsWithEnums = {
-                  //   target: toEnum(monaco.languages.typescript.ScriptTarget, compilerOptions.target),
-                  // }
-                  monaco.languages.typescript.JsxEmit.Preserve;
-                  monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-                    ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
-                    strict: false,
-                    lib: ["es6"],
-                    // ...compilerOptions,
-                    typeRoots: ["file:///node_modules"],
-                  });
-                }}
-                onMount={onMount}
-              />
-            </div>
-          </>
+          <Editor
+            path={validSelectedFile + (dts.data?.length || "") || undefined}
+            height="100%"
+            defaultLanguage={language || "markdown"}
+            language={language}
+            onChange={(val) => handleContentChange(val || "")}
+            value={currentContent}
+            theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+            options={{ wordWrap: "on", fixedOverflowWidgets: true }}
+            beforeMount={(monaco) => {
+              monaco.languages.typescript.JsxEmit.Preserve;
+              monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+                ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+                strict: false,
+                lib: ["es6"],
+                typeRoots: ["file:///node_modules"],
+              });
+            }}
+            onMount={onMount}
+          />
         ) : (
-          <div className="flex-1 flex items-center justify-center text-muted-foreground">
+          <div className="flex items-center justify-center h-full text-muted-foreground">
             Select a file to edit
           </div>
         )}
