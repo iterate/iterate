@@ -46,6 +46,10 @@ export async function triggerEstateRebuild(params: {
   // Get installation token
   const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
 
+  if (!installationToken) {
+    throw new Error("Failed to get installation token");
+  }
+
   // Get repository details
   const repoResponse = await fetch(
     `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}`,
