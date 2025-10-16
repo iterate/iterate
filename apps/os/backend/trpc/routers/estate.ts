@@ -1,3 +1,7 @@
+import { Readable } from "node:stream";
+import { createGunzip } from "node:zlib";
+import * as semver from "semver";
+import * as tarStream from "tar-stream";
 import * as fflate from "fflate";
 import { z } from "zod";
 import { eq, desc, and } from "drizzle-orm";
@@ -258,6 +262,136 @@ export const estateRouter = router({
       );
       const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
       return { filesystem, sha };
+    }),
+
+  getDTS: protectedProcedure
+    .input(
+      z.object({
+        packageJson: z.object({
+          dependencies: z.record(z.string(), z.string()).optional(),
+          devDependencies: z.record(z.string(), z.string()).optional(),
+        }),
+      }),
+    )
+    .query(async ({ input }) => {
+      // who needs pnpm when you can just fetch the tarball and extract the dts files?
+      const deps = { ...input.packageJson.dependencies, ...input.packageJson.devDependencies };
+      type GottenPackage = {
+        packageJson: import("type-fest").PackageJson;
+        files: Record<string, string>;
+      };
+      const getPackage = async (name: string, version: string): Promise<GottenPackage> => {
+        if (version.startsWith("github:")) {
+          const [ownerAndRepo, ref = "main"] = version.replace("github:", "").split("#");
+          const zipballUrl = `https://api.github.com/repos/${ownerAndRepo}/zipball/${ref}`;
+          const zipballResponse = await fetch(zipballUrl, {
+            headers: { "User-Agent": "iterate.com OS" },
+          });
+
+          if (!zipballResponse.ok) {
+            throw new Error(`Failed to fetch zipball: ${await zipballResponse.text()}`);
+          }
+
+          const zipball = await zipballResponse.arrayBuffer();
+          const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+
+          const filesystem: Record<string, string> = Object.fromEntries(
+            Object.entries(unzipped)
+              .map(([zipballPath, data]) => {
+                const filename = zipballPath.split("/").slice(1).join("/"); // root dir is `${owner}-${repo}-${sha}`
+                return [filename, data] as const;
+              })
+              .filter(([filename]) => filename.endsWith(".d.ts") || filename === "package.json")
+              .map(([filename, data]) => [filename, fflate.strFromU8(data)])
+              .filter(([k, v]) => !k.endsWith("/") && v.trim()),
+          );
+          return { files: filesystem, packageJson: JSON.parse(filesystem["package.json"]!) };
+        }
+        const url = version?.match(/^https?:/)
+          ? version
+          : `https://registry.npmjs.org/${name}/-/${name}-${version.replace(/^[~^]/, "")}.tgz`;
+        const res = await fetch(url);
+        const extract = tarStream.extract({});
+
+        // Load into buffer first to avoid streaming issues in Workers
+        const buffer = Buffer.from(await res.arrayBuffer());
+
+        const files: Record<string, string> = {};
+
+        await new Promise<void>(async (resolve, reject) => {
+          const nodeStream = Readable.from(buffer);
+
+          nodeStream.on("error", (error) => {
+            console.error("nodeStream error", error);
+            reject(error);
+          });
+
+          const gunzip = createGunzip();
+
+          gunzip.on("error", (error) => {
+            console.error("gunzip error", error);
+            reject(error);
+          });
+
+          nodeStream.pipe(gunzip).pipe(extract);
+
+          for await (const entry of extract) {
+            const tgzPath = entry.header.name;
+            const filename = tgzPath.replace("package/", "");
+            const isInteresting = filename.endsWith(".d.ts") || filename === "package.json";
+            if (!isInteresting) {
+              entry.resume();
+              continue;
+            }
+            const chunks: Buffer[] = [];
+            for await (const chunk of entry) {
+              chunks.push(chunk);
+            }
+            const content = Buffer.concat(chunks).toString("utf-8");
+            files[filename] = content;
+          }
+          resolve();
+        });
+        const packageJson = JSON.parse(files["package.json"]!) as import("type-fest").PackageJson;
+
+        if (!packageJson.name) {
+          throw new Error(`Couldn't find valid package.json for ${name}@${version}`);
+        }
+        return { packageJson, files };
+      };
+
+      const packages: GottenPackage[] = [];
+      const remainingDeps = { ...deps };
+      for (let i = 100; i >= 0 && Object.keys(remainingDeps).length > 0; i--) {
+        if (i === 0)
+          throw new Error("Too many dependencies: " + Object.keys(remainingDeps).join(", "));
+        for (const [name, version] of Object.entries(remainingDeps)) {
+          const existing = packages.find(
+            (p) => p.packageJson.name === name && semver.satisfies(p.packageJson.version!, version),
+          );
+          delete remainingDeps[name];
+          if (existing) {
+            console.log(
+              `package ${name}@${existing.packageJson.version} exists and matches ${version}`,
+            );
+            continue;
+          }
+          console.log(`package ${name}@${version} not found, getting it...`);
+          const pkg = await getPackage(name, version);
+          console.log(`package ${name}@${version} gotten.`);
+          packages.push(pkg);
+          for (const [depName, depVersion] of Object.entries(pkg.packageJson.dependencies ?? {})) {
+            console.log(
+              `adding dependency ${depName}@${depVersion} to remaining deps because it's a dependency of ${name}@${version}`,
+            );
+            remainingDeps[depName] = depVersion!;
+          }
+        }
+      }
+      console.log(
+        `got ${packages.length} packages: ${packages.map((p) => p.packageJson.name).join(", ")}`,
+      );
+      return packages;
     }),
 
   // Get builds for an estate

@@ -57,7 +57,7 @@ const t = initTRPC.context<Context>().create({
       };
     }
 
-    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
+    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}: ${String(error.cause)}`, {
       code: error.code,
       message: formattedError,
       zodFormatted,

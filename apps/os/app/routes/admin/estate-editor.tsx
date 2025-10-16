@@ -1,3 +1,4 @@
+import JSON5 from "json5";
 import Editor from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage } from "usehooks-ts";
@@ -14,7 +15,6 @@ import {
   Braces,
   Settings,
 } from "lucide-react";
-import dedent from "dedent";
 import { Button } from "../../components/ui/button.tsx";
 import { cn } from "../../lib/utils.ts";
 import { useTRPC } from "../../lib/trpc.ts";
@@ -241,6 +241,17 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
     ...getRepoFilesystemQueryOptions,
     placeholderData: (old) => old,
   });
+
+  const dts = useQuery({
+    ...trpc.estate.getDTS.queryOptions({
+      packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
+    }),
+    enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
+  });
+  console.log({
+    packageJson: getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}",
+    dts: dts.data || dts.error || dts.status,
+  });
   const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
 
   // Derive file contents by merging filesystem with local edits
@@ -323,35 +334,41 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
   const editorRef = useRef<Parameters<OnMount> | null>(null);
 
-  const _getEditor = () => editorRef.current!!![0];
-  const _getMonaco = () => editorRef.current!!![1];
+  const _getEditor = () => editorRef.current?.[0];
+  const _getMonaco = () => editorRef.current?.[1];
+
+  // useEffect(() => {
+  //   const monaco = _getMonaco();
+  //   if (!monaco) return;
+
+  //   const tsconfig = JSON5.parse(getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}");
+  //   const compilerOptions = tsconfig.compilerOptions || {};
+  //   monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+  //     ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+  //     strict: false,
+  //     ...compilerOptions,
+  //     typeRoots: [...(compilerOptions.typeRoots || []), "file:///node_modules"],
+  //   });
+  // }, [getRepoFileSystemQuery.data]);
+  useEffect(() => {
+    const monaco = _getMonaco();
+    if (!monaco) return;
+    dts.data?.forEach((p) => {
+      Object.entries(p.files).forEach(([filename, content]) => {
+        console.log(`file:///node_modules/${p.packageJson.name}/${filename}`);
+        monaco.languages.typescript.typescriptDefaults.addExtraLib(
+          content,
+          `file:///node_modules/${p.packageJson.name}/${filename}`,
+        );
+      });
+    });
+  }, [dts.data, validSelectedFile]);
 
   const { resolvedTheme } = useTheme();
 
   const onMount = useCallback<OnMount>((...params) => {
     editorRef.current = params;
   }, []);
-
-  // Sync editor model content when file changes or content updates
-  // useEffect(() => {
-  //   if (editorRef.current && validSelectedFile) {
-  //     const [editor, monaco] = editorRef.current;
-  //     const model = editor.getModel();
-  //     if (model && model.getValue() !== currentContent) {
-  //       // Use pushEditOperations to update content in a way that preserves undo/redo
-  //       model.pushEditOperations(
-  //         [],
-  //         [
-  //           {
-  //             range: model.getFullModelRange(),
-  //             text: currentContent,
-  //           },
-  //         ],
-  //         () => null,
-  //       );
-  //     }
-  //   }
-  // }, [validSelectedFile, currentContent]);
 
   useEffect(() => {
     // capture cmd-s/ctrl-s
@@ -408,7 +425,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
             </div>
             <div className="flex-1">
               <Editor
-                path={validSelectedFile || undefined}
+                path={validSelectedFile + (dts.data?.length || "") || undefined}
                 // make the editor (roughly) full window height minus the navbar at the top
                 height="calc(100vh - 240px)"
                 defaultLanguage={language || "markdown"}
@@ -425,48 +442,22 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                 //   colorDecorators: true,
                 // }}
                 beforeMount={(monaco) => {
+                  // todo: helper to transform actual tsconfig.json to stupid monaco editor compatible enums
+                  // const tsconfig = JSON5.parse(
+                  //   getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
+                  // ) as import("type-fest").TsConfigJson;
+                  // const compilerOptions = tsconfig.compilerOptions || {};
+                  // const compilerOptionsWithEnums = {
+                  //   target: toEnum(monaco.languages.typescript.ScriptTarget, compilerOptions.target),
+                  // }
+                  monaco.languages.typescript.JsxEmit.Preserve;
                   monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
                     ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
-                    types: ["node_modules/*"],
-                    strict: true,
+                    strict: false,
                     lib: ["es6"],
+                    // ...compilerOptions,
+                    typeRoots: ["file:///node_modules"],
                   });
-                  monaco.languages.typescript.typescriptDefaults.addExtraLib(
-                    "export const a: 1",
-                    "file:///node_modules/@types/testmodule/index.d.ts",
-                  );
-                  const sdkModelFile = monaco.Uri.file("/iterate-com-sdk.d.ts");
-                  const existingSdkModel = monaco.editor.getModel(sdkModelFile);
-                  // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-                  //   dedent`
-                  //     export const matchers: {foo: string}
-                  //   `,
-                  //   `inmemory://model/types.d.ts`,
-                  // );
-                  // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-                  //   dedent`
-                  //     export const matchers: {foo: string}
-                  //   `,
-                  //   `file:///node_modules/axios/index.d.ts`,
-                  // );
-                  // // monaco.languages.typescript.typescriptDefaults.addExtraLib(
-                  //   dedent`
-                  //     export const matchers: {foo: string}
-                  //   `,
-                  //   `file:///node_modules/axios/index.d.ts`,
-                  // )
-
-                  if (!existingSdkModel) {
-                    monaco.editor.createModel(
-                      dedent`
-                        declare module "@iterate-com/sdk" {
-                          ${sdkdts}
-                        }
-                      `,
-                      "typescript",
-                      sdkModelFile,
-                    );
-                  }
                 }}
                 onMount={onMount}
               />
