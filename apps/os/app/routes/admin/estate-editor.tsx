@@ -3,12 +3,6 @@ import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage } from "usehooks-ts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
-import { basicSetup, EditorView } from "codemirror";
-import { javascript } from "@codemirror/lang-javascript";
-import { markdown } from "@codemirror/lang-markdown";
-import { search, searchKeymap } from "@codemirror/search";
-import { keymap } from "@codemirror/view";
-import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { useTheme } from "next-themes";
 import {
   ChevronDown,
