@@ -269,13 +269,6 @@ export class IterateAgent<
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
 
-    // disabling broadcast functionality because it breaks with better-wait-until keep alive websockets
-    const newBroadcast = (_msg: string, _without: string[] | undefined) => {
-      logger.info("web socket broadcast is a no op for now");
-    };
-    this.broadcast = newBroadcast;
-    this.constructor.prototype.broadcast = newBroadcast;
-
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
     this.mcpManagerCache = createMCPManagerCache();
