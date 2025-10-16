@@ -1,4 +1,3 @@
-import JSON5 from "json5";
 import Editor from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage } from "usehooks-ts";
@@ -16,11 +15,11 @@ import {
   Settings,
   Upload,
 } from "lucide-react";
-import { Button } from "../../components/ui/button.tsx";
-import { cn } from "../../lib/utils.ts";
-import { useTRPC } from "../../lib/trpc.ts";
-import { IterateLetterI } from "../../components/ui/iterate-logos.tsx";
-import { useEstateId } from "../../hooks/use-estate.ts";
+import { cn } from "../lib/utils.ts";
+import { useTRPC } from "../lib/trpc.ts";
+import { useEstateId } from "../hooks/use-estate.ts";
+import { IterateLetterI } from "./ui/iterate-logos.tsx";
+import { Button } from "./ui/button.tsx";
 
 interface FileTreeNode {
   name: string;

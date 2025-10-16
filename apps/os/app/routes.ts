@@ -22,7 +22,6 @@ export default [
     route("db-tools", "./routes/admin/db-tools.tsx"),
     route("trpc-tools", "./routes/admin/trpc-tools.tsx"),
     route("estates", "./routes/admin/estates.tsx"),
-    route("estate-editor", "./routes/admin/estate-editor.tsx"),
   ]),
 
   // loader.tsx doesn't apply a layout
