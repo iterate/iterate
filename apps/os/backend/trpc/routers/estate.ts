@@ -267,7 +267,7 @@ export const estateRouter = router({
     const zipball = await zipballResponse.arrayBuffer();
     const unzipped = fflate.unzipSync(new Uint8Array(zipball));
 
-    const filesystem: Record<string, string> = Object.fromEntries(
+    const filesystem: Record<string, string | null> = Object.fromEntries(
       Object.entries(unzipped)
         .map(([filename, data]) => [
           filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
@@ -334,6 +334,7 @@ export const estateRouter = router({
 
         const files: Record<string, string> = {};
 
+        // eslint-disable-next-line no-async-promise-executor -- can't be bothered to avoid async await in this one case
         await new Promise<void>(async (resolve, reject) => {
           const nodeStream = Readable.from(buffer);
 
@@ -387,24 +388,24 @@ export const estateRouter = router({
           );
           delete remainingDeps[name];
           if (existing) {
-            console.log(
+            logger.debug(
               `package ${name}@${existing.packageJson.version} exists and matches ${version}`,
             );
             continue;
           }
-          console.log(`package ${name}@${version} not found, getting it...`);
+          logger.debug(`package ${name}@${version} not found, getting it...`);
           const pkg = await getPackage(name, version);
-          console.log(`package ${name}@${version} gotten.`);
+          logger.debug(`package ${name}@${version} gotten.`);
           packages.push(pkg);
           for (const [depName, depVersion] of Object.entries(pkg.packageJson.dependencies ?? {})) {
-            console.log(
+            logger.debug(
               `adding dependency ${depName}@${depVersion} to remaining deps because it's a dependency of ${name}@${version}`,
             );
             remainingDeps[depName] = depVersion!;
           }
         }
       }
-      console.log(
+      logger.debug(
         `got ${packages.length} packages: ${packages.map((p) => p.packageJson.name).join(", ")}`,
       );
       return packages;

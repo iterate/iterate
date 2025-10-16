@@ -16,14 +16,20 @@ import {
   Upload,
   FilePlus,
   FolderPlus,
-  Folder,
-  FolderOpen,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { Button } from "./ui/button.tsx";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuTrigger,
+} from "./ui/context-menu.tsx";
 
 interface FileTreeNode {
   name: string;
@@ -64,14 +70,16 @@ function getFileIcon(filename: string) {
 }
 
 // Build a tree structure from flat file paths
-function buildFileTree(filePaths: string[]): FileTreeNode[] {
+function buildFileTree(filePaths: Array<[string, string | null]>): FileTreeNode[] {
   const root: FileTreeNode[] = [];
   const nodeMap = new Map<string, FileTreeNode>();
 
   // Filter out empty files and sort
-  const validPaths = filePaths.filter((path) => path.trim() !== "").sort();
+  const validPaths = filePaths
+    .filter(([path, value]) => path.trim() !== "" && typeof value === "string")
+    .sort();
 
-  for (const path of validPaths) {
+  for (const [path] of validPaths) {
     const parts = path.split("/");
     let currentPath = "";
 
@@ -131,6 +139,8 @@ interface FileTreeViewProps {
   onToggleFolder: (path: string) => void;
   onNewFile: (folderPath: string) => void;
   onNewFolder: (folderPath: string) => void;
+  onRename: (oldPath: string, newPath: string) => void;
+  onDelete: (path: string) => void;
   level?: number;
 }
 
@@ -143,6 +153,8 @@ function FileTreeView({
   onToggleFolder,
   onNewFile,
   onNewFolder,
+  onRename,
+  onDelete,
   level = 0,
 }: FileTreeViewProps) {
   const [hoveredFolder, setHoveredFolder] = useState<string | null>(null);
@@ -156,72 +168,95 @@ function FileTreeView({
 
         return (
           <div key={node.path}>
-            <div
-              className="group relative"
-              onMouseEnter={() => node.type === "folder" && setHoveredFolder(node.path)}
-              onMouseLeave={() => node.type === "folder" && setHoveredFolder(null)}
-            >
-              <button
-                onClick={() => {
-                  if (node.type === "folder") {
-                    onToggleFolder(node.path);
-                  } else {
-                    onFileSelect(node.path);
-                  }
-                }}
-                className={cn(
-                  "w-full text-left px-2 py-1 text-xs flex items-center gap-1 hover:bg-accent rounded-sm",
-                  selectedFile === node.path && node.type === "file" && "bg-accent",
-                )}
-                style={{ paddingLeft: `${level === 0 ? 2 : level * 12 + 8}px` }}
-              >
-                {node.type === "folder" ? (
-                  <>
-                    {hasChildren ? (
-                      isCollapsed ? (
-                        <ChevronRight className="h-3 w-3 flex-shrink-0" />
-                      ) : (
-                        <ChevronDown className="h-3 w-3 flex-shrink-0" />
-                      )
-                    ) : (
-                      <span className="w-3" />
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div
+                  className="group relative"
+                  onMouseEnter={() => node.type === "folder" && setHoveredFolder(node.path)}
+                  onMouseLeave={() => node.type === "folder" && setHoveredFolder(null)}
+                >
+                  <button
+                    onClick={() => {
+                      if (node.type === "folder") {
+                        onToggleFolder(node.path);
+                      } else {
+                        onFileSelect(node.path);
+                      }
+                    }}
+                    className={cn(
+                      "w-full text-left px-2 py-1 text-xs flex items-center gap-1 hover:bg-accent rounded-sm",
+                      selectedFile === node.path && node.type === "file" && "bg-accent",
                     )}
-                  </>
-                ) : (
-                  <>{getFileIcon(node.name)}</>
-                )}
-                <span className="truncate flex-1">
-                  {node.name}
-                  {node.type === "file" && isFileEdited(node.path) && (
-                    <span className="text-orange-500">*</span>
+                    style={{ paddingLeft: `${level === 0 ? 2 : level * 12 + 8}px` }}
+                  >
+                    {node.type === "folder" ? (
+                      <>
+                        {hasChildren ? (
+                          isCollapsed ? (
+                            <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                          ) : (
+                            <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                          )
+                        ) : (
+                          <span className="w-3" />
+                        )}
+                      </>
+                    ) : (
+                      <>{getFileIcon(node.name)}</>
+                    )}
+                    <span className="truncate flex-1">
+                      {node.name}
+                      {node.type === "file" && isFileEdited(node.path) && (
+                        <span className="text-orange-500">*</span>
+                      )}
+                    </span>
+                  </button>
+                  {node.type === "folder" && isHovered && (
+                    <div className="absolute right-1 top-1 flex gap-0.5 bg-background/80 backdrop-blur-sm rounded">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNewFile(node.path);
+                        }}
+                        className="p-0.5 hover:bg-accent rounded"
+                        title="New File"
+                      >
+                        <FilePlus className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onNewFolder(node.path);
+                        }}
+                        className="p-0.5 hover:bg-accent rounded"
+                        title="New Folder"
+                      >
+                        <FolderPlus className="h-3 w-3" />
+                      </button>
+                    </div>
                   )}
-                </span>
-              </button>
-              {node.type === "folder" && isHovered && (
-                <div className="absolute right-1 top-1 flex gap-0.5 bg-background/80 backdrop-blur-sm rounded">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onNewFile(node.path);
-                    }}
-                    className="p-0.5 hover:bg-accent rounded"
-                    title="New File"
-                  >
-                    <FilePlus className="h-3 w-3" />
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onNewFolder(node.path);
-                    }}
-                    className="p-0.5 hover:bg-accent rounded"
-                    title="New Folder"
-                  >
-                    <FolderPlus className="h-3 w-3" />
-                  </button>
                 </div>
-              )}
-            </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem
+                  onClick={() => {
+                    const newName = prompt(`Rename ${node.type}:`, node.name);
+                    if (newName && newName !== node.name) {
+                      const parentPath = node.path.split("/").slice(0, -1).join("/");
+                      const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+                      onRename(node.path, newPath);
+                    }
+                  }}
+                >
+                  <Pencil />
+                  Rename
+                </ContextMenuItem>
+                <ContextMenuItem variant="destructive" onClick={() => onDelete(node.path)}>
+                  <Trash2 />
+                  Delete
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
             {node.type === "folder" && node.children && !isCollapsed && (
               <FileTreeView
                 nodes={node.children}
@@ -232,6 +267,8 @@ function FileTreeView({
                 onToggleFolder={onToggleFolder}
                 onNewFile={onNewFile}
                 onNewFolder={onNewFolder}
+                onRename={onRename}
+                onDelete={onDelete}
                 level={level + 1}
               />
             )}
@@ -250,11 +287,11 @@ export function IDE() {
     "iterate-selected-file",
     null,
   );
-  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string> | null>(
+  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string | null> | null>(
     "iterate-local-edits",
     {},
   );
-  const [expectedEdits, setExpectedEdits] = useState({} as Record<string, string>);
+  const [expectedEdits, setExpectedEdits] = useState({} as Record<string, string | null>);
   const [collapsedFoldersRecord, setCollapsedFolders] = useSessionStorage<Record<string, boolean>>(
     "iterate-collapsed-folders",
     {},
@@ -307,8 +344,14 @@ export function IDE() {
   };
   const repoName = repoData?.full_name?.split("/")[1] || "repository";
 
-  // Derive file contents by merging filesystem with local edits
-  const fileContents = useMemo(() => ({ ...filesystem, ...localEdits }), [filesystem, localEdits]);
+  // Derive file contents by merging filesystem with local edits, excluding deleted files
+  const fileContents = useMemo(() => {
+    const merged = { ...filesystem, ...localEdits };
+    // Filter out files marked for deletion (empty string content)
+    return Object.fromEntries(
+      Object.entries(merged).filter(([_path, content]) => typeof content === "string"),
+    );
+  }, [filesystem, localEdits]);
 
   // Derive valid selected file (reset if file no longer exists)
   const validSelectedFile = useMemo(() => {
@@ -323,7 +366,7 @@ export function IDE() {
 
   // Build file tree from filesystem and wrap in root folder
   const fileTree = useMemo(() => {
-    const tree = buildFileTree(Object.keys(fileContents));
+    const tree = buildFileTree(Object.entries(fileContents));
     // Wrap in root folder based on repo name
     return [
       {
@@ -373,6 +416,33 @@ export function IDE() {
     }
   };
 
+  const handleRename = (oldPath: string, newPath: string) => {
+    if (oldPath === newPath) return;
+    setLocalEdits((prev) => ({
+      [newPath]: prev?.[oldPath] ?? null,
+      [oldPath]: null,
+    }));
+  };
+
+  const handleDelete = (path: string) => {
+    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+
+    setLocalEdits(() => {
+      const updated = Object.fromEntries(
+        Object.entries(filesystem || {}).map(([k, v]) =>
+          k === path || k.startsWith(path + "/") ? [k, null] : [k, v],
+        ),
+      );
+      updated[path] = null;
+      console.log("updated", updated);
+      return updated;
+    });
+    // Clear selection if deleted file was selected
+    if (validSelectedFile === path || validSelectedFile?.startsWith(path + "/")) {
+      setSelectedFile(null);
+    }
+  };
+
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
     return fileContents[filename] !== (filesystem as Record<string, string>)[filename];
@@ -399,7 +469,9 @@ export function IDE() {
           expectedHeadOid: sha,
           message: { headline: `in-browser changes to ${validSelectedFile}` },
           fileChanges: {
-            additions: [{ path: validSelectedFile, contents: fileContents[validSelectedFile] }],
+            additions: [
+              { path: validSelectedFile, contents: fileContents[validSelectedFile] ?? "" },
+            ],
           },
         },
         format: "plaintext",
@@ -412,14 +484,23 @@ export function IDE() {
     const deletions: { path: string }[] = [];
     Object.keys(fileContents).forEach((filename) => {
       if (isFileEdited(filename)) {
-        additions.push({ path: filename, contents: fileContents[filename] });
+        const content = fileContents[filename];
+        // If content is empty and file exists in filesystem, mark for deletion
+        if (content === null && filename in (filesystem as Record<string, string>)) {
+          deletions.push({ path: filename });
+        } else if (content) {
+          additions.push({ path: filename, contents: content });
+        }
       }
     });
+    const changeCount = additions.length + deletions.length;
     saveFileMutation.mutate({
       estateId,
       commit: {
         expectedHeadOid: sha,
-        message: { headline: `in-browser changes to ${additions.length} files` },
+        message: {
+          headline: `in-browser changes to ${changeCount} file${changeCount === 1 ? "" : "s"}`,
+        },
         fileChanges: { additions, deletions },
       },
       format: "plaintext",
@@ -474,7 +555,7 @@ export function IDE() {
     if (!monaco) return;
     if (!getRepoFileSystemQuery.data) return;
     Object.entries(getRepoFileSystemQuery.data.filesystem).forEach(([filename, content]) => {
-      if (filename.endsWith(".ts") || filename.endsWith(".tsx")) {
+      if (content && (filename.endsWith(".ts") || filename.endsWith(".tsx"))) {
         console.log("adding extra lib", filename);
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           content,
@@ -557,6 +638,8 @@ export function IDE() {
             onToggleFolder={handleToggleFolder}
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
+            onRename={handleRename}
+            onDelete={handleDelete}
           />
         </div>
       </div>
@@ -570,7 +653,7 @@ export function IDE() {
             defaultLanguage={language || "markdown"}
             language={language}
             onChange={(val) => handleContentChange(val || "")}
-            value={currentContent}
+            value={currentContent || ""}
             theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
             options={{ wordWrap: "on", fixedOverflowWidgets: true }}
             beforeMount={(monaco) => {
