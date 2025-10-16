@@ -212,6 +212,7 @@ export function IDE() {
     "iterate-local-edits",
     {},
   );
+  const [expectedEdits, setExpectedEdits] = useState({} as Record<string, string>);
   const [collapsedFoldersRecord, setCollapsedFolders] = useSessionStorage<Record<string, boolean>>(
     "iterate-collapsed-folders",
     {},
@@ -230,16 +231,25 @@ export function IDE() {
 
   const saveFileMutation = useMutation(
     trpc.estate.updateRepo.mutationOptions({
-      onSuccess: () => {
+      onSuccess: (_data, variables) => {
+        const edited = new Set([
+          ...(variables.commit.fileChanges.additions?.map((addition) => addition.path) || []),
+          ...(variables.commit.fileChanges.deletions?.map((deletion) => deletion.path) || []),
+        ]);
         setBump((prev) => prev + 1);
-        setLocalEdits(null);
+        setExpectedEdits(localEdits || {});
+        setLocalEdits(
+          localEdits &&
+            Object.fromEntries(Object.entries(localEdits).filter(([k]) => !edited.has(k))),
+        );
       },
     }),
   );
 
   const getRepoFileSystemQuery = useQuery({
     ...getRepoFilesystemQueryOptions,
-    placeholderData: (old) => old && { ...old, sha: "" },
+    placeholderData: (old) =>
+      old && { ...old, filesystem: { ...old.filesystem, ...expectedEdits }, sha: "" },
   });
 
   const dts = useQuery({
@@ -289,29 +299,17 @@ export function IDE() {
   const handleSave = () => {
     console.log("handleSave", { validSelectedFile });
     if (validSelectedFile) {
-      saveFileMutation.mutate(
-        {
-          estateId,
-          commit: {
-            expectedHeadOid: sha,
-            message: { headline: `in-browser changes to ${validSelectedFile}` },
-            fileChanges: {
-              additions: [{ path: validSelectedFile, contents: fileContents[validSelectedFile] }],
-            },
-          },
-          format: "plaintext",
-        },
-        {
-          onSuccess: () => {
-            // Clear local edits for the saved file
-            setLocalEdits((prev) => {
-              const next = { ...prev };
-              delete next[validSelectedFile];
-              return next;
-            });
+      saveFileMutation.mutate({
+        estateId,
+        commit: {
+          expectedHeadOid: sha,
+          message: { headline: `in-browser changes to ${validSelectedFile}` },
+          fileChanges: {
+            additions: [{ path: validSelectedFile, contents: fileContents[validSelectedFile] }],
           },
         },
-      );
+        format: "plaintext",
+      });
     }
   };
 
