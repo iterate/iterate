@@ -145,6 +145,7 @@ export const estateRouter = router({
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
+      slackTrialConnectChannelId: userEstate.slackTrialConnectChannelId ?? null,
       organization: org
         ? {
             id: org.id,

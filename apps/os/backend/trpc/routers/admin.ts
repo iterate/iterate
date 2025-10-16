@@ -14,13 +14,13 @@ import { getAuth } from "../../auth/auth.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
 import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
-import { deleteUserAccount } from "./user.ts";
 import {
   createTrialSlackConnectChannel,
   emailToChannelName,
   getIterateSlackEstateId,
 } from "../../utils/trial-channel-setup.ts";
 import { env } from "../../../env.ts";
+import { deleteUserAccount } from "./user.ts";
 
 const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -529,14 +529,45 @@ export const adminRouter = router({
         });
       }
 
-      // Get iterate's bot token
-      const iterateBotToken = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
-      if (!iterateBotToken) {
+      // Get iterate's bot account and token
+      const iterateBotAccountResult = await ctx.db
+        .select({
+          accountId: schema.account.id,
+          accessToken: schema.account.accessToken,
+        })
+        .from(schema.estateAccountsPermissions)
+        .innerJoin(
+          schema.account,
+          eq(schema.estateAccountsPermissions.accountId, schema.account.id),
+        )
+        .where(
+          and(
+            eq(schema.estateAccountsPermissions.estateId, iterateEstateId),
+            eq(schema.account.providerId, "slack-bot"),
+          ),
+        )
+        .limit(1);
+
+      if (!iterateBotAccountResult[0]?.accessToken) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack bot token not found",
+          message: "Iterate Slack bot account not found",
         });
       }
+
+      const iterateBotToken = iterateBotAccountResult[0].accessToken;
+      const iterateBotAccountId = iterateBotAccountResult[0].accountId;
+
+      // Link trial estate to iterate's bot account
+      await ctx.db
+        .insert(schema.estateAccountsPermissions)
+        .values({
+          accountId: iterateBotAccountId,
+          estateId: estateId!,
+        })
+        .onConflictDoNothing();
+
+      logger.info(`Linked trial estate ${estateId} to iterate's bot account`);
 
       // Create trial channel and send invite
       const result = await createTrialSlackConnectChannel({

@@ -134,7 +134,18 @@ export default function Integrations() {
     }),
   );
 
-  const integrations = data?.oauthIntegrations || [];
+  const { data: estateInfo } = useSuspenseQuery(
+    trpc.estate.get.queryOptions({
+      estateId: estateId,
+    }),
+  );
+
+  const isTrialEstate = !!estateInfo.slackTrialConnectChannelId;
+
+  // Filter out Slack connector for trial estates since they're using Slack Connect
+  const integrations = (data?.oauthIntegrations || []).filter(
+    (integration: any) => !(isTrialEstate && integration.id === "slack-bot"),
+  );
   const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
 
   // Count connections by mode

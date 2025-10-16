@@ -108,6 +108,72 @@ function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }
   );
 }
 
+function UpgradeTrialButton({ estateId }: { estateId: string }) {
+  const trpc = useTRPC();
+  const { connectSlackBot } = useSlackConnection();
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const { mutateAsync: upgradeTrial, isPending } = useMutation(
+    trpc.trial.upgradeTrialToFullInstallation.mutationOptions({}),
+  );
+
+  const handleUpgrade = async () => {
+    try {
+      await upgradeTrial({ estateId });
+      toast.success("Trial upgraded! Redirecting to Slack installation...");
+      setDialogOpen(false);
+      // Trigger Slack bot installation flow
+      await connectSlackBot(window.location.pathname);
+    } catch (error) {
+      toast.error("Failed to upgrade trial. Please try again.");
+      console.error(error);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        size="lg"
+        variant="outline"
+        className="text-lg px-8 py-3 h-auto"
+        onClick={() => setDialogOpen(true)}
+      >
+        Upgrade to Full Installation
+      </Button>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Upgrade to Full Slack Installation</DialogTitle>
+            <DialogDescription>
+              Ready to connect your own Slack workspace? This will disconnect from the trial setup
+              and redirect you to install iterate in your workspace.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950 p-4">
+              <p className="text-sm text-yellow-900 dark:text-yellow-100">
+                <strong>What happens:</strong> We'll remove the trial configuration and take you to
+                Slack to install the iterate bot in your own workspace.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button onClick={handleUpgrade} disabled={isPending}>
+                {isPending ? "Upgrading..." : "Upgrade Now"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const estateId = useEstateId();
@@ -241,6 +307,8 @@ export default function Home() {
     );
   };
 
+  const isTrialEstate = !!estateInfo.slackTrialConnectChannelId;
+
   return (
     <>
       {/* Welcome Section */}
@@ -253,10 +321,13 @@ export default function Home() {
                 The main way to interact with iterate is by mentioning @iterate in Slack.
               </p>
             </div>
-            <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
-              <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
-              Message @iterate on Slack
-            </Button>
+            <div className="flex gap-3 flex-wrap">
+              <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
+                <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
+                {isTrialEstate ? "Open Trial Channel in Slack" : "Message @iterate on Slack"}
+              </Button>
+              {isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
+            </div>
 
             {estateInfo.onboardingAgentName && user.debugMode ? (
               <div className="pt-4">

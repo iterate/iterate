@@ -1,28 +1,15 @@
 import { useState } from "react";
-import { X } from "lucide-react";
 import { useNavigate } from "react-router";
 import { authClient } from "../lib/auth-client.ts";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "./ui/dialog.tsx";
-import { Button } from "./ui/button.tsx";
-import { Card, CardContent } from "./ui/card.tsx";
-import { Alert, AlertDescription } from "./ui/alert.tsx";
+import { Button } from "../components/ui/button.tsx";
+import { Card, CardContent } from "../components/ui/card.tsx";
+import { Alert, AlertDescription } from "../components/ui/alert.tsx";
 
-interface OnboardingModalProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}
+type OnboardingView = "choose-option" | "auth-providers" | "no-slack";
 
-export function OnboardingModal({ open, onOpenChange }: OnboardingModalProps) {
+export default function OnboardingPage() {
   const navigate = useNavigate();
-  const [view, setView] = useState<"choose-option" | "auth-providers" | "no-slack">(
-    "choose-option",
-  );
+  const [view, setView] = useState<OnboardingView>("choose-option");
 
   const handleSetupNow = () => {
     setView("auth-providers");
@@ -63,15 +50,15 @@ export function OnboardingModal({ open, onOpenChange }: OnboardingModalProps) {
 
   if (view === "no-slack") {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Slack Required</DialogTitle>
-            <DialogDescription>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+        <div className="w-full max-w-md space-y-6">
+          <div className="space-y-2">
+            <h1 className="text-2xl font-bold">Slack Required</h1>
+            <p className="text-muted-foreground">
               iterate currently works exclusively through Slack as your interface to interact with
               AI agents.
-            </DialogDescription>
-          </DialogHeader>
+            </p>
+          </div>
           <Alert>
             <AlertDescription>
               We're focused on making the best Slack-based AI agent platform. If you're interested
@@ -85,23 +72,23 @@ export function OnboardingModal({ open, onOpenChange }: OnboardingModalProps) {
             <Button variant="outline" onClick={handleBack}>
               Back
             </Button>
-            <Button onClick={() => onOpenChange(false)}>Got it</Button>
+            <Button onClick={() => navigate("/login")}>Got it</Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     );
   }
 
   if (view === "auth-providers") {
     return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-2xl">Choose your sign-in method</DialogTitle>
-            <DialogDescription>Select how you'd like to authenticate</DialogDescription>
-          </DialogHeader>
+      <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+        <div className="w-full max-w-md space-y-6">
+          <div className="space-y-2">
+            <h1 className="text-3xl font-bold">Choose your sign-in method</h1>
+            <p className="text-muted-foreground">Select how you'd like to authenticate</p>
+          </div>
 
-          <div className="space-y-4 py-4">
+          <div className="space-y-4">
             <div className="space-y-3">
               <Button
                 onClick={handleGoogleAuth}
@@ -164,26 +151,26 @@ export function OnboardingModal({ open, onOpenChange }: OnboardingModalProps) {
               Back to options
             </Button>
           </div>
-        </DialogContent>
-      </Dialog>
+        </div>
+      </div>
     );
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl w-[95vw]">
-        <DialogHeader>
-          <DialogTitle className="text-3xl">
+    <div className="min-h-screen flex items-center justify-center p-4 bg-muted/20">
+      <div className="w-full max-w-4xl space-y-6">
+        <div className="space-y-2">
+          <h1 className="text-4xl font-bold">
             How would you like to use{" "}
             <span className="inline-flex items-baseline rounded bg-[#1264a3]/10 dark:bg-[#1264a3]/20 px-1 py-0.5 text-[#1264a3] dark:text-[#1d9bd1] font-semibold">
               @iterate
             </span>
             ?
-          </DialogTitle>
-          <DialogDescription className="text-base">
+          </h1>
+          <p className="text-muted-foreground text-lg">
             Choose the option that works best for your workspace
-          </DialogDescription>
-        </DialogHeader>
+          </p>
+        </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 py-6">
           {/* Option 1: Add to Slack Workspace */}
@@ -239,7 +226,7 @@ export function OnboardingModal({ open, onOpenChange }: OnboardingModalProps) {
             I don't use Slack
           </Button>
         </div>
-      </DialogContent>
-    </Dialog>
+      </div>
+    </div>
   );
 }

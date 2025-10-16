@@ -1,9 +1,9 @@
-import { useRef, useState, type ComponentPropsWithRef } from "react";
+import { useRef, type ComponentPropsWithRef } from "react";
+import { useNavigate } from "react-router";
 import { cn } from "../lib/utils.ts";
 import { AnimatedBeam } from "./ui/animated-beam.tsx";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { Button } from "./ui/button.tsx";
-import { OnboardingModal } from "./onboarding-modal.tsx";
 
 function LogoBox({ className, children, ref }: ComponentPropsWithRef<"div">) {
   return (
@@ -20,7 +20,7 @@ function LogoBox({ className, children, ref }: ComponentPropsWithRef<"div">) {
 }
 
 export function LoginPrompt() {
-  const [showOnboardingModal, setShowOnboardingModal] = useState(false);
+  const navigate = useNavigate();
   const containerRef = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
   const div1Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
   const div2Ref = useRef<HTMLDivElement>(null as unknown as HTMLDivElement);
@@ -173,7 +173,7 @@ export function LoginPrompt() {
               <p className="text-muted-foreground text-lg">AI agent that works in your Slack</p>
             </div>
             <Button
-              onClick={() => setShowOnboardingModal(true)}
+              onClick={() => navigate("/get-started")}
               size="lg"
               className="w-full h-14 text-lg"
             >
@@ -182,8 +182,6 @@ export function LoginPrompt() {
           </div>
         </div>
       </div>
-
-      <OnboardingModal open={showOnboardingModal} onOpenChange={setShowOnboardingModal} />
     </div>
   );
 }

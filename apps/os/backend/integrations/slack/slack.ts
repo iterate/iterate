@@ -98,6 +98,10 @@ export async function ensureUserSynced(params: {
 }): Promise<boolean> {
   const { db, estateId, slackUserId, botToken, syncingTeamId } = params;
 
+  logger.info(
+    `[JIT Sync] Starting sync for user ${slackUserId}, estate ${estateId}, syncingTeam ${syncingTeamId}`,
+  );
+
   try {
     // Check if user already exists for this estate
     const existing = await db.query.providerUserMapping.findFirst({
@@ -109,37 +113,79 @@ export async function ensureUserSynced(params: {
     });
 
     if (existing) {
+      logger.info(
+        `[JIT Sync] User ${slackUserId} already synced for estate ${estateId} (internalUserId=${existing.internalUserId})`,
+      );
       return true; // Already synced
     }
 
-    // Fetch user info from Slack
-    const slackAPI = new WebClient(botToken);
-    const userInfoResponse = await slackAPI.users.info({ user: slackUserId });
+    logger.info(`[JIT Sync] User ${slackUserId} not in database, proceeding with sync`);
 
-    if (!userInfoResponse.ok || !userInfoResponse.user) {
-      logger.error(`Failed to fetch user info for ${slackUserId}: ${userInfoResponse.error}`);
-      return false;
-    }
-
-    const userInfo = userInfoResponse.user;
-
-    // Determine user's home team ID (for external users)
-    const userHomeTeamId = userInfo.team_id;
-    const isExternalUser = userHomeTeamId !== syncingTeamId;
-
-    // Generate email using syncing team ID (not user's home team)
-    const email = userInfo.profile?.email || `${slackUserId}@${syncingTeamId}.slack.iterate.com`;
-
-    // Get estate and organization
+    // Check if this is a trial estate
     const estate = await db.query.estate.findFirst({
       where: eq(schema.estate.id, estateId),
-      columns: { organizationId: true },
+      columns: { slackTrialConnectChannelId: true, organizationId: true },
     });
 
+    const isTrialEstate = !!estate?.slackTrialConnectChannelId;
+
+    // Fetch user info from Slack
+    const slackAPI = new WebClient(botToken);
+    let userInfoResponse;
+    let userInfo: any = null;
+    let hasFullUserInfo = false;
+
+    try {
+      userInfoResponse = await slackAPI.users.info({ user: slackUserId });
+      hasFullUserInfo = userInfoResponse.ok && !!userInfoResponse.user;
+      userInfo = userInfoResponse.user || null;
+
+      if (!hasFullUserInfo) {
+        logger.warn(
+          `[JIT Sync] Limited user info for ${slackUserId} on estate ${estateId} (${userInfoResponse.error})`,
+        );
+      }
+    } catch (error: any) {
+      logger.warn(
+        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on estate ${estateId} (likely external Slack Connect user):`,
+        error,
+      );
+      // For trial estates, this is expected - all users are external
+      // Continue with minimal user record creation
+      if (!isTrialEstate) {
+        return false; // For non-trial estates, fail if we can't get user info
+      }
+    }
+
+    // Determine user's home team ID (for external users)
+    const userHomeTeamId = userInfo?.team_id;
+
+    // Determine if user is external by comparing team IDs
+    // For both trial and regular estates, users from other workspaces are external
+    // For trial estates:
+    //   - iterate team members are INTERNAL (same team ID as syncingTeamId)
+    //   - trial users via Slack Connect are EXTERNAL (different team ID)
+    //   - if we don't have userHomeTeamId, assume EXTERNAL (Slack Connect users have limited API access)
+    const isExternalUser = isTrialEstate
+      ? userHomeTeamId !== syncingTeamId // For trials, assume external unless proven internal
+      : userHomeTeamId && userHomeTeamId !== syncingTeamId; // For regular estates, require proof
+
+    logger.info(
+      `[JIT Sync] User ${slackUserId}: homeTeam=${userHomeTeamId}, syncingTeam=${syncingTeamId}, isTrial=${isTrialEstate}, isExternal=${isExternalUser}, hasFullInfo=${hasFullUserInfo}`,
+    );
+
+    // Generate email using syncing team ID (not user's home team)
+    // If we don't have full user info, always use synthetic email
+    const email = userInfo?.profile?.email || `${slackUserId}@${syncingTeamId}.slack.iterate.com`;
+
     if (!estate) {
-      logger.error(`Estate ${estateId} not found during JIT sync`);
+      logger.error(`[JIT Sync] Estate ${estateId} not found during JIT sync`);
       return false;
     }
+
+    logger.info(
+      `[JIT Sync] Creating user with email=${email}, name=${userInfo?.real_name || userInfo?.name || `User ${slackUserId}`}`,
+    );
 
     // Sync user in transaction
     await db.transaction(async (tx) => {
@@ -147,11 +193,11 @@ export async function ensureUserSynced(params: {
       await tx
         .insert(schema.user)
         .values({
-          name: userInfo.real_name || userInfo.name || "Slack User",
+          name: userInfo?.real_name || userInfo?.name || `User ${slackUserId}`,
           email: email,
           emailVerified: false,
-          image: userInfo.profile?.image_192,
-          isBot: userInfo.is_bot ?? false,
+          image: userInfo?.profile?.image_192,
+          isBot: userInfo?.is_bot ?? false,
         })
         .onConflictDoNothing();
 
@@ -172,12 +218,13 @@ export async function ensureUserSynced(params: {
           internalUserId: user.id,
           externalId: slackUserId,
           estateId: estateId,
-          externalUserTeamId: isExternalUser ? userHomeTeamId : null,
+          externalUserTeamId: isExternalUser && userHomeTeamId ? userHomeTeamId : null,
           providerMetadata: {
-            ...userInfo,
+            ...(userInfo || {}),
             sourceTeamId: userHomeTeamId,
             isSlackConnect: isExternalUser,
-            jitSynced: true, // Mark this was synced just-in-time
+            jitSynced: true,
+            limitedUserInfo: !hasFullUserInfo,
           },
         })
         .onConflictDoUpdate({
@@ -192,11 +239,19 @@ export async function ensureUserSynced(params: {
         });
 
       // Determine role
-      const role = isExternalUser
-        ? "external"
-        : userInfo.is_ultra_restricted || userInfo.is_restricted
-          ? "guest"
-          : "member";
+      // For trial estates, everyone is a member (keep it simple)
+      // For regular estates, use standard role logic
+      const role = isTrialEstate
+        ? "member"
+        : isExternalUser
+          ? "external"
+          : userInfo?.is_ultra_restricted || userInfo?.is_restricted
+            ? "guest"
+            : "member";
+
+      logger.info(
+        `[JIT Sync] Assigning role="${role}" to user ${slackUserId} (isTrial=${isTrialEstate}, isExternal=${isExternalUser})`,
+      );
 
       // Add to organization
       await tx
@@ -210,7 +265,7 @@ export async function ensureUserSynced(params: {
     });
 
     logger.info(
-      `[JIT Sync] Successfully synced user ${slackUserId} (${email}) for estate ${estateId}`,
+      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for estate ${estateId}`,
     );
     return true;
   } catch (error) {
@@ -700,13 +755,23 @@ export async function syncSlackUsersInBackground(
       }
 
       // Step 4: Upsert organization memberships
+      // Note: We use onConflictDoUpdate to ensure roles are updated when re-syncing
+      // This is important for trial upgrades where users may have different roles in the new workspace
       logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
 
       if (organizationMembershipsToUpsert.length > 0) {
         await tx
           .insert(schema.organizationUserMembership)
           .values(organizationMembershipsToUpsert)
-          .onConflictDoNothing();
+          .onConflictDoUpdate({
+            target: [
+              schema.organizationUserMembership.organizationId,
+              schema.organizationUserMembership.userId,
+            ],
+            set: {
+              role: sql`excluded.role`,
+            },
+          });
       }
 
       // Log sync results
@@ -773,7 +838,15 @@ export async function syncSlackUsersInBackground(
               userId: slackbotUser.id,
               role: "member",
             })
-            .onConflictDoNothing();
+            .onConflictDoUpdate({
+              target: [
+                schema.organizationUserMembership.organizationId,
+                schema.organizationUserMembership.userId,
+              ],
+              set: {
+                role: sql`excluded.role`,
+              },
+            });
 
           logger.info("Slackbot user record created proactively");
         }
