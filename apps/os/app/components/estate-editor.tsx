@@ -346,11 +346,7 @@ export function IDE() {
 
   // Derive file contents by merging filesystem with local edits, excluding deleted files
   const fileContents = useMemo(() => {
-    const merged = { ...filesystem, ...localEdits };
-    // Filter out files marked for deletion (empty string content)
-    return Object.fromEntries(
-      Object.entries(merged).filter(([_path, content]) => typeof content === "string"),
-    );
+    return { ...filesystem, ...localEdits };
   }, [filesystem, localEdits]);
 
   // Derive valid selected file (reset if file no longer exists)
@@ -427,14 +423,14 @@ export function IDE() {
   const handleDelete = (path: string) => {
     if (!confirm(`Are you sure you want to delete ${path}?`)) return;
 
-    setLocalEdits(() => {
-      const updated = Object.fromEntries(
-        Object.entries(filesystem || {}).map(([k, v]) =>
-          k === path || k.startsWith(path + "/") ? [k, null] : [k, v],
-        ),
-      );
+    setLocalEdits((prev) => {
+      const updated = { ...prev };
       updated[path] = null;
-      console.log("updated", updated);
+      for (const otherpath of Object.keys(filesystem)) {
+        if (otherpath.startsWith(path + "/")) {
+          updated[otherpath] = null;
+        }
+      }
       return updated;
     });
     // Clear selection if deleted file was selected
@@ -462,44 +458,38 @@ export function IDE() {
 
   const handleSave = () => {
     console.log("handleSave", { validSelectedFile });
-    if (validSelectedFile) {
-      saveFileMutation.mutate({
-        estateId,
-        commit: {
-          expectedHeadOid: sha,
-          message: { headline: `in-browser changes to ${validSelectedFile}` },
-          fileChanges: {
-            additions: [
-              { path: validSelectedFile, contents: fileContents[validSelectedFile] ?? "" },
-            ],
-          },
-        },
-        format: "plaintext",
-      });
-    }
+    if (validSelectedFile) handleSaveAll([validSelectedFile]);
   };
 
-  const handleSaveAll = () => {
+  const handleSaveAll = (filepaths = Object.keys(fileContents)) => {
     const additions: { path: string; contents: string }[] = [];
     const deletions: { path: string }[] = [];
-    Object.keys(fileContents).forEach((filename) => {
+    filepaths.forEach((filename) => {
       if (isFileEdited(filename)) {
         const content = fileContents[filename];
-        // If content is empty and file exists in filesystem, mark for deletion
-        if (content === null && filename in (filesystem as Record<string, string>)) {
+        // If content is null
+        if (content === null) {
           deletions.push({ path: filename });
-        } else if (content) {
+        } else {
           additions.push({ path: filename, contents: content });
         }
       }
     });
-    const changeCount = additions.length + deletions.length;
+    const summarise = (label: string, list: { path: string }[]) => {
+      if (list.length === 0) return "";
+      if (list.length === 1) return `${label}: ${list[0].path}`;
+      return `${list.length} ${label}s`;
+    };
+    const summary = [summarise("addition", additions), summarise("deletion", deletions)]
+      .filter(Boolean)
+      .join(" and ");
+
     saveFileMutation.mutate({
       estateId,
       commit: {
         expectedHeadOid: sha,
         message: {
-          headline: `in-browser changes to ${changeCount} file${changeCount === 1 ? "" : "s"}`,
+          headline: `in-browser changes: ${summary}`,
         },
         fileChanges: { additions, deletions },
       },
@@ -614,7 +604,7 @@ export function IDE() {
         </div>
         <div className="p-2 border-b">
           <Button
-            onClick={handleSaveAll}
+            onClick={() => handleSaveAll()}
             disabled={
               Object.keys(localEdits || {}).length === 0 ||
               saveFileMutation.isPending ||
