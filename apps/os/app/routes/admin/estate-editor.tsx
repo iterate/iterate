@@ -208,7 +208,7 @@ export function IDE() {
     "iterate-selected-file",
     null,
   );
-  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string>>(
+  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string> | null>(
     "iterate-local-edits",
     {},
   );
@@ -230,13 +230,16 @@ export function IDE() {
 
   const saveFileMutation = useMutation(
     trpc.estate.updateRepo.mutationOptions({
-      onSuccess: () => setBump((prev) => prev + 1),
+      onSuccess: () => {
+        setBump((prev) => prev + 1);
+        setLocalEdits(null);
+      },
     }),
   );
 
   const getRepoFileSystemQuery = useQuery({
     ...getRepoFilesystemQueryOptions,
-    placeholderData: (old) => old,
+    placeholderData: (old) => old && { ...old, sha: "" },
   });
 
   const dts = useQuery({
@@ -244,10 +247,6 @@ export function IDE() {
       packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
     }),
     enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
-  });
-  console.log({
-    packageJson: getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}",
-    dts: dts.data || dts.error || dts.status,
   });
   const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
 
@@ -314,6 +313,25 @@ export function IDE() {
         },
       );
     }
+  };
+
+  const handleSaveAll = () => {
+    const additions: { path: string; contents: string }[] = [];
+    const deletions: { path: string }[] = [];
+    Object.keys(fileContents).forEach((filename) => {
+      if (isFileEdited(filename)) {
+        additions.push({ path: filename, contents: fileContents[filename] });
+      }
+    });
+    saveFileMutation.mutate({
+      estateId,
+      commit: {
+        expectedHeadOid: sha,
+        message: { headline: `in-browser changes to ${additions.length} files` },
+        fileChanges: { additions, deletions },
+      },
+      format: "plaintext",
+    });
   };
 
   const getLanguage = (filename: string) => {
@@ -397,6 +415,22 @@ export function IDE() {
             {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
               ? "Pushing..."
               : "Push to GitHub"}
+          </Button>
+        </div>
+        <div className="p-2 border-b">
+          <Button
+            onClick={handleSaveAll}
+            disabled={
+              Object.keys(localEdits || {}).length === 0 ||
+              saveFileMutation.isPending ||
+              getRepoFileSystemQuery.isPending
+            }
+            size="sm"
+            variant="ghost"
+            className="w-full h-7 text-xs gap-1.5"
+          >
+            <Upload className="h-3 w-3" />
+            Push all
           </Button>
         </div>
         <div className="p-2 flex-1 overflow-y-auto">
