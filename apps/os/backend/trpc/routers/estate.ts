@@ -6,6 +6,7 @@ import * as fflate from "fflate";
 import { z } from "zod";
 import { eq, desc, and } from "drizzle-orm";
 import dedent from "dedent";
+import { Octokit } from "octokit";
 import {
   protectedProcedure,
   estateProtectedProcedure,
@@ -23,6 +24,7 @@ import type { DB } from "../../db/client.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./CreateCommitOnBranchInput.ts";
 
 const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
@@ -215,9 +217,12 @@ export const estateRouter = router({
     }),
 
   updateRepo: iterateBotGithubProcedure
-    .input(CreateCommitOnBranchInput.omit({ branch: true }))
+    .input(
+      z.object({
+        commit: CreateCommitOnBranchInput.omit({ branch: true }),
+      }),
+    )
     .mutation(async ({ input, ctx }) => {
-      const { Octokit } = await import("octokit");
       const github = new Octokit({ auth: ctx.installationToken });
       const result = await github.graphql(
         dedent`
@@ -231,7 +236,7 @@ export const estateRouter = router({
         `,
         {
           input: {
-            ...input,
+            ...input.commit,
             branch: {
               branchName: ctx.estate.connectedRepoRef!,
               repositoryNameWithOwner: ctx.repoData.full_name,
@@ -278,6 +283,7 @@ export const estateRouter = router({
       }),
     )
     .query(async ({ input }) => {
+      // todo: consider moving to frontend? will break api.github.com requests unless a cors proxy is used
       // who needs pnpm when you can just fetch the tarball and extract the dts files?
       const deps = { ...input.packageJson.dependencies, ...input.packageJson.devDependencies };
       type GottenPackage = {
@@ -326,14 +332,14 @@ export const estateRouter = router({
           const nodeStream = Readable.from(buffer);
 
           nodeStream.on("error", (error) => {
-            console.error("nodeStream error", error);
+            logger.error("nodeStream error", error);
             reject(error);
           });
 
           const gunzip = createGunzip();
 
           gunzip.on("error", (error) => {
-            console.error("gunzip error", error);
+            logger.error("gunzip error", error);
             reject(error);
           });
 

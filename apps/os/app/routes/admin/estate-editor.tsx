@@ -291,12 +291,14 @@ export function IDE() {
       saveFileMutation.mutate(
         {
           estateId,
-          expectedHeadOid: sha,
-          message: { headline: `in-browser changes to ${validSelectedFile}` },
-          fileChanges: {
-            additions: [
-              { path: validSelectedFile, contents: btoa(fileContents[validSelectedFile]) },
-            ],
+          commit: {
+            expectedHeadOid: sha,
+            message: { headline: `in-browser changes to ${validSelectedFile}` },
+            fileChanges: {
+              additions: [
+                { path: validSelectedFile, contents: btoa(fileContents[validSelectedFile]) },
+              ],
+            },
           },
         },
         {
@@ -377,9 +379,9 @@ export function IDE() {
   const language = getLanguage(validSelectedFile || "");
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] border rounded-lg overflow-hidden">
+    <div className="flex h-[calc(100vh-8rem)] overflow-hidden">
       {/* Left sidebar - File tree */}
-      <div className="w-48 flex-shrink-0 border-r bg-muted/50 overflow-y-auto">
+      <div className="w-48 flex-shrink-0 border-r bg-muted/30 overflow-y-auto">
         <div className="p-2">
           <h3 className="text-xs font-semibold mb-2 px-2 py-1">Files</h3>
           <FileTreeView
@@ -397,7 +399,7 @@ export function IDE() {
       <div className="flex-1 min-w-0 flex flex-col">
         {validSelectedFile ? (
           <>
-            <div className="border-b p-3 flex items-center justify-between bg-background">
+            <div className="p-3 flex items-center justify-between">
               <span className="text-sm font-medium">
                 {validSelectedFile}
                 {hasUnsavedChanges && <span className="text-orange-500">*</span>}
@@ -417,7 +419,7 @@ export function IDE() {
                   : "Push to GitHub"}
               </Button>
             </div>
-            <div className="flex-1">
+            <div className="flex-1 -mt-3">
               <Editor
                 path={validSelectedFile + (dts.data?.length || "") || undefined}
                 // make the editor (roughly) full window height minus the navbar at the top
