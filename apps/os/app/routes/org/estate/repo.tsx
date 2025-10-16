@@ -805,7 +805,13 @@ function EstateContent({
               <Button
                 type="button"
                 variant="destructive"
-                onClick={handleConnectGitHub}
+                onClick={() =>
+                  // The best way to handle this is just to delete the installation, which will prompt the user to reconnect new repo
+                  disconnectGithubRepoMutation.mutate({
+                    estateId: estateId,
+                    deleteInstallation: true,
+                  })
+                }
                 disabled={startGithubAppInstallFlowMutation.isPending}
                 className="flex-1"
               >
