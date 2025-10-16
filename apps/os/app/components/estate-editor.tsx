@@ -418,6 +418,7 @@ export function IDE() {
       [newPath]: prev?.[oldPath] ?? null,
       [oldPath]: null,
     }));
+    if (validSelectedFile === oldPath) setSelectedFile(newPath);
   };
 
   const handleDelete = (path: string) => {
