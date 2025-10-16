@@ -205,24 +205,7 @@ interface IDEProps {
 
 function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
   const trpc = useTRPC();
-  const [bump, setBump] = useState(0);
-  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({
-    repositoryNameWithOwner,
-    refName,
-    ...({ bump } as {}),
-  });
-  const getRepoFileSystemQuery = useQuery({
-    ...getRepoFilesystemQueryOptions,
-    placeholderData: (old) => old,
-  });
 
-  const saveFileMutation = useMutation(
-    trpc.estate.updateRepo.mutationOptions({
-      onSuccess: () => setBump((prev) => prev + 1),
-    }),
-  );
-
-  const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
   const [selectedFile, setSelectedFile] = useSessionStorage<string | null>(
     "iterate-selected-file",
     null,
@@ -240,6 +223,25 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
       new Set(Object.keys(collapsedFoldersRecord).filter((path) => collapsedFoldersRecord[path])),
     [collapsedFoldersRecord],
   );
+
+  const [bump, setBump] = useState(0);
+  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({
+    repositoryNameWithOwner,
+    refName,
+    ...({ bump } as {}),
+  });
+
+  const saveFileMutation = useMutation(
+    trpc.estate.updateRepo.mutationOptions({
+      onSuccess: () => setBump((prev) => prev + 1),
+    }),
+  );
+
+  const getRepoFileSystemQuery = useQuery({
+    ...getRepoFilesystemQueryOptions,
+    placeholderData: (old) => old,
+  });
+  const { filesystem, sha } = getRepoFileSystemQuery.data || { filesystem: {}, sha: "" };
 
   // Derive file contents by merging filesystem with local edits
   const fileContents = useMemo(() => ({ ...filesystem, ...localEdits }), [filesystem, localEdits]);
@@ -326,17 +328,30 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
 
   const { resolvedTheme } = useTheme();
 
-  // // Update document when value changes externally
-  // useEffect(() => {
-  //   if (viewRef.current && viewRef.current.state.doc.toString() !== value) {
-  //     viewRef.current.dispatch({
-  //       changes: { from: 0, to: viewRef.current.state.doc.length, insert: value },
-  //     });
-  //   }
-  // }, [value]);
   const onMount = useCallback<OnMount>((...params) => {
     editorRef.current = params;
   }, []);
+
+  // Sync editor model content when file changes or content updates
+  // useEffect(() => {
+  //   if (editorRef.current && validSelectedFile) {
+  //     const [editor, monaco] = editorRef.current;
+  //     const model = editor.getModel();
+  //     if (model && model.getValue() !== currentContent) {
+  //       // Use pushEditOperations to update content in a way that preserves undo/redo
+  //       model.pushEditOperations(
+  //         [],
+  //         [
+  //           {
+  //             range: model.getFullModelRange(),
+  //             text: currentContent,
+  //           },
+  //         ],
+  //         () => null,
+  //       );
+  //     }
+  //   }
+  // }, [validSelectedFile, currentContent]);
 
   useEffect(() => {
     // capture cmd-s/ctrl-s
@@ -393,6 +408,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
             </div>
             <div className="flex-1">
               <Editor
+                path={validSelectedFile || undefined}
                 // make the editor (roughly) full window height minus the navbar at the top
                 height="calc(100vh - 240px)"
                 defaultLanguage={language || "markdown"}
@@ -400,6 +416,7 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                 onChange={(val) => handleContentChange(val || "")}
                 value={currentContent}
                 theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
+                options={{ wordWrap: "on" }}
                 // options={{
                 //   quickSuggestions: false,
                 //   suggest: { showKeywords: false },
@@ -418,6 +435,8 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                     "export const a: 1",
                     "file:///node_modules/@types/testmodule/index.d.ts",
                   );
+                  const sdkModelFile = monaco.Uri.file("/iterate-com-sdk.d.ts");
+                  const existingSdkModel = monaco.editor.getModel(sdkModelFile);
                   // monaco.languages.typescript.typescriptDefaults.addExtraLib(
                   //   dedent`
                   //     export const matchers: {foo: string}
@@ -436,25 +455,18 @@ function IDE({ repositoryNameWithOwner, refName }: IDEProps) {
                   //   `,
                   //   `file:///node_modules/axios/index.d.ts`,
                   // )
-                  monaco.editor.createModel(
-                    dedent`
-                      declare module "myModule" {
-                        export type MyType = 'myValue';
-                        export const myValue = 'myValue';
-                      }
-                    `,
-                    "typescript",
-                    monaco.Uri.file("/myModule.d.ts"),
-                  );
-                  monaco.editor.createModel(
-                    dedent`
-                      declare module "@iterate-com/sdk" {
-                        ${sdkdts}
-                      }
-                    `,
-                    "typescript",
-                    monaco.Uri.file("/iterate-com-sdk.d.ts"),
-                  );
+
+                  if (!existingSdkModel) {
+                    monaco.editor.createModel(
+                      dedent`
+                        declare module "@iterate-com/sdk" {
+                          ${sdkdts}
+                        }
+                      `,
+                      "typescript",
+                      sdkModelFile,
+                    );
+                  }
                 }}
                 onMount={onMount}
               />
