@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { TRPCError } from "@trpc/server";
 import { eq, and } from "drizzle-orm";
-import { publicProcedure, protectedProcedure, router } from "../trpc.ts";
+import { protectedProcedure, router } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import {

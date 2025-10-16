@@ -25,7 +25,6 @@ import {
   FieldLabel,
   FieldSet,
 } from "../../components/ui/field.tsx";
-import { Textarea } from "../../components/ui/textarea.tsx";
 import { Checkbox } from "../../components/ui/checkbox.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
 import type { Route } from "./+types/trial-channel-setup.ts";

@@ -1182,7 +1182,7 @@ export const integrationsRouter = router({
         }),
       )
       .mutation(async ({ ctx, input }) => {
-        const { estateId, slackChannelId, slackTeamId, targetEstateId, reason } = input;
+        const { slackChannelId, slackTeamId, targetEstateId, reason } = input;
 
         // Verify the target estate exists and user has access
         const targetEstate = await ctx.db.query.estate.findFirst({

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
@@ -15,7 +15,6 @@ import {
 } from "../../components/ui/field.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
-import { authClient } from "../../lib/auth-client.ts";
 import type { Route } from "./+types/slack-connect.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -44,9 +43,35 @@ export default function TrialSlackConnectPage() {
     channelId: string;
   } | null>(null);
 
+  // Check if user already has a trial estate set up
+  const existingTrialEstate = userEstates.find((estate) => estate.slackTrialConnectChannelId);
+
+  // Redirect to home page if trial is already set up
+  useEffect(() => {
+    if (existingTrialEstate) {
+      navigate(`/${existingTrialEstate.organizationId}/${existingTrialEstate.id}`, {
+        replace: true,
+      });
+    }
+  }, [existingTrialEstate, navigate]);
+
   // For now, always allow trial signup
   // TODO: Check if estate has actual Slack integration via providerEstateMapping
   const existingFullEstate = null as (typeof userEstates)[0] | null;
+
+  // Show loading state while redirecting to existing trial
+  if (existingTrialEstate) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <div className="w-full max-w-md space-y-6 text-center">
+          <Spinner className="h-12 w-12 mx-auto" />
+          <div>
+            <h2 className="text-2xl font-semibold">Redirecting to your trial...</h2>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Setup trial mutation
   const setupTrialMutation = useMutation({

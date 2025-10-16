@@ -467,7 +467,7 @@ function CreateOverrideDialog({
   const slackIntegration = integrationsData?.oauthIntegrations.find((i) => i.id === "slack-bot");
   const teamId = (slackIntegration as any)?.providerMetadata?.team?.id as string | undefined;
 
-  const channels = channelsData?.channels || [];
+  const channels = useMemo(() => channelsData?.channels || [], [channelsData?.channels]);
 
   // Filter channels by search
   const filteredChannels = useMemo(() => {

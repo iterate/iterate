@@ -16,7 +16,6 @@ import { logger } from "../../tag-logger.ts";
 import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
 import {
   createTrialSlackConnectChannel,
-  emailToChannelName,
   getIterateSlackEstateId,
 } from "../../utils/trial-channel-setup.ts";
 import { env } from "../../../env.ts";
