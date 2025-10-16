@@ -267,6 +267,9 @@ export function IDE() {
     if (selectedFile && selectedFile in fileContents) {
       return selectedFile;
     }
+    if ("iterate.config.ts" in fileContents) {
+      return "iterate.config.ts";
+    }
     return null;
   }, [selectedFile, fileContents]);
 
@@ -346,7 +349,7 @@ export function IDE() {
   const editorRef = useRef<Parameters<OnMount> | null>(null);
 
   const _getEditor = () => editorRef.current?.[0];
-  const _getMonaco = () => editorRef.current?.[1];
+  const getMonaco = () => editorRef.current?.[1];
 
   // useEffect(() => {
   //   const monaco = _getMonaco();
@@ -362,11 +365,10 @@ export function IDE() {
   //   });
   // }, [getRepoFileSystemQuery.data]);
   useEffect(() => {
-    const monaco = _getMonaco();
+    const monaco = getMonaco();
     if (!monaco) return;
     dts.data?.forEach((p) => {
       Object.entries(p.files).forEach(([filename, content]) => {
-        console.log(`file:///node_modules/${p.packageJson.name}/${filename}`);
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           content,
           `file:///node_modules/${p.packageJson.name}/${filename}`,
@@ -446,7 +448,7 @@ export function IDE() {
       <div className="flex-1 min-w-0">
         {validSelectedFile ? (
           <Editor
-            path={validSelectedFile + (dts.data?.length || "") || undefined}
+            path={validSelectedFile ? `/app/${validSelectedFile}` : undefined}
             height="100%"
             defaultLanguage={language || "markdown"}
             language={language}
