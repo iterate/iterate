@@ -1,18 +1,14 @@
 import { CheckIcon, CopyIcon } from "lucide-react";
 import type { ComponentProps, HTMLAttributes, ReactNode } from "react";
-import { createContext, useContext, useState } from "react";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { oneDark, oneLight } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { useState } from "react";
+import {
+  ShikiHighlighter as _ShikiHighlighter,
+  createHighlighterCore,
+  createJavaScriptRegexEngine,
+} from "react-shiki/core";
 import { cn } from "../../lib/utils.ts";
 import { Button } from "../ui/button.tsx";
-
-type CodeBlockContextType = {
-  code: string;
-};
-
-const CodeBlockContext = createContext<CodeBlockContextType>({
-  code: "",
-});
+import { useTheme } from "next-themes";
 
 export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   code: string;
@@ -21,6 +17,27 @@ export type CodeBlockProps = HTMLAttributes<HTMLDivElement> & {
   children?: ReactNode;
 };
 
+let ShikiHighlighter: React.ComponentType<ComponentProps<typeof _ShikiHighlighter>>;
+if (import.meta.env.SSR) {
+  ShikiHighlighter = ({ children, className }: ComponentProps<typeof _ShikiHighlighter>) => (
+    <div className={cn("overflow-hidden", className)}>{children}</div>
+  );
+} else {
+  const highlighter = await createHighlighterCore({
+    themes: [
+      await import("@shikijs/themes/one-dark-pro"),
+      await import("@shikijs/themes/one-light"),
+    ],
+    // We are only using JSON for now
+    langs: [await import("@shikijs/langs/json")],
+    engine: createJavaScriptRegexEngine(),
+  });
+
+  ShikiHighlighter = (props: ComponentProps<typeof _ShikiHighlighter>) => (
+    <_ShikiHighlighter highlighter={highlighter} {...props} />
+  );
+}
+
 export const CodeBlock = ({
   code,
   language,
@@ -28,8 +45,9 @@ export const CodeBlock = ({
   className,
   children,
   ...props
-}: CodeBlockProps) => (
-  <CodeBlockContext.Provider value={{ code }}>
+}: CodeBlockProps) => {
+  const { resolvedTheme } = useTheme();
+  return (
     <div
       className={cn(
         "relative w-full overflow-hidden rounded-md border bg-background text-foreground",
@@ -38,64 +56,27 @@ export const CodeBlock = ({
       {...props}
     >
       <div className="relative">
-        <SyntaxHighlighter
-          className="overflow-hidden dark:hidden"
-          codeTagProps={{
-            className: "font-mono text-sm",
-          }}
-          customStyle={{
-            margin: 0,
-            padding: "1rem",
-            fontSize: "0.875rem",
-            background: "hsl(var(--background))",
-            color: "hsl(var(--foreground))",
-          }}
+        <ShikiHighlighter
+          theme={resolvedTheme === "dark" ? "one-dark-pro" : "one-light"}
+          className="overflow-hidden"
           language={language}
-          lineNumberStyle={{
-            color: "hsl(var(--muted-foreground))",
-            paddingRight: "1rem",
-            minWidth: "2.5rem",
-          }}
           showLineNumbers={showLineNumbers}
-          style={oneLight}
         >
           {code}
-        </SyntaxHighlighter>
-        <SyntaxHighlighter
-          className="hidden overflow-hidden dark:block"
-          codeTagProps={{
-            className: "font-mono text-sm",
-          }}
-          customStyle={{
-            margin: 0,
-            padding: "1rem",
-            fontSize: "0.875rem",
-            background: "hsl(var(--background))",
-            color: "hsl(var(--foreground))",
-          }}
-          language={language}
-          lineNumberStyle={{
-            color: "hsl(var(--muted-foreground))",
-            paddingRight: "1rem",
-            minWidth: "2.5rem",
-          }}
-          showLineNumbers={showLineNumbers}
-          style={oneDark}
-        >
-          {code}
-        </SyntaxHighlighter>
+        </ShikiHighlighter>
         {children && (
           <div className="absolute top-2 right-2 flex items-center gap-2">{children}</div>
         )}
       </div>
     </div>
-  </CodeBlockContext.Provider>
-);
+  );
+};
 
 export type CodeBlockCopyButtonProps = ComponentProps<typeof Button> & {
   onCopy?: () => void;
   onError?: (error: Error) => void;
   timeout?: number;
+  code: string;
 };
 
 export const CodeBlockCopyButton = ({
@@ -104,10 +85,10 @@ export const CodeBlockCopyButton = ({
   timeout = 2000,
   children,
   className,
+  code,
   ...props
 }: CodeBlockCopyButtonProps) => {
   const [isCopied, setIsCopied] = useState(false);
-  const { code } = useContext(CodeBlockContext);
 
   const copyToClipboard = async () => {
     if (typeof window === "undefined" || !navigator.clipboard.writeText) {
