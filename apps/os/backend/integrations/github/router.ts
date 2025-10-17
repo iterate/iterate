@@ -219,13 +219,15 @@ githubApp.post("/webhook", async (c) => {
 
     // Get the GitHub installation for this estate
     const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
-    if (!githubInstallation) {
-      logger.error(`No GitHub installation found for estate ${estate.id}`);
-      return c.json({ error: "GitHub installation not found" }, 500);
-    }
 
     // Get an installation access token
-    const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+    let installationToken: string | null = null;
+
+    if (githubInstallation)
+      installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // If no installation token is found, use the fallback token
+    if (!installationToken) installationToken = c.env.GITHUB_ESTATES_TOKEN;
 
     // Construct the repository URL
     const repoUrl = event.repository?.html_url || event.repository?.url;
