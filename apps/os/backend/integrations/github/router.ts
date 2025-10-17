@@ -233,6 +233,14 @@ githubApp.post("/webhook", async (c) => {
       return c.json({ error: "Repository URL not found in webhook payload" }, 400);
     }
 
+    if (!installationToken) {
+      logger.error(`No installation token found for estate ${estate.id}`);
+      return c.json(
+        { error: "Installation token not found, please re-authenticate github app" },
+        400,
+      );
+    }
+
     // Use the common build trigger function
     const build = await triggerGithubBuild({
       db: c.var.db,
