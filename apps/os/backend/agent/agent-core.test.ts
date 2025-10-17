@@ -2246,7 +2246,7 @@ describe("CORE:FILE_SHARED event handling", () => {
 
       // Check that error log was written
       const errorLogs = consoleCapture.getLogs().filter((log) => log.includes("[ERROR]"));
-      expect(errorLogs.some((log) => log.includes("LLM request 1 failed"))).toBe(true);
+      expect(errorLogs.some((log) => log.includes("OpenAI service unavailable"))).toBe(true);
 
       // Check that error events were added
       const events = hWithConsole.getEvents();

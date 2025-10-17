@@ -76,10 +76,17 @@ export const env = _env as CloudflareEnv;
  */
 export function waitUntil(promise: Promise<unknown>): void {
   // Preemptively create an error to ensure we log with the correct stack trace
-  const preemptiveError = new Error("Error in waitUntil callback");
+  const preemptiveError = new Error("[error message placeholder]");
   _waitUntil(
     promise.catch((error) => {
       preemptiveError.cause = error;
+      preemptiveError.message = `${error.message} (in waitUntil callback)`;
+      if (preemptiveError.stack) {
+        preemptiveError.stack = preemptiveError.stack.replace(
+          /\[error message placeholder\]/,
+          `${preemptiveError.message}`,
+        );
+      }
       logger.error(preemptiveError);
     }),
   );
