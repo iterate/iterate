@@ -511,8 +511,8 @@ export class AgentCore<
     // Check if initialized
     if (!this._initialized) {
       const eventNames = events
-        .map((e) => e.type)
-        .flatMap((e, i) => (i < 3 ? e : i === 3 ? "..." : [undefined]))
+        .map((e): string => e.type)
+        .flatMap((e, i) => (i < 3 ? e : i === 3 ? "..." : []))
         .join(",");
       throw new Error(
         `[AgentCore] Cannot add events before calling initializeWithEvents. Tried to add: ${eventNames}`,
