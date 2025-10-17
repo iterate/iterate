@@ -267,9 +267,10 @@ export class TagLogger {
 
 function serializeError(error: unknown): any {
   if (error instanceof Error) {
-    const plain: any = {
+    const plain: Record<string, unknown> = {
       name: error.name,
       message: error.message,
+      stack: error.stack,
     };
 
     // Include cause if present (recursively serialize it)
