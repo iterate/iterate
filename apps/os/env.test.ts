@@ -35,7 +35,12 @@ describe("waitUntil wrapper", () => {
 
     // Wait for the promise chain to resolve
     await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith("Error in waitUntil callback", synchronousError);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Error in waitUntil callback",
+          cause: synchronousError,
+        }),
+      );
     });
   });
 
@@ -51,7 +56,38 @@ describe("waitUntil wrapper", () => {
     );
 
     await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith("Error in waitUntil callback", asyncError);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Error in waitUntil callback",
+          cause: asyncError,
+        }),
+      );
+    });
+  });
+
+  test("should capture original stack trace", async () => {
+    const loggerSpy = vi.spyOn(tagLogger.logger, "error");
+
+    const asyncError = new Error("Async error");
+
+    function functionWithBrokenWaitUntil() {
+      waitUntil(
+        (async () => {
+          throw asyncError;
+        })(),
+      );
+    }
+
+    functionWithBrokenWaitUntil();
+
+    await vi.waitFor(() => {
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Error in waitUntil callback",
+          cause: asyncError,
+          stack: expect.stringContaining("functionWithBrokenWaitUntil"),
+        }),
+      );
     });
   });
 
@@ -64,7 +100,12 @@ describe("waitUntil wrapper", () => {
     waitUntil(rejectedPromise);
 
     await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith("Error in waitUntil callback", rejectionError);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Error in waitUntil callback",
+          cause: rejectionError,
+        }),
+      );
     });
   });
 
@@ -107,7 +148,12 @@ describe("waitUntil wrapper", () => {
     );
 
     await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith("Error in waitUntil callback", delayedError);
+      expect(loggerSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Error in waitUntil callback",
+          cause: delayedError,
+        }),
+      );
     });
   });
 });
