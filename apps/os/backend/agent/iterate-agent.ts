@@ -1,6 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import pMemoize from "p-suite/p-memoize";
-import { enableDebug } from "better-wait-until";
 import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -381,8 +380,7 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
-        enableDebug();
+        // Note that this.ctx.waitUntil is replaced by better-wait-until to actually keep the DO alive...
         this.ctx.waitUntil(fn());
       },
 
@@ -470,11 +468,18 @@ export class IterateAgent<
       // Wrap the default console so every call is also sent to connected websocket clients
       console: (() => {
         // we're going to jettison this soon
-        return console;
+        return logger;
       })(),
 
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
         const event = _event as MergedEventForSlices<Slices>;
+        if (event.type === "CORE:INTERNAL_ERROR") {
+          const reconstructed = new Error(event.data.error);
+          if (event.data.stack) reconstructed.stack = event.data.stack;
+          logger.error(
+            new Error(`Internal error in agent: ${event.data.error}`, { cause: reconstructed }),
+          );
+        }
         const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
         // Handle MCP side effects for relevant events
         const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;

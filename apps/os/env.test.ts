@@ -37,7 +37,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Error in waitUntil callback",
+          message: "Synchronous error (in waitUntil callback)",
           cause: synchronousError,
         }),
       );
@@ -58,7 +58,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Error in waitUntil callback",
+          message: "Async error (in waitUntil callback)",
           cause: asyncError,
         }),
       );
@@ -83,7 +83,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Error in waitUntil callback",
+          message: "Async error (in waitUntil callback)",
           cause: asyncError,
           stack: expect.stringContaining("functionWithBrokenWaitUntil"),
         }),
@@ -102,7 +102,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Error in waitUntil callback",
+          message: "Rejection error (in waitUntil callback)",
           cause: rejectionError,
         }),
       );
@@ -150,7 +150,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Error in waitUntil callback",
+          message: "Delayed error (in waitUntil callback)",
           cause: delayedError,
         }),
       );

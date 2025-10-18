@@ -292,7 +292,32 @@ function serializeError(error: unknown): any {
 
 const replacer = (_: string, value: unknown) => serializeError(value);
 
+function formatErrorWithCauses(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const parts: string[] = [];
+  let current: unknown = err;
+  let level = 0;
+  while (current instanceof Error && level < 10) {
+    parts.push(
+      level === 0
+        ? (current.stack ?? current.toString())
+        : `Caused by: ${current.stack ?? current.toString()}`,
+    );
+    current = current.cause;
+    level++;
+  }
+  return parts.join("\n");
+}
+
 /* eslint-disable no-console -- this is the one place where we use console */
+export const devConsoleImplementation: TagLogger.Implementation = {
+  debug: ({ message }) => console.debug(message),
+  info: ({ message }) => console.info(message),
+  warn: ({ message }) => console.warn(message),
+  error: ({ message, errorObject }) =>
+    console.error(errorObject ? formatErrorWithCauses(errorObject) : message),
+};
+
 export const consoleImplementation: TagLogger.Implementation = {
   debug: ({ message, metadata }) =>
     console.debug(JSON.stringify({ message, ...metadata }, replacer)),
@@ -305,4 +330,6 @@ export const consoleImplementation: TagLogger.Implementation = {
     ),
 };
 
-export const logger = new TagLogger(consoleImplementation);
+export const logger = new TagLogger(
+  import.meta.env.MODE === "development" ? devConsoleImplementation : consoleImplementation,
+);

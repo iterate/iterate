@@ -84,8 +84,8 @@ app.use(
 
 // Error tracking with PostHog
 app.onError((err, c) => {
-  // Log the error
-  logger.error("Unhandled error:", err);
+  // Log the error with cause-chaining and contextual suffix
+  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
   // Return error response
   return c.json({ error: "Internal Server Error" }, 500);
 });
@@ -129,9 +129,17 @@ app.all("/api/trpc/*", (c) => {
     router: appRouter,
     allowMethodOverride: true,
     createContext: (opts) => createContext(c, opts),
-    onError: ({ error }) => {
-      if (getHTTPStatusCodeFromError(error) >= 500) {
-        logger.error("Error in tRPC endpoint:", error);
+    onError: ({ error, path }) => {
+      const procedurePath = path ?? "unknown";
+      const status = getHTTPStatusCodeFromError(error);
+      if (status >= 500) {
+        // logger.error tracks the error in posthog - we only want this for 500 errors
+        logger.error(
+          new Error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, { cause: error }),
+        );
+      } else {
+        // however, we DO want to log other errors to stdout with path and stacktrace
+        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
       }
     },
   });
