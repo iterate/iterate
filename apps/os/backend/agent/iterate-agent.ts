@@ -1,7 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import pMemoize from "p-suite/p-memoize";
-import { enableDebug } from "better-wait-until";
-import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
@@ -16,6 +14,7 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
+import { Agent as CloudflareAgent } from "agents";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -198,17 +197,13 @@ export class IterateAgent<
     // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
 
     // Perform the PartyKit set-name fetch internally so it triggers onStart inside this DO
-    try {
-      const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-      req.headers.set("x-partykit-room", params.record.durableObjectName);
-      if (params.props) {
-        req.headers.set("x-partykit-props", JSON.stringify(params.props));
-      }
-      const res = await this.fetch(req);
-      await res.text();
-    } catch (e) {
-      logger.error("Could not set server name:", e);
+    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+    req.headers.set("x-partykit-room", params.record.durableObjectName);
+    if (params.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(params.props));
     }
+    const res = await this.fetch(req);
+    await res.text();
 
     this._isInitialized = true;
   }
@@ -381,8 +376,7 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
-        enableDebug();
+        // Note that this.ctx.waitUntil is replaced by better-wait-until to actually keep the DO alive...
         this.ctx.waitUntil(fn());
       },
 
@@ -470,11 +464,18 @@ export class IterateAgent<
       // Wrap the default console so every call is also sent to connected websocket clients
       console: (() => {
         // we're going to jettison this soon
-        return console;
+        return logger;
       })(),
 
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
         const event = _event as MergedEventForSlices<Slices>;
+        if (event.type === "CORE:INTERNAL_ERROR") {
+          const reconstructed = new Error(event.data.error);
+          if (event.data.stack) reconstructed.stack = event.data.stack;
+          logger.error(
+            new Error(`Internal error in agent: ${event.data.error}`, { cause: reconstructed }),
+          );
+        }
         const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
         // Handle MCP side effects for relevant events
         const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;

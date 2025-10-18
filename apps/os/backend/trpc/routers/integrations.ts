@@ -317,6 +317,11 @@ export const integrationsRouter = router({
 
     const token = await getGithubInstallationToken(githubInstallation.accountId);
 
+    // If there is no token, that means the installation has been deleted
+    if (!token) {
+      return [];
+    }
+
     // GitHub API schema for paginated repository response
     const GitHubReposResponse = z.object({
       total_count: z.number(),
@@ -496,22 +501,42 @@ export const integrationsRouter = router({
         success: true,
       };
     }),
-  disconnectGithubRepo: estateProtectedProcedure.mutation(async ({ ctx, input }) => {
-    const { estateId } = input;
+  disconnectGithubRepo: estateProtectedProcedure
+    .input(
+      z.object({
+        deleteInstallation: z.boolean().optional().default(false),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId, deleteInstallation } = input;
 
-    await ctx.db
-      .update(schemas.estate)
-      .set({
-        connectedRepoId: null,
-        connectedRepoRef: null,
-        connectedRepoPath: null,
-      })
-      .where(eq(schemas.estate.id, estateId));
+      await ctx.db
+        .update(schemas.estate)
+        .set({
+          connectedRepoId: null,
+          connectedRepoRef: null,
+          connectedRepoPath: null,
+        })
+        .where(eq(schemas.estate.id, estateId));
 
-    return {
-      success: true,
-    };
-  }),
+      if (deleteInstallation) {
+        const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+
+        if (githubInstallation) {
+          await ctx.db
+            .delete(schemas.account)
+            .where(
+              and(
+                eq(schemas.account.accountId, githubInstallation.accountId),
+                eq(schemas.account.providerId, "github-app"),
+              ),
+            );
+        }
+      }
+      return {
+        success: true,
+      };
+    }),
 
   // Disconnect an integration from the estate or personal account
   disconnect: estateProtectedProcedure

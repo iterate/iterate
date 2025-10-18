@@ -269,7 +269,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             break;
           }
           case "CORE:INTERNAL_ERROR": {
-            logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
             void this.getAgentDebugURL().then((url) =>

@@ -26,7 +26,7 @@ export const generateGithubJWT = async () => {
 };
 
 export const getGithubInstallationForEstate = async (db: DB, estateId: string) => {
-  const [githubInstallation] = await db
+  const installations = await db
     .select({
       accountId: schemas.account.accountId,
       accessToken: schemas.account.accessToken,
@@ -43,7 +43,7 @@ export const getGithubInstallationForEstate = async (db: DB, estateId: string) =
     )
     .limit(1);
 
-  return githubInstallation;
+  return installations.length > 0 ? installations[0] : null;
 };
 
 export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
@@ -105,6 +105,11 @@ export const getGithubInstallationToken = async (installationId: string) => {
       },
     },
   );
+
+  // If the installation is deleted, return null
+  if (tokenRes.status === 404) {
+    return null;
+  }
 
   if (!tokenRes.ok) {
     throw new Error(`Failed to fetch installation token: ${tokenRes.statusText}`);
