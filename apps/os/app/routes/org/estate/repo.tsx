@@ -21,7 +21,7 @@ import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { useTRPC } from "../../../lib/trpc.ts";
-import { useEstateId, useOrganizationId } from "../../../hooks/use-estate.ts";
+import { useEstateId } from "../../../hooks/use-estate.ts";
 import {
   Select,
   SelectContent,
@@ -149,7 +149,6 @@ function EstateContent({
 
   // Get estate ID from URL
   const estateId = useEstateId();
-  const organizationId = useOrganizationId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
@@ -203,15 +202,7 @@ function EstateContent({
   );
 
   const disconnectGithubRepoMutation = useMutation(
-    trpc.integrations.disconnectGithubRepo.mutationOptions({
-      onSuccess: async () => {
-        const { installationUrl } = await startGithubAppInstallFlowMutation.mutateAsync({
-          estateId: estateId!,
-          callbackURL: `${window.location.origin}/${organizationId}/onboarding/4`,
-        });
-        window.location.href = installationUrl;
-      },
-    }),
+    trpc.integrations.disconnectGithubRepo.mutationOptions({}),
   );
   const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
 
@@ -804,13 +795,13 @@ function EstateContent({
               <Button
                 type="button"
                 variant="destructive"
-                onClick={() =>
-                  // The best way to handle this is just to delete the installation, which will prompt the user to reconnect new repo
-                  disconnectGithubRepoMutation.mutate({
-                    estateId: estateId,
-                    deleteInstallation: true,
-                  })
-                }
+                onClick={() => {
+                  // TODO: temporary disabled
+                  // Upon redirect the estate will be disconnected from GitHub
+                  // Which will automatically create a new repo in the estate pool
+                  // That is not ideal, so we're temporarily disabling this feature
+                  toast.error("This feature is temporarily disabled");
+                }}
                 disabled={startGithubAppInstallFlowMutation.isPending}
                 className="flex-1"
               >

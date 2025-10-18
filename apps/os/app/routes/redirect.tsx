@@ -7,7 +7,10 @@ import { getDb } from "../../backend/db/client.ts";
 import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
-import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
+import {
+  createGithubRepoInEstatePool,
+  createUserOrganizationAndEstate,
+} from "../../backend/org-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
@@ -123,7 +126,34 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       id: estate.id,
       name: estate.name,
       organizationId: estate.organizationId,
+      connectedRepoId: estate.connectedRepoId,
+      parentOrgName: organization.name,
     })),
+  );
+
+  // If any estate has no connected repo, create one in the estate pool
+  await Promise.allSettled(
+    userEstates
+      .filter((estate) => !estate.connectedRepoId)
+      .map(async (estate) => {
+        const repo = await createGithubRepoInEstatePool(estate.parentOrgName).catch((error) => {
+          logger.error("Failed to create Github repo in estate pool", {
+            estateId: estate.id,
+            error,
+          });
+          return null;
+        });
+        if (repo) {
+          await db
+            .update(schema.estate)
+            .set({
+              connectedRepoId: repo.id,
+              connectedRepoRef: repo.default_branch,
+              connectedRepoPath: `/`,
+            })
+            .where(eq(schema.estate.id, estate.id));
+        }
+      }),
   );
 
   // If user has no estates, redirect to no-access page

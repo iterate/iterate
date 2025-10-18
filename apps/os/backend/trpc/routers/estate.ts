@@ -39,16 +39,12 @@ export async function triggerEstateRebuild(params: {
 
   // Get the GitHub installation
   const githubInstallation = await getGithubInstallationForEstate(db, estateId);
-  if (!githubInstallation) {
-    throw new Error("GitHub installation not found for this estate");
-  }
 
-  // Get installation token
-  const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-  if (!installationToken) {
-    throw new Error("Failed to get installation token");
-  }
+  let installationToken: string | null = null;
+  if (githubInstallation)
+    installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+  // If no installation token is found, use the fallback token
+  if (!installationToken) installationToken = env.GITHUB_ESTATES_TOKEN;
 
   // Get repository details
   const repoResponse = await fetch(
@@ -335,12 +331,13 @@ export const estateRouter = router({
 
       // Get the GitHub installation
       const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-      if (!githubInstallation) {
-        throw new Error("GitHub installation not found for this estate");
-      }
 
-      // Get installation token
-      const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      let installationToken: string | null = null;
+
+      if (githubInstallation)
+        installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      // If no installation token is found, use the fallback token
+      if (!installationToken) installationToken = ctx.env.GITHUB_ESTATES_TOKEN;
 
       // GitHub API response schemas
       const GitHubCommitResponse = z.object({

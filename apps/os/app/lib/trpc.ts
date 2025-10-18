@@ -31,10 +31,10 @@ const getTrpcUrl = () => {
 
 export const trpcClient = createTRPCClient<AppRouter>({
   links: [
+    loggerLink({ enabled: () => true }),
     httpBatchLink({
       url: getTrpcUrl(),
       methodOverride: "POST",
     }),
-    loggerLink({ enabled: () => true }),
   ],
 });
