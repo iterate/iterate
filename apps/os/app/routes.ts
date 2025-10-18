@@ -3,7 +3,7 @@ import { type RouteConfig, index, prefix, route, layout } from "@react-router/de
 export default [
   // Public routes (no auth required)
   route("/login", "./routes/login.tsx"),
-  route("/get-started", "./routes/get-started.tsx"),
+  route("/signup", "./routes/signup.tsx"),
   route("/no-access", "./routes/no-access.tsx"),
 
   // Trial routes (requires auth but no specific org/estate context)

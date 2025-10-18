@@ -164,9 +164,6 @@ export const estate = pgTable("estate", (t) => ({
   // Onboarding agent name. Semantics: if null, user is done with onboarding.
   // If not null, use that agent to get onboarding information from it.
   onboardingAgentName: t.text(),
-  // If set, this estate is using a Slack Connect trial channel
-  // This links to the Slack channel ID in iterate's workspace
-  slackTrialConnectChannelId: t.text(),
   ...withTimestamps,
 }));
 

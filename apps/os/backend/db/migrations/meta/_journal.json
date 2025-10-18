@@ -155,13 +155,6 @@
       "when": 1760539256931,
       "tag": "0021_exotic_goliath",
       "breakpoints": true
-    },
-    {
-      "idx": 22,
-      "version": "7",
-      "when": 1760546704731,
-      "tag": "0022_abandoned_matthew_murdock",
-      "breakpoints": true
     }
   ]
 }

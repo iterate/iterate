@@ -19,7 +19,7 @@ import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
-
+import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
@@ -124,10 +124,10 @@ export async function ensureUserSynced(params: {
     // Check if this is a trial estate
     const estate = await db.query.estate.findFirst({
       where: eq(schema.estate.id, estateId),
-      columns: { slackTrialConnectChannelId: true, organizationId: true },
+      columns: { organizationId: true },
     });
 
-    const isTrialEstate = !!estate?.slackTrialConnectChannelId;
+    const isTrial = await slackChannelOverrideExists(db, estateId);
 
     // Fetch user info from Slack
     const slackAPI = new WebClient(botToken);
@@ -152,7 +152,7 @@ export async function ensureUserSynced(params: {
       );
       // For trial estates, this is expected - all users are external
       // Continue with minimal user record creation
-      if (!isTrialEstate) {
+      if (!isTrial) {
         return false; // For non-trial estates, fail if we can't get user info
       }
     }
@@ -166,12 +166,12 @@ export async function ensureUserSynced(params: {
     //   - iterate team members are INTERNAL (same team ID as syncingTeamId)
     //   - trial users via Slack Connect are EXTERNAL (different team ID)
     //   - if we don't have userHomeTeamId, assume EXTERNAL (Slack Connect users have limited API access)
-    const isExternalUser = isTrialEstate
+    const isExternalUser = isTrial
       ? userHomeTeamId !== syncingTeamId // For trials, assume external unless proven internal
       : userHomeTeamId && userHomeTeamId !== syncingTeamId; // For regular estates, require proof
 
     logger.info(
-      `[JIT Sync] User ${slackUserId}: homeTeam=${userHomeTeamId}, syncingTeam=${syncingTeamId}, isTrial=${isTrialEstate}, isExternal=${isExternalUser}, hasFullInfo=${hasFullUserInfo}`,
+      `[JIT Sync] User ${slackUserId}: homeTeam=${userHomeTeamId}, syncingTeam=${syncingTeamId}, isTrial=${isTrial}, isExternal=${isExternalUser}, hasFullInfo=${hasFullUserInfo}`,
     );
 
     // Generate email using syncing team ID (not user's home team)
@@ -241,7 +241,7 @@ export async function ensureUserSynced(params: {
       // Determine role
       // For trial estates, everyone is a member (keep it simple)
       // For regular estates, use standard role logic
-      const role = isTrialEstate
+      const role = isTrial
         ? "member"
         : isExternalUser
           ? "external"
@@ -250,7 +250,7 @@ export async function ensureUserSynced(params: {
             : "member";
 
       logger.info(
-        `[JIT Sync] Assigning role="${role}" to user ${slackUserId} (isTrial=${isTrialEstate}, isExternal=${isExternalUser})`,
+        `[JIT Sync] Assigning role="${role}" to user ${slackUserId} (isTrial=${isTrial}, isExternal=${isExternalUser})`,
       );
 
       // Add to organization
@@ -361,9 +361,9 @@ slackApp.post("/webhook", async (c) => {
 
   waitUntil(
     // deterministically react to the webhook as early as possible (eyes emoji)
-    getSlackAccessTokenForEstate(db, estateId).then(async (slackToken) => {
-      if (slackToken) {
-        await reactToSlackWebhook(body, new WebClient(slackToken), messageMetadata);
+    getSlackAccessTokenForEstate(db, estateId).then(async (slackAccount) => {
+      if (slackAccount) {
+        await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
     }),
   );
@@ -1167,13 +1167,13 @@ async function handleBotChannelJoin(params: {
 }) {
   const { db, estateId, channelId, botUserId } = params;
 
-  const slackToken = await getSlackAccessTokenForEstate(db, estateId);
-  if (!slackToken) {
+  const slackAccount = await getSlackAccessTokenForEstate(db, estateId);
+  if (!slackAccount) {
     logger.error("No Slack token available for channel join handling");
     return;
   }
 
-  const slackAPI = new WebClient(slackToken);
+  const slackAPI = new WebClient(slackAccount.accessToken);
 
   const history = await slackAPI.conversations.history({
     channel: channelId,

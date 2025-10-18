@@ -140,7 +140,7 @@ export default function Integrations() {
     }),
   );
 
-  const isTrialEstate = !!estateInfo.slackTrialConnectChannelId;
+  const isTrialEstate = estateInfo.isTrialEstate;
 
   // Filter out Slack connector for trial estates since they're using Slack Connect
   const integrations = (data?.oauthIntegrations || []).filter(

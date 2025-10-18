@@ -4,7 +4,7 @@ import { authClient } from "../lib/auth-client.ts";
 import { GlobalLoading } from "./global-loading.tsx";
 
 // Routes that don't require authentication
-const PUBLIC_ROUTES = ["/login", "/get-started", "/no-access"];
+const PUBLIC_ROUTES = ["/login", "/signup", "/no-access"];
 
 export function AuthGuard({ children }: PropsWithChildren) {
   const navigate = useNavigate();

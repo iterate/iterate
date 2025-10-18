@@ -23,6 +23,7 @@ import type { DB } from "../../db/client.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -140,12 +141,15 @@ export const estateRouter = router({
       where: eq(organization.id, userEstate.organizationId),
     });
 
+    // Check if this is a trial estate
+    const isTrial = await slackChannelOverrideExists(ctx.db, userEstate.id);
+
     return {
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
-      slackTrialConnectChannelId: userEstate.slackTrialConnectChannelId ?? null,
+      isTrialEstate: isTrial,
       organization: org
         ? {
             id: org.id,
@@ -174,20 +178,22 @@ export const estateRouter = router({
       },
     });
 
-    // Flatten estates from all organizations
-    const estates = memberships.flatMap((membership) =>
-      membership.organization.estates.map((est) => ({
-        id: est.id,
-        name: est.name,
-        organizationId: est.organizationId,
-        organization: {
-          id: membership.organization.id,
-          name: membership.organization.name,
-        },
-        slackTrialConnectChannelId: est.slackTrialConnectChannelId,
-        createdAt: est.createdAt,
-        updatedAt: est.updatedAt,
-      })),
+    // Flatten estates from all organizations and check trial status
+    const estates = await Promise.all(
+      memberships.flatMap((membership) =>
+        membership.organization.estates.map(async (est) => ({
+          id: est.id,
+          name: est.name,
+          organizationId: est.organizationId,
+          organization: {
+            id: membership.organization.id,
+            name: membership.organization.name,
+          },
+          isTrialEstate: await slackChannelOverrideExists(ctx.db, est.id),
+          createdAt: est.createdAt,
+          updatedAt: est.updatedAt,
+        })),
+      ),
     );
 
     return estates;

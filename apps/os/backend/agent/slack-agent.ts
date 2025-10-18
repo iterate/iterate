@@ -86,10 +86,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // The loading_messages are a new crazy bot thing that shows a shimmering bot avatar while
   // your bot is thinking and cycles through an array of string status that appear where the message will
   // later appear.
-  private updateSlackThreadStatus = pDebounce((params: { status: string | null | undefined }) => {
-    const { status } = params;
-    try {
-      void this.slackAPI.assistant.threads.setStatus({
+  private updateSlackThreadStatus = pDebounce(
+    async (params: { status: string | null | undefined }) => {
+      const { status } = params;
+      const result = await this.slackAPI.assistant.threads.setStatus({
         channel_id: this.slackChannelId,
         thread_ts: this.slackThreadId,
 
@@ -121,6 +121,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         ...(status ? { loading_messages: [`${status}...`] } : {}),
       });
 
+      if (!result.ok) {
+        // log error but don't crash DO
+        logger.error(`Failed to update Slack status: ${result.error}`);
+        return;
+      }
+
       if (this.slackStatusClearTimeout) {
         clearTimeout(this.slackStatusClearTimeout);
       }
@@ -132,18 +138,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             return;
           }
           this.slackStatusClearTimeout = null;
-          this.updateSlackThreadStatus({ status: undefined });
+          void this.updateSlackThreadStatus({ status: undefined });
         };
 
         this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
       } else {
         this.slackStatusClearTimeout = null;
       }
-    } catch (error) {
-      // log error but don't crash DO
-      logger.error("Failed to update Slack status:", error);
-    }
-  }, 100);
+    },
+    100,
+  );
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
@@ -154,12 +158,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return;
     }
 
-    const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
-    if (!slackAccessToken) {
+    const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
+    if (!slackAccount) {
       throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
     }
     // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccessToken, {
+    this.slackAPI = new WebClient(slackAccount.accessToken, {
       rejectRateLimitedCalls: true,
       retryConfig: { retries: 0 },
     });
@@ -721,36 +725,18 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * For trial estates, finds the team ID via the channel override.
    */
   private async getSyncingTeamId(estateId: string): Promise<string | null> {
-    // First check if this is a trial estate
-    const estate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
-      columns: { slackTrialConnectChannelId: true },
+    // First check if this is a trial estate (has a channel override)
+    const channelOverride = await this.db.query.slackChannelEstateOverride.findFirst({
+      where: eq(schema.slackChannelEstateOverride.estateId, estateId),
+      columns: { slackTeamId: true, slackChannelId: true },
     });
 
-    if (estate?.slackTrialConnectChannelId) {
-      // For trial estates, find the team ID via channel override
+    if (channelOverride) {
+      // For trial estates, use the team ID from the channel override
       logger.info(
-        `[SlackAgent JIT] Estate ${estateId} is a trial estate with channel ${estate.slackTrialConnectChannelId}`,
+        `[SlackAgent JIT] Estate ${estateId} is a trial estate with channel ${channelOverride.slackChannelId}, teamId=${channelOverride.slackTeamId}`,
       );
-
-      const channelOverride = await this.db.query.slackChannelEstateOverride.findFirst({
-        where: and(
-          eq(schema.slackChannelEstateOverride.estateId, estateId),
-          eq(schema.slackChannelEstateOverride.slackChannelId, estate.slackTrialConnectChannelId),
-        ),
-      });
-
-      if (channelOverride) {
-        logger.info(
-          `[SlackAgent JIT] Found channel override with teamId=${channelOverride.slackTeamId}`,
-        );
-        return channelOverride.slackTeamId;
-      }
-
-      logger.warn(
-        `[SlackAgent JIT] Trial estate ${estateId} has channel ${estate.slackTrialConnectChannelId} but no override found`,
-      );
-      return null;
+      return channelOverride.slackTeamId;
     }
 
     // For regular estates, use the provider estate mapping
@@ -840,8 +826,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       );
 
       // Get Slack token and team ID for this estate
-      const slackToken = await getSlackAccessTokenForEstate(this.db, estateId);
-      if (!slackToken) {
+      const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
+      if (!slackAccount) {
         logger.warn(`[SlackAgent JIT] No Slack token found for estate ${estateId}`);
         return [];
       }
@@ -865,7 +851,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         db: this.db,
         estateId,
         slackUserId,
-        botToken: slackToken,
+        botToken: slackAccount.accessToken,
         syncingTeamId,
       });
 
@@ -986,8 +972,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       );
 
       // Get Slack token and team ID for this estate
-      const slackToken = await getSlackAccessTokenForEstate(this.db, estateId);
-      if (!slackToken) {
+      const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
+      if (!slackAccount) {
         logger.warn(
           `[SlackAgent JIT] Cannot sync mentioned users - no Slack token for estate ${estateId}`,
         );
@@ -1010,7 +996,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                 db: this.db,
                 estateId,
                 slackUserId,
-                botToken: slackToken,
+                botToken: slackAccount.accessToken,
                 syncingTeamId,
               }),
             ),
@@ -1343,18 +1329,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async stopRespondingUntilMentioned(_input: Inputs["stopRespondingUntilMentioned"]) {
-    try {
-      const channel = this.agentCore.state.slackChannelId;
-      const ts = await this.mostRecentSlackMessageTs();
-      if (channel && ts) {
-        await this.slackAPI.reactions.add({
-          channel,
-          timestamp: ts,
-          name: "zipper_mouth_face",
-        });
+    const channel = this.agentCore.state.slackChannelId;
+    const ts = await this.mostRecentSlackMessageTs();
+    if (channel && ts) {
+      const result = await this.slackAPI.reactions.add({
+        channel,
+        timestamp: ts,
+        name: "zipper_mouth_face",
+      });
+      if (!result.ok) {
+        logger.warn(`[SlackAgent] Failed adding zipper-mouth reaction: ${result.error}`);
       }
-    } catch (error) {
-      logger.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
     }
     return {
       __pauseAgentUntilMentioned: true,

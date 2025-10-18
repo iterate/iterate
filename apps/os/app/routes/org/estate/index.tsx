@@ -114,18 +114,18 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
   const { mutateAsync: upgradeTrial, isPending } = useMutation(
-    trpc.trial.upgradeTrialToFullInstallation.mutationOptions({}),
+    trpc.integrations.upgradeTrialToFullInstallation.mutationOptions({}),
   );
 
   const handleUpgrade = async () => {
     try {
       await upgradeTrial({ estateId });
-      toast.success("Trial upgraded! Redirecting to Slack installation...");
+      toast.success("Installing to Slack workspace... Redirecting to Slack...");
       setDialogOpen(false);
       // Trigger Slack bot installation flow
       await connectSlackBot(window.location.pathname);
     } catch (error) {
-      toast.error("Failed to upgrade trial. Please try again.");
+      toast.error("Failed to install into Slack workspace. Please try again.");
       console.error(error);
     }
   };
@@ -138,7 +138,7 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
         className="text-lg px-8 py-3 h-auto"
         onClick={() => setDialogOpen(true)}
       >
-        Upgrade to Full Installation
+        Add @iterate to my Slack workspace
       </Button>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -154,8 +154,8 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
           <div className="space-y-4">
             <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950 p-4">
               <p className="text-sm text-yellow-900 dark:text-yellow-100">
-                <strong>What happens:</strong> We'll remove the trial configuration and take you to
-                Slack to install the iterate bot in your own workspace.
+                <strong>What happens:</strong> We'll remove the Slack Connect and take you to Slack
+                to install the iterate bot in your own workspace.
               </p>
             </div>
 
@@ -307,7 +307,7 @@ export default function Home() {
     );
   };
 
-  const isTrialEstate = !!estateInfo.slackTrialConnectChannelId;
+  const isTrialEstate = estateInfo.isTrialEstate;
 
   return (
     <>
@@ -324,7 +324,7 @@ export default function Home() {
             <div className="flex gap-3 flex-wrap">
               <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
                 <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
-                {isTrialEstate ? "Open Trial Channel in Slack" : "Message @iterate on Slack"}
+                {isTrialEstate ? "Open Slack Connect channel" : "Message @iterate on Slack"}
               </Button>
               {isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
             </div>

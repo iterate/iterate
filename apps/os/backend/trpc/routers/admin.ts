@@ -366,9 +366,9 @@ export const adminRouter = router({
   syncSlackForEstate: adminProcedure
     .input(z.object({ estateId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const slackToken = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
+      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
 
-      if (!slackToken) {
+      if (!slackAccount) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "No Slack token found for this estate",
@@ -392,7 +392,7 @@ export const adminRouter = router({
 
       return await syncSlackForEstateInBackground(
         ctx.db,
-        slackToken,
+        slackAccount.accessToken,
         input.estateId,
         estateMapping.externalId,
       );
@@ -471,7 +471,7 @@ export const adminRouter = router({
   createTrialSlackChannel: adminProcedure
     .input(
       z.object({
-        userEmail: z.string().email(),
+        userEmail: z.email(),
         userName: z.string().optional(),
         existingEstateId: z.string().optional(),
         createNewEstate: z.boolean().default(true),
@@ -541,7 +541,7 @@ export const adminRouter = router({
         });
       }
 
-      const iterateEstateId = await getIterateSlackEstateId(ctx.db, iterateTeamId);
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
       if (!iterateEstateId) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
@@ -550,39 +550,19 @@ export const adminRouter = router({
       }
 
       // Get iterate's bot account and token
-      const iterateBotAccountResult = await ctx.db
-        .select({
-          accountId: schema.account.id,
-          accessToken: schema.account.accessToken,
-        })
-        .from(schema.estateAccountsPermissions)
-        .innerJoin(
-          schema.account,
-          eq(schema.estateAccountsPermissions.accountId, schema.account.id),
-        )
-        .where(
-          and(
-            eq(schema.estateAccountsPermissions.estateId, iterateEstateId),
-            eq(schema.account.providerId, "slack-bot"),
-          ),
-        )
-        .limit(1);
-
-      if (!iterateBotAccountResult[0]?.accessToken) {
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
           message: "Iterate Slack bot account not found",
         });
       }
 
-      const iterateBotToken = iterateBotAccountResult[0].accessToken;
-      const iterateBotAccountId = iterateBotAccountResult[0].accountId;
-
       // Link trial estate to iterate's bot account
       await ctx.db
         .insert(schema.estateAccountsPermissions)
         .values({
-          accountId: iterateBotAccountId,
+          accountId: iterateBotAccount.accountId,
           estateId: estateId!,
         })
         .onConflictDoNothing();
@@ -596,7 +576,7 @@ export const adminRouter = router({
         userEmail,
         userName: userName || userEmail.split("@")[0],
         iterateTeamId,
-        iterateBotToken,
+        iterateBotToken: iterateBotAccount.accessToken,
       });
 
       if (!result.success) {
@@ -629,9 +609,9 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
 
   const syncPromises = estates.map(async (estate) => {
     try {
-      const slackToken = await getSlackAccessTokenForEstate(db, estate.id);
+      const slackAccount = await getSlackAccessTokenForEstate(db, estate.id);
 
-      if (!slackToken) {
+      if (!slackAccount) {
         return {
           estateId: estate.id,
           estateName: estate.name,
@@ -659,7 +639,7 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
 
       const result = await syncSlackForEstateInBackground(
         db,
-        slackToken,
+        slackAccount.accessToken,
         estate.id,
         estateMapping.externalId,
       );

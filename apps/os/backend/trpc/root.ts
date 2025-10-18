@@ -8,7 +8,6 @@ import { userRouter } from "./routers/user.ts";
 import { testingRouter } from "./routers/testing.ts";
 import { adminRouter } from "./routers/admin.ts";
 import { organizationRouter } from "./routers/organization.ts";
-import { trialRouter } from "./routers/trial.ts";
 
 export const appRouter = router({
   integrations: integrationsRouter,
@@ -20,7 +19,6 @@ export const appRouter = router({
   testing: testingRouter,
   stripe: stripeRouter,
   organization: organizationRouter,
-  trial: trialRouter,
 });
 
 export type AppRouter = typeof appRouter;
