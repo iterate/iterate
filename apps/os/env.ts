@@ -1,5 +1,5 @@
-import { logger } from "./backend/tag-logger.ts";
 import type { Workflow } from "cloudflare:workflows";
+import { logger } from "./backend/tag-logger.ts";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;

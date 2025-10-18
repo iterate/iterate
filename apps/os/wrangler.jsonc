@@ -72,8 +72,8 @@
     {
       "name": "estate-onboarding",
       "binding": "ESTATE_ONBOARDING_WORKFLOW",
-      "class_name": "EstateOnboardingWorkflow"
-    }
+      "class_name": "EstateOnboardingWorkflow",
+    },
   ],
   "migrations": [
     {

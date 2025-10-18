@@ -115,7 +115,9 @@ export default function EstateOnboardingStatus() {
         </CardHeader>
         <CardContent className="flex flex-col gap-6 pb-6">
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Steps</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Steps
+            </h2>
             {orderedSteps.length > 0 ? (
               <ul className="flex flex-col gap-3">
                 {orderedSteps.map((step) => {
@@ -129,9 +131,14 @@ export default function EstateOnboardingStatus() {
                     : null;
 
                   return (
-                    <li key={step.name} className="flex flex-col gap-1 rounded-lg border border-border/60 bg-background/60 p-3">
+                    <li
+                      key={step.name}
+                      className="flex flex-col gap-1 rounded-lg border border-border/60 bg-background/60 p-3"
+                    >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="font-medium capitalize">{step.name.replace(/_/g, " ")}</span>
+                        <span className="font-medium capitalize">
+                          {step.name.replace(/_/g, " ")}
+                        </span>
                         <Badge variant={stepStatusBadge} className="capitalize">
                           {stepLabel}
                         </Badge>
@@ -148,11 +155,15 @@ export default function EstateOnboardingStatus() {
                 })}
               </ul>
             ) : (
-              <p className="text-sm text-muted-foreground">No workflow steps have been recorded yet.</p>
+              <p className="text-sm text-muted-foreground">
+                No workflow steps have been recorded yet.
+              </p>
             )}
           </div>
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Workflow payload</h2>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+              Workflow payload
+            </h2>
             <SerializedObjectCodeBlock
               data={onboarding.data}
               initialFormat="json"

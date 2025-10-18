@@ -3,10 +3,7 @@ import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
-import type {
-  EstateOnboardingData,
-  EstateOnboardingState,
-} from "../../types/estate-onboarding.ts";
+import type { EstateOnboardingData, EstateOnboardingState } from "../../types/estate-onboarding.ts";
 
 // User's role within an organization (used in organizationUserMembership table)
 // Note: This is different from user.role which is for Better Auth's admin plugin

@@ -10,8 +10,8 @@ import * as schema from "../../backend/db/schema.ts";
 import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
-import type { Route } from "./+types/redirect";
 import type { EstateOnboardingState } from "../../types/estate-onboarding.ts";
+import type { Route } from "./+types/redirect";
 
 type EstatePathInput = {
   organizationId: string;
@@ -20,7 +20,12 @@ type EstatePathInput = {
   onboardingState: EstateOnboardingState | null;
 };
 
-function getEstatePath({ organizationId, estateId, onboardingId, onboardingState }: EstatePathInput) {
+function getEstatePath({
+  organizationId,
+  estateId,
+  onboardingId,
+  onboardingState,
+}: EstatePathInput) {
   if (!estateId) {
     return "/no-access";
   }
@@ -127,8 +132,7 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       organizationId: newOrgAndEstate.organization.id,
       estateId: newOrgAndEstate.estate?.id,
       onboardingId: newOrgAndEstate.estate?.onboardingId ?? null,
-      onboardingState:
-        newOrgAndEstate.estate?.onboardingId ? "pending" : null,
+      onboardingState: newOrgAndEstate.estate?.onboardingId ? "pending" : null,
     });
   }
 

@@ -77,17 +77,15 @@ async function updateStepStatus(
       status,
       detail: detail ?? current.detail,
       startedAt: current.startedAt ?? (status !== "pending" ? now : undefined),
-      completedAt:
-        status === "completed" || status === "error"
-          ? now
-          : current.completedAt,
+      completedAt: status === "completed" || status === "error" ? now : current.completedAt,
     };
   } else {
     steps.push({
       name: stepName,
       status,
       detail,
-      startedAt: status === "in_progress" || status === "completed" || status === "error" ? now : undefined,
+      startedAt:
+        status === "in_progress" || status === "completed" || status === "error" ? now : undefined,
       completedAt: status === "completed" || status === "error" ? now : undefined,
     });
   }
@@ -146,7 +144,10 @@ export class EstateOnboardingWorkflow extends WorkflowEntrypoint<
         await updateStepStatus(onboardingId, STEP_STRIPE_CUSTOMER, "completed");
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        logger.error(`Failed to create stripe customer during onboarding for estate ${estateId}: ${message}`, error);
+        logger.error(
+          `Failed to create stripe customer during onboarding for estate ${estateId}: ${message}`,
+          error,
+        );
         await updateStepStatus(onboardingId, STEP_STRIPE_CUSTOMER, "error", message);
         throw error;
       }

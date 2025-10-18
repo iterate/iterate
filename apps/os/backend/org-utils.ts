@@ -89,26 +89,30 @@ export const createUserOrganizationAndEstate = async (
     .where(eq(schema.estate.id, estate.id))
     .returning();
 
-  const resultEstate = updatedEstate ?? { ...estate, onboardingAgentName: agentName, onboardingId: onboarding.id };
+  const resultEstate = updatedEstate ?? {
+    ...estate,
+    onboardingAgentName: agentName,
+    onboardingId: onboarding.id,
+  };
 
   if (env.ESTATE_ONBOARDING_WORKFLOW) {
     waitUntil(
-      env.ESTATE_ONBOARDING_WORKFLOW
-        .create({
-          params: {
-            onboardingId: onboarding.id,
-            organizationId: organization.id,
-            estateId: estate.id,
-            ownerUserId: user.id,
-            onboardingAgentName: agentName,
-          },
-        })
-        .catch((error) => {
-          logger.error("Failed to start estate onboarding workflow", error);
-        }),
+      env.ESTATE_ONBOARDING_WORKFLOW.create({
+        params: {
+          onboardingId: onboarding.id,
+          organizationId: organization.id,
+          estateId: estate.id,
+          ownerUserId: user.id,
+          onboardingAgentName: agentName,
+        },
+      }).catch((error) => {
+        logger.error("Failed to start estate onboarding workflow", error);
+      }),
     );
   } else {
-    logger.warn("ESTATE_ONBOARDING_WORKFLOW binding is not configured. Onboarding workflow was not started.");
+    logger.warn(
+      "ESTATE_ONBOARDING_WORKFLOW binding is not configured. Onboarding workflow was not started.",
+    );
   }
 
   // Send Slack notification to our own slack instance, unless suppressed for test users
