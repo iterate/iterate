@@ -1,5 +1,5 @@
 {
-  "id": "539ad792-17bb-415f-a609-0a1256ff390a",
+  "id": "b090d767-b107-4d70-975b-e19d09544a0d",
   "prevId": "727c7760-91ed-4a81-9311-24f3ea513c1b",
   "version": "7",
   "dialect": "postgresql",
@@ -1606,6 +1606,136 @@
         "slack_channel_estate_id_estate_id_fk": {
           "name": "slack_channel_estate_id_estate_id_fk",
           "tableFrom": "slack_channel",
+          "tableTo": "estate",
+          "columnsFrom": [
+            "estate_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.slack_channel_estate_override": {
+      "name": "slack_channel_estate_override",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "slack_channel_id": {
+          "name": "slack_channel_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "slack_team_id": {
+          "name": "slack_team_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "estate_id": {
+          "name": "estate_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "reason": {
+          "name": "reason",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "metadata": {
+          "name": "metadata",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false,
+          "default": "'{}'::jsonb"
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        }
+      },
+      "indexes": {
+        "slack_channel_estate_override_slack_channel_id_slack_team_id_index": {
+          "name": "slack_channel_estate_override_slack_channel_id_slack_team_id_index",
+          "columns": [
+            {
+              "expression": "slack_channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "slack_team_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": true,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "slack_channel_estate_override_slack_channel_id_index": {
+          "name": "slack_channel_estate_override_slack_channel_id_index",
+          "columns": [
+            {
+              "expression": "slack_channel_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "slack_channel_estate_override_estate_id_index": {
+          "name": "slack_channel_estate_override_estate_id_index",
+          "columns": [
+            {
+              "expression": "estate_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {
+        "slack_channel_estate_override_estate_id_estate_id_fk": {
+          "name": "slack_channel_estate_override_estate_id_estate_id_fk",
+          "tableFrom": "slack_channel_estate_override",
           "tableTo": "estate",
           "columnsFrom": [
             "estate_id"
