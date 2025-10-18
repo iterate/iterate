@@ -99,13 +99,11 @@ export async function getAgentStub(
     ...(locationHint && { locationHint }),
   };
 
-  const stub = namespace.getByName(
-    agentInitParams.record.durableObjectName,
-    options,
-  ) as DurableObjectStub<IterateAgent>;
+  const stub = namespace.getByName(agentInitParams.record.durableObjectName, options);
 
   await stub.initIterateAgent(agentInitParams);
 
+  // @ts-expect-error, fix this infinite type error
   return stub;
 }
 

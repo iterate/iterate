@@ -97,10 +97,6 @@ const start = t.procedure
       nodeOptions: {
         stdio: "inherit",
         cwd: process.cwd(),
-        env: {
-          ...process.env,
-          CLOUDFLARE_INCLUDE_PROCESS_ENV: "true",
-        },
       },
     });
 

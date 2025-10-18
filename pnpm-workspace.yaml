@@ -12,6 +12,7 @@ minimumReleaseAgeExclude:
   - wrangler
   - better-wait-until
   - '@cloudflare/sandbox'
+  - alchemy
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
