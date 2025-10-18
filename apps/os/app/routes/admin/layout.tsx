@@ -9,6 +9,8 @@ import {
   Database,
   Building2,
   Server,
+  Route as RouteIcon,
+  Beaker,
 } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -32,6 +34,8 @@ import {
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
   { title: "Estates", icon: Building2, path: "/admin/estates" },
+  { title: "Slack Channel Routing", icon: RouteIcon, path: "/admin/slack-channel-routing" },
+  { title: "Trial Channel Setup", icon: Beaker, path: "/admin/trial-channel-setup" },
   { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
   { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
   { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },

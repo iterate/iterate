@@ -63,11 +63,13 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
               .onConflictDoNothing();
 
             // Get team info from Slack API to create provider-estate mapping
+            let teamId: string | undefined;
             try {
               const slackClient = new WebClient(slackBotAccount.accessToken);
               const authTest = await slackClient.auth.test();
 
               if (authTest.ok && authTest.team_id) {
+                teamId = authTest.team_id;
                 await db
                   .insert(schema.providerEstateMapping)
                   .values({
@@ -105,8 +107,12 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
             }
 
             // Sync Slack users to the organization
-            await syncSlackUsersInBackground(db, slackBotAccount.accessToken, estateId);
-            logger.info(`Auto-connected Slack bot to estate ${estateId} and synced users`);
+            if (teamId) {
+              await syncSlackUsersInBackground(db, slackBotAccount.accessToken, estateId, teamId);
+              logger.info(`Auto-connected Slack bot to estate ${estateId} and synced users`);
+            } else {
+              logger.warn("Skipped syncing Slack users - no team ID available");
+            }
           }
         })().catch((error) => {
           logger.error("Failed to auto-connect Slack bot to new estate", error);

@@ -25,21 +25,25 @@ export async function sendNotificationToIterateSlack(
   const db = getDb();
 
   // Get Slack access token for the notification estate
-  const slackToken = await getSlackAccessTokenForEstate(db, notificationEstateId);
+  const slackAccount = await getSlackAccessTokenForEstate(db, notificationEstateId);
 
-  if (!slackToken) {
+  if (!slackAccount) {
     logger.error("Slack access token not found for notification estate", {
       estateId: notificationEstateId,
     });
     return;
   }
 
-  const slackClient = new WebClient(slackToken);
+  const slackClient = new WebClient(slackAccount.accessToken);
 
-  await slackClient.chat.postMessage({
+  const result = await slackClient.chat.postMessage({
     channel,
     text: message,
     unfurl_links: false,
     unfurl_media: false,
   });
+
+  if (!result.ok) {
+    logger.error(`Failed to send notification to Slack: ${result.error}`);
+  }
 }
