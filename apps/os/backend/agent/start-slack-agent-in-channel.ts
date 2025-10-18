@@ -36,17 +36,6 @@ export async function startSlackAgentInChannel(params: {
 }> {
   const { db, estateId, slackChannelIdOrName, firstMessage, additionalEvents } = params;
 
-  // Look up the Slack channel ID in the database first by name, then fall back to treating as ID
-  let channelId = slackChannelIdOrName;
-  const channelRecord = await db.query.slackChannel.findFirst({
-    where: and(eq(slackChannel.estateId, estateId), eq(slackChannel.name, slackChannelIdOrName)),
-  });
-
-  if (channelRecord) {
-    channelId = channelRecord.externalId;
-  }
-  // If not found by name, assume slackChannelIdOrName is already the channel ID
-
   const accessToken = await getSlackAccessTokenForEstate(db, estateId);
   if (!accessToken) {
     throw new Error("No Slack integration found for this estate");
@@ -54,13 +43,55 @@ export async function startSlackAgentInChannel(params: {
 
   const slackAPI = new WebClient(accessToken);
 
-  const chatResult = await slackAPI.chat.postMessage({
-    channel: channelId,
-    text: firstMessage || "",
+  // Look up the Slack channel ID in the database first by name
+  let channelId = slackChannelIdOrName;
+  const channelRecord = await db.query.slackChannel.findFirst({
+    where: and(eq(slackChannel.estateId, estateId), eq(slackChannel.name, slackChannelIdOrName)),
   });
 
+  if (channelRecord) {
+    channelId = channelRecord.externalId;
+  } else if (!slackChannelIdOrName.startsWith("C") && !slackChannelIdOrName.startsWith("D")) {
+    // If not found in DB and doesn't look like a channel ID, search via Slack API
+    // This handles cases where the channel exists but hasn't been synced to our DB yet
+    try {
+      const channelsResponse = await slackAPI.conversations.list({
+        types: "public_channel,private_channel",
+        limit: 1000, // Slack's max
+      });
+
+      if (channelsResponse.ok && channelsResponse.channels) {
+        const matchingChannel = channelsResponse.channels.find(
+          (ch: any) => ch.name === slackChannelIdOrName,
+        );
+        if (matchingChannel && matchingChannel.id) {
+          channelId = matchingChannel.id;
+        }
+      }
+    } catch (_error) {
+      // If Slack API lookup fails, fall back to assuming it's a channel ID
+      // The subsequent postMessage will fail if it's invalid
+    }
+  }
+  // If not found by name or API lookup, assume slackChannelIdOrName is already the channel ID
+
+  let chatResult;
+  try {
+    chatResult = await slackAPI.chat.postMessage({
+      channel: channelId,
+      text: firstMessage || "",
+    });
+  } catch (error) {
+    const errorMsg = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to post message to Slack channel "${channelId}" (original: "${slackChannelIdOrName}"): ${errorMsg}`,
+    );
+  }
+
   if (!chatResult.ok || !chatResult.ts) {
-    throw new Error("Failed to post message to Slack");
+    throw new Error(
+      `Slack API returned error when posting to channel "${channelId}" (original: "${slackChannelIdOrName}"): ${chatResult.error || "Unknown error"}`,
+    );
   }
 
   const routingKey = getRoutingKey({
