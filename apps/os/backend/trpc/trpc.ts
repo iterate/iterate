@@ -183,7 +183,11 @@ export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
     with: {
       organization: {
         with: {
-          estates: true,
+          estates: {
+            with: {
+              onboarding: true,
+            },
+          },
         },
       },
     },
@@ -225,7 +229,11 @@ export async function getUserEstateAccess(
     with: {
       organization: {
         with: {
-          estates: true,
+          estates: {
+            with: {
+              onboarding: true,
+            },
+          },
         },
       },
     },

@@ -68,6 +68,13 @@
       },
     ],
   },
+  "workflows": [
+    {
+      "name": "estate-onboarding",
+      "binding": "ESTATE_ONBOARDING_WORKFLOW",
+      "class_name": "EstateOnboardingWorkflow"
+    }
+  ],
   "migrations": [
     {
       "tag": "2025-01-init-agents",

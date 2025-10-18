@@ -1,4 +1,5 @@
 import { logger } from "./backend/tag-logger.ts";
+import type { Workflow } from "cloudflare:workflows";
 
 // Conditionally import cloudflare:workers - it's not available in test environment
 let _env: any;
@@ -47,6 +48,7 @@ export type CloudflareEnv = Env & {
   STRIPE_WEBHOOK_SECRET: string;
   STRIPE_PRICING_PLAN_ID: string;
   SERVICE_AUTH_TOKEN: string;
+  ESTATE_ONBOARDING_WORKFLOW?: Workflow;
 
   // Comma-separated list of hostnames. If a user with a verified email using that hostname signs up,
   // they get user.role=admin set. This is particularly useful for testing in development when

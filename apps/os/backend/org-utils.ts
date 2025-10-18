@@ -6,8 +6,6 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
 
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
@@ -68,35 +66,50 @@ export const createUserOrganizationAndEstate = async (
 
   const agentName = `${estate.id}-Onboarding`;
 
+  const [onboarding] = await db
+    .insert(schema.estateOnboarding)
+    .values({
+      estateId: estate.id,
+      state: "pending",
+      data: { steps: [] },
+    })
+    .returning();
+
+  if (!onboarding) {
+    throw new Error("Failed to create estate onboarding record");
+  }
+
   // Update the estate with the onboarding agent name
-  await db
+  const [updatedEstate] = await db
     .update(schema.estate)
     .set({
       onboardingAgentName: agentName,
+      onboardingId: onboarding.id,
     })
-    .where(eq(schema.estate.id, estate.id));
+    .where(eq(schema.estate.id, estate.id))
+    .returning();
 
-  const result = { organization, estate };
+  const resultEstate = updatedEstate ?? { ...estate, onboardingAgentName: agentName, onboardingId: onboarding.id };
 
-  waitUntil(
-    (async () => {
-      try {
-        await createStripeCustomerAndSubscriptionForOrganization(db, result.organization, user);
-
-        const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
-          db,
-          estateId: estate.id,
-          agentInstanceName: agentName,
-          reason: "Auto-provisioned OnboardingAgent during estate creation",
-        });
-        // We need to call some method on the stub, otherwise the agent durable object
-        // wouldn't boot up. Obtaining a stub doesn't in itself do anything.
-        await onboardingAgent.doNothing();
-      } catch (error) {
-        logger.error("Failed to create stripe customer and start onboarding agent", error);
-      }
-    })(),
-  );
+  if (env.ESTATE_ONBOARDING_WORKFLOW) {
+    waitUntil(
+      env.ESTATE_ONBOARDING_WORKFLOW
+        .create({
+          params: {
+            onboardingId: onboarding.id,
+            organizationId: organization.id,
+            estateId: estate.id,
+            ownerUserId: user.id,
+            onboardingAgentName: agentName,
+          },
+        })
+        .catch((error) => {
+          logger.error("Failed to start estate onboarding workflow", error);
+        }),
+    );
+  } else {
+    logger.warn("ESTATE_ONBOARDING_WORKFLOW binding is not configured. Onboarding workflow was not started.");
+  }
 
   // Send Slack notification to our own slack instance, unless suppressed for test users
   // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id
@@ -106,13 +119,13 @@ export const createUserOrganizationAndEstate = async (
 
     if (!shouldSuppress) {
       waitUntil(
-        sendEstateCreatedNotificationToSlack(result.organization, result.estate).catch((error) => {
+        sendEstateCreatedNotificationToSlack(organization, resultEstate).catch((error) => {
           logger.error("Failed to send Slack notification for new estate", error);
         }),
       );
     }
   }
-  return result;
+  return { organization, estate: resultEstate };
 };
 
 async function sendEstateCreatedNotificationToSlack(

@@ -137,6 +137,17 @@ export const estateRouter = router({
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
+      onboardingId: userEstate.onboardingId ?? null,
+      onboarding: userEstate.onboarding
+        ? {
+            id: userEstate.onboarding.id,
+            estateId: userEstate.onboarding.estateId,
+            state: userEstate.onboarding.state,
+            data: userEstate.onboarding.data,
+            createdAt: userEstate.onboarding.createdAt,
+            updatedAt: userEstate.onboarding.updatedAt,
+          }
+        : null,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
     };

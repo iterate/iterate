@@ -289,4 +289,5 @@ export default class extends WorkerEntrypoint {
 }
 
 export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket };
+export { EstateOnboardingWorkflow } from "./workflows/estate-onboarding.ts";
 export { Sandbox } from "@cloudflare/sandbox";

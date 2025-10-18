@@ -3,6 +3,10 @@ import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
+import type {
+  EstateOnboardingData,
+  EstateOnboardingState,
+} from "../../types/estate-onboarding.ts";
 
 // User's role within an organization (used in organizationUserMembership table)
 // Note: This is different from user.role which is for Better Auth's admin plugin
@@ -164,6 +168,7 @@ export const estate = pgTable("estate", (t) => ({
   // Onboarding agent name. Semantics: if null, user is done with onboarding.
   // If not null, use that agent to get onboarding information from it.
   onboardingAgentName: t.text(),
+  onboardingId: t.text().references(() => estateOnboarding.id, { onDelete: "set null" }),
   ...withTimestamps,
 }));
 
@@ -171,6 +176,10 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   organization: one(organization, {
     fields: [estate.organizationId],
     references: [organization.id],
+  }),
+  onboarding: one(estateOnboarding, {
+    fields: [estate.onboardingId],
+    references: [estateOnboarding.id],
   }),
   estateAccountsPermissions: many(estateAccountsPermissions),
   files: many(files),
@@ -191,6 +200,32 @@ export const organization = pgTable("organization", (t) => ({
 export const organizationRelations = relations(organization, ({ many }) => ({
   estates: many(estate),
   members: many(organizationUserMembership),
+}));
+
+export const estateOnboarding = pgTable(
+  "estate_onboarding",
+  (t) => ({
+    id: iterateId("eob"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    state: t
+      .text({ enum: ["pending", "in_progress", "completed", "error"] })
+      .$type<EstateOnboardingState>()
+      .notNull()
+      .default("pending"),
+    data: t.jsonb().$type<EstateOnboardingData>().notNull().default({ steps: [] }),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex("estate_onboarding_estate_id_idx").on(t.estateId)],
+);
+
+export const estateOnboardingRelations = relations(estateOnboarding, ({ one }) => ({
+  estate: one(estate, {
+    fields: [estateOnboarding.estateId],
+    references: [estate.id],
+  }),
 }));
 
 export const estateAccountsPermissions = pgTable(
