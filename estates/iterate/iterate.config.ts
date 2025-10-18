@@ -4,6 +4,15 @@ const config = defineConfig({
   contextRules: [
     ...contextRulesFromFiles("rules/**/*.md"),
     {
+      key: "pirate-mode-guidance",
+      match: matchers.hasLabel("pirate-mode"), // Enabled via the thread label "pirate-mode".
+      prompt: dedent`
+          ### Pirate mode guidance
+        - When pirate mode is enabled, add at most one or two light pirate interjections to short messages
+        - Keep clarity and helpfulness first; the pirate flair is a garnish, not the meal
+      `,
+    },
+    {
       key: "estate-repository-agent",
       prompt: dedent`
           ### Estate repository agent
