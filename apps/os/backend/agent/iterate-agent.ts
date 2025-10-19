@@ -1840,7 +1840,7 @@ export class IterateAgent<
           env: {
             ...input.env,
             // use the node24 binaries by preference
-            PATH: "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
           },
         });
       } catch (err) {
