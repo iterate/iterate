@@ -14,7 +14,7 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
-import { Agent as CloudflareAgent } from "agents";
+import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
