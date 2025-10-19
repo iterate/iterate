@@ -1,5 +1,4 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
-import type { Sandbox } from "@cloudflare/sandbox";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
