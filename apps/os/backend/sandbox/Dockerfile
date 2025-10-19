@@ -24,6 +24,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 RUN git config --global user.name "iterate" && \
     git config --global user.email "iterate@iterate.com"
 
+# Alias python to python3 because AI often tries to use `python` and if we don't do this there's nothing called python on the path
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
 # Configure codex
 ENV CODEX_NO_CONFIRM=1
 
