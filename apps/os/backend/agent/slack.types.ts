@@ -283,6 +283,7 @@ export const SlackInteractionPayload = z.union([
 export interface SlackWebhookPayload {
   token?: string;
   team_id?: string;
+  api_app_id?: string;
   event?: SlackEvent;
   authorizations?: Array<{
     enterprise_id?: string;

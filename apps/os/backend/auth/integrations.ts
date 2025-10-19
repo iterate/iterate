@@ -270,19 +270,23 @@ export const integrationsPlugin = () =>
           const state = generateRandomString(32);
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-          const data = JSON.stringify({
+          const oauthStateData = {
             estateId,
             link: {
               userId: session.user.id,
               email: session.user.email,
             },
             callbackURL,
-          });
+          };
+
+          logger.info(
+            `[Slack OAuth] Creating OAuth state with estateId=${estateId}, userId=${session.user.id}, email=${session.user.email}`,
+          );
 
           await ctx.context.internalAdapter.createVerificationValue({
             expiresAt,
             identifier: state,
-            value: data,
+            value: JSON.stringify(oauthStateData),
           });
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
@@ -388,7 +392,13 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Invalid state" });
           }
 
+          logger.info(`[Slack OAuth Callback] Retrieved OAuth state from DB: ${value.value}`);
+
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
+
+          logger.info(
+            `[Slack OAuth Callback] Parsed state - estateId=${parsedState.estateId}, has link=${!!parsedState.link}`,
+          );
 
           const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
@@ -410,6 +420,15 @@ export const integrationsPlugin = () =>
             code: code,
             redirect_uri: redirectURI,
           });
+
+          logger.info(
+            `[Slack OAuth] Received tokens response, keys: ${Object.keys(tokens).join(", ")}`,
+          );
+          logger.info(`[Slack OAuth] tokens.app_id=${tokens.app_id}`);
+          logger.info(`[Slack OAuth] tokens.appId=${(tokens as any).appId}`);
+          logger.info(`[Slack OAuth] tokens.bot_user_id=${tokens.bot_user_id}`);
+          logger.info(`[Slack OAuth] tokens.team?.id=${tokens.team?.id}`);
+          logger.info(`[Slack OAuth] Full tokens object: ${JSON.stringify(tokens, null, 2)}`);
 
           if (
             !tokens.ok ||
@@ -450,6 +469,29 @@ export const integrationsPlugin = () =>
                 image: userInfo.picture,
               });
               user = existingUser.user;
+
+              // For existing users in login flow, find their primary estate to link Slack to
+              if (!estateId) {
+                const userEstates = await db
+                  .select({ estateId: schema.estate.id })
+                  .from(schema.estate)
+                  .innerJoin(
+                    schema.organizationUserMembership,
+                    eq(
+                      schema.estate.organizationId,
+                      schema.organizationUserMembership.organizationId,
+                    ),
+                  )
+                  .where(eq(schema.organizationUserMembership.userId, user.id))
+                  .limit(1);
+
+                if (userEstates[0]) {
+                  estateId = userEstates[0].estateId;
+                  logger.info(
+                    `[Slack OAuth] Existing user login - auto-selected primary estate ${estateId}`,
+                  );
+                }
+              }
             } else {
               user = await ctx.context.internalAdapter.createUser({
                 email: userInfo.email,
@@ -523,14 +565,27 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get user" });
           }
 
-          let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          // Store app_id for cross-workspace bot matching
+          const appId = tokens.app_id || (tokens as any).appId;
+
+          // Find existing bot account by userId + providerId (not by bot user ID which is not the account.id)
+          const existingBotAccount = await db.query.account.findFirst({
+            where: and(
+              eq(schema.account.userId, user.id),
+              eq(schema.account.providerId, "slack-bot"),
+            ),
+          });
+
+          let botAccount = existingBotAccount;
           if (botAccount) {
+            logger.info(`[Slack OAuth] Updating existing bot account ${botAccount.id}`);
             await ctx.context.internalAdapter.updateAccount(botAccount.id, {
               accessToken: tokens.access_token,
               scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
           } else {
+            logger.info(`[Slack OAuth] Creating new bot account for user ${user.id}`);
             botAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
               userId: user.id,
@@ -543,22 +598,41 @@ export const integrationsPlugin = () =>
           if (!botAccount) {
             return ctx.json({ error: "Failed to get account id" });
           }
+          logger.info(`[Slack OAuth] ========== EXTRACTED VALUES ==========`);
+          logger.info(`[Slack OAuth] app_id=${appId}`);
+          logger.info(`[Slack OAuth] bot_user_id=${botUserId}`);
+          logger.info(`[Slack OAuth] team_id=${tokens.team?.id}`);
+          logger.info(`[Slack OAuth] team_name=${tokens.team?.name}`);
+          logger.info(`[Slack OAuth] user.id=${user?.id}`);
+          logger.info(`[Slack OAuth] user.email=${user?.email}`);
+          logger.info(`[Slack OAuth] estateId=${estateId}`);
+          logger.info(`[Slack OAuth] link=${JSON.stringify(link)}`);
+          logger.info(`[Slack OAuth] =====================================`);
 
           // Link estate if we have an ID
           // TODO(rahul): figure out if there are any edge cases
           // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
           // So we can skip this step for them
           if (estateId) {
+            logger.info(`[Slack OAuth] >>> ENTERING LINK FLOW (estateId=${estateId})`);
+
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
             if (!tokens.team?.id) {
+              logger.error("[Slack OAuth] ERROR: No team_id in link flow");
               return ctx.json({ error: "Failed to get Slack team ID" });
             }
 
+            logger.info(
+              `[Slack OAuth] Starting background sync for estate ${estateId}, team ${tokens.team.id}`,
+            );
             waitUntil(
               syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
             );
 
+            logger.info(
+              `[Slack OAuth] Inserting estateAccountsPermissions: accountId=${botAccount.id}, estateId=${estateId}`,
+            );
             await db
               .insert(schema.estateAccountsPermissions)
               .values({
@@ -567,7 +641,11 @@ export const integrationsPlugin = () =>
               })
               .onConflictDoNothing();
 
-            await db
+            logger.info(
+              `[Slack OAuth] Inserting/updating providerEstateMapping with appId=${appId}, botUserId=${botUserId}, teamId=${tokens.team.id}`,
+            );
+
+            const insertResult = await db
               .insert(schema.providerEstateMapping)
               .values({
                 internalEstateId: estateId,
@@ -576,6 +654,7 @@ export const integrationsPlugin = () =>
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
+                  appId, // Store app_id for cross-workspace bot matching
                 },
               })
               .onConflictDoUpdate({
@@ -588,9 +667,22 @@ export const integrationsPlugin = () =>
                   providerMetadata: {
                     botUserId,
                     team: tokens.team,
+                    appId, // Store app_id for cross-workspace bot matching
                   },
                 },
-              });
+              })
+              .returning();
+
+            logger.info(
+              `[Slack OAuth] Successfully stored providerEstateMapping: ${JSON.stringify(insertResult[0])}`,
+            );
+          } else {
+            logger.info(`[Slack OAuth] >>> ENTERING LOGIN FLOW (no estateId)`);
+            logger.info(
+              `[Slack OAuth] Skipping auto-linking in login flow - redirect.tsx will handle estate creation and linking`,
+            );
+            // Don't auto-link in login flow - let redirect.tsx handle it
+            // This avoids linking to wrong estates when users share organizations via Slack sync
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);

@@ -1284,6 +1284,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl: sendInput.unfurl,
     });
 
+    console.log("SEND INPUT", sendInput);
+
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
@@ -1292,6 +1294,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
     });
+
+    console.log("RESULT", result);
 
     if (!result.ok) {
       throw new Error(`Failed to send Slack message: ${result.error}`);

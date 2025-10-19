@@ -11,6 +11,7 @@ import { SlackAgent } from "../../agent/slack-agent.ts";
 import { logger } from "../../tag-logger.ts";
 import {
   extractBotUserIdFromAuthorizations,
+  extractAllBotUserIdsFromAuthorizations,
   extractUserId,
   getMessageMetadata,
   isBotMentionedInMessage,
@@ -24,6 +25,48 @@ import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
+
+/**
+ * Gets all bot user IDs for the same Slack app across all workspaces.
+ * Uses app_id (api_app_id) to find matching bot installations.
+ *
+ * This is crucial for Slack Connect where the same app can be installed
+ * in multiple workspaces with different bot user IDs.
+ *
+ * @param db - Database connection
+ * @param apiAppId - Slack api_app_id from webhook payload
+ * @returns Array of bot user IDs for this app across all estates
+ */
+async function getAllBotUserIdsForApp(db: DB, apiAppId: string): Promise<string[]> {
+  const mappings = await db.query.providerEstateMapping.findMany({
+    where: eq(schema.providerEstateMapping.providerId, "slack-bot"),
+  });
+
+  logger.info(
+    `[getAllBotUserIdsForApp] Searching for api_app_id=${apiAppId}, found ${mappings.length} slack-bot mappings`,
+  );
+
+  // Filter mappings that have matching appId in metadata
+  const botUserIds = mappings
+    .filter((mapping) => {
+      const metadata = mapping.providerMetadata as { appId?: string; botUserId?: string };
+      const matches = metadata?.appId === apiAppId && metadata?.botUserId;
+      logger.info(
+        `[getAllBotUserIdsForApp] Estate ${mapping.internalEstateId}: appId=${metadata?.appId}, botUserId=${metadata?.botUserId}, matches=${matches}`,
+      );
+      return matches;
+    })
+    .map((mapping) => {
+      const metadata = mapping.providerMetadata as { botUserId: string };
+      return metadata.botUserId;
+    });
+
+  logger.info(
+    `[getAllBotUserIdsForApp] Returning ${botUserIds.length} bot user IDs: ${botUserIds.join(", ")}`,
+  );
+
+  return botUserIds;
+}
 
 /**
  * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
@@ -280,6 +323,7 @@ export async function ensureUserSynced(params: {
 slackApp.post("/webhook", async (c) => {
   const db = getDb();
 
+  console.log("SLACK WEBHOOK RECEIVED");
   // Get raw request body for signature verification
   const rawBody = await c.req.text();
   const signature = c.req.header("x-slack-signature");
@@ -330,6 +374,8 @@ slackApp.post("/webhook", async (c) => {
     channelId: messageMetadata.channel,
   });
 
+  console.log("ESTATE ID", estateId);
+
   if (!estateId) {
     // console.warn(
     //   `Slack webhook received for team ${body.team_id} that doesn't map to a known estate`,
@@ -337,6 +383,8 @@ slackApp.post("/webhook", async (c) => {
     // );
     return c.text("ok");
   }
+
+  console.log("BODY", body);
 
   if (
     body.event?.type === "message" &&
@@ -362,6 +410,7 @@ slackApp.post("/webhook", async (c) => {
   waitUntil(
     // deterministically react to the webhook as early as possible (eyes emoji)
     getSlackAccessTokenForEstate(db, estateId).then(async (slackAccount) => {
+      console.log("SLACK ACCOUNT", slackAccount);
       if (slackAccount) {
         await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
@@ -416,14 +465,27 @@ slackApp.post("/webhook", async (c) => {
   }
 
   // If the bot isn't mentioned or it's not a DM to the bot, we bail early
+  // In Slack Connect scenarios, we need to check ALL bot user IDs across all workspaces
+  // where this app is installed, since the message might mention any of them
 
   if (!agentRoute) {
-    const botUserId = extractBotUserIdFromAuthorizations(body);
+    // Get all bot user IDs for this app across all workspaces using api_app_id
+    // This handles Slack Connect where the same app has different bot user IDs per workspace
+    const allBotUserIds = body.api_app_id
+      ? await getAllBotUserIdsForApp(db, body.api_app_id)
+      : extractAllBotUserIdsFromAuthorizations(body); // Fallback for old installations
+
+    // Check if we should process this event:
+    // In Slack Connect, app_mention events can be sent to ALL workspaces even when only one bot is mentioned
+    // So we MUST verify the mentioned bot actually matches a bot in this workspace
+    // For both message and app_mention events, check if any of our bots are mentioned in the text
     const isBotMentioned =
-      botUserId && body.event.type === "message"
-        ? isBotMentionedInMessage(body.event, botUserId)
+      allBotUserIds.length > 0 &&
+      (body.event.type === "message" || body.event.type === "app_mention")
+        ? isBotMentionedInMessage(body.event, allBotUserIds)
         : false;
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
+
     if (!isBotMentioned && !isDM) {
       return c.text("ok");
     }
@@ -464,22 +526,25 @@ export async function reactToSlackWebhook(
   slackAPI: WebClient,
   messageMetadata: { channel?: string; ts?: string },
 ) {
-  const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
+  // In Slack Connect scenarios, extract ALL bot user IDs from authorizations
+  const allBotUserIds = extractAllBotUserIdsFromAuthorizations(slackWebhookPayload);
 
-  if (!botUserId || !slackWebhookPayload.event) {
+  if (allBotUserIds.length === 0 || !slackWebhookPayload.event) {
     return;
   }
 
   const event = slackWebhookPayload.event;
 
-  // Add eyes reaction when bot is mentioned in a human message
+  // Add eyes reaction when any bot is mentioned in a human message
+  // This handles multi-party Slack Connect where bots from different workspaces might be mentioned
   if (
     event.type === "message" &&
     "user" in event &&
-    event.user !== botUserId &&
+    event.user &&
+    !allBotUserIds.includes(event.user) && // Not from any of the bots
     messageMetadata.channel &&
     messageMetadata.ts &&
-    isBotMentionedInMessage(event, botUserId)
+    isBotMentionedInMessage(event, allBotUserIds)
   ) {
     await slackAPI.reactions
       .add({
@@ -1219,6 +1284,7 @@ async function handleBotChannelJoin(params: {
     R.map((result) => result.value),
     R.filter(
       ({ threadHistory }) =>
+        // Check if any message mentions the bot (passes single botUserId, function accepts string | string[])
         threadHistory.messages?.some((m) => isBotMentionedInMessage(m, botUserId)) ?? false,
     ),
   );
