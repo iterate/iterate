@@ -2,22 +2,14 @@ FROM docker.io/cloudflare/sandbox:0.4.3
 
 ENV COMMAND_TIMEOUT_MS=360000
 
-# RUN node -v
-# # Remove existing Node.js and install Node.js 24
-# RUN apt-get remove -y nodejs npm
-# RUN apt-get update && apt-get install -y xz-utils
-# RUN curl -fsSL https://nodejs.org/dist/v24.10.0/node-v24.10.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1 && \
-#     ln -sf /usr/local/bin/node /usr/bin/node && \
-#     ln -sf /usr/local/bin/npm /usr/bin/npm && \
-#     ln -sf /usr/local/bin/npx /usr/bin/npx
-# RUN curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
-# RUN apt-get update && apt-get install -y nodejs
+# Install Node.js 24 in a separate location so it doesn't interfere with existing binaries
+RUN apt-get update && apt-get install -y xz-utils
+RUN mkdir -p /opt/node24 && \
+    curl -fsSL https://nodejs.org/dist/v24.10.0/node-v24.10.0-linux-x64.tar.xz | tar -xJ -C /opt/node24 --strip-components=1
 
-# # Install pnpm, tsx and openai codex using Node 24
-RUN bun install -g @openai/codex@0.46
-# add bun global bin to path
-ENV PATH="/root/.bun/bin:$PATH"
-# RUN npm install -g pnpm@10.18 tsx@4.20
+# Install pnpm, tsx and openai codex using the existing node binaries
+RUN bun install -g @openai/codex@0.46 tsx
+# RUN npm install -g pnpm@10.18 tsx@4.20 
 # RUN curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" SHELL="$(which sh)" PNPM_VERSION=10.18.3 sh -
 # RUN npm install -g pnpm@10.18
 
