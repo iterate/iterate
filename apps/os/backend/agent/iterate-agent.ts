@@ -1926,12 +1926,11 @@ export class IterateAgent<
             };
           }
 
-          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
-          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
-          // an event we probably will never get one but we don't get an error either from
-          // sandbox sdk
+          // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
+          // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
+          // don't get an event in 510s though we're pretty sure that bun has timed out.
           const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
+          const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
             signal: abortController.signal,
           }).then(() => "TIMEOUT" as const);
 
