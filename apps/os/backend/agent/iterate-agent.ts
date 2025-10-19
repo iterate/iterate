@@ -1880,7 +1880,7 @@ export class IterateAgent<
             resultInit,
           );
         } else {
-          logger.info("Sandbox initialized successfully", resultInit.stdout, resultInit.stderr);
+          logger.info("Sandbox initialized successfully");
         }
 
         if (input.command.length > 256) {
