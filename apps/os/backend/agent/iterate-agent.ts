@@ -1810,11 +1810,11 @@ export class IterateAgent<
     const { getSandbox } = await import("@cloudflare/sandbox");
 
     // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
-      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
+      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
       // Ensure that the session directory exists
       const sessionDir = `/tmp/session-${sessionId}`;
       try {
@@ -2013,7 +2013,8 @@ export class IterateAgent<
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
-    if (sandboxState.status !== "healthy") {
+    const runningStatuses = ["healthy", "running"];
+    if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
