@@ -1810,11 +1810,11 @@ export class IterateAgent<
     const { getSandbox } = await import("@cloudflare/sandbox");
 
     // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
-      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
+      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
       // Ensure that the session directory exists
       const sessionDir = `/tmp/session-${sessionId}`;
       try {
@@ -1926,12 +1926,11 @@ export class IterateAgent<
             };
           }
 
-          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
-          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
-          // an event we probably will never get one but we don't get an error either from
-          // sandbox sdk
+          // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
+          // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
+          // don't get an event in 510s though we're pretty sure that bun has timed out.
           const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
+          const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
             signal: abortController.signal,
           }).then(() => "TIMEOUT" as const);
 
@@ -2013,7 +2012,8 @@ export class IterateAgent<
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
-    if (sandboxState.status !== "healthy") {
+    const runningStatuses = ["healthy", "running"];
+    if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
