@@ -1815,6 +1815,7 @@ export class IterateAgent<
 
     const execInSandbox = async () => {
       const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
+      logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
       const sessionDir = `/tmp/session-${sessionId}`;
       try {
@@ -1829,177 +1830,198 @@ export class IterateAgent<
         }
       }
 
-      // Create an isolated session
-      const sandboxSession = await sandbox.createSession({
-        id: sessionId,
-        cwd: sessionDir,
-        isolation: true,
-        env: {
-          ...input.env,
-        },
-      });
-
-      // Determine the checkout target and whether it's a commit hash
-      const checkoutTarget = commitHash || branch || "main";
-      const isCommitHash = Boolean(commitHash);
-
-      // Prepare arguments as a JSON object
-      const initArgs = {
-        sessionDir,
-        githubRepoUrl,
-        githubToken,
-        checkoutTarget,
-        isCommitHash,
-      };
-      // Escape the JSON string for shell
-      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-      // Init the sandbox (ignore any errors)
-      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}' && node /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
-      using resultInit = await sandboxSession.exec(commandInit, {
-        timeout: 360 * 1000, // 360 seconds total timeout
-      });
-      if (!resultInit.success) {
-        logger.error(
-          "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
-          resultInit,
-        );
-      }
-
-      if (input.command.length > 256) {
-        if (!input.files) {
-          input.files = [];
-        }
-        const commandId = R.randomInteger(0, 99999);
-        input.files.push({
-          path: `/tmp/command-id-${commandId}.sh`,
-          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
-        });
-        input.command = `bash /tmp/command-id-${commandId}.sh`;
-      }
-      // ------------------------------------------------------------------------
-      // Write files
-      // ------------------------------------------------------------------------
-      await Promise.all(
-        (input.files ?? []).map(async (file) => {
-          await sandboxSession.writeFile(file.path, file.content);
-        }),
-      );
-
-      // ------------------------------------------------------------------------
-      // Run exec
-      // ------------------------------------------------------------------------
-
-      // Run the exec command in streaming mode
-      const commandExec = input.command;
-      const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
-      });
-      let stdout = "";
-      let stderr = "";
-      const stream = resultStream[Symbol.asyncIterator]();
-
-      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
-      let sandboxHealthy = true;
-      const interval = setInterval(async () => {
-        try {
-          const state = await sandbox.getState();
-          if (state.status !== "healthy") {
-            sandboxHealthy = false;
-          }
-          await sandbox.renewActivityTimeout();
-        } catch (err) {
-          logger.error("Error renewing activity timeout", err);
-        }
-      }, 5000);
-
-      // try finallyblock to close the interval
+      let sandboxSession: ReturnType<typeof sandbox.createSession>;
       try {
-        while (true) {
-          if (!sandboxHealthy) {
-            logger.warn("Sandbox is not healthy, exiting");
-            return {
-              success: false,
-              message: "Sandbox crashed after completing this work",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // Create an isolated session
+        sandboxSession = await sandbox.createSession({
+          id: sessionId,
+          cwd: sessionDir,
+          isolation: true,
+          env: {
+            ...input.env,
+            // use the node24 binaries by preference
+            PATH: "/opt/node24/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          },
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("already exists")) {
+          logger.info("Session already exists, getting existing session");
+          sandboxSession = await sandbox.getSession(sessionId);
+        } else {
+          logger.error("Error creating session", err);
+          throw new Error("Error creating session");
+        }
+      }
+
+      try {
+        // Determine the checkout target and whether it's a commit hash
+        const checkoutTarget = commitHash || branch || "main";
+        const isCommitHash = Boolean(commitHash);
+
+        // Prepare arguments as a JSON object
+        const initArgs = {
+          sessionDir,
+          githubRepoUrl,
+          githubToken,
+          checkoutTarget,
+          isCommitHash,
+        };
+        // Escape the JSON string for shell
+        const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+        // Init the sandbox (ignore any errors)
+        const commandInit = `pwd && bun /tmp/sandbox-entry.ts init '${initJsonArgs}' && bun /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
+        using resultInit = await sandboxSession.exec(commandInit, {
+          timeout: 360 * 1000, // 360 seconds total timeout
+        });
+        if (!resultInit.success) {
+          logger.error(
+            "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
+            resultInit,
+          );
+        } else {
+          logger.info("Sandbox initialized successfully");
+        }
+
+        if (input.command.length > 256) {
+          if (!input.files) {
+            input.files = [];
           }
+          const commandId = R.randomInteger(0, 99999);
+          input.files.push({
+            path: `/tmp/command-id-${commandId}.sh`,
+            content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
+          });
+          input.command = `bash /tmp/command-id-${commandId}.sh`;
+        }
+        // ------------------------------------------------------------------------
+        // Write files
+        // ------------------------------------------------------------------------
+        await Promise.all(
+          (input.files ?? []).map(async (file) => {
+            await sandboxSession.writeFile(file.path, file.content);
+          }),
+        );
 
-          // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
-          // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
-          // don't get an event in 510s though we're pretty sure that bun has timed out.
-          const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
-            signal: abortController.signal,
-          }).then(() => "TIMEOUT" as const);
+        // ------------------------------------------------------------------------
+        // Run exec
+        // ------------------------------------------------------------------------
 
-          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+        // Run the exec command in streaming mode
+        const commandExec = input.command;
+        const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
+          timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
+        });
+        let stdout = "";
+        let stderr = "";
+        const stream = resultStream[Symbol.asyncIterator]();
 
-          // Clean up the timeout regardless of which promise won the race
-          abortController.abort();
-
-          if (result === "TIMEOUT") {
-            return {
-              message: "The connection to codex timed out",
-              success: false,
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
+        let sandboxHealthy = true;
+        const interval = setInterval(async () => {
+          try {
+            const state = await sandbox.getState();
+            if (state.status !== "healthy") {
+              sandboxHealthy = false;
+            }
+            await sandbox.renewActivityTimeout();
+          } catch (err) {
+            logger.error("Error renewing activity timeout", err);
           }
-          if (result.done) {
-            logger.info("Exec readable exhausted without complete event", {
-              input,
-              stdout,
-              stderr,
-            });
-            // should not get here
-            return {
-              success: false,
-              message: "Result stream terminated before process completion signal was received",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
-          const event = result.value;
-          switch (event.type) {
-            case "stdout":
-              stdout += event.data;
-              logger.info(`Exec stdout: ${event.data}`);
-              break;
-            case "stderr":
-              stderr += event.data;
-              logger.info(`Exec stderr: ${event.data}`);
-              break;
-            case "error":
-              stderr += event.data;
-              logger.info(`Exec error: ${event.data}`);
-              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+        }, 5000);
+
+        // try finallyblock to close the interval
+        try {
+          while (true) {
+            if (!sandboxHealthy) {
+              logger.warn("Sandbox is not healthy, exiting");
               return {
-                message: "Execution errors occurred",
+                success: false,
+                message: "Sandbox crashed after completing this work",
+                stdout,
+                stderr,
+                exitCode: 1,
+              };
+            }
+
+            // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
+            // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
+            // don't get an event in 510s though we're pretty sure that bun has timed out.
+            const abortController = new AbortController();
+            const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
+              signal: abortController.signal,
+            }).then(() => "TIMEOUT" as const);
+
+            const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+
+            // Clean up the timeout regardless of which promise won the race
+            abortController.abort();
+
+            if (result === "TIMEOUT") {
+              return {
+                message: "The connection to codex timed out",
                 success: false,
                 stdout,
                 stderr,
                 exitCode: 1,
               };
-            case "complete":
-              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
-              return {
-                message:
-                  event.exitCode === 0
-                    ? "Execution completed successfully"
-                    : "Execution completed with errors",
-                success: event.exitCode === 0,
+            }
+            if (result.done) {
+              logger.info("Exec readable exhausted without complete event", {
+                input,
                 stdout,
                 stderr,
-                exitCode: event.exitCode,
+              });
+              // should not get here
+              return {
+                success: false,
+                message: "Result stream terminated before process completion signal was received",
+                stdout,
+                stderr,
+                exitCode: 1,
               };
+            }
+            const event = result.value;
+            switch (event.type) {
+              case "stdout":
+                stdout += event.data;
+                logger.info(`Exec stdout: ${event.data}`);
+                break;
+              case "stderr":
+                stderr += event.data;
+                logger.info(`Exec stderr: ${event.data}`);
+                break;
+              case "error":
+                stderr += event.data;
+                logger.info(`Exec error: ${event.data}`);
+                logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+                return {
+                  message: "Execution errors occurred",
+                  success: false,
+                  stdout,
+                  stderr,
+                  exitCode: 1,
+                };
+              case "complete":
+                logger.info(`Exec ${event.exitCode === 0 ? "succeeded" : "failed"}`);
+                return {
+                  message:
+                    event.exitCode === 0
+                      ? "Execution completed successfully"
+                      : "Execution completed with errors",
+                  success: event.exitCode === 0,
+                  stdout,
+                  stderr,
+                  exitCode: event.exitCode,
+                };
+            }
           }
+        } finally {
+          clearInterval(interval);
         }
       } finally {
-        clearInterval(interval);
+        // TODO: uncomment when cloudflare sandbox is fixed
+        // await sandbox.deleteSession(sessionId);
+        logger.info(`TODO: delete session ${sessionId}`);
       }
     };
 
