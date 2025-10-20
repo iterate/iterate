@@ -1500,7 +1500,7 @@ export const integrationsRouter = router({
         [organization] = await ctx.db
           .insert(schemas.organization)
           .values({
-            name: `${userName}'s Organization`,
+            name: `${userName || userEmail}'s Organization`,
           })
           .returning();
 

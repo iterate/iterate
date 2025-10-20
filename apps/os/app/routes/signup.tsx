@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { Check } from "lucide-react";
+import { Check, MailIcon } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Card, CardContent } from "../components/ui/card.tsx";
@@ -32,6 +32,21 @@ export default function OnboardingPage() {
       provider: "google",
       callbackURL: "/trial/slack-connect",
     });
+  };
+
+  const handleSlackConnectWithEmail = async () => {
+    const email = prompt("Enter your email");
+    if (!email) return;
+    const _otpResult = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+    if (!_otpResult) return;
+
+    const otp = prompt("Enter the OTP we sent to your email");
+    if (!otp) return;
+
+    const signinResult = await authClient.signIn.emailOtp({ email, otp });
+    if (!signinResult) return;
+
+    window.location.href = "/trial/slack-connect";
   };
 
   if (view === "no-slack") {
@@ -174,6 +189,17 @@ export default function OnboardingPage() {
                   </svg>
                   Continue with Google
                 </Button>
+
+                {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
+                  <Button
+                    onClick={handleSlackConnectWithEmail}
+                    variant="outline"
+                    className="w-full h-14 mt-2"
+                  >
+                    <MailIcon className="mr-2 h-5 w-5" />
+                    Continue with Email
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>

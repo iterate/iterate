@@ -90,7 +90,7 @@ export async function createTrialSlackConnectChannel(params: {
 > {
   const { db, userEstateId, userEmail, userName, iterateTeamId, iterateBotToken } = params;
 
-  const channelName = estateIdToChannelName(userEstateId);
+  const channelName = `iterate-${userEmail}`.replace(/\.com$/, "").replace(/\W+/g, "-");
   const slackAPI = new WebClient(iterateBotToken);
 
   try {
@@ -308,6 +308,11 @@ export async function createTrialSlackConnectChannel(params: {
     logger.info(
       `Successfully ${channelWasCreated ? "created" : "reused existing"} trial channel for ${userEmail}: ${channelName} → estate ${userEstateId}`,
     );
+
+    await slackAPI.chat.postMessage({
+      channel: channelId,
+      text: `hi. @ me if you need anything.`,
+    });
 
     return {
       success: true,

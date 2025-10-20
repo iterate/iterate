@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router";
+import { MailIcon } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
 
@@ -24,6 +25,19 @@ export function LoginPrompt() {
       provider: "google",
       callbackURL: "/",
     });
+  };
+
+  const handleEmailAuth = async () => {
+    const email = prompt("Enter your email");
+    if (!email) return;
+
+    const _otpResult = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+
+    const otp = prompt("Enter the OTP we sent to your email");
+    if (!otp) return;
+
+    const signinResult = await authClient.signIn.emailOtp({ email, otp });
+    window.location.href = "/";
   };
 
   return (
@@ -68,6 +82,13 @@ export function LoginPrompt() {
             </svg>
             Continue with Google
           </Button>
+
+          {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
+            <Button onClick={handleEmailAuth} variant="outline" className="w-full h-12">
+              <MailIcon className="mr-2 h-5 w-5" />
+              Continue with Email
+            </Button>
+          )}
         </div>
 
         <div className="text-center text-sm text-muted-foreground">

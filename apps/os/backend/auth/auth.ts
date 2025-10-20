@@ -1,8 +1,9 @@
 import { betterAuth } from "better-auth";
-import { admin } from "better-auth/plugins";
+import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { stripe } from "@better-auth/stripe";
+import { Resend } from "resend";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
@@ -50,6 +51,20 @@ export const getAuth = (db: DB) =>
       : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
     plugins: [
       admin(),
+      emailOTP({
+        async sendVerificationOTP(data) {
+          logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
+          if (!import.meta.env.RESEND_API_KEY) return;
+          const resend = new Resend(import.meta.env.RESEND_API_KEY);
+          const result = await resend.emails.send({
+            from: `iterate <${import.meta.env.RESEND_FROM_EMAIL}>`,
+            to: data.email,
+            subject: `sign in to iterate`,
+            html: `Your sign in code is ${data.otp}`,
+          });
+          if (result.error) logger.error("Error sending verification OTP", result.error);
+        },
+      }),
       integrationsPlugin(),
       serviceAuthPlugin(),
       // We don't use any of the better auth stripe plugin's database schema or
