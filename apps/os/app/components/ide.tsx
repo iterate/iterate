@@ -46,6 +46,10 @@ function getFileIcon(filename: string) {
     return <IterateLetterI className="h-3 w-3 flex-shrink-0" />;
   }
 
+  if (filename === ".gitignore") {
+    return <span className="text-xs">🙈</span>;
+  }
+
   const extension = filename.split(".").pop()?.toLowerCase();
 
   switch (extension) {
