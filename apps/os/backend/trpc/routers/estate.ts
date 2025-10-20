@@ -24,7 +24,7 @@ import type { CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { logger } from "../../tag-logger.ts";
-import { CreateCommitOnBranchInput } from "./CreateCommitOnBranchInput.ts";
+import { CreateCommitOnBranchInput } from "./github-schemas.ts";
 
 const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
   const githubInstallation = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
@@ -303,6 +303,9 @@ export const estateRouter = router({
     }),
 
   getDTS: protectedProcedure
+    .meta({
+      description: `kinda like "pnpm install" - it recursively fetches all dependencies for a packageJson struct but only gives you the typescript definition, for usage in an in-browser mini-IDE. Doesn't handle many edge cases tho so types might be missing for some packages/uncommon specifiers`,
+    })
     .input(
       z.object({
         packageJson: z.object({

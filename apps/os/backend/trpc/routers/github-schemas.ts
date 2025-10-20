@@ -1,5 +1,9 @@
 import { z } from "zod";
 
+/**
+ * Expected shape for the github graphql API createCommitOnBranch mutation input. Just manually typed out here
+ * to avoid adding a dependency on funky graphql codegen tools.
+ */
 export const CreateCommitOnBranchInput = z.object({
   branch: z.object({
     repositoryNameWithOwner: z.string(),
