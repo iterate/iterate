@@ -426,6 +426,7 @@ export function IDE() {
   const handleRename = (oldPath: string, newPath: string) => {
     if (oldPath === newPath) return;
     setLocalEdits((prev) => ({
+      ...prev,
       [newPath]: prev?.[oldPath] ?? null,
       [oldPath]: null,
     }));
