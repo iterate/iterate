@@ -119,7 +119,7 @@ export class TagLogger {
     return this.context.metadata;
   }
 
-  // todo: get rid of rawArgs, just pass the raw args to args, and get rid of the not-fully-working error transformations
+  // TODO: get rid of rawArgs, just pass the raw args to args, and get rid of the not-fully-working error transformations
   _log({ level, args, rawArgs }: { level: TagLogger.Level; args: unknown[]; rawArgs?: unknown[] }) {
     // Serialize args to a message string
     const message = args
