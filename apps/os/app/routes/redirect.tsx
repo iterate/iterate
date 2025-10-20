@@ -12,6 +12,7 @@ import { createStripeCustomerAndSubscriptionForOrganization } from "../../backen
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { Route } from "./+types/redirect";
+import { appendEstatePath } from "./append-estate-path.ts";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
@@ -174,24 +175,6 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
 
   // Fallback (shouldn't happen)
   return "/no-access";
-}
-
-function appendEstatePath(redirectPath: string, estatePath: string) {
-  try {
-    const redirectPathURL = new URL(redirectPath, "http://estate");
-    const tempURL = new URL(estatePath, "http://estate");
-    // check that there's no sneaky stuff like //evil.com
-    if (tempURL.origin === "http://estate") {
-      redirectPathURL.pathname += tempURL.pathname;
-      for (const [key, value] of tempURL.searchParams.entries()) {
-        redirectPathURL.searchParams.set(key, value);
-      }
-      return redirectPathURL.toString().replace(redirectPathURL.origin, "");
-    }
-  } catch {
-    // sus path(s), don't append
-  }
-  return redirectPath;
 }
 
 // Server-side loader that handles all the redirect logic
