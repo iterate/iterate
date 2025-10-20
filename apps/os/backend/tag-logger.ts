@@ -27,6 +27,7 @@ export namespace TagLogger {
       metadata: Record<string, Primitive>;
       debugMemories?: Array<{ timestamp: Date; message: string }>;
       errorObject?: Error;
+      rawArgs: unknown[];
     }) => void
   >;
 }
@@ -118,7 +119,8 @@ export class TagLogger {
     return this.context.metadata;
   }
 
-  _log({ level, args }: { level: TagLogger.Level; args: unknown[] }) {
+  // todo: get rid of rawArgs, just pass the raw args to args, and get rid of the not-fully-working error transformations
+  _log({ level, args, rawArgs }: { level: TagLogger.Level; args: unknown[]; rawArgs?: unknown[] }) {
     // Serialize args to a message string
     const message = args
       .map((arg) => {
@@ -163,6 +165,7 @@ export class TagLogger {
       metadata: metadataCopy,
       debugMemories,
       errorObject,
+      rawArgs: rawArgs || args,
     });
   }
 
@@ -292,30 +295,17 @@ function serializeError(error: unknown): any {
 
 const replacer = (_: string, value: unknown) => serializeError(value);
 
-function formatErrorWithCauses(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
-  const parts: string[] = [];
-  let current: unknown = err;
-  let level = 0;
-  while (current instanceof Error && level < 10) {
-    parts.push(
-      level === 0
-        ? (current.stack ?? current.toString())
-        : `Caused by: ${current.stack ?? current.toString()}`,
-    );
-    current = current.cause;
-    level++;
-  }
-  return parts.join("\n");
-}
+const dumpMetadata = (metadata: Record<string, unknown>) =>
+  Object.entries(metadata)
+    .map(([key, value]) => `[${key}=${value}]`)
+    .join("");
 
 /* eslint-disable no-console -- this is the one place where we use console */
 export const devConsoleImplementation: TagLogger.Implementation = {
-  debug: ({ message }) => console.debug(message),
-  info: ({ message }) => console.info(message),
-  warn: ({ message }) => console.warn(message),
-  error: ({ message, errorObject }) =>
-    console.error(errorObject ? formatErrorWithCauses(errorObject) : message),
+  debug: ({ rawArgs, metadata }) => console.debug(dumpMetadata(metadata), ...rawArgs),
+  info: ({ rawArgs, metadata }) => console.info(dumpMetadata(metadata), ...rawArgs),
+  warn: ({ rawArgs, metadata }) => console.warn(dumpMetadata(metadata), ...rawArgs),
+  error: ({ rawArgs, metadata }) => console.error(dumpMetadata(metadata), ...rawArgs),
 };
 
 export const consoleImplementation: TagLogger.Implementation = {
