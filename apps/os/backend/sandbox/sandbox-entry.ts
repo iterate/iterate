@@ -340,6 +340,21 @@ async function subcommandInit(args: InitArgs) {
 async function subcommandInstallDependencies({ sessionDir }: { sessionDir: string }) {
   // Install dependencies (optimized: prefer offline cache for speed)
   console.error("=== Installing dependencies ===");
+  // install pnpm if not present
+  const pnpmResult = await execCommand("pnpm", ["--version"]);
+  if (pnpmResult.exitCode !== 0) {
+    console.error("=== Installing pnpm ===");
+    const installResult = await execCommand("npm", ["install", "-g", "corepack@latest"]);
+    if (installResult.exitCode !== 0) {
+      console.error("=== Failed to install pnpm ===");
+      process.exit(1);
+    }
+    const corepackResult = await execCommand("corepack", ["enable", "pnpm"]);
+    if (corepackResult.exitCode !== 0) {
+      console.error("=== Failed to enable pnpm ===");
+      process.exit(1);
+    }
+  }
   const installResult = await execCommand("pnpm", ["i", "--prefer-offline"], {
     cwd: sessionDir,
   });

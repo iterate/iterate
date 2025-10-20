@@ -55,6 +55,10 @@ const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, nex
 async function getRepoDetails(repoId: number, installationId: string) {
   const installationToken = await getGithubInstallationToken(installationId);
 
+  if (!installationToken) {
+    throw new Error("Failed to get installation token");
+  }
+
   // Get repository details
   const repoResponse = await fetch(`https://api.github.com/repositories/${repoId}`, {
     headers: {

@@ -19,7 +19,6 @@ const t = initTRPC.context<Context>().create({
     const { shape, error } = opts;
 
     // Check if this is a ZodError and format it nicely
-    let formattedError = error.message;
     let zodFormatted: any;
 
     // Helper to extract ZodError from error or error.cause
@@ -27,14 +26,6 @@ const t = initTRPC.context<Context>().create({
       error.cause instanceof ZodError ? error.cause : error instanceof ZodError ? error : undefined;
 
     if (zodError) {
-      // Format the ZodError into a more readable structure
-      const formattedIssues = zodError.issues.map((issue, index) => {
-        const path = issue.path.length > 0 ? issue.path.join(".") : "root";
-        return `#${index + 1}: ${issue.message} (at ${path})`;
-      });
-
-      formattedError = `Validation error:\n${formattedIssues.join("\n")}`;
-
       // Create a structured error format similar to flattenError
       zodFormatted = {
         formErrors: zodError.issues
@@ -56,17 +47,6 @@ const t = initTRPC.context<Context>().create({
         issues: zodError.issues,
       };
     }
-
-    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}: ${String(error.cause)}`, {
-      code: error.code,
-      message: formattedError,
-      zodPretty: zodError ? z.prettifyError(zodError) : undefined,
-      zodFormatted,
-      stack: error.stack,
-      cause: error.cause,
-      input: opts.input,
-      type: opts.type,
-    });
 
     return {
       ...shape,

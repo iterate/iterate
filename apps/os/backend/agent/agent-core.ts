@@ -510,7 +510,13 @@ export class AgentCore<
   ): { eventIndex: number }[] {
     // Check if initialized
     if (!this._initialized) {
-      throw new Error("[AgentCore] Cannot add events before calling initializeWithEvents");
+      const eventNames = events
+        .map((e): string => e.type)
+        .flatMap((e, i) => (i < 3 ? e : i === 3 ? "..." : []))
+        .join(",");
+      throw new Error(
+        `[AgentCore] Cannot add events before calling initializeWithEvents. Tried to add: ${eventNames}`,
+      );
     }
 
     try {
@@ -1145,7 +1151,7 @@ export class AgentCore<
       try {
         await this.makeLLMRequest(requestIndex, params);
       } catch (err: any) {
-        this.deps.console.error(`[AgentCore] LLM request ${requestIndex} failed`, err);
+        this.deps.console.error(err);
         // Only add error events if this request is still the active one
         if (this.llmRequestInProgress() && this._state.llmRequestStartedAtIndex === requestIndex) {
           await this.addEvents([
@@ -1424,9 +1430,11 @@ export class AgentCore<
     const tools = this.state.runtimeTools;
     let tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
-      this.deps.console.error("Tool not found or not local:", tool);
-      this.deps.console.error("runtime tools:", tools);
-      this.deps.console.error("tool", JSON.stringify(tool, null, 2));
+      this.deps.console.error("Tool not found or not local:", {
+        tool,
+        runtimeTools: tools,
+        toolString: JSON.stringify(tool, null, 2),
+      });
       return { success: false, error: `Tool not found or not local: ${call.name}` };
     }
 

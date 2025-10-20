@@ -16,11 +16,12 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
+import { data, useLoaderData } from "react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { useTRPC } from "../../../lib/trpc.ts";
-import { useEstateId } from "../../../hooks/use-estate.ts";
+import { useEstateId, useOrganizationId } from "../../../hooks/use-estate.ts";
 import {
   Select,
   SelectContent,
@@ -73,6 +74,12 @@ import {
 } from "../../../components/ui/sheet.tsx";
 import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
 import { IDE } from "../../../components/ide.tsx";
+import {
+  getGithubInstallationForEstate,
+  getGithubInstallationToken,
+} from "../../../../backend/integrations/github/github-utils.ts";
+import { getDb } from "../../../../backend/db/client.ts";
+import type { Route } from "./+types/repo.ts";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -88,7 +95,48 @@ export function meta() {
   ];
 }
 
-function EstateContent() {
+export async function loader({ params }: Route.LoaderArgs) {
+  const { estateId } = params;
+  if (!estateId) {
+    return data({
+      isConnected: false,
+      isActive: false,
+    });
+  }
+
+  const db = getDb();
+
+  const githubInstallation = await getGithubInstallationForEstate(db, estateId);
+
+  if (!githubInstallation) {
+    return data({
+      isConnected: false,
+      isActive: false,
+    });
+  }
+
+  const token = await getGithubInstallationToken(githubInstallation.accountId);
+
+  if (!token) {
+    return data({
+      isConnected: true,
+      isActive: false,
+    });
+  }
+
+  return data({
+    isConnected: true,
+    isActive: true,
+  });
+}
+
+function EstateContent({
+  installationStatus,
+}: {
+  installationStatus: Awaited<ReturnType<typeof loader>>["data"];
+}) {
+  const { isConnected, isActive } = installationStatus;
+
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
   const [isIterateConfigSheetOpen, setIsIterateConfigSheetOpen] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
@@ -102,6 +150,7 @@ function EstateContent() {
 
   // Get estate ID from URL
   const estateId = useEstateId();
+  const organizationId = useOrganizationId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
@@ -154,6 +203,17 @@ function EstateContent() {
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
   );
 
+  const disconnectGithubRepoMutation = useMutation(
+    trpc.integrations.disconnectGithubRepo.mutationOptions({
+      onSuccess: async () => {
+        const { installationUrl } = await startGithubAppInstallFlowMutation.mutateAsync({
+          estateId: estateId!,
+          callbackURL: `${window.location.origin}/${organizationId}/onboarding/4`,
+        });
+        window.location.href = installationUrl;
+      },
+    }),
+  );
   const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
 
   const handleConnectRepo = (e: React.FormEvent) => {
@@ -383,7 +443,7 @@ function EstateContent() {
             </div>
           </CardHeader>
           <CardContent>
-            {connectedRepo ? (
+            {isConnected && isActive && connectedRepo ? (
               <>
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
                   <div className="text-sm text-muted-foreground">Repository:</div>
@@ -401,6 +461,26 @@ function EstateContent() {
 
                   <div className="text-sm text-muted-foreground">Path:</div>
                   <span className="font-mono text-sm">{connectedRepo.path}</span>
+                </div>
+              </>
+            ) : isConnected && !isActive ? (
+              <>
+                <CardDescription className="text-amber-600 dark:text-amber-400">
+                  Your GIthub App connection has expired or been revoked. You will need to remove
+                  the connection and reconnect the repo.
+                </CardDescription>
+                <div className="flex gap-2 mt-4">
+                  <Button
+                    onClick={() => {
+                      disconnectGithubRepoMutation.mutate({
+                        estateId: estateId!,
+                        deleteInstallation: true,
+                      });
+                    }}
+                    variant="outline"
+                  >
+                    Remove and Reconnect
+                  </Button>
                 </div>
               </>
             ) : repos && repos.length > 0 ? (
@@ -727,7 +807,13 @@ function EstateContent() {
               <Button
                 type="button"
                 variant="destructive"
-                onClick={handleConnectGitHub}
+                onClick={() =>
+                  // The best way to handle this is just to delete the installation, which will prompt the user to reconnect new repo
+                  disconnectGithubRepoMutation.mutate({
+                    estateId: estateId,
+                    deleteInstallation: true,
+                  })
+                }
                 disabled={startGithubAppInstallFlowMutation.isPending}
                 className="flex-1"
               >
@@ -864,5 +950,6 @@ function EstateContent() {
 }
 
 export default function ManageEstate() {
-  return <EstateContent />;
+  const installationStatus = useLoaderData<typeof loader>();
+  return <EstateContent installationStatus={installationStatus} />;
 }

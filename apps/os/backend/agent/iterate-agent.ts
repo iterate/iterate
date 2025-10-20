@@ -1,7 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import pMemoize from "p-suite/p-memoize";
-import { enableDebug } from "better-wait-until";
-import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
 import dedent from "dedent";
@@ -16,6 +14,7 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
+import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -198,17 +197,13 @@ export class IterateAgent<
     // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
 
     // Perform the PartyKit set-name fetch internally so it triggers onStart inside this DO
-    try {
-      const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-      req.headers.set("x-partykit-room", params.record.durableObjectName);
-      if (params.props) {
-        req.headers.set("x-partykit-props", JSON.stringify(params.props));
-      }
-      const res = await this.fetch(req);
-      await res.text();
-    } catch (e) {
-      logger.error("Could not set server name:", e);
+    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+    req.headers.set("x-partykit-room", params.record.durableObjectName);
+    if (params.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(params.props));
     }
+    const res = await this.fetch(req);
+    await res.text();
 
     this._isInitialized = true;
   }
@@ -381,8 +376,7 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
-        enableDebug();
+        // Note that this.ctx.waitUntil is replaced by better-wait-until to actually keep the DO alive...
         this.ctx.waitUntil(fn());
       },
 
@@ -470,11 +464,18 @@ export class IterateAgent<
       // Wrap the default console so every call is also sent to connected websocket clients
       console: (() => {
         // we're going to jettison this soon
-        return console;
+        return logger;
       })(),
 
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
         const event = _event as MergedEventForSlices<Slices>;
+        if (event.type === "CORE:INTERNAL_ERROR") {
+          const reconstructed = new Error(event.data.error);
+          if (event.data.stack) reconstructed.stack = event.data.stack;
+          logger.error(
+            new Error(`Internal error in agent: ${event.data.error}`, { cause: reconstructed }),
+          );
+        }
         const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
         // Handle MCP side effects for relevant events
         const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;
@@ -1809,11 +1810,12 @@ export class IterateAgent<
     const { getSandbox } = await import("@cloudflare/sandbox");
 
     // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
-      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
+      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
+      logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
       const sessionDir = `/tmp/session-${sessionId}`;
       try {
@@ -1828,178 +1830,198 @@ export class IterateAgent<
         }
       }
 
-      // Create an isolated session
-      const sandboxSession = await sandbox.createSession({
-        id: sessionId,
-        cwd: sessionDir,
-        isolation: true,
-        env: {
-          ...input.env,
-        },
-      });
-
-      // Determine the checkout target and whether it's a commit hash
-      const checkoutTarget = commitHash || branch || "main";
-      const isCommitHash = Boolean(commitHash);
-
-      // Prepare arguments as a JSON object
-      const initArgs = {
-        sessionDir,
-        githubRepoUrl,
-        githubToken,
-        checkoutTarget,
-        isCommitHash,
-      };
-      // Escape the JSON string for shell
-      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-      // Init the sandbox (ignore any errors)
-      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}' && node /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
-      using resultInit = await sandboxSession.exec(commandInit, {
-        timeout: 360 * 1000, // 360 seconds total timeout
-      });
-      if (!resultInit.success) {
-        logger.error(
-          "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
-          resultInit,
-        );
-      }
-
-      if (input.command.length > 256) {
-        if (!input.files) {
-          input.files = [];
-        }
-        const commandId = R.randomInteger(0, 99999);
-        input.files.push({
-          path: `/tmp/command-id-${commandId}.sh`,
-          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
-        });
-        input.command = `bash /tmp/command-id-${commandId}.sh`;
-      }
-      // ------------------------------------------------------------------------
-      // Write files
-      // ------------------------------------------------------------------------
-      await Promise.all(
-        (input.files ?? []).map(async (file) => {
-          await sandboxSession.writeFile(file.path, file.content);
-        }),
-      );
-
-      // ------------------------------------------------------------------------
-      // Run exec
-      // ------------------------------------------------------------------------
-
-      // Run the exec command in streaming mode
-      const commandExec = input.command;
-      const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
-      });
-      let stdout = "";
-      let stderr = "";
-      const stream = resultStream[Symbol.asyncIterator]();
-
-      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
-      let sandboxHealthy = true;
-      const interval = setInterval(async () => {
-        try {
-          const state = await sandbox.getState();
-          if (state.status !== "healthy") {
-            sandboxHealthy = false;
-          }
-          await sandbox.renewActivityTimeout();
-        } catch (err) {
-          logger.error("Error renewing activity timeout", err);
-        }
-      }, 5000);
-
-      // try finallyblock to close the interval
+      let sandboxSession: ReturnType<typeof sandbox.createSession>;
       try {
-        while (true) {
-          if (!sandboxHealthy) {
-            logger.warn("Sandbox is not healthy, exiting");
-            return {
-              success: false,
-              message: "Sandbox crashed after completing this work",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // Create an isolated session
+        sandboxSession = await sandbox.createSession({
+          id: sessionId,
+          cwd: sessionDir,
+          isolation: true,
+          env: {
+            ...input.env,
+            // use the node24 binaries by preference
+            PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          },
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("already exists")) {
+          logger.info("Session already exists, getting existing session");
+          sandboxSession = await sandbox.getSession(sessionId);
+        } else {
+          logger.error("Error creating session", err);
+          throw new Error("Error creating session");
+        }
+      }
+
+      try {
+        // Determine the checkout target and whether it's a commit hash
+        const checkoutTarget = commitHash || branch || "main";
+        const isCommitHash = Boolean(commitHash);
+
+        // Prepare arguments as a JSON object
+        const initArgs = {
+          sessionDir,
+          githubRepoUrl,
+          githubToken,
+          checkoutTarget,
+          isCommitHash,
+        };
+        // Escape the JSON string for shell
+        const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+        // Init the sandbox (ignore any errors)
+        const commandInit = `pwd && bun /tmp/sandbox-entry.ts init '${initJsonArgs}' && bun /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
+        using resultInit = await sandboxSession.exec(commandInit, {
+          timeout: 360 * 1000, // 360 seconds total timeout
+        });
+        if (!resultInit.success) {
+          logger.error(
+            "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
+            resultInit,
+          );
+        } else {
+          logger.info("Sandbox initialized successfully");
+        }
+
+        if (input.command.length > 256) {
+          if (!input.files) {
+            input.files = [];
           }
+          const commandId = R.randomInteger(0, 99999);
+          input.files.push({
+            path: `/tmp/command-id-${commandId}.sh`,
+            content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
+          });
+          input.command = `bash /tmp/command-id-${commandId}.sh`;
+        }
+        // ------------------------------------------------------------------------
+        // Write files
+        // ------------------------------------------------------------------------
+        await Promise.all(
+          (input.files ?? []).map(async (file) => {
+            await sandboxSession.writeFile(file.path, file.content);
+          }),
+        );
 
-          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
-          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
-          // an event we probably will never get one but we don't get an error either from
-          // sandbox sdk
-          const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
-            signal: abortController.signal,
-          }).then(() => "TIMEOUT" as const);
+        // ------------------------------------------------------------------------
+        // Run exec
+        // ------------------------------------------------------------------------
 
-          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+        // Run the exec command in streaming mode
+        const commandExec = input.command;
+        const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
+          timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
+        });
+        let stdout = "";
+        let stderr = "";
+        const stream = resultStream[Symbol.asyncIterator]();
 
-          // Clean up the timeout regardless of which promise won the race
-          abortController.abort();
-
-          if (result === "TIMEOUT") {
-            return {
-              message: "The connection to codex timed out",
-              success: false,
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
+        let sandboxHealthy = true;
+        const interval = setInterval(async () => {
+          try {
+            const state = await sandbox.getState();
+            if (state.status !== "healthy") {
+              sandboxHealthy = false;
+            }
+            await sandbox.renewActivityTimeout();
+          } catch (err) {
+            logger.error("Error renewing activity timeout", err);
           }
-          if (result.done) {
-            logger.info("Exec readable exhausted without complete event", {
-              input,
-              stdout,
-              stderr,
-            });
-            // should not get here
-            return {
-              success: false,
-              message: "Result stream terminated before process completion signal was received",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
-          const event = result.value;
-          switch (event.type) {
-            case "stdout":
-              stdout += event.data;
-              logger.info(`Exec stdout: ${event.data}`);
-              break;
-            case "stderr":
-              stderr += event.data;
-              logger.info(`Exec stderr: ${event.data}`);
-              break;
-            case "error":
-              stderr += event.data;
-              logger.info(`Exec error: ${event.data}`);
-              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+        }, 5000);
+
+        // try finallyblock to close the interval
+        try {
+          while (true) {
+            if (!sandboxHealthy) {
+              logger.warn("Sandbox is not healthy, exiting");
               return {
-                message: "Execution errors occurred",
+                success: false,
+                message: "Sandbox crashed after completing this work",
+                stdout,
+                stderr,
+                exitCode: 1,
+              };
+            }
+
+            // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
+            // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
+            // don't get an event in 510s though we're pretty sure that bun has timed out.
+            const abortController = new AbortController();
+            const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
+              signal: abortController.signal,
+            }).then(() => "TIMEOUT" as const);
+
+            const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+
+            // Clean up the timeout regardless of which promise won the race
+            abortController.abort();
+
+            if (result === "TIMEOUT") {
+              return {
+                message: "The connection to codex timed out",
                 success: false,
                 stdout,
                 stderr,
                 exitCode: 1,
               };
-            case "complete":
-              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
-              return {
-                message:
-                  event.exitCode === 0
-                    ? "Execution completed successfully"
-                    : "Execution completed with errors",
-                success: event.exitCode === 0,
+            }
+            if (result.done) {
+              logger.info("Exec readable exhausted without complete event", {
+                input,
                 stdout,
                 stderr,
-                exitCode: event.exitCode,
+              });
+              // should not get here
+              return {
+                success: false,
+                message: "Result stream terminated before process completion signal was received",
+                stdout,
+                stderr,
+                exitCode: 1,
               };
+            }
+            const event = result.value;
+            switch (event.type) {
+              case "stdout":
+                stdout += event.data;
+                logger.info(`Exec stdout: ${event.data}`);
+                break;
+              case "stderr":
+                stderr += event.data;
+                logger.info(`Exec stderr: ${event.data}`);
+                break;
+              case "error":
+                stderr += event.data;
+                logger.info(`Exec error: ${event.data}`);
+                logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+                return {
+                  message: "Execution errors occurred",
+                  success: false,
+                  stdout,
+                  stderr,
+                  exitCode: 1,
+                };
+              case "complete":
+                logger.info(`Exec ${event.exitCode === 0 ? "succeeded" : "failed"}`);
+                return {
+                  message:
+                    event.exitCode === 0
+                      ? "Execution completed successfully"
+                      : "Execution completed with errors",
+                  success: event.exitCode === 0,
+                  stdout,
+                  stderr,
+                  exitCode: event.exitCode,
+                };
+            }
           }
+        } finally {
+          clearInterval(interval);
         }
       } finally {
-        clearInterval(interval);
+        // TODO: uncomment when cloudflare sandbox is fixed
+        // await sandbox.deleteSession(sessionId);
+        logger.info(`TODO: delete session ${sessionId}`);
       }
     };
 
@@ -2012,7 +2034,8 @@ export class IterateAgent<
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
-    if (sandboxState.status !== "healthy") {
+    const runningStatuses = ["healthy", "running"];
+    if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
