@@ -641,6 +641,10 @@ export function IDE() {
             theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
             options={{ wordWrap: "on", fixedOverflowWidgets: true }}
             beforeMount={(monaco) => {
+              monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+                enableSchemaRequest: true, // use fetch to get json schema for intellisense for tsconfig etc.
+              });
+
               const tsconfig = JSON.parse(
                 getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
               ) as import("type-fest").TsConfigJson;
@@ -654,7 +658,6 @@ export function IDE() {
                 plugins,
                 ...compilerOptions
               } = tsconfig.compilerOptions || {};
-              monaco.languages.typescript.JsxEmit.Preserve;
               monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
                 ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
                 ...compilerOptions,
