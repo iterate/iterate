@@ -21,6 +21,7 @@ import {
 } from "../../auth/token-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
+import { formatMcpOAuthConnections } from "./integrations-helpers.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -174,32 +175,11 @@ export const integrationsRouter = router({
     );
 
     // 2. Get OAuth-based MCP connections (accounts with providerId not in known list)
-    // OAuth connections are always personal since they're user-specific authentication
-    const mcpOAuthConnections = [
-      ...estateAccounts
-        .filter(({ account: acc }) => acc && !knownOAuthProviders.includes(acc.providerId))
-        .map(({ account: acc }) => ({
-          type: "mcp-oauth" as const,
-          id: acc!.id,
-          name: acc!.providerId,
-          providerId: acc!.providerId,
-          mode: "personal" as const,
-          scope: acc!.scope,
-          connectedAt: acc!.createdAt,
-        })),
-      ...personalAccounts
-        .filter((acc) => !knownOAuthProviders.includes(acc.providerId))
-        .filter((acc) => !estateAccounts.some(({ account: estateAcc }) => estateAcc?.id === acc.id))
-        .map((acc) => ({
-          type: "mcp-oauth" as const,
-          id: acc.id,
-          name: acc.providerId,
-          providerId: acc.providerId,
-          mode: "personal" as const,
-          scope: acc.scope,
-          connectedAt: acc.createdAt,
-        })),
-    ];
+    const mcpOAuthConnections = formatMcpOAuthConnections({
+      estateAccounts,
+      personalAccounts,
+      knownOAuthProviders,
+    });
 
     // Format param-based MCP connections
     const mcpParamConnections = Object.values(mcpParamsByKey).map((conn) => {

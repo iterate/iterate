@@ -4,6 +4,7 @@ Recent changes from the last month.
 
 ## 2025-10-14
 
+- fix: mark shared MCP OAuth connections as company (ITE-3270)
 - 880c76c update website
 - 6693b2e fix: use browser version of fflate to better support workers (#344)
 - e54c663 fix: don't use this reference in logger (#345)
