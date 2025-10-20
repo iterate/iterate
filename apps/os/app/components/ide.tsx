@@ -19,6 +19,7 @@ import {
   Pencil,
   Trash2,
 } from "lucide-react";
+import { useSearchParams } from "react-router";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
@@ -283,9 +284,15 @@ export function IDE() {
   const trpc = useTRPC();
   const estateId = useEstateId();
 
-  const [selectedFile, setSelectedFile] = useSessionStorage<string | null>(
-    "iterate-selected-file",
-    null,
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedFile = searchParams.get("file");
+  const setSelectedFile = useCallback(
+    (file: string | null) => {
+      const newParams = Object.fromEntries(searchParams);
+      if (typeof file === "string") newParams.file = file;
+      setSearchParams(new URLSearchParams(newParams));
+    },
+    [searchParams, setSearchParams],
   );
   const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string | null> | null>(
     "iterate-local-edits",
@@ -512,22 +519,8 @@ export function IDE() {
 
   const editorRef = useRef<Parameters<OnMount> | null>(null);
 
-  const _getEditor = () => editorRef.current?.[0];
   const getMonaco = () => editorRef.current?.[1];
 
-  // useEffect(() => {
-  //   const monaco = _getMonaco();
-  //   if (!monaco) return;
-
-  //   const tsconfig = JSON5.parse(getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}");
-  //   const compilerOptions = tsconfig.compilerOptions || {};
-  //   monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-  //     ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
-  //     strict: false,
-  //     ...compilerOptions,
-  //     typeRoots: [...(compilerOptions.typeRoots || []), "file:///node_modules"],
-  //   });
-  // }, [getRepoFileSystemQuery.data]);
   useEffect(() => {
     const monaco = getMonaco();
     if (!monaco) return;
@@ -600,7 +593,7 @@ export function IDE() {
             <Upload className="h-3 w-3" />
             {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
               ? "Pushing..."
-              : "Push to GitHub"}
+              : `Push to ${getRepoFileSystemQuery.data!.branch || "GitHub"}`}
           </Button>
         </div>
         <div className="p-2 border-b">

@@ -27,8 +27,8 @@ import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./CreateCommitOnBranchInput.ts";
 
 const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
-  const githubStuff = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
-  if (!githubStuff) {
+  const githubInstallation = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
+  if (!githubInstallation) {
     throw new Error("GitHub installation not found for this estate");
   }
   if (!ctx.estate.connectedRepoId) {
@@ -36,10 +36,19 @@ const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, nex
   }
   const { repoData, installationToken } = await getRepoDetails(
     ctx.estate.connectedRepoId,
-    githubStuff.accountId,
+    githubInstallation.accountId,
   );
+  const octokit = new Octokit({ auth: installationToken });
   return next({
-    ctx: { ...ctx, repoData, installationToken, refName: ctx.estate.connectedRepoRef },
+    ctx: {
+      ...ctx,
+      github: octokit,
+      /** owner and repo in format needed for octokit.rest api */
+      repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
+      repoData,
+      installationToken,
+      refName: ctx.estate.connectedRepoRef,
+    },
   });
 });
 
@@ -275,8 +284,19 @@ export const estateRouter = router({
         .filter(([k, v]) => !k.endsWith("/") && v.trim()),
     );
     const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
-    return { repoData: ctx.repoData, filesystem, sha };
+    return { repoData: ctx.repoData, filesystem, sha, branch: ctx.refName };
   }),
+
+  listPulls: iterateBotGithubProcedure
+    .input(
+      z.object({
+        state: z.enum(["open", "closed", "all"]).default("open"),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { data: pulls } = await ctx.github.rest.pulls.list({ ...ctx.repo, state: input.state });
+      return pulls;
+    }),
 
   getDTS: protectedProcedure
     .input(
