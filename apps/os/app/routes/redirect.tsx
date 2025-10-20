@@ -192,7 +192,13 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   // Determine where to redirect based on user's estates
-  const redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+  let redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+
+  console.log({ redirectPath });
+  if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
+    const estatePath = new URL(request.url).searchParams.get("estate_path");
+    redirectPath += estatePath ? `/${estatePath}` : "";
+  }
 
   throw redirect(redirectPath);
 }
