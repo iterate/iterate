@@ -425,7 +425,12 @@ export const estateRouter = router({
           }
           resolve();
         });
-        const packageJson = JSON.parse(files["package.json"]!) as import("type-fest").PackageJson;
+
+        if (!files["package.json"]) {
+          throw new Error(`package.json not found in ${name}@${specifier}`);
+        }
+
+        const packageJson = JSON.parse(files["package.json"]) as import("type-fest").PackageJson;
 
         if (!packageJson.name) {
           throw new Error(`Couldn't find valid package.json for ${name}@${specifier}`);

@@ -597,7 +597,7 @@ export function IDE() {
             <Upload className="h-3 w-3" />
             {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
               ? "Pushing..."
-              : `Push to ${getRepoFileSystemQuery.data!.branch || "GitHub"}`}
+              : `Push to ${getRepoFileSystemQuery.data?.branch || "GitHub"}`}
           </Button>
         </div>
         <div className="p-2 border-b">
