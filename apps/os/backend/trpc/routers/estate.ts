@@ -295,9 +295,9 @@ export const estateRouter = router({
         packageJson: import("type-fest").PackageJson;
         files: Record<string, string>;
       };
-      const getPackage = async (name: string, version: string): Promise<GottenPackage> => {
-        if (version.startsWith("github:")) {
-          const [ownerAndRepo, ref = "main"] = version.replace("github:", "").split("#");
+      const getPackage = async (name: string, specifier: string): Promise<GottenPackage> => {
+        if (specifier.startsWith("github:")) {
+          const [ownerAndRepo, ref = "main"] = specifier.replace("github:", "").split("#");
           const zipballUrl = `https://api.github.com/repos/${ownerAndRepo}/zipball/${ref}`;
           const zipballResponse = await fetch(zipballUrl, {
             headers: { "User-Agent": "iterate.com OS" },
@@ -322,9 +322,42 @@ export const estateRouter = router({
           );
           return { files: filesystem, packageJson: JSON.parse(filesystem["package.json"]!) };
         }
-        const url = version?.match(/^https?:/)
-          ? version
-          : `https://registry.npmjs.org/${name}/-/${name}-${version.replace(/^[~^]/, "")}.tgz`;
+
+        let url: string;
+        if (specifier?.match(/^https?:/)) {
+          url = specifier;
+        } else if (semver.validRange(specifier)) {
+          const packageInfo: { versions: Record<string, {}> } = await fetch(
+            `https://registry.npmjs.org/${name}`,
+          ).then((r) => r.json());
+          const allVersions = Object.keys(packageInfo.versions);
+          const resolvedVersion =
+            semver.maxSatisfying(allVersions, specifier) || specifier.replace(/^[~^]/, "");
+          url = `https://registry.npmjs.org/${name}/-/${name}-${resolvedVersion}.tgz`;
+        } else if (specifier.match(/^[\w-.]+$/)) {
+          // looks like a dist-tag to me
+          const packageInfo: {
+            "dist-tags": Record<string, string>;
+            versions: Record<string, { version: string }>;
+          } = await fetch(`https://registry.npmjs.org/${name}`).then((r) => r.json());
+
+          const distTagVersion = packageInfo["dist-tags"][specifier];
+          if (!distTagVersion) {
+            throw new Error(`No dist-tag "${specifier}" found for ${name}`);
+          }
+
+          const resolvedVersion = packageInfo.versions[distTagVersion]?.version;
+          if (!resolvedVersion) {
+            throw new Error(
+              `${name} dist-tag ${specifier} resolved to version ${distTagVersion} but that version wasn't found on the registry.`,
+            );
+          }
+
+          url = `https://registry.npmjs.org/${name}/-/${name}-${resolvedVersion}.tgz`;
+        } else {
+          throw new Error(`Unsupported package specifier: ${specifier}`);
+        }
+
         const res = await fetch(url);
         const extract = tarStream.extract({});
 
@@ -371,7 +404,7 @@ export const estateRouter = router({
         const packageJson = JSON.parse(files["package.json"]!) as import("type-fest").PackageJson;
 
         if (!packageJson.name) {
-          throw new Error(`Couldn't find valid package.json for ${name}@${version}`);
+          throw new Error(`Couldn't find valid package.json for ${name}@${specifier}`);
         }
         return { packageJson, files };
       };
