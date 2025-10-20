@@ -66,19 +66,13 @@ export default function TrialSlackConnectPage() {
   const setupTrialMutation = useMutation({
     ...trpc.integrations.setupSlackConnectTrial.mutationOptions({}),
     onSuccess: (data) => {
-      if (!data.success) {
-        if ("error" in data && data.error === "invalid_email") {
-          toast.error("message" in data ? data.message : "Email not found in Slack");
-        }
-      } else {
-        setTrialData({
-          estateId: data.estateId,
-          organizationId: data.organizationId,
-          channelName: "channelName" in data ? data.channelName : "",
-          channelId: "channelId" in data ? data.channelId : "",
-        });
-        setStep("success");
-      }
+      setTrialData({
+        estateId: data.estateId,
+        organizationId: data.organizationId,
+        channelName: "channelName" in data ? data.channelName : "",
+        channelId: "channelId" in data ? data.channelId : "",
+      });
+      setStep("success");
     },
     onError: (error) => {
       toast.error(`Failed to set up trial: ${error.message}`);

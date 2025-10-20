@@ -1538,10 +1538,7 @@ export const integrationsRouter = router({
       // 4. Get iterate's bot account and token
       const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
       if (!iterateBotAccount) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack bot account not found",
-        });
+        throw new Error("Iterate Slack bot account not found");
       }
 
       // 5. Link trial user's estate to iterate's bot account
@@ -1585,13 +1582,7 @@ export const integrationsRouter = router({
       });
 
       if (!result.success) {
-        return {
-          success: false,
-          error: result.error,
-          message: result.message,
-          estateId: estate.id,
-          organizationId: organization.id,
-        };
+        throw new Error(`Something went wrong while setting up trial`, { cause: result.error });
       }
 
       logger.info(

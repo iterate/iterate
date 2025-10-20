@@ -319,7 +319,8 @@ export async function createTrialSlackConnectChannel(params: {
     return {
       success: false,
       error: "api_error",
-      message: error instanceof Error ? error.message : "Unknown error occurred",
+      message:
+        error instanceof Error ? `Unexpected error: ${error.message}` : "Unexpected error occurred",
     };
   }
 }
