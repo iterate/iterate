@@ -72,12 +72,7 @@ export default function OnboardingPage() {
               <div className="flex flex-col flex-1">
                 <h3 className="text-lg md:text-xl font-semibold mb-4 md:mb-6">
                   Add{" "}
-                  <span
-                    className="px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: "#4A154B1A", color: "#4A154B" }}
-                  >
-                    @iterate
-                  </span>{" "}
+                  <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary">@iterate</span>{" "}
                   to your workspace
                 </h3>
 
@@ -105,8 +100,7 @@ export default function OnboardingPage() {
                 <Button
                   onClick={handleSlackAuth}
                   variant="outline"
-                  className="w-full bg-white h-14"
-                  style={{ borderColor: "#4A154B", borderWidth: "2px" }}
+                  className="w-full h-14 border-2 border-primary bg-background hover:bg-accent"
                 >
                   <img src="/slack.svg" alt="Slack" className="mr-2 h-5 w-5" />
                   Continue with Slack
@@ -134,12 +128,7 @@ export default function OnboardingPage() {
               <div className="flex flex-col flex-1">
                 <h3 className="text-lg md:text-xl font-semibold mb-4 md:mb-6">
                   Try{" "}
-                  <span
-                    className="px-1.5 py-0.5 rounded"
-                    style={{ backgroundColor: "#4A154B1A", color: "#4A154B" }}
-                  >
-                    @iterate
-                  </span>{" "}
+                  <span className="px-1.5 py-0.5 rounded bg-primary/10 text-primary">@iterate</span>{" "}
                   with Slack Connect
                 </h3>
 
