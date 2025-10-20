@@ -30,7 +30,6 @@ import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
-import { createLoggerMiddleware } from "./tag-logger-middleware.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -63,15 +62,17 @@ app.use("*", async (c, next) => {
 });
 
 // Sets up the logger with request metadata
-app.use(
-  "*",
-  createLoggerMiddleware<CloudflareEnv, Variables>(logger, (c) => ({
-    userId: c.var.session?.user?.id || undefined,
-    path: c.req.path,
-    httpMethod: c.req.method,
-    url: c.req.url,
-    traceId: typeid("req").toString(),
-  })),
+app.use("*", async (c, next) =>
+  logger.run(
+    [
+      `userId=${c.var.session?.user?.id || undefined}`,
+      `path=${c.req.path}`,
+      `httpMethod=${c.req.method}`,
+      `url=${c.req.url}`,
+      `traceId=${typeid("req").toString()}`,
+    ],
+    () => next(),
+  ),
 );
 
 app.use(
