@@ -388,46 +388,28 @@ export const estateRouter = router({
         const res = await fetch(url);
         const extract = tarStream.extract({});
 
-        // Load into buffer first to avoid streaming issues in Workers
-        const buffer = Buffer.from(await res.arrayBuffer());
-
         const files: Record<string, string> = {};
 
-        // eslint-disable-next-line no-async-promise-executor -- can't be bothered to avoid async await in this one case
-        await new Promise<void>(async (resolve, reject) => {
-          const nodeStream = Readable.from(buffer);
+        // Stream the response directly through gunzip into tar-stream
+        const nodeStream = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
+        const gunzip = createGunzip();
+        nodeStream.pipe(gunzip).pipe(extract);
 
-          nodeStream.on("error", (error) => {
-            logger.error("nodeStream error", error);
-            reject(error);
-          });
-
-          const gunzip = createGunzip();
-
-          gunzip.on("error", (error) => {
-            logger.error("gunzip error", error);
-            reject(error);
-          });
-
-          nodeStream.pipe(gunzip).pipe(extract);
-
-          for await (const entry of extract) {
-            const tgzPath = entry.header.name;
-            const filename = tgzPath.replace("package/", "");
-            const isInteresting = filename.endsWith(".d.ts") || filename === "package.json";
-            if (!isInteresting) {
-              entry.resume();
-              continue;
-            }
-            const chunks: Buffer[] = [];
-            for await (const chunk of entry) {
-              chunks.push(chunk);
-            }
-            const content = Buffer.concat(chunks).toString("utf-8");
-            files[filename] = content;
+        for await (const entry of extract) {
+          const tgzPath = entry.header.name;
+          const filename = tgzPath.replace("package/", "");
+          const isInteresting = filename.endsWith(".d.ts") || filename === "package.json";
+          if (!isInteresting) {
+            entry.resume();
+            continue;
           }
-          resolve();
-        });
+          const chunks: Buffer[] = [];
+          for await (const chunk of entry) {
+            chunks.push(chunk);
+          }
+          const content = Buffer.concat(chunks).toString("utf-8");
+          files[filename] = content;
+        }
 
         if (!files["package.json"]) {
           throw new Error(`package.json not found in ${name}@${specifier}`);
