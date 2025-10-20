@@ -470,7 +470,6 @@ export function IDE() {
   };
 
   const handleSave = () => {
-    console.log("handleSave", { validSelectedFile });
     if (validSelectedFile) handleSaveAll([validSelectedFile]);
   };
 

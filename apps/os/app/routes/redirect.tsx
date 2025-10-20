@@ -176,6 +176,24 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
   return "/no-access";
 }
 
+function appendEstatePath(redirectPath: string, estatePath: string) {
+  try {
+    const redirectPathURL = new URL(redirectPath, "http://estate");
+    const tempURL = new URL(estatePath, "http://estate");
+    // check that there's no sneaky stuff like //evil.com
+    if (tempURL.origin === "http://estate") {
+      redirectPathURL.pathname += tempURL.pathname;
+      for (const [key, value] of tempURL.searchParams.entries()) {
+        redirectPathURL.searchParams.set(key, value);
+      }
+      return redirectPathURL.toString().replace(redirectPathURL.origin, "");
+    }
+  } catch {
+    // sus path(s), don't append
+  }
+  return redirectPath;
+}
+
 // Server-side loader that handles all the redirect logic
 export async function loader({ request }: Route.LoaderArgs) {
   // Get the database and auth instances
@@ -196,7 +214,9 @@ export async function loader({ request }: Route.LoaderArgs) {
 
   if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
     const estatePath = new URL(request.url).searchParams.get("estate_path");
-    redirectPath += estatePath ? `/${estatePath}` : "";
+    if (estatePath) {
+      redirectPath = appendEstatePath(redirectPath, estatePath);
+    }
   }
 
   throw redirect(redirectPath);
