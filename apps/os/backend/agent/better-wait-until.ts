@@ -6,12 +6,12 @@ import { logger } from "../tag-logger.ts";
 let _debugEnabled = false;
 function logDebug(message: string, ...args: unknown[]) {
   if (_debugEnabled) {
-    logger.info(`[keep-alive] ${message}`, ...args);
+    logger.info(`[better-wait-until] ${message}`, ...args);
   }
 }
 
 function logError(message: string, data?: unknown) {
-  logger.error(`[keep-alive] ${message}`, data);
+  logger.error(`[better-wait-until] ${message}`, data);
 }
 
 export function enableDebug(): void {
@@ -23,21 +23,17 @@ export function disableDebug(): void {
 }
 
 // WebSocket endpoint configuration
-const WEBSOCKET_ENDPOINT = new URL("https://fake/better-wait-until/websocket");
-const websocketPath = WEBSOCKET_ENDPOINT.pathname;
+export const BETTER_WAIT_UNTIL_WEBSOCKET_ENDPOINT = new URL(
+  "https://fake/better-wait-until/websocket",
+);
+export const betterWaitUntilWebsocketPath = BETTER_WAIT_UNTIL_WEBSOCKET_ENDPOINT.pathname;
 
-function getKeepAliveUrl(className: string): URL {
-  return new URL(WEBSOCKET_ENDPOINT.toString() + `?className=${className}`);
+function getBetterWaitUntilUrl(className: string): URL {
+  return new URL(BETTER_WAIT_UNTIL_WEBSOCKET_ENDPOINT.toString() + `?className=${className}`);
 }
 
-export type ConstructorUpdateOptions = {
-  usePartykitCompatibleMode: boolean;
-};
-
-export function constructorUpdate(
-  instance: DurableObject<any>,
-  options: ConstructorUpdateOptions = { usePartykitCompatibleMode: false },
-): void {
+// We modiffy the instance to accept better wait until requests and handle them without breaking Agents/PartyKit functionality
+export function monkeyPatchAgentWithBetterWaitUntilSupport(instance: Agent<any, any>): void {
   const originalFetch = instance.fetch;
   const originalWebSocketMessage = instance.webSocketMessage;
 
@@ -47,9 +43,13 @@ export function constructorUpdate(
     enumerable: false,
     writable: true,
     value: async function (this: DurableObject<any>, request: Request): Promise<Response> {
-      const keepAliveResponse = await acceptKeepAliveWebSocket(this["ctx"], request, options);
-      if (keepAliveResponse) {
-        return keepAliveResponse;
+      // returns null if the request is not a better wait until request
+      const betterWaitUntilResponse = await acceptBetterWaitUntilWebSocketIfValid(
+        this["ctx"],
+        request,
+      );
+      if (betterWaitUntilResponse) {
+        return betterWaitUntilResponse;
       }
       if (typeof originalFetch === "function") {
         return await originalFetch.call(this, request);
@@ -84,32 +84,66 @@ export function constructorUpdate(
       return oldWaitUntil?.call(instance["ctx"], betterAwait(instance, promise));
     },
   });
+
+  const originalBroadcast = instance.broadcast;
+  Object.defineProperty(instance, "broadcast", {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: function (this: Agent<any, any>, msg: string, without?: string[]) {
+      const exclude: string[] = without ?? [];
+      // Don't send broadcast messages to wait-until connections.
+      for (const connection of this.getConnections()) {
+        if (connection.url?.includes(betterWaitUntilWebsocketPath)) {
+          exclude.push(connection.id);
+        }
+      }
+      return originalBroadcast.call(this, msg, exclude);
+    },
+  });
+
+  const originalOnConnect = instance.onConnect;
+  Object.defineProperty(instance, "onConnect", {
+    configurable: true,
+    enumerable: false,
+    writable: true,
+    value: function (this: Agent<any, any>, connection: Connection, ctx: ConnectionContext) {
+      // don't pass through better wait until connections to the agent class, it will confuse it.
+      if (connection.url?.includes(betterWaitUntilWebsocketPath)) {
+        return;
+      }
+      if (typeof originalOnConnect === "function") {
+        return originalOnConnect.call(this, connection, ctx);
+      }
+    },
+  });
 }
 
-function acceptKeepAliveWebSocket(
+function acceptBetterWaitUntilWebSocketIfValid(
   state: DurableObjectState,
   request: Request,
-  options: ConstructorUpdateOptions,
 ): Response | null {
   const url = new URL(request.url);
-  if (!url.pathname.startsWith(websocketPath) || request.headers.get("Upgrade") !== "websocket") {
+  if (
+    !url.pathname.startsWith(betterWaitUntilWebsocketPath) ||
+    request.headers.get("Upgrade") !== "websocket"
+  ) {
     return null;
   }
   try {
     const [client, server] = Object.values(new WebSocketPair());
 
     // Accept the server side with hibernation
-    state.acceptWebSocket(server, ["keepalive"]);
-    if (options.usePartykitCompatibleMode) {
-      // Add fake attachment to the server side to keep PartyKit from freaking out
-      server.serializeAttachment({
-        __pk: {
-          id: -1,
-          uri: request.url,
-        },
-        __user: null,
-      });
-    }
+    state.acceptWebSocket(server, ["better-wait-until"]);
+
+    // Add fake attachment to the server side to keep PartyKit from freaking out
+    server.serializeAttachment({
+      __pk: {
+        id: -1,
+        uri: request.url,
+      },
+      __user: null,
+    });
 
     // Return the client side
     return new Response(null, {
@@ -117,8 +151,8 @@ function acceptKeepAliveWebSocket(
       webSocket: client,
     });
   } catch (err) {
-    logError("Error keeping agent awake", { err });
-    return new Response("Error keeping agent awake", { status: 500 });
+    logError("Error accepting better wait until web socket", { err });
+    return new Response("Error accepting better wait until web socket", { status: 500 });
   }
 }
 
@@ -147,6 +181,9 @@ function betterAwait(
   const start = Date.now();
   const logWarningAt = (options.logWarningAfter?.getTime() ?? Date.now()) + 1000 * 60 * 15; // 15 minutes
   const logErrorAt = (options.logErrorAfter?.getTime() ?? Date.now()) + 1000 * 60 * 60; // 1 hour
+  if (!options.timeout) {
+    options.timeout = new Date(Date.now() + 1000 * 60 * 60 * 2); // 2 hours
+  }
 
   // access private property haha!
   const ctx = durableObject["ctx"];
@@ -172,7 +209,7 @@ function betterAwait(
     }
     const response = durableObjectNamespace
       .get(ctx.id)
-      .fetch(getKeepAliveUrl(className), {
+      .fetch(getBetterWaitUntilUrl(className), {
         headers: {
           Upgrade: "websocket",
           Connection: "Upgrade",
@@ -270,7 +307,7 @@ function betterAwait(
         if (options.timeout && Date.now() > options.timeout.getTime()) {
           // do not use debug for this because we want it to surface
           logger.error(
-            "[better-wait-until] Timeout reached, stopping keep alive interval. Your Durable Object may now be killed by Cloudflare and the promise may never resolve.",
+            "[better-wait-until] Timeout reached, stopping better wait until interval. Your Durable Object may now be killed by Cloudflare and the promise may never resolve.",
           );
           clearInterval(interval);
           requestCleanup();
@@ -286,7 +323,7 @@ function betterAwait(
         const response = await websocketPromise;
         response.webSocket!.send("better-wait-until-ping " + count);
       } catch (err) {
-        logError("Error keeping agent awake", { err });
+        logError("Error sending better wait until ping", { err });
       }
     }, 10000);
   });
@@ -304,60 +341,6 @@ export function betterWaitUntil(
     logErrorAfter?: Date;
   } = {},
 ): void {
+  // Deliberately void the promise - the websocket it creates will keep it alive!
   void betterAwait(durableObject, promise, options);
-}
-
-// export under `waitUntil` for autocomplete
-export { betterWaitUntil as waitUntil };
-// export as default for convenience
-export default betterWaitUntil;
-
-// Agents-specific code
-
-function agentsConstructorUpdate(instance: Agent<any, any>): void {
-  const originalBroadcast = instance.broadcast;
-  Object.defineProperty(instance, "broadcast", {
-    configurable: true,
-    enumerable: false,
-    writable: true,
-    value: function (this: Agent<any, any>, msg: string, without?: string[]) {
-      const exclude: string[] = without ?? [];
-      for (const connection of this.getConnections()) {
-        if (connection.url?.includes("better-wait-until/websocket")) {
-          logDebug("Skipping keep-alive connection", connection);
-          exclude.push(connection.id);
-        }
-      }
-      return originalBroadcast.call(this, msg, exclude);
-    },
-  });
-  // this is supersitious, I don't think it's needed
-  try {
-    instance["_autoWrapCustomMethods"]();
-  } catch (error) {
-    logError("Error wrapping custom methods", { error });
-  }
-}
-
-export abstract class KeepAliveAgent<
-  Env = unknown,
-  State = unknown,
-  Props extends Record<string, unknown> = Record<string, unknown>,
-> extends Agent<Env, State, Props> {
-  constructor(
-    ctx: AgentContext,
-    readonly env: Env,
-  ) {
-    super(ctx, env);
-    constructorUpdate(this, { usePartykitCompatibleMode: true });
-    agentsConstructorUpdate(this);
-  }
-
-  onConnect(connection: Connection, ctx: ConnectionContext) {
-    if (connection.url?.includes("better-wait-until/websocket")) {
-      logDebug("Skipping keep-alive connection");
-      return;
-    }
-    super.onConnect(connection, ctx);
-  }
 }

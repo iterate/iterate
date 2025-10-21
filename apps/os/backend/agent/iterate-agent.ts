@@ -1,4 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
+import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -52,7 +53,10 @@ import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-ut
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
-import { KeepAliveAgent as CloudflareAgent } from "./keep-alive-agent.ts";
+import {
+  betterWaitUntil,
+  monkeyPatchAgentWithBetterWaitUntilSupport,
+} from "./better-wait-until.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -263,6 +267,7 @@ export class IterateAgent<
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+    monkeyPatchAgentWithBetterWaitUntilSupport(this);
 
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
@@ -376,8 +381,11 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // Note that this.ctx.waitUntil is replaced by better-wait-until to actually keep the DO alive...
-        this.ctx.waitUntil(fn());
+        betterWaitUntil(this, fn(), {
+          logErrorAfter: new Date(Date.now() + 1000 * 60 * 60 * 2), // 2 hours
+          logWarningAfter: new Date(Date.now() + 1000 * 60 * 30), // 30 minutes
+          timeout: new Date(Date.now() + 1000 * 60 * 60 * 6), // 6 hours
+        });
       },
 
       getOpenAIClient: async () => {
