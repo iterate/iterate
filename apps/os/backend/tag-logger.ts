@@ -260,11 +260,11 @@ class PosthogTagLogger extends TagLogger {
 }
 
 function getLogger() {
-  if (import.meta.env.MODE === "test") {
+  if (import.meta.env?.MODE === "test") {
     return new TagLogger(TagLogger.consoleLogFn(console));
   }
-  if (import.meta.env.DOPPLER_ENVIRONMENT === "dev") {
-    // we don't currently have import.meta.env.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
+  if (import.meta.env?.DOPPLER_ENVIRONMENT === "dev") {
+    // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
     return new PosthogTagLogger(TagLogger.consoleLogFn(console));
   }
 

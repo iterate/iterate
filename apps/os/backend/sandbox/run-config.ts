@@ -73,11 +73,17 @@ async function runConfigInSandboxInternal(
   await sandbox.mkdir(sessionDir, { recursive: true });
 
   // Create an isolated session
-  const sandboxSession = await sandbox.createSession({
-    id: sessionId,
-    cwd: sessionDir,
-    isolation: true,
-  });
+  let sandboxSession: ReturnType<typeof sandbox.createSession>;
+  try {
+    sandboxSession = await sandbox.createSession({
+      id: sessionId,
+      cwd: sessionDir,
+      isolation: true,
+    });
+  } catch {
+    // If the session creation fails, get existing session
+    sandboxSession = await sandbox.getSession(sessionId!);
+  }
 
   // Determine the checkout target and whether it's a commit hash
   const checkoutTarget = commitHash || branch || "main";
@@ -94,14 +100,14 @@ async function runConfigInSandboxInternal(
   // Escape the JSON string for shell
   const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
   // Init the sandbox (ignore any errors)
-  const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+  const commandInit = `npx tsx /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
   const resultInit = await sandboxSession.exec(commandInit, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
   if (!resultInit.success) {
     logger.error(
       JSON.stringify({
-        message: "Error running `node /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+        message: "Error running `npx tsx /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
         result: resultInit,
       }),
     );
@@ -119,7 +125,7 @@ async function runConfigInSandboxInternal(
   // Escape the JSON string for shell
   const buildJsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
   // Run the build in sandbox
-  const commandBuild = `node /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
+  const commandBuild = `npx tsx /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
   const resultBuild = await sandboxSession.exec(commandBuild, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
@@ -127,7 +133,7 @@ async function runConfigInSandboxInternal(
   if (!resultBuild.success) {
     logger.error(
       JSON.stringify({
-        message: "Error running `node /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
+        message: "Error running `npx tsx /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
         result: resultBuild,
       }),
     );
