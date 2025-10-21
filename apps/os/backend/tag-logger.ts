@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "async_hooks";
-import type { OverloadParameters } from "expect-type";
 import { waitUntil } from "../env.ts";
 
 export namespace TagLogger {
@@ -7,7 +6,12 @@ export namespace TagLogger {
   export type Context = {
     level: TagLogger.Level;
     tags: string[];
-    logs: Array<{ level: TagLogger.Level; timestamp: Date; prefix: string[]; args: unknown[] }>;
+    logs: Array<{
+      level: TagLogger.Level;
+      timestamp: Date;
+      prefix: readonly Record<string, string>[];
+      args: unknown[];
+    }>;
   };
   /** "driver" for tag-logger. Expected to be responsible for printing logs to stdout/stdin. But if you want to email your grandma when we log an error, go for it. */
   export type Implementation = Pick<typeof console, TagLogger.Level>;
@@ -45,22 +49,34 @@ export class TagLogger {
     return this.context.tags;
   }
 
-  tagsRecord() {
-    return Object.fromEntries(this.tags.map((tag) => [tag, this.getTag(tag)]));
+  /** 1-tuple of concatenated tags, or empty array if there are no tags. useful for `console.info(...logger.prefix, 123, 456)` */
+  get prefix(): [] | [Record<string, string>] {
+    if (this.tags.length === 0) return [];
+    const string = this.tagsString();
+    const record = this.tagsRecord();
+    // add magic symbol so that when using `console` as the implementation, the prefix is printed as a concise but readable string, not a big fat object
+    // in environments like cloudflare logs/aws cloudwatch, this won't be used, and it'll be a nicely queryable fat object
+    Object.defineProperty(record, Symbol.for("nodejs.util.inspect.custom"), {
+      value: () => string,
+      enumerable: false,
+    });
+    return [record];
   }
 
-  /** 1-tuple of concatenated tags, or empty array if there are no tags. useful for `console.info(...logger.prefix, 123, 456)` */
-  get prefix(): [] | [string] {
-    if (this.tags.length === 0) return [];
-    return [this.tags.map((c) => `[${c}]`).join("")];
+  tagsString() {
+    return this.tags.map((c) => `[${c}]`).join("");
+  }
+
+  tagsRecord() {
+    return Object.fromEntries(new URLSearchParams(this.tags.join("&")));
   }
 
   /**
    * may not be the best way retrieve stuff from context, but useful in a pinch: if you've set tags in the form `foo=bar` you can retrieve
    * them anywhere in the async context with this: `logger.getTag('foo') // return 'bar'`
    */
-  getTag(name: string) {
-    return new URLSearchParams(this.tags.join("&")).get(name);
+  getTag(name: string): string | undefined {
+    return this.tagsRecord()[name];
   }
 
   run<T>(tag: string | string[], fn: () => T): T {
@@ -181,7 +197,7 @@ function serializeError<T>(error: T): { [K in keyof T]: T[K] } {
 }
 
 class PosthogTagLogger extends TagLogger {
-  error(...args: OverloadParameters<TagLogger["error"]>) {
+  error(...args: [Error] | [string, unknown?]) {
     super.error(...(args as Parameters<TagLogger["error"]>));
     waitUntil(
       Promise.resolve().then(async () => {
@@ -190,9 +206,7 @@ class PosthogTagLogger extends TagLogger {
 
         try {
           const error = args[0] instanceof Error ? args[0] : new Error(args[0], { cause: args[1] });
-          const posthog = new PostHog(env.POSTHOG_PUBLIC_KEY, {
-            host: "https://eu.i.posthog.com",
-          });
+          const posthog = new PostHog(env.POSTHOG_PUBLIC_KEY, { host: "https://eu.i.posthog.com" });
 
           posthog.captureException(error, this.getTag("userId") || "anonymous", {
             environment: env.POSTHOG_ENVIRONMENT,
@@ -215,19 +229,25 @@ function getLogger() {
     return new TagLogger(console);
   }
   if (import.meta.env.DOPPLER_ENVIRONMENT === "dev") {
-    // we don't currently have import.meta.env.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definnitely in a dev environment
+    // we don't currently have import.meta.env.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
     return new PosthogTagLogger(console);
   }
-  const cloudflareSafeArgs = (args: unknown[]): [] | [unknown] =>
-    args.length <= 1 ? (args as [] | [unknown]) : [args];
-  const toJSON = (x: unknown) => JSON.stringify(x, (_, value) => serializeError(value));
+  const getLogger =
+    (level: TagLogger.Level) =>
+    (metadata: {}, ...args: unknown[]) => {
+      let toLog: Record<string, unknown> = { level, metadata: { ...metadata }, args };
+      if (typeof args[0] === "string") {
+        // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
+        toLog = { message: args[0], ...toLog };
+      }
+      // eslint-disable-next-line no-console -- only usage
+      console.info(JSON.stringify(toLog, (_, value) => serializeError(value)));
+    };
   return new TagLogger({
-    /* eslint-disable no-console -- this is the one place where we use console */
-    debug: (...args) => console.debug(toJSON(cloudflareSafeArgs(args))),
-    info: (...args) => console.info(toJSON(cloudflareSafeArgs(args))),
-    warn: (...args) => console.warn(toJSON(cloudflareSafeArgs(args))),
-    error: (...args) => console.error(toJSON(cloudflareSafeArgs(args))),
-    /* eslint-enable no-console -- done w/ console methods */
+    debug: getLogger("debug"),
+    info: getLogger("info"),
+    warn: getLogger("warn"),
+    error: getLogger("error"),
   });
 }
 

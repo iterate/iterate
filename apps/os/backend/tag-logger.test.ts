@@ -1,13 +1,14 @@
+import { inspect } from "util";
 import { expect, test } from "vitest";
 import { TagLogger } from "./tag-logger.ts";
 
 const createLogger = () => {
   const calls: any[][] = [];
   const mocks = {
-    info: (...args: any[]) => calls.push(["info", ...args]),
-    warn: (...args: any[]) => calls.push(["warn", ...args]),
-    error: (...args: any[]) => calls.push(["error", ...args]),
-    debug: (...args: any[]) => calls.push(["debug", ...args]),
+    info: (prefix: string, ...args: any[]) => calls.push(["info", inspect(prefix), ...args]),
+    warn: (prefix: string, ...args: any[]) => calls.push(["warn", inspect(prefix), ...args]),
+    error: (prefix: string, ...args: any[]) => calls.push(["error", inspect(prefix), ...args]),
+    debug: (prefix: string, ...args: any[]) => calls.push(["debug", inspect(prefix), ...args]),
   };
   return {
     mocks,
@@ -51,11 +52,11 @@ test("stores memories", () => {
       "[numero=dos][depth=prettydeep][depth=deeper]",
       "pretty big input",
       "memories:",
-      [expect.stringMatching(/^2.*/), "debug", "[numero=dos]", "dbg-one", { input: 0.9 }],
+      [expect.stringMatching(/^2.*/), "debug", { numero: "dos" }, "dbg-one", { input: 0.9 }],
       [
         expect.stringMatching(/^2.*/),
         "debug",
-        "[numero=dos][depth=prettydeep]",
+        { depth: "prettydeep", numero: "dos" },
         "dbg-two",
         { depth: 1 },
       ],
