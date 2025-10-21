@@ -179,8 +179,8 @@ function betterAwait(
     options,
   });
   const start = Date.now();
-  const logWarningAt = (options.logWarningAfter?.getTime() ?? Date.now()) + 1000 * 60 * 15; // 15 minutes
-  const logErrorAt = (options.logErrorAfter?.getTime() ?? Date.now()) + 1000 * 60 * 60; // 1 hour
+  const logWarningAt = options.logWarningAfter?.getTime() ?? Date.now() + 1000 * 60 * 15; // 15 minutes
+  const logErrorAt = options.logErrorAfter?.getTime() ?? Date.now() + 1000 * 60 * 60; // 1 hour
   if (!options.timeout) {
     options.timeout = new Date(Date.now() + 1000 * 60 * 60 * 2); // 2 hours
   }
