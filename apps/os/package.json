@@ -125,7 +125,6 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/tar-stream": "3.1.4",
     "autoevals": "0.0.131",
-    "better-wait-until": "0.0.9",
     "drizzle-kit": "^0.31.5",
     "evalite": "0.14.6",
     "tailwindcss": "^4.1.14",
