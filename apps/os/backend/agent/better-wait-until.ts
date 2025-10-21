@@ -1,4 +1,4 @@
-import { Agent, type Connection, type ConnectionContext, type AgentContext } from "agents";
+import { Agent, type Connection, type ConnectionContext } from "agents";
 import { DurableObject } from "cloudflare:workers";
 import { logger } from "../tag-logger.ts";
 
