@@ -209,7 +209,10 @@ function betterAwait(
     websocketPromise
       .then((response) => {
         try {
-          if (response.webSocket?.readyState === WebSocket.CLOSING || response.webSocket?.readyState === WebSocket.CLOSED) {
+          if (
+            response.webSocket?.readyState === WebSocket.CLOSING ||
+            response.webSocket?.readyState === WebSocket.CLOSED
+          ) {
             return;
           }
           response.webSocket?.close();
