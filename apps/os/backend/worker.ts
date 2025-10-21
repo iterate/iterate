@@ -61,6 +61,17 @@ app.use("*", async (c, next) => {
   return next();
 });
 
+app.use("*", async (c, next) => {
+  const requestTags = {
+    userId: c.var.session?.user?.id,
+    path: c.req.path,
+    httpMethod: c.req.method,
+    url: c.req.url,
+    traceId: typeid("req").toString(),
+  };
+  return logger.run(requestTags, () => next());
+});
+
 app.use(
   "*",
   cors({
@@ -75,19 +86,6 @@ app.onError((err, c) => {
   logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
   // Return error response
   return c.json({ error: "Internal Server Error" }, 500);
-});
-
-// Sets up the logger with request metadata
-app.use("*", async (c, next) => {
-  return logger.run(
-    {
-      userId: c.var.session?.user?.id,
-      httpMethod: c.req.method,
-      url: c.req.url,
-      traceId: typeid("req").toString(),
-    },
-    () => next(),
-  );
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
