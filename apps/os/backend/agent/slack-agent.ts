@@ -123,7 +123,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
       if (!result.ok) {
         // log error but don't crash DO
-        logger.error(`Failed to update Slack status: ${result.error}`);
+        logger.error(`Failed to update Slack status`, result.error);
         return;
       }
 
