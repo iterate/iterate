@@ -180,24 +180,12 @@ export const slackSlice = defineAgentCoreSlice<{
             (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
           );
 
-          import("../tag-logger.ts").then(({ logger }) => {
-            logger.info(
-              `[slack-slice] type=${payload.event?.type}, user=${slackUserId}, isParticipant=${userIsJoinedParticipant}, participantCount=${Object.keys(next.participants || {}).length}`,
-            );
-          });
-
           // hack to make evals/e2e tests get responses for now
           // TODO: remove! we need to just send the approrpriate add participant events for the test users
           if (slackUserId === "UALICE" || slackUserId === "UBOB") userIsJoinedParticipant = true;
         }
 
         const finalTrigger = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
-
-        import("../tag-logger.ts").then(({ logger }) => {
-          logger.info(
-            `[slack-slice] Final LLM trigger decision: shouldTriggerLLM=${shouldTriggerLLM}, paused=${next.paused}, userIsParticipant=${userIsJoinedParticipant}, FINAL=${finalTrigger}`,
-          );
-        });
 
         next.triggerLLMRequest = finalTrigger;
         break;
