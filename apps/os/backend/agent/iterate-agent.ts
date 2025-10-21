@@ -14,7 +14,6 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
-import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -53,6 +52,7 @@ import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-ut
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
+import { KeepAliveAgent as CloudflareAgent } from "./keep-alive-agent.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
