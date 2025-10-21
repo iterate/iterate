@@ -470,28 +470,19 @@ export const integrationsPlugin = () =>
               });
               user = existingUser.user;
 
-              // For existing users in login flow, find their primary estate to link Slack to
-              if (!estateId) {
-                const userEstates = await db
-                  .select({ estateId: schema.estate.id })
-                  .from(schema.estate)
-                  .innerJoin(
-                    schema.organizationUserMembership,
-                    eq(
-                      schema.estate.organizationId,
-                      schema.organizationUserMembership.organizationId,
-                    ),
-                  )
-                  .where(eq(schema.organizationUserMembership.userId, user.id))
-                  .limit(1);
-
-                if (userEstates[0]) {
-                  estateId = userEstates[0].estateId;
-                  logger.info(
-                    `[Slack OAuth] Existing user login - auto-selected primary estate ${estateId}`,
-                  );
-                }
-              }
+              // REMOVED AUTO-LINKING: Do not auto-link bot accounts to existing estates during signup.
+              // This was causing bot accounts to be linked to multiple estates when users were
+              // synced across organizations via Slack Connect.
+              //
+              // Bot accounts should only be linked when:
+              // 1. estateId is explicitly provided in OAuth state (link flow from integrations page)
+              // 2. A new estate is being created during signup (handled by redirect.tsx)
+              //
+              // If estateId is not provided, the signup flow in redirect.tsx will create a new estate
+              // and link the bot account to it properly.
+              logger.info(
+                `[Slack OAuth] Existing user login - estateId=${estateId ?? "will be created in redirect flow"}`,
+              );
             } else {
               user = await ctx.context.internalAdapter.createUser({
                 email: userInfo.email,

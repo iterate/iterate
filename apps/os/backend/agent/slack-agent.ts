@@ -632,10 +632,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
 
     const eventsLists = await Promise.all([
-      slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
+      // Handle both 'message' and 'app_mention' events for participant joining
+      (slackEvent?.type === "message" || slackEvent?.type === "app_mention") &&
+      "user" in slackEvent &&
+      slackEvent.user
         ? this.getParticipantJoinedEvents(slackEvent.user, botUserId)
         : Promise.resolve([]),
-      slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
+      (slackEvent?.type === "message" || slackEvent?.type === "app_mention") &&
+      "text" in slackEvent &&
+      slackEvent.text
         ? this.getParticipantMentionedEvents(
             slackEvent.text,
             "user" in slackEvent ? slackEvent.user : undefined,
@@ -646,14 +651,24 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     ]);
     events.push(...eventsLists.flat());
 
+    // Determine if we should trigger LLM for this event
+    // Support both 'message' and 'app_mention' event types
+    const shouldTriggerLLMForThisEvent =
+      shouldTriggerLLM &&
+      (slackEvent.type === "message" || slackEvent.type === "app_mention") &&
+      !isBotMessageThatShouldBeIgnored;
+
+    logger.info(
+      `[extractEventsFromWebhook] estate=${this.databaseRecord.estateId}, type=${slackEvent.type}, participant_events=${eventsLists[0].length}, shouldTriggerLLM=${shouldTriggerLLM}, shouldTriggerLLMForThisEvent=${shouldTriggerLLMForThisEvent}`,
+    );
+
     events.push({
       type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
         payload: slackWebhookPayload as {},
         updateThreadIds: true,
       },
-      triggerLLMRequest:
-        shouldTriggerLLM && slackEvent.type === "message" && !isBotMessageThatShouldBeIgnored,
+      triggerLLMRequest: shouldTriggerLLMForThisEvent,
       idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
     });
 
@@ -1077,6 +1092,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         slackChannelId: channelId,
         slackThreadId: threadTs,
         slackChannel,
+        estateName: this.estate.name,
       },
       triggerLLMRequest: false,
     });
@@ -1187,6 +1203,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     ) {
       return;
     }
+
+    // Extract bot user ID from this webhook's authorizations
     const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
 
     if (!botUserId) {
@@ -1284,8 +1302,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl: sendInput.unfurl,
     });
 
-    console.log("SEND INPUT", sendInput);
-
     const result = await this.slackAPI.chat.postMessage({
       channel: this.agentCore.state.slackChannelId as string,
       thread_ts: this.agentCore.state.slackThreadId as string,
@@ -1294,8 +1310,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       unfurl_links: doUnfurl,
       unfurl_media: doUnfurl,
     });
-
-    console.log("RESULT", result);
 
     if (!result.ok) {
       throw new Error(`Failed to send Slack message: ${result.error}`);

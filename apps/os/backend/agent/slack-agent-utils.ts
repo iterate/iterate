@@ -23,7 +23,10 @@ export function isBotMentionedInMessage(
     return false;
   }
 
-  if (slackEvent.type === "message") {
+  // Handle both 'message' and 'app_mention' events
+  // app_mention events are sent when a bot is @-mentioned
+  // message events may also contain @-mentions
+  if (slackEvent.type === "message" || slackEvent.type === "app_mention") {
     if ("text" in slackEvent && slackEvent.text) {
       const mentionedUserIds = getMentionedExternalUserIds(slackEvent.text);
       // Check if ANY of the mentioned users match ANY of the bot user IDs
