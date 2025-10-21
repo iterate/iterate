@@ -235,7 +235,12 @@ function getLogger() {
   const getLogger =
     (level: TagLogger.Level) =>
     (metadata: {}, ...args: unknown[]) => {
-      let toLog: Record<string, unknown> = { level, metadata: { ...metadata }, args };
+      let toLog: Record<string, unknown> = {
+        level,
+        metadata: { ...metadata },
+        args,
+        levelNumber: TagLogger.levels[level],
+      };
       if (typeof args[0] === "string") {
         // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
         toLog = { message: args[0], ...toLog };
