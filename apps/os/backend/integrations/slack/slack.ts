@@ -54,32 +54,6 @@ async function botUserIdToEstateId(db: DB, botUserId: string): Promise<string | 
 }
 
 /**
- * Gets all bot user IDs that belong to a specific estate.
- * Used for detecting if any of this estate's bots were mentioned.
- *
- * @param db - Database connection
- * @param estateId - Estate ID
- * @returns Array of bot user IDs for this estate
- */
-async function getEstatesBotUserIds(db: DB, estateId: string): Promise<string[]> {
-  const results = await db
-    .select({ botUserId: schema.account.accountId })
-    .from(schema.account)
-    .innerJoin(
-      schema.estateAccountsPermissions,
-      eq(schema.account.id, schema.estateAccountsPermissions.accountId),
-    )
-    .where(
-      and(
-        eq(schema.account.providerId, "slack-bot"),
-        eq(schema.estateAccountsPermissions.estateId, estateId),
-      ),
-    );
-
-  return results.map((r) => r.botUserId);
-}
-
-/**
  * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
  *
  * Resolution order:
@@ -292,30 +266,43 @@ export async function ensureUserSynced(params: {
           },
         });
 
-      // Determine role
-      // For trial estates, everyone is a member (keep it simple)
-      // For regular estates, use standard role logic
+      const existingMembership = await tx.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(schema.organizationUserMembership.userId, user.id),
+          eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+        ),
+      });
+
       const role = isTrial
         ? "member"
-        : isExternalUser
-          ? "external"
-          : userInfo?.is_ultra_restricted || userInfo?.is_restricted
-            ? "guest"
-            : "member";
+        : existingMembership
+          ? existingMembership.role
+          : isExternalUser
+            ? "external"
+            : userInfo?.is_ultra_restricted || userInfo?.is_restricted
+              ? "guest"
+              : "member";
 
-      logger.info(
-        `[JIT Sync] Assigning role="${role}" to user ${slackUserId} (isTrial=${isTrial}, isExternal=${isExternalUser})`,
-      );
-
-      // Add to organization
-      await tx
-        .insert(schema.organizationUserMembership)
-        .values({
-          organizationId: estate.organizationId,
-          userId: user.id,
-          role: role as "guest" | "member" | "external",
-        })
-        .onConflictDoNothing();
+      if (!existingMembership) {
+        await tx
+          .insert(schema.organizationUserMembership)
+          .values({
+            organizationId: estate.organizationId,
+            userId: user.id,
+            role: role as "guest" | "member" | "external",
+          })
+          .onConflictDoNothing();
+      } else if (isTrial && existingMembership.role !== "member") {
+        await tx
+          .update(schema.organizationUserMembership)
+          .set({ role: "member" })
+          .where(
+            and(
+              eq(schema.organizationUserMembership.userId, user.id),
+              eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+            ),
+          );
+      }
     });
 
     logger.info(
@@ -374,29 +361,153 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  // Get message metadata first to extract the channel
   const messageMetadata = await getMessageMetadata(body.event, db);
 
-  // Resolve estate ID, checking channel override first if we have a channel
+  const estateIdsToProcess = await determineEstateIdsToProcess({
+    db,
+    body,
+    messageMetadata,
+  });
+
+  if (estateIdsToProcess.length === 0) {
+    return c.text("ok");
+  }
+
+  // Process the webhook for each estate independently
+  await Promise.all(
+    estateIdsToProcess.map((estateId) =>
+      processWebhookForEstate({
+        db,
+        body,
+        messageMetadata,
+        estateId,
+      }),
+    ),
+  );
+
+  return c.text("ok");
+});
+
+async function determineEstateIdsToProcess({
+  db,
+  body,
+  messageMetadata,
+}: {
+  db: DB;
+  body: SlackWebhookPayload;
+  messageMetadata: { channel?: string; threadTs?: string; ts?: string };
+}): Promise<string[]> {
+  if (!body.event) {
+    return [];
+  }
+
+  if (messageMetadata.threadTs) {
+    const existingRoutes = await db.query.agentInstanceRoute.findMany({
+      where: sql`${schema.agentInstanceRoute.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstanceRoute.routingKey} LIKE ${"%-slack-%"}`,
+      with: {
+        agentInstance: {
+          columns: {
+            estateId: true,
+          },
+        },
+      },
+    });
+
+    if (existingRoutes.length > 0) {
+      const estateIds = [...new Set(existingRoutes.map((r) => r.agentInstance.estateId))];
+      return estateIds;
+    }
+  }
+
+  // Channel overrides (for trial estates) take priority over bot mention routing
+  if (messageMetadata.channel && body.team_id) {
+    const channelOverrideEstateId = await slackTeamIdToEstateId({
+      db,
+      teamId: body.team_id,
+      channelId: messageMetadata.channel,
+    });
+
+    if (channelOverrideEstateId) {
+      const channelOverride = await db.query.slackChannelEstateOverride.findFirst({
+        where: and(
+          eq(schema.slackChannelEstateOverride.slackChannelId, messageMetadata.channel),
+          eq(schema.slackChannelEstateOverride.slackTeamId, body.team_id),
+        ),
+      });
+
+      if (channelOverride) {
+        return [channelOverrideEstateId];
+      }
+    }
+  }
+
+  const mentionedBotIds =
+    body.event.type === "message" || body.event.type === "app_mention"
+      ? "text" in body.event && body.event.text
+        ? getMentionedExternalUserIds(body.event.text)
+        : []
+      : [];
+
+  if (mentionedBotIds.length > 0) {
+    const mentionedBotEstates = await Promise.all(
+      mentionedBotIds.map((botId: string) => botUserIdToEstateId(db, botId)),
+    );
+
+    const validEstateIds = [
+      ...new Set(mentionedBotEstates.filter((id): id is string => id !== null)),
+    ];
+
+    if (validEstateIds.length > 0) {
+      return validEstateIds;
+    }
+  }
+
+  if (!body.team_id) {
+    return [];
+  }
+
   const estateId = await slackTeamIdToEstateId({
     db,
     teamId: body.team_id,
     channelId: messageMetadata.channel,
   });
 
-  if (!estateId) {
-    return c.text("ok");
+  if (estateId) {
+    const isDM = "channel_type" in body.event && body.event.channel_type === "im";
+    if (isDM) {
+      return [estateId];
+    }
+  }
+
+  return [];
+}
+
+async function processWebhookForEstate({
+  db,
+  body,
+  messageMetadata,
+  estateId,
+}: {
+  db: DB;
+  body: SlackWebhookPayload;
+  messageMetadata: { channel?: string; threadTs?: string; ts?: string };
+  estateId: string;
+}) {
+  if (!body.event) {
+    return;
   }
 
   if (
-    body.event?.type === "message" &&
+    body.event.type === "message" &&
     "subtype" in body.event &&
-    body.event.subtype === "channel_join"
+    body.event.subtype === "channel_join" &&
+    "channel" in body.event &&
+    body.event.channel
   ) {
     const joinedUserId = body.event.user;
     const botUserId = extractBotUserIdFromAuthorizations(body);
 
-    if (joinedUserId === botUserId) {
+    if (joinedUserId === botUserId && botUserId && body.team_id) {
       waitUntil(
         handleBotChannelJoin({
           db,
@@ -410,17 +521,9 @@ slackApp.post("/webhook", async (c) => {
   }
 
   waitUntil(
-    // deterministically react to the webhook as early as possible (eyes emoji)
     getSlackAccessTokenForEstate(db, estateId).then(async (slackAccount) => {
       if (slackAccount) {
-        // Get all bot user IDs for this estate (simple join query!)
-        const estateBotUserIds = await getEstatesBotUserIds(db, estateId);
-        await reactToSlackWebhook(
-          body,
-          new WebClient(slackAccount.accessToken),
-          messageMetadata,
-          estateBotUserIds,
-        );
+        await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
     }),
   );
@@ -442,7 +545,7 @@ slackApp.post("/webhook", async (c) => {
   );
 
   if (!messageMetadata.threadTs) {
-    return c.text("ok");
+    return;
   }
 
   const routingKey = getRoutingKey({
@@ -450,7 +553,6 @@ slackApp.post("/webhook", async (c) => {
     threadTs: messageMetadata.threadTs,
   });
 
-  // look up in the database to get all the agents by routing key (hydrate estate/org/config)
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
     where: eq(schema.agentInstanceRoute.routingKey, routingKey),
     with: {
@@ -469,45 +571,7 @@ slackApp.post("/webhook", async (c) => {
 
   if (rest.length > 0) {
     logger.error(`Multiple agents found for routing key ${routingKey}`);
-    return c.text("ok");
-  }
-
-  // For new threads (no existing agent route), verify bot mention or DM
-  // In Slack Connect, webhooks are sent to ALL connected workspaces,
-  // so we must verify a bot from THIS estate was actually mentioned
-  if (!agentRoute) {
-    // Extract mentioned bot IDs from message text
-    const mentionedBotIds =
-      body.event.type === "message" || body.event.type === "app_mention"
-        ? "text" in body.event && body.event.text
-          ? getMentionedExternalUserIds(body.event.text)
-          : []
-        : [];
-
-    logger.info(
-      `[Bot Routing] estate=${estateId}, mentionedBotIds=[${mentionedBotIds.join(", ")}]`,
-    );
-
-    // Look up which estates own the mentioned bots
-    const mentionedBotEstates = await Promise.all(
-      mentionedBotIds.map((botId: string) => botUserIdToEstateId(db, botId)),
-    );
-
-    logger.info(
-      `[Bot Routing] mentionedBotIds → estates: ${mentionedBotIds.map((id, i) => `${id}→${mentionedBotEstates[i]}`).join(", ")}`,
-    );
-
-    // Process if: any mentioned bot belongs to this estate OR it's a DM
-    const botMentionedForThisEstate = mentionedBotEstates.includes(estateId);
-    const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-
-    logger.info(
-      `[Bot Routing] botMentionedForThisEstate=${botMentionedForThisEstate}, isDM=${isDM}, decision=${botMentionedForThisEstate || isDM ? "PROCESS" : "SKIP"}`,
-    );
-
-    if (!botMentionedForThisEstate && !isDM) {
-      return c.text("ok");
-    }
+    return;
   }
 
   const agentStub = agentRoute?.agentInstance?.estate
@@ -527,9 +591,7 @@ slackApp.post("/webhook", async (c) => {
       });
 
   waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
-
-  return c.text("ok");
-});
+}
 
 slackApp.post("/interactive", async (c) => {
   return c.text("ok");
@@ -544,37 +606,40 @@ export async function reactToSlackWebhook(
   slackWebhookPayload: SlackWebhookPayload,
   slackAPI: WebClient,
   messageMetadata: { channel?: string; ts?: string },
-  estateBotUserIds: string[],
 ) {
-  // Use the estate's bot user IDs to detect if our bots were mentioned
-  const botUserIds = estateBotUserIds;
+  const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
 
-  if (botUserIds.length === 0 || !slackWebhookPayload.event) {
+  if (!botUserId || !slackWebhookPayload.event) {
     return;
   }
 
   const event = slackWebhookPayload.event;
 
-  // Add eyes reaction when any bot is mentioned in a human message
-  // This handles multi-party Slack Connect where bots from different workspaces might be mentioned
-  // Support both 'message' and 'app_mention' event types
   if (
-    (event.type === "message" || event.type === "app_mention") &&
-    "user" in event &&
-    event.user &&
-    typeof event.user === "string" &&
-    !botUserIds.includes(event.user) && // Not from any of the bots
-    messageMetadata.channel &&
-    messageMetadata.ts &&
-    isBotMentionedInMessage(event, botUserIds)
+    !messageMetadata.channel ||
+    !messageMetadata.ts ||
+    !("user" in event) ||
+    event.user === botUserId
   ) {
+    return;
+  }
+
+  const shouldReact =
+    event.type === "app_mention" ||
+    (event.type === "message" && isBotMentionedInMessage(event, botUserId));
+
+  if (shouldReact) {
     await slackAPI.reactions
       .add({
         channel: messageMetadata.channel,
         timestamp: messageMetadata.ts,
         name: "eyes",
       })
-      .catch((error) => logger.error("[reactToSlackWebhook] Failed to add eyes reaction", error));
+      .catch((error) => {
+        if (!(error instanceof Error && error.message.includes("already_reacted"))) {
+          logger.error("[SlackAgent] Failed to add eyes reaction", error);
+        }
+      });
   }
 }
 

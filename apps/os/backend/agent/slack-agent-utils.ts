@@ -13,25 +13,22 @@ export function getMentionedExternalUserIds(body: string) {
 
 export function isBotMentionedInMessage(
   slackEvent: { user?: string; text?: string; type?: string },
-  botUserIds: string | string[],
+  botUserId: string,
 ): boolean {
-  // Normalize to array for consistent handling
-  const botIds = Array.isArray(botUserIds) ? botUserIds : [botUserIds];
-
-  // Skip messages from any of the bots - they shouldn't be treated as mentions
-  if ("user" in slackEvent && slackEvent.user && botIds.includes(slackEvent.user)) {
+  // Skip messages from the bot itself - they shouldn't be treated as mentions
+  if ("user" in slackEvent && slackEvent.user === botUserId) {
     return false;
   }
 
-  // Handle both 'message' and 'app_mention' events
-  // app_mention events are sent when a bot is @-mentioned
-  // message events may also contain @-mentions
-  if (slackEvent.type === "message" || slackEvent.type === "app_mention") {
+  // app_mention events are always mentions of the bot
+  if (slackEvent.type === "app_mention") {
+    return true;
+  }
+
+  // For message events, check if the text contains a mention
+  if (slackEvent.type === "message") {
     if ("text" in slackEvent && slackEvent.text) {
-      const mentionedUserIds = getMentionedExternalUserIds(slackEvent.text);
-      // Check if ANY of the mentioned users match ANY of the bot user IDs
-      // This handles Slack Connect scenarios where multiple bot installations exist
-      return mentionedUserIds.some((mentionedId) => botIds.includes(mentionedId));
+      return getMentionedExternalUserIds(slackEvent.text).includes(botUserId);
     }
   }
   return false;
@@ -144,32 +141,12 @@ export function slackWebhookEventToIdempotencyKey(
  * According to the Slack Events API documentation, the authorizations field contains
  * one installation of the app that the event is visible to, with is_bot indicating
  * whether it's a bot user.
- *
- * Note: In single-workspace scenarios, this returns the only bot. In Slack Connect
- * scenarios with multiple workspaces, this returns the first bot found. For comprehensive
- * Slack Connect support, use extractAllBotUserIdsFromAuthorizations instead.
  */
 export function extractBotUserIdFromAuthorizations(
   payload: SlackWebhookPayload,
 ): string | undefined {
   const botAuthorization = payload.authorizations?.find((auth) => auth.is_bot);
   return botAuthorization?.user_id;
-}
-
-/**
- * Extracts ALL bot user IDs from a Slack webhook payload's authorizations field.
- * In Slack Connect scenarios with multiple parties, the authorizations array can contain
- * multiple bot installations (one per connected workspace). This function returns all of them.
- *
- * Use this when you need to handle multi-party Slack Connect scenarios where any of the
- * bot installations might be mentioned or involved in the interaction.
- */
-export function extractAllBotUserIdsFromAuthorizations(payload: SlackWebhookPayload): string[] {
-  return (
-    payload.authorizations
-      ?.filter((auth) => auth.is_bot && auth.user_id)
-      .map((auth) => auth.user_id!) ?? []
-  );
 }
 
 export function shouldUnfurlSlackMessage(params: {

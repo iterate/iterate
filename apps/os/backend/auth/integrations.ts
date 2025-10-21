@@ -567,7 +567,7 @@ export const integrationsPlugin = () =>
             ),
           });
 
-          let botAccount = existingBotAccount;
+          let botAccount: typeof existingBotAccount = existingBotAccount;
           if (botAccount) {
             logger.info(`[Slack OAuth] Updating existing bot account ${botAccount.id}`);
             await ctx.context.internalAdapter.updateAccount(botAccount.id, {
@@ -577,13 +577,24 @@ export const integrationsPlugin = () =>
             });
           } else {
             logger.info(`[Slack OAuth] Creating new bot account for user ${user.id}`);
-            botAccount = await ctx.context.internalAdapter.createAccount({
+            const createdAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
               userId: user.id,
               accessToken: tokens.access_token,
               scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
+            if (!createdAccount) {
+              return ctx.json({ error: "Failed to create bot account" });
+            }
+            botAccount = {
+              ...createdAccount,
+              password: createdAccount.password ?? null,
+              refreshToken: createdAccount.refreshToken ?? null,
+              idToken: createdAccount.idToken ?? null,
+              accessTokenExpiresAt: createdAccount.accessTokenExpiresAt ?? null,
+              refreshTokenExpiresAt: createdAccount.refreshTokenExpiresAt ?? null,
+            };
           }
 
           if (!botAccount) {

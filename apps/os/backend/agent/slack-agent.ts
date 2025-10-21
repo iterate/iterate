@@ -18,6 +18,7 @@ import {
 } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import { ensureUserSynced } from "../integrations/slack/slack.ts";
+import { slackChannelOverrideExists } from "../utils/trial-channel-setup.ts";
 import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -714,6 +715,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         and(
           eq(providerUserMapping.providerId, "slack-bot"),
           eq(providerUserMapping.externalId, slackUserId),
+          eq(providerUserMapping.estateId, estateId),
           eq(estate.id, estateId),
         ),
       )
@@ -792,13 +794,20 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       })
       .from(providerUserMapping)
       .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
-      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
-      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
-      .innerJoin(estate, eq(organization.id, estate.organizationId))
+      .innerJoin(estate, eq(providerUserMapping.estateId, estate.id))
+      .innerJoin(organization, eq(estate.organizationId, organization.id))
+      .innerJoin(
+        organizationUserMembership,
+        and(
+          eq(user.id, organizationUserMembership.userId),
+          eq(organizationUserMembership.organizationId, organization.id),
+        ),
+      )
       .where(
         and(
           eq(providerUserMapping.providerId, "slack-bot"),
           eq(providerUserMapping.estateId, estateId),
+          eq(estate.id, estateId),
           inArray(providerUserMapping.externalId, slackUserIds),
         ),
       );
@@ -810,6 +819,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Adds a participant to the conversation when they send a message.
    * This is crucial for MCP personal connections to work properly.
    */
+
   public async getParticipantJoinedEvents(
     slackUserId: string,
     botUserId?: string,
@@ -902,6 +912,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       return [];
     }
 
+    const isTrial = await slackChannelOverrideExists(this.db, estateId);
+    const role =
+      isTrial && (userInfo.orgRole === "external" || userInfo.orgRole === "guest")
+        ? "member"
+        : userInfo.orgRole;
+
     const internalUser = {
       id: userInfo.userId,
       email: userInfo.userEmail,
@@ -917,7 +933,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
-          role: userInfo.orgRole,
+          role: role,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
@@ -1032,14 +1048,21 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       }
     }
 
+    const isTrial = await slackChannelOverrideExists(this.db, estateId);
+
     return userMappings.map((userMapping): ParticipantMentionedEvent => {
+      const role =
+        isTrial && (userMapping.orgRole === "external" || userMapping.orgRole === "guest")
+          ? "member"
+          : userMapping.orgRole;
+
       return {
         type: "CORE:PARTICIPANT_MENTIONED",
         data: {
           internalUserId: userMapping.userId,
           email: userMapping.userEmail,
           displayName: userMapping.userName,
-          role: userMapping.orgRole,
+          role: role,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
