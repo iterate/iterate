@@ -85,6 +85,7 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+import { createHash } from "node:crypto";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1741,9 +1742,125 @@ export class IterateAgent<
       },
     };
     const result = await this.exec(newInput);
-    // TODO: filter the json here and make it token efficient
+
+    // codex exec supports a --json mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
+
+    // Supported event types:
+
+    // thread.started - when a thread is started or resumed.
+    // turn.started - when a turn starts. A turn encompasses all events between the user message and the assistant response.
+    // turn.completed - when a turn completes; includes token usage.
+    // turn.failed - when a turn fails; includes error details.
+    // item.started/item.updated/item.completed - when a thread item is added/updated/completed.
+    // error - when the stream reports an unrecoverable error; includes the error message.
+    // Supported item types:
+
+    // agent_message - assistant message.
+    // reasoning - a summary of the assistant's thinking.
+    // command_execution - assistant executing a command.
+    // file_change - assistant making file changes.
+    // mcp_tool_call - assistant calling an MCP tool.
+    // web_search - assistant performing a web search.
+    // todo_list - the agent's running plan when the plan tool is active, updating as steps change.
+    // Typically, an agent_message is added at the end of the turn.
+
+    // Sample output:
+
+    // {"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
+    // {"type":"turn.started"}
+    // {"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
+    // {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
+    // {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
+    // {"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
+    // {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
+    // {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
+
+    const parsedOutput = result.output?.stdout
+      .split("\n")
+      .map((line: string): string | null => {
+        try {
+          const parsed = JSON.parse(line);
+          if (typeof parsed === "object" && parsed.type) {
+            switch (parsed.type) {
+              case "thread.started":
+                return null; // don't need to return this to the iterate agent
+              case "turn.started":
+                return null; // don't need to return this to the iterate agent
+              case "turn.completed":
+                return null; // don't need to return this to the iterate agent
+              case "item.started":
+                return null; // we don't need to add this to the output because we should already have a completed or failed item
+              case "turn.failed":
+                return line; // return the raw line  on failure
+              case "item.updated":
+                // TODO: implement support for these, if the actually exist
+                logger.warn("item.updated message encountered", parsed);
+                return truncateLongString(JSON.stringify(parsed), 250);
+              case "item.completed":
+                switch (parsed.item.type) {
+                  case "file_change":
+                    if (parsed.item.status === "completed") {
+                      return parsed.item.changes
+                        ? `<files changed>\n${JSON.stringify(parsed.item.changes)}</files changed>`
+                        : (parsed.item.text ?? parsed.item);
+                    }
+                    logger.warn("unknown file change status:", parsed.item);
+                    return line;
+                  case "agent_message":
+                    return parsed.item.text ?? parsed.item;
+                  case "reasoning":
+                    return `<reasoning>\n${truncateLongString(parsed.item.text ?? parsed.item, 250)}\n</reasoning>`;
+                  case "command_execution":
+                    if (parsed.item.status === "completed") {
+                      if (parsed.item.command) {
+                        const { command, aggregated_output, exit_code } = parsed.item;
+                        const shortCommand = truncateLongString(command);
+                        const shortAggregatedOutput = truncateLongString(aggregated_output);
+                        return `<command executed>\n<command>${shortCommand}</command>\n<aggregated_output>${shortAggregatedOutput}</aggregated_output>\n<exit_code>${exit_code}</exit_code>\n</command executed>`;
+                      }
+                      return parsed.item.text ?? parsed.item;
+                    }
+                    logger.warn("unknown command execution status:", parsed.item);
+                    return line;
+                  case "web_search":
+                    return `<web search>\n${truncateLongString(parsed.item, 250)}\n</web search>`;
+                  case "todo_list":
+                    return `<todo list>\n${parsed.item}\n</todo list>`;
+                  case "mcp_tool_call":
+                    return `<mcp tool call>\n${truncateLongString(parsed.item, 250)}\n</mcp tool call>`;
+                  default:
+                    logger.warn("unknown item.completed type:", parsed.item.type);
+                    return parsed.item;
+                }
+              case "error":
+                return parsed;
+              default:
+                logger.warn("unknown event type:", parsed.type);
+                return line;
+            }
+          } else {
+            return line;
+          }
+        } catch (err) {
+          return line;
+        }
+      })
+      .filter(Boolean)
+      .map((line) => {
+        let str = typeof line === "string" ? line : JSON.stringify(line);
+        // Remove leading/trailing asterisks, double, and single quotes from each line
+        str = str.replace(/\\n/g, "\n"); // Replace literal '\n' with actual newlines
+        str = str.replace(/^[*"'\s]+|[*"'\s]+$/g, ""); // Remove leading/trailing asterisks, quotes, and whitespace
+        str = str.replace(/\n{2,}/g, "\n"); // Collapse consecutive newlines into a single newline
+        return str;
+      });
+
     return {
       ...result,
+      output: {
+        ...result.output,
+        stdout: parsedOutput?.join("\n"),
+      },
     };
   }
 
@@ -1817,7 +1934,9 @@ export class IterateAgent<
       const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
       logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
-      const sessionDir = `/tmp/session-${sessionId}`;
+      // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
+      // TODO: switch to using branch names instead of session ids
+      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}`;
       try {
         await sandbox.mkdir(sessionDir, { recursive: true });
       } catch (err) {
@@ -1984,7 +2103,7 @@ export class IterateAgent<
             switch (event.type) {
               case "stdout":
                 stdout += event.data;
-                logger.info(`Exec stdout: ${event.data}`);
+                logger.debug(`Exec stdout: ${event.data}`);
                 break;
               case "stderr":
                 stderr += event.data;
@@ -2308,4 +2427,46 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
+}
+
+function hashSessionId(sessionId: string): string {
+  // Use sha256 for good entropy, then take first 5 bytes (40 bits = 8 base32 chars)
+  const hash = createHash("sha256").update(sessionId).digest();
+  const hashSlice = hash.subarray(0, 5); // first 5 bytes
+  // Use base32 for file path safe encoding
+  const base32 = "abcdefghijklmnopqrstuvwxyz234567";
+  let out = "";
+  let bits = 0,
+    value = 0,
+    i = 0;
+  while (i < hashSlice.length || bits > 0) {
+    if (bits < 5) {
+      if (i < hashSlice.length) {
+        value = (value << 8) | hashSlice[i++];
+        bits += 8;
+      } else {
+        // Padding zero bits if done with all bytes
+        value <<= 5 - bits;
+        bits = 5;
+      }
+    }
+    out += base32[(value >>> (bits - 5)) & 31];
+    bits -= 5;
+    if (out.length === 8) break; // Only 8 characters
+  }
+  return out;
+}
+
+/**
+ * Truncates a long string to show first N and last N characters with a truncation marker in between.
+ * @param str The string to truncate
+ * @param maxLength The maximum length before truncation (default: 100)
+ * @param showChars The number of characters to show from start and end (default: 50)
+ * @returns The original string if short enough, or truncated version with "...[truncated]..." in the middle
+ */
+function truncateLongString(str: string, maxLength = 100): string {
+  const showChars = Math.floor(maxLength / 2);
+  return str.length > maxLength
+    ? str.slice(0, showChars) + "...[truncated]..." + str.slice(-showChars)
+    : str;
 }
