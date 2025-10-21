@@ -62,33 +62,16 @@ app.use("*", async (c, next) => {
 });
 
 // Sets up the logger with request metadata
-app.use("*", async (c, next) =>
-  logger.run(
-    [
-      `userId=${c.var.session?.user?.id || undefined}`,
-      `path=${c.req.path}`,
-      `httpMethod=${c.req.method}`,
-      `url=${c.req.url}`,
-      `traceId=${typeid("req").toString()}`,
-    ],
+app.use("*", async (c, next) => {
+  return logger.run(
+    {
+      userId: c.var.session?.user?.id,
+      httpMethod: c.req.method,
+      url: c.req.url,
+      traceId: typeid("req").toString(),
+    },
     () => next(),
-  ),
-);
-
-app.use(
-  "*",
-  cors({
-    credentials: true,
-    origin: (c) => c,
-  }),
-);
-
-// Error tracking with PostHog
-app.onError((err, c) => {
-  // Log the error with cause-chaining and contextual suffix
-  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
-  // Return error response
-  return c.json({ error: "Internal Server Error" }, 500);
+  );
 });
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));

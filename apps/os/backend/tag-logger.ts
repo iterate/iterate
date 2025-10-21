@@ -78,24 +78,6 @@ export class TagLogger {
     return this.context.tags as readonly string[];
   }
 
-  /** 1-tuple of concatenated tags, or empty array if there are no tags. useful for `console.info(...logger.prefix, 123, 456)` */
-  get prefixOLD(): [] | [Record<string, string>] {
-    if (this.tags.length === 0) return [];
-    const string = this.tagsString();
-    const record = this.tagsRecord();
-    // add magic symbol so that when using `console` as the implementation, the prefix is printed as a concise but readable string, not a big fat object
-    // in environments like cloudflare logs/aws cloudwatch, this won't be used, and it'll be a nicely queryable fat object
-    Object.defineProperty(record, Symbol.for("nodejs.util.inspect.custom"), {
-      value: () => string,
-      enumerable: false,
-    });
-    Object.defineProperty(record, "toString", {
-      value: () => string,
-      enumerable: false,
-    });
-    return [record];
-  }
-
   static tagsToString(tags: readonly string[]) {
     return tags.map((c) => `[${c}]`).join("");
   }
@@ -119,8 +101,16 @@ export class TagLogger {
     return this.tagsRecord()[name];
   }
 
-  run<T>(tag: string | string[], fn: () => T): T {
-    return this._storage.run({ ...this.context, tags: this.context.tags.concat(tag) }, fn);
+  run<T>(tags: string | string[] | Record<string, string | undefined>, fn: () => T): T {
+    let array: string[] = [];
+    if (Array.isArray(tags)) array = tags;
+    else if (typeof tags === "string") array = [tags];
+    else {
+      array = Object.entries(tags).flatMap(([key, value]) =>
+        value !== undefined ? [`${key}=${value}`] : [],
+      );
+    }
+    return this._storage.run({ ...this.context, tags: this.context.tags.concat(array) }, fn);
   }
 
   timed = Object.fromEntries(
