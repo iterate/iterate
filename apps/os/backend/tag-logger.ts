@@ -75,7 +75,7 @@ export class TagLogger {
   }
 
   get tags() {
-    return this.context.tags;
+    return this.context.tags as readonly string[];
   }
 
   /** 1-tuple of concatenated tags, or empty array if there are no tags. useful for `console.info(...logger.prefix, 123, 456)` */
@@ -96,10 +96,10 @@ export class TagLogger {
     return [record];
   }
 
-  static tagsToString(tags: string[]) {
+  static tagsToString(tags: readonly string[]) {
     return tags.map((c) => `[${c}]`).join("");
   }
-  static tagsToRecord(tags: string[]) {
+  static tagsToRecord(tags: readonly string[]) {
     return Object.fromEntries(new URLSearchParams(tags.join("&")));
   }
 
