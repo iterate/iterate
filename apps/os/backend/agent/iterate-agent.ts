@@ -1,4 +1,5 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
+import { createHash } from "node:crypto";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -85,7 +86,6 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
-import { createHash } from "node:crypto";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1842,6 +1842,7 @@ export class IterateAgent<
             return line;
           }
         } catch (err) {
+          logger.warn("error parsing codex output", err);
           return line;
         }
       })
