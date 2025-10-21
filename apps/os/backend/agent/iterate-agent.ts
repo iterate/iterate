@@ -1776,7 +1776,7 @@ export class IterateAgent<
     // {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
 
     const parsedOutput = result.output?.stdout
-      .split("\n")
+      ?.split("\n")
       .map((line: string): string | null => {
         try {
           const parsed = JSON.parse(line);
