@@ -9,12 +9,22 @@ export namespace TagLogger {
     logs: Array<{
       level: TagLogger.Level;
       timestamp: Date;
-      prefix: readonly Record<string, string>[];
+      tags: string[];
       args: unknown[];
     }>;
   };
   /** "driver" for tag-logger. Expected to be responsible for printing logs to stdout/stdin. But if you want to email your grandma when we log an error, go for it. */
-  export type Implementation = Pick<typeof console, TagLogger.Level>;
+  export type ConsoleImplementation = Pick<typeof console, TagLogger.Level>;
+  export type LogFn = (
+    this: TagLogger,
+    params: { level: TagLogger.Level; args: unknown[] },
+  ) => void;
+  export type Implementation = {
+    debug: LogFn;
+    info: LogFn;
+    warn: LogFn;
+    error: LogFn;
+  };
 }
 
 export class TagLogger {
@@ -25,7 +35,26 @@ export class TagLogger {
     "enterWith" // cloudflare workers doesn't support enterWith: https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/#caveats
   >;
 
-  constructor(readonly _implementation: TagLogger.Implementation = console) {}
+  /**
+   * A helper/reference implementation for if you want to use `console` and its various methods to print your logs.
+   * It appends the tags string to the beginning of the log message. It's useful for dev/test etc. where you want to
+   * use `console`'s default pretty-printing. Not so much if you want JSON logs.
+   *
+   * You could also pass in another compatible logger implementation, like `pino` or `winston` or `roarr` or whatever.
+   * But if you are finding it annoying, don't bother with it. Just write a simple function yourself.
+   */
+  static consoleLogFn(console: TagLogger.ConsoleImplementation): TagLogger.LogFn {
+    return function consoleLog({ level, args }) {
+      if (this.tags.length) console[level](this.tagsString(), ...args);
+      else console[level](...args);
+    };
+  }
+
+  private _logFn: TagLogger.LogFn;
+
+  constructor(logFn: TagLogger.LogFn = TagLogger.consoleLogFn(console)) {
+    this._logFn = logFn.bind(this);
+  }
 
   get context(): TagLogger.Context {
     return this._storage.getStore() || { level: "info", tags: [], logs: [] };
@@ -50,7 +79,7 @@ export class TagLogger {
   }
 
   /** 1-tuple of concatenated tags, or empty array if there are no tags. useful for `console.info(...logger.prefix, 123, 456)` */
-  get prefix(): [] | [Record<string, string>] {
+  get prefixOLD(): [] | [Record<string, string>] {
     if (this.tags.length === 0) return [];
     const string = this.tagsString();
     const record = this.tagsRecord();
@@ -67,12 +96,19 @@ export class TagLogger {
     return [record];
   }
 
+  static tagsToString(tags: string[]) {
+    return tags.map((c) => `[${c}]`).join("");
+  }
+  static tagsToRecord(tags: string[]) {
+    return Object.fromEntries(new URLSearchParams(tags.join("&")));
+  }
+
   tagsString() {
-    return this.tags.map((c) => `[${c}]`).join("");
+    return TagLogger.tagsToString(this.tags);
   }
 
   tagsRecord() {
-    return Object.fromEntries(new URLSearchParams(this.tags.join("&")));
+    return TagLogger.tagsToRecord(this.tags);
   }
 
   /**
@@ -118,10 +154,10 @@ export class TagLogger {
 
   _log({ level, args, forget }: { level: TagLogger.Level; args: unknown[]; forget?: boolean }) {
     if (!forget)
-      this.context.logs.push({ level, timestamp: new Date(), prefix: this.prefix, args });
+      this.context.logs.push({ level, timestamp: new Date(), tags: this.tags.slice(), args });
 
     if (this.levelNumber > TagLogger.levels[level]) return;
-    this._implementation[level](...this.prefix, ...args);
+    this._logFn({ level, args });
   }
 
   debug(...args: unknown[]) {
@@ -159,7 +195,7 @@ export class TagLogger {
       ...this.context.logs.map((log) => [
         log.timestamp.toISOString(),
         log.level,
-        ...log.prefix.map(String),
+        TagLogger.tagsToString(log.tags),
         ...log.args,
       ]),
     ];
@@ -235,34 +271,28 @@ class PosthogTagLogger extends TagLogger {
 
 function getLogger() {
   if (import.meta.env.MODE === "test") {
-    return new TagLogger(console);
+    return new TagLogger(TagLogger.consoleLogFn(console));
   }
   if (import.meta.env.DOPPLER_ENVIRONMENT === "dev") {
     // we don't currently have import.meta.env.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
-    return new PosthogTagLogger(console);
+    return new PosthogTagLogger(TagLogger.consoleLogFn(console));
   }
-  const prodLogger =
-    (level: TagLogger.Level) =>
-    (metadata: {}, ...args: unknown[]) => {
-      const toLog = {
-        // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
-        ...(typeof args[0] === "string" ? { message: args[0] } : {}),
-        level,
-        // spread metadata to get rid of Symbol.for("nodejs.util.inspect.custom") symbol
-        metadata: { ...metadata },
-        // raw args
-        args,
-        // Same info as `level` but useful for filtering by `levelNumber >= 2` (warn or worse) in dashboards
-        levelNumber: TagLogger.levels[level],
-      };
-      // eslint-disable-next-line no-console -- only usage
-      console.info(JSON.stringify(toLog, (_, value) => serializeError(value)));
+
+  return new TagLogger(function prodLog({ level, args }) {
+    const toLog = {
+      // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
+      ...(typeof args[0] === "string" ? { message: args[0] } : {}),
+      level,
+      // spread metadata to get rid of Symbol.for("nodejs.util.inspect.custom") symbol
+      metadata: this.tagsRecord(),
+      // raw args
+      args,
+      // Same info as `level` but useful for filtering by `levelNumber >= 2` (warn or worse) in dashboards
+      levelNumber: TagLogger.levels[level],
     };
-  return new TagLogger({
-    debug: prodLogger("debug"),
-    info: prodLogger("info"),
-    warn: prodLogger("warn"),
-    error: prodLogger("error"),
+    // for now let's use console.info always. But we could do `console[level](...)`, not sure if that'll work as well in Cloudflare/AWS CloudWatch/etc.
+    // eslint-disable-next-line no-console -- only usage
+    console.info(JSON.stringify(toLog, (_, value) => serializeError(value)));
   });
 }
 

@@ -4,16 +4,11 @@ import { TagLogger } from "./tag-logger.ts";
 
 const createLogger = () => {
   const calls: any[][] = [];
-  const mocks = {
-    info: (prefix: string, ...args: any[]) => calls.push(["info", inspect(prefix), ...args]),
-    warn: (prefix: string, ...args: any[]) => calls.push(["warn", inspect(prefix), ...args]),
-    error: (prefix: string, ...args: any[]) => calls.push(["error", inspect(prefix), ...args]),
-    debug: (prefix: string, ...args: any[]) => calls.push(["debug", inspect(prefix), ...args]),
-  };
   return {
-    mocks,
     calls,
-    logger: new TagLogger(mocks),
+    logger: new TagLogger(function ({ level, args }) {
+      calls.push([level, this.tagsString(), ...args]);
+    }),
   };
 };
 
