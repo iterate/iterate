@@ -61,6 +61,22 @@ app.use("*", async (c, next) => {
   return next();
 });
 
+app.use(
+  "*",
+  cors({
+    credentials: true,
+    origin: (c) => c,
+  }),
+);
+
+// Error tracking with PostHog
+app.onError((err, c) => {
+  // Log the error with cause-chaining and contextual suffix
+  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
+  // Return error response
+  return c.json({ error: "Internal Server Error" }, 500);
+});
+
 // Sets up the logger with request metadata
 app.use("*", async (c, next) => {
   return logger.run(
