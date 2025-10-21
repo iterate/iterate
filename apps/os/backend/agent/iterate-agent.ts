@@ -2467,6 +2467,10 @@ function hashSessionId(sessionId: string): string {
  */
 function truncateLongString(str: string, maxLength = 100): string {
   const showChars = Math.floor(maxLength / 2);
+
+  if (typeof str !== "string") {
+    str = JSON.stringify(str);
+  }
   return str.length > maxLength
     ? str.slice(0, showChars) + "...[truncated]..." + str.slice(-showChars)
     : str;
