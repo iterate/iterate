@@ -201,13 +201,31 @@ function betterAwait(
   let lastLoggedErrorAt = 0;
 
   let closureFlag = false;
-  promise
-    .finally(() => (closureFlag = true))
-    .then(() => {
-      websocketPromise.then((response) => {
-        response.webSocket!.close();
+  let hasCleanedUp = false;
+  const requestCleanup = (): void => {
+    if (hasCleanedUp) return;
+    hasCleanedUp = true;
+    // If socket is already available, close immediately. Otherwise, mark for close upon accept.
+    websocketPromise
+      .then((response) => {
+        try {
+          if (response.webSocket?.readyState === WebSocket.CLOSING || response.webSocket?.readyState === WebSocket.CLOSED) {
+            return;
+          }
+          response.webSocket?.close();
+        } catch (err) {
+          logError("Error closing WebSocket during cleanup", { err });
+        }
+      })
+      .catch(() => {
+        // If the websocket never connected, there's nothing to close; this is fine.
       });
-    });
+  };
+
+  promise.finally(() => {
+    closureFlag = true;
+    requestCleanup();
+  });
   let count = 0;
   const intervalFinished = new Promise<void>((resolve) => {
     const interval = setInterval(async () => {
@@ -218,6 +236,7 @@ function betterAwait(
         if (isPromiseFinished) {
           logDebug("promise is finished, clearing interval", { count, now: Date.now() });
           clearInterval(interval);
+          requestCleanup();
           resolve();
           return;
         }
@@ -251,6 +270,7 @@ function betterAwait(
             "[better-wait-until] Timeout reached, stopping keep alive interval. Your Durable Object may now be killed by Cloudflare and the promise may never resolve.",
           );
           clearInterval(interval);
+          requestCleanup();
           resolve();
           return;
         }
