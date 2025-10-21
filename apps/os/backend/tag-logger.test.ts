@@ -52,11 +52,11 @@ test("stores memories", () => {
       "[numero=dos][depth=prettydeep][depth=deeper]",
       "pretty big input",
       "memories:",
-      [expect.stringMatching(/^2.*/), "debug", { numero: "dos" }, "dbg-one", { input: 0.9 }],
+      [expect.stringMatching(/^2.*/), "debug", "[numero=dos]", "dbg-one", { input: 0.9 }],
       [
         expect.stringMatching(/^2.*/),
         "debug",
-        { depth: "prettydeep", numero: "dos" },
+        "[numero=dos][depth=prettydeep]",
         "dbg-two",
         { depth: 1 },
       ],

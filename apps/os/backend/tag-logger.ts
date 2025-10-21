@@ -60,6 +60,10 @@ export class TagLogger {
       value: () => string,
       enumerable: false,
     });
+    Object.defineProperty(record, "toString", {
+      value: () => string,
+      enumerable: false,
+    });
     return [record];
   }
 
@@ -143,6 +147,11 @@ export class TagLogger {
     this._log({ level: "error", args: args.concat(this.memories()) });
   }
 
+  /**
+   * Somewhat opinionated way to recall what has been logged so far in the current async context.
+   * Prepends with the string `memories:`, and each log is prepended with its timestamp, level, and prefix, converted to strings for readability.
+   * If you want to keep the prefix as a record, override this method.
+   */
   memories() {
     if (this.context.logs.length === 0) return [];
     return [
@@ -150,7 +159,7 @@ export class TagLogger {
       ...this.context.logs.map((log) => [
         log.timestamp.toISOString(),
         log.level,
-        ...log.prefix,
+        ...log.prefix.map(String),
         ...log.args,
       ]),
     ];
@@ -232,27 +241,28 @@ function getLogger() {
     // we don't currently have import.meta.env.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
     return new PosthogTagLogger(console);
   }
-  const getLogger =
+  const prodLogger =
     (level: TagLogger.Level) =>
     (metadata: {}, ...args: unknown[]) => {
-      let toLog: Record<string, unknown> = {
+      const toLog = {
+        // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
+        ...(typeof args[0] === "string" ? { message: args[0] } : {}),
         level,
+        // spread metadata to get rid of Symbol.for("nodejs.util.inspect.custom") symbol
         metadata: { ...metadata },
+        // raw args
         args,
+        // Same info as `level` but useful for filtering by `levelNumber >= 2` (warn or worse) in dashboards
         levelNumber: TagLogger.levels[level],
       };
-      if (typeof args[0] === "string") {
-        // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
-        toLog = { message: args[0], ...toLog };
-      }
       // eslint-disable-next-line no-console -- only usage
       console.info(JSON.stringify(toLog, (_, value) => serializeError(value)));
     };
   return new TagLogger({
-    debug: getLogger("debug"),
-    info: getLogger("info"),
-    warn: getLogger("warn"),
-    error: getLogger("error"),
+    debug: prodLogger("debug"),
+    info: prodLogger("info"),
+    warn: prodLogger("warn"),
+    error: prodLogger("error"),
   });
 }
 
