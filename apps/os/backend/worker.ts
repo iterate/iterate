@@ -63,7 +63,7 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const requestTags = {
-    userId: c.var.session?.user?.id,
+    userId: c.var.session?.user?.id || undefined,
     path: c.req.path,
     httpMethod: c.req.method,
     url: c.req.url,
