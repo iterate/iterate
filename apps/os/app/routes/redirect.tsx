@@ -12,6 +12,7 @@ import { createStripeCustomerAndSubscriptionForOrganization } from "../../backen
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { Route } from "./+types/redirect";
+import { appendEstatePath } from "./append-estate-path.ts";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
@@ -198,7 +199,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   // Determine where to redirect based on user's estates
-  const redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+  let redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+
+  if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
+    const estatePath = new URL(request.url).searchParams.get("estate_path");
+    if (estatePath) {
+      redirectPath = appendEstatePath(redirectPath, estatePath);
+    }
+  }
 
   throw redirect(redirectPath);
 }

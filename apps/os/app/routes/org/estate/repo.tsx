@@ -73,6 +73,7 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet.tsx";
 import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
+import { IDE } from "../../../components/ide.tsx";
 import {
   getGithubInstallationForEstate,
   getGithubInstallationToken,
@@ -517,6 +518,8 @@ function EstateContent({
           </CardContent>
         </Card>
       </div>
+
+      <IDE />
 
       {/* Build History */}
       {connectedRepo && (

@@ -219,7 +219,7 @@ export async function getUserEstateAccess(
   userId: string,
   estateId: string,
   organizationId?: string,
-): Promise<{ hasAccess: boolean; estate: any | null }> {
+) {
   const userWithEstates = await db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
     with: {
@@ -232,7 +232,7 @@ export async function getUserEstateAccess(
   });
 
   if (!userWithEstates?.length) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
   const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
@@ -241,15 +241,15 @@ export async function getUserEstateAccess(
   const userEstate = allEstates.find((e) => e.id === estateId);
 
   if (!userEstate) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
   // If organizationId is provided, verify it matches
   if (organizationId && userEstate.organizationId !== organizationId) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
-  return { hasAccess: true, estate: userEstate };
+  return { hasAccess: true, estate: userEstate } as const;
 }
 
 // Organization protected procedure that requires both authentication and organization membership
