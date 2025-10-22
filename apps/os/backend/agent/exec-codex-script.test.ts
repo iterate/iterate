@@ -10,15 +10,9 @@ describe("buildExecCodexResumeScript", () => {
       logPrefix: "[test]",
     });
 
-    expect(script).toContain(
-      'PROMPT="Perform the task described in /tmp/instructions-123.txt"',
-    );
-    expect(script).toContain(
-      'BASE_COMMAND=(codex exec --json --skip-git-repo-check)',
-    );
-    expect(script).toContain(
-      'if "${BASE_COMMAND[@]}" resume --last - <<< "$PROMPT"; then',
-    );
+    expect(script).toContain('PROMPT="Perform the task described in /tmp/instructions-123.txt"');
+    expect(script).toContain("BASE_COMMAND=(codex exec --json --skip-git-repo-check)");
+    expect(script).toContain('if "${BASE_COMMAND[@]}" resume --last - <<< "$PROMPT"; then');
     expect(script).toContain(
       'echo "[test] Resume failed with status ${resume_status}; starting a new session" >&2',
     );

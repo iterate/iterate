@@ -1,10 +1,6 @@
 export function buildExecCodexResumeScript({
   instructionsFilePath,
-  codexFlags = [
-    "--json",
-    "--dangerously-bypass-approvals-and-sandbox",
-    "--skip-git-repo-check",
-  ],
+  codexFlags = ["--json", "--dangerously-bypass-approvals-and-sandbox", "--skip-git-repo-check"],
   logPrefix = "[execCodex]",
 }: {
   instructionsFilePath: string;
