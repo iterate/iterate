@@ -203,13 +203,7 @@ export async function triggerGithubBuild(params: {
     estateId,
   });
 
-  // Use waitUntil to run in background (won't throw if not in request context)
-  try {
-    waitUntil(buildPromise);
-  } catch {
-    // If waitUntil is not available (e.g., in tests), just await the promise
-    await buildPromise;
-  }
+  waitUntil(buildPromise);
 
   return build;
 }

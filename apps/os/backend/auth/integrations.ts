@@ -8,6 +8,7 @@ import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
+import dedent from "dedent";
 import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
@@ -360,26 +361,27 @@ export const integrationsPlugin = () =>
         "/integrations/callback/slack-bot",
         {
           method: "GET",
-          query: z.object({
-            error: z
-              .string()
-              .meta({
+          query: z.union([
+            z.object({
+              error: z.string().meta({
                 description: "The error message, if any",
-              })
-              .optional(),
-            error_description: z
-              .string()
-              .meta({
-                description: "The error description, if any",
-              })
-              .optional(),
-            code: z.string().meta({
-              description: "The OAuth2 code",
+              }),
+              error_description: z
+                .string()
+                .meta({
+                  description: "The error description, if any",
+                })
+                .optional(),
             }),
-            state: z.string().meta({
-              description: "The state parameter from the OAuth2 request",
+            z.object({
+              code: z.string().meta({
+                description: "The OAuth2 code",
+              }),
+              state: z.string().meta({
+                description: "The state parameter from the OAuth2 request",
+              }),
             }),
-          }),
+          ]),
         },
         async (ctx) => {
           const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
@@ -391,6 +393,23 @@ export const integrationsPlugin = () =>
 
           const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
+
+          if ("error" in ctx.query) {
+            return new Response(
+              dedent`
+                <html>
+                  <body>
+                    <h1>Error</h1>
+                    <p>${ctx.query.error}</p>
+                    <p>${ctx.query.error_description}</p>
+                    <a href="/">Go back</a>
+                  </body>
+                </html>
+              `,
+              { status: 400 },
+              { headers: { "Content-Type": "text/html" } },
+            );
+          }
 
           const code = ctx.query.code;
 
