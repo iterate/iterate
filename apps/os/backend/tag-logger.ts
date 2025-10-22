@@ -113,12 +113,35 @@ export class TagLogger {
         value !== undefined ? [`${key}=${value}`] : [],
       );
     }
+    const { problems, fixed } = TagLogger.fixTags(array);
+    if (problems.length > 0) {
+      const msg = `Invalid tags: ${problems.join(", ")}. Avoid using special characters in tags`;
+      this.error(new Error(msg));
+      array = fixed;
+    }
+
     const newContext: TagLogger.Context = {
       ...this.context,
       logs: [...this.context.logs], // copy array since children will push to this
       tags: [...this.context.tags, ...array],
     };
     return this._storage.run(newContext, fn);
+  }
+
+  /** Takes an array of tags and makes sure they don't have special characters which will cause problems. Returns an array of problems, and the fixed array. */
+  static fixTags(array: string[]) {
+    const problems: string[] = [];
+    const fixed = array.map((tag) => {
+      const [name, ...rest] = tag.split("=");
+      const value = rest.join("=");
+      const encodedName = encodeURIComponent(name);
+      const encodedValue = encodeURIComponent(value);
+      if (encodedName !== name || encodedValue !== value) {
+        problems.push(tag);
+      }
+      return rest.length ? `${encodedName}=${encodedValue}` : encodedName;
+    });
+    return { problems, fixed };
   }
 
   timed = Object.fromEntries(
