@@ -47,12 +47,12 @@ export async function startSlackAgentInChannel(params: {
   }
   // If not found by name, assume slackChannelIdOrName is already the channel ID
 
-  const accessToken = await getSlackAccessTokenForEstate(db, estateId);
-  if (!accessToken) {
+  const slackAccount = await getSlackAccessTokenForEstate(db, estateId);
+  if (!slackAccount) {
     throw new Error("No Slack integration found for this estate");
   }
 
-  const slackAPI = new WebClient(accessToken);
+  const slackAPI = new WebClient(slackAccount.accessToken);
 
   const chatResult = await slackAPI.chat.postMessage({
     channel: channelId,

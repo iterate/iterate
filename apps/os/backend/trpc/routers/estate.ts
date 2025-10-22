@@ -5,7 +5,7 @@ import * as semver from "semver";
 import * as tarStream from "tar-stream";
 import * as fflate from "fflate";
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, notInArray } from "drizzle-orm";
 import dedent from "dedent";
 import { Octokit } from "octokit";
 import {
@@ -14,7 +14,14 @@ import {
   getUserEstateAccess,
   router,
 } from "../trpc.ts";
-import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
+import {
+  estate,
+  builds,
+  agentInstance,
+  iterateConfig,
+  organizationUserMembership,
+  organization,
+} from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
   getGithubInstallationToken,
@@ -24,6 +31,7 @@ import type { DB } from "../../db/client.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./github-schemas.ts";
 
@@ -175,14 +183,67 @@ export const estateRouter = router({
     // The estate is already validated and available in context
     const userEstate = ctx.estate;
 
+    // Fetch the organization
+    const org = await ctx.db.query.organization.findFirst({
+      where: eq(organization.id, userEstate.organizationId),
+    });
+
+    // Check if this is a trial estate
+    const isTrial = await slackChannelOverrideExists(ctx.db, userEstate.id);
+
     return {
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
+      isTrialEstate: isTrial,
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+          }
+        : undefined,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
     };
+  }),
+
+  // List all estates the user has access to
+  listAllForUser: protectedProcedure.query(async ({ ctx }) => {
+    // Get all organizations the user is a member of (excluding external and guest roles)
+    const memberships = await ctx.db.query.organizationUserMembership.findMany({
+      where: and(
+        eq(organizationUserMembership.userId, ctx.user.id),
+        notInArray(organizationUserMembership.role, ["external", "guest"]),
+      ),
+      with: {
+        organization: {
+          with: {
+            estates: true,
+          },
+        },
+      },
+    });
+
+    // Flatten estates from all organizations and check trial status
+    const estates = await Promise.all(
+      memberships.flatMap((membership) =>
+        membership.organization.estates.map(async (est) => ({
+          id: est.id,
+          name: est.name,
+          organizationId: est.organizationId,
+          organization: {
+            id: membership.organization.id,
+            name: membership.organization.name,
+          },
+          isTrialEstate: await slackChannelOverrideExists(ctx.db, est.id),
+          createdAt: est.createdAt,
+          updatedAt: est.updatedAt,
+        })),
+      ),
+    );
+
+    return estates;
   }),
 
   getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {

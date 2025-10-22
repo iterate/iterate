@@ -3,7 +3,11 @@ import { type RouteConfig, index, prefix, route, layout } from "@react-router/de
 export default [
   // Public routes (no auth required)
   route("/login", "./routes/login.tsx"),
+  route("/signup", "./routes/signup.tsx"),
   route("/no-access", "./routes/no-access.tsx"),
+
+  // Trial routes (requires auth but no specific org/estate context)
+  route("/trial/slack-connect", "./routes/trial/slack-connect.tsx"),
 
   // User settings route (requires auth but no specific org/estate context)
   route("/user-settings", "./routes/user-settings.tsx"),
@@ -19,6 +23,8 @@ export default [
     index("./routes/admin/index.tsx"),
     route("session-info", "./routes/admin/session-info.tsx"),
     route("slack-notification", "./routes/admin/slack-notification.tsx"),
+    route("slack-channel-routing", "./routes/admin/slack-channel-routing.tsx"),
+    route("trial-channel-setup", "./routes/admin/trial-channel-setup.tsx"),
     route("db-tools", "./routes/admin/db-tools.tsx"),
     route("trpc-tools", "./routes/admin/trpc-tools.tsx"),
     route("estates", "./routes/admin/estates.tsx"),

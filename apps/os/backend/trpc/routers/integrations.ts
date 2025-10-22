@@ -3,7 +3,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
-import { estateProtectedProcedure, router } from "../trpc.ts";
+import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
@@ -1137,15 +1137,15 @@ export const integrationsRouter = router({
     .query(async ({ ctx, input }) => {
       const { estateId, types, excludeArchived } = input;
 
-      const accessToken = await getSlackAccessTokenForEstate(ctx.db, estateId);
-      if (!accessToken) {
+      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, estateId);
+      if (!slackAccount) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "No Slack integration found for this estate",
         });
       }
 
-      const slackAPI = new WebClient(accessToken);
+      const slackAPI = new WebClient(slackAccount.accessToken);
       const result = await slackAPI.conversations.list({
         types: types,
         exclude_archived: excludeArchived,
@@ -1162,6 +1162,597 @@ export const integrationsRouter = router({
       return {
         success: true,
         channels: result.channels || [],
+      };
+    }),
+
+  // Slack Channel Estate Override Management
+  slackChannelOverrides: {
+    // List all overrides for an estate
+    list: estateProtectedProcedure.query(async ({ ctx, input }) => {
+      const { estateId } = input;
+
+      const overrides = await ctx.db.query.slackChannelEstateOverride.findMany({
+        where: eq(schemas.slackChannelEstateOverride.estateId, estateId),
+        orderBy: (override, { desc }) => [desc(override.createdAt)],
+      });
+
+      // Enrich with channel names if available
+      const enrichedOverrides = await Promise.all(
+        overrides.map(async (override) => {
+          const channel = await ctx.db.query.slackChannel.findFirst({
+            where: and(
+              eq(schemas.slackChannel.externalId, override.slackChannelId),
+              eq(schemas.slackChannel.estateId, estateId),
+            ),
+          });
+
+          return {
+            ...override,
+            channelName: channel?.name || null,
+          };
+        }),
+      );
+
+      return enrichedOverrides;
+    }),
+
+    // Create a new channel override
+    create: estateProtectedProcedure
+      .input(
+        z.object({
+          slackChannelId: z.string().describe("The Slack channel ID to override"),
+          slackTeamId: z.string().describe("The Slack team/workspace ID"),
+          targetEstateId: z.string().describe("The estate ID to route this channel to"),
+          reason: z.string().optional().describe("Optional reason for the override"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { slackChannelId, slackTeamId, targetEstateId, reason } = input;
+
+        // Verify the target estate exists and user has access
+        const targetEstate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, targetEstateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!targetEstate || targetEstate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to the target estate",
+          });
+        }
+
+        // Create the override
+        const [override] = await ctx.db
+          .insert(schemas.slackChannelEstateOverride)
+          .values({
+            slackChannelId,
+            slackTeamId,
+            estateId: targetEstateId,
+            reason: reason || `Created by ${ctx.user.name || ctx.user.email}`,
+            metadata: {
+              createdBy: ctx.user.id,
+              createdByEmail: ctx.user.email,
+            },
+          })
+          .returning();
+
+        logger.info(
+          `Created Slack channel override: channel=${slackChannelId}, team=${slackTeamId} → estate=${targetEstateId}`,
+        );
+
+        return override;
+      }),
+
+    // Update an existing override
+    update: estateProtectedProcedure
+      .input(
+        z.object({
+          overrideId: z.string().describe("The override ID to update"),
+          targetEstateId: z.string().optional().describe("New estate ID to route to"),
+          reason: z.string().optional().describe("Updated reason"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { overrideId, targetEstateId, reason } = input;
+
+        // Fetch the existing override
+        const existing = await ctx.db.query.slackChannelEstateOverride.findFirst({
+          where: eq(schemas.slackChannelEstateOverride.id, overrideId),
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Override not found",
+          });
+        }
+
+        // Verify user has access to the current estate
+        const currentEstate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, existing.estateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!currentEstate || currentEstate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to this override",
+          });
+        }
+
+        // If changing target estate, verify access
+        if (targetEstateId) {
+          const targetEstate = await ctx.db.query.estate.findFirst({
+            where: eq(schemas.estate.id, targetEstateId),
+            with: {
+              organization: {
+                with: {
+                  members: {
+                    where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                  },
+                },
+              },
+            },
+          });
+
+          if (!targetEstate || targetEstate.organization.members.length === 0) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: "You don't have access to the target estate",
+            });
+          }
+        }
+
+        // Update the override
+        const updateData: Partial<typeof schemas.slackChannelEstateOverride.$inferInsert> = {};
+        if (targetEstateId) updateData.estateId = targetEstateId;
+        if (reason) updateData.reason = reason;
+
+        const [updated] = await ctx.db
+          .update(schemas.slackChannelEstateOverride)
+          .set(updateData)
+          .where(eq(schemas.slackChannelEstateOverride.id, overrideId))
+          .returning();
+
+        logger.info(`Updated Slack channel override: ${overrideId}`);
+
+        return updated;
+      }),
+
+    // Delete an override
+    delete: estateProtectedProcedure
+      .input(
+        z.object({
+          overrideId: z.string().describe("The override ID to delete"),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        const { overrideId } = input;
+
+        // Fetch the existing override
+        const existing = await ctx.db.query.slackChannelEstateOverride.findFirst({
+          where: eq(schemas.slackChannelEstateOverride.id, overrideId),
+        });
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Override not found",
+          });
+        }
+
+        // Verify user has access
+        const estate = await ctx.db.query.estate.findFirst({
+          where: eq(schemas.estate.id, existing.estateId),
+          with: {
+            organization: {
+              with: {
+                members: {
+                  where: eq(schemas.organizationUserMembership.userId, ctx.user.id),
+                },
+              },
+            },
+          },
+        });
+
+        if (!estate || estate.organization.members.length === 0) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "You don't have access to this override",
+          });
+        }
+
+        // Delete the override
+        await ctx.db
+          .delete(schemas.slackChannelEstateOverride)
+          .where(eq(schemas.slackChannelEstateOverride.id, overrideId));
+
+        logger.info(`Deleted Slack channel override: ${overrideId}`);
+
+        return { success: true };
+      }),
+  },
+
+  /**
+   * Sets up a trial Slack Connect channel for a new user
+   * This is called from slack-connect.tsx, most commonly after Google Sign In with /trial/slack-connect redirect
+   *
+   * What this does:
+   * 1. Checks for existing trial with same email and reuses estate if found
+   * 2. Creates new organization/estate if no existing trial
+   * 3. Links estate to iterate's bot account
+   * 4. Creates provider estate mapping for the trial estate
+   * 5. Creates/reuses Slack Connect channel and sends invite
+   *
+   * Note: Trial estates are deduplicated by email. If a trial already exists for the given email,
+   * the existing estate will be reused and the current user will be added to its organization.
+   *
+   * User sync: External Slack Connect users are synced just-in-time when they send messages,
+   * handled automatically by slack-agent.ts JIT sync logic.
+   */
+  setupSlackConnectTrial: protectedProcedure
+    .input(
+      z.object({
+        userEmail: z.string().email(),
+        userName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { userEmail, userName } = input;
+      const userId = ctx.user.id;
+
+      logger.info(`Setting up Slack Connect trial for ${userEmail}`);
+
+      const iterateTeamId = ctx.env.SLACK_ITERATE_TEAM_ID;
+
+      // Look up user by email and check if they have a trial estate
+      // This follows the proper schema relationships: user → org → estate → override
+      const existingUserWithTrial = await ctx.db.query.user.findFirst({
+        where: eq(schemas.user.email, userEmail),
+        with: {
+          organizationUserMembership: {
+            with: {
+              organization: {
+                with: {
+                  estates: {
+                    with: {
+                      slackChannelEstateOverrides: {
+                        where: eq(schemas.slackChannelEstateOverride.slackTeamId, iterateTeamId),
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      // Find the first estate that has a trial override
+      let existingTrial:
+        | {
+            estate: typeof schemas.estate.$inferSelect & {
+              organization: typeof schemas.organization.$inferSelect;
+            };
+          }
+        | undefined;
+
+      if (existingUserWithTrial) {
+        for (const membership of existingUserWithTrial.organizationUserMembership) {
+          for (const estate of membership.organization.estates) {
+            if (estate.slackChannelEstateOverrides.length > 0) {
+              existingTrial = {
+                estate: {
+                  ...estate,
+                  organization: membership.organization,
+                },
+              };
+              break;
+            }
+          }
+          if (existingTrial) break;
+        }
+      }
+
+      let estate;
+      let organization;
+
+      if (existingTrial) {
+        estate = existingTrial.estate;
+        organization = estate.organization;
+        logger.info(
+          `Reusing existing trial estate ${estate.id} for ${userEmail} (organization ${organization.id})`,
+        );
+
+        const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
+          where: and(
+            eq(schemas.organizationUserMembership.organizationId, organization.id),
+            eq(schemas.organizationUserMembership.userId, userId),
+          ),
+        });
+
+        if (!existingMembership) {
+          await ctx.db.insert(schemas.organizationUserMembership).values({
+            organizationId: organization.id,
+            userId: userId,
+            role: "owner",
+          });
+          logger.info(`Added user ${userId} as owner of existing organization ${organization.id}`);
+        }
+      } else {
+        [organization] = await ctx.db
+          .insert(schemas.organization)
+          .values({
+            name: `${userName}'s Organization`,
+          })
+          .returning();
+
+        logger.info(`Created organization ${organization.id} for ${userName}`);
+
+        [estate] = await ctx.db
+          .insert(schemas.estate)
+          .values({
+            name: `${userName}'s Estate`,
+            organizationId: organization.id,
+          })
+          .returning();
+
+        logger.info(`Created estate ${estate.id} for ${userName}`);
+
+        await ctx.db.insert(schemas.organizationUserMembership).values({
+          organizationId: organization.id,
+          userId: userId,
+          role: "owner",
+        });
+
+        logger.info(`Added user ${userId} as owner of organization ${organization.id}`);
+      }
+
+      // 3. Get iterate's Slack workspace estate
+      const { getIterateSlackEstateId } = await import("../../utils/trial-channel-setup.ts");
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
+      if (!iterateEstateId) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Iterate Slack workspace estate not found",
+        });
+      }
+
+      // 4. Get iterate's bot account and token
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) {
+        throw new Error("Iterate Slack bot account not found");
+      }
+
+      // 5. Link trial user's estate to iterate's bot account
+      // This gives the trial estate permission to use iterate's bot token for API calls
+      await ctx.db
+        .insert(schemas.estateAccountsPermissions)
+        .values({
+          accountId: iterateBotAccount.accountId,
+          estateId: estate.id,
+        })
+        .onConflictDoNothing();
+
+      logger.info(`Linked trial estate ${estate.id} to iterate's bot account`);
+
+      // 6. Create provider estate mapping to link trial estate to iterate's Slack workspace
+      await ctx.db
+        .insert(schemas.providerEstateMapping)
+        .values({
+          internalEstateId: estate.id,
+          externalId: iterateTeamId,
+          providerId: "slack-bot",
+          providerMetadata: {
+            isTrial: true,
+            createdVia: "trial_signup",
+          },
+        })
+        .onConflictDoNothing();
+
+      logger.info(`Created provider estate mapping for trial estate ${estate.id}`);
+
+      // 7. Create trial channel and send invite
+      // Note: User sync happens just-in-time when external users send messages
+      const { createTrialSlackConnectChannel } = await import("../../utils/trial-channel-setup.ts");
+      const result = await createTrialSlackConnectChannel({
+        db: ctx.db,
+        userEstateId: estate.id,
+        userEmail,
+        userName,
+        iterateTeamId,
+        iterateBotToken: iterateBotAccount.accessToken,
+      });
+
+      if (!result.success) {
+        throw new Error(`Something went wrong while setting up trial`, { cause: result.error });
+      }
+
+      logger.info(
+        `Successfully set up trial for ${userEmail}: channel ${result.channelName} → estate ${estate.id}`,
+      );
+
+      return {
+        success: true,
+        estateId: estate.id,
+        organizationId: organization.id,
+        channelId: result.channelId,
+        channelName: result.channelName,
+      };
+    }),
+
+  /**
+   * Upgrades a trial estate to a full Slack installation
+   * This removes all trial-specific configuration so the user can connect their own Slack workspace
+   */
+  upgradeTrialToFullInstallation: protectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId } = input;
+
+      logger.info(`Upgrading trial estate ${estateId} to full installation`);
+
+      // Verify this is actually a trial estate
+      const estate = await ctx.db.query.estate.findFirst({
+        where: eq(schemas.estate.id, estateId),
+        columns: {
+          organizationId: true,
+        },
+      });
+
+      if (!estate) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Estate not found",
+        });
+      }
+
+      const { getSlackChannelOverrideId } = await import("../../utils/trial-channel-setup.ts");
+      const trialChannelId = await getSlackChannelOverrideId(ctx.db, estateId);
+      if (!trialChannelId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "This estate is not a trial estate",
+        });
+      }
+
+      // Verify user has permission to modify this estate
+      const membership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(schemas.organizationUserMembership.organizationId, estate.organizationId),
+          eq(schemas.organizationUserMembership.userId, ctx.user.id),
+        ),
+      });
+
+      if (!membership) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You don't have permission to modify this estate",
+        });
+      }
+
+      const iterateTeamId = ctx.env.SLACK_ITERATE_TEAM_ID;
+      if (!iterateTeamId) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Iterate Slack workspace not configured",
+        });
+      }
+
+      // Perform cleanup in a transaction
+      await ctx.db.transaction(async (tx) => {
+        // 1. Delete the channel override
+        await tx
+          .delete(schemas.slackChannelEstateOverride)
+          .where(
+            and(
+              eq(schemas.slackChannelEstateOverride.estateId, estateId),
+              eq(schemas.slackChannelEstateOverride.slackTeamId, iterateTeamId),
+            ),
+          );
+
+        logger.info(`Deleted channel override for estate ${estateId}`);
+
+        // 2. Delete the provider estate mapping
+        await tx
+          .delete(schemas.providerEstateMapping)
+          .where(
+            and(
+              eq(schemas.providerEstateMapping.internalEstateId, estateId),
+              eq(schemas.providerEstateMapping.providerId, "slack-bot"),
+            ),
+          );
+
+        logger.info(`Deleted provider estate mapping for estate ${estateId}`);
+
+        // 3. Delete all old Slack provider user mappings
+        // These were created during trial and will be stale after connecting own workspace
+        await tx
+          .delete(schemas.providerUserMapping)
+          .where(
+            and(
+              eq(schemas.providerUserMapping.estateId, estateId),
+              eq(schemas.providerUserMapping.providerId, "slack-bot"),
+            ),
+          );
+
+        logger.info(`Deleted Slack provider user mappings for estate ${estateId}`);
+
+        // 4. Get iterate's estate to find the bot account
+        const iterateEstateResult = await tx
+          .select({
+            estateId: schemas.providerEstateMapping.internalEstateId,
+          })
+          .from(schemas.providerEstateMapping)
+          .where(
+            and(
+              eq(schemas.providerEstateMapping.externalId, iterateTeamId),
+              eq(schemas.providerEstateMapping.providerId, "slack-bot"),
+            ),
+          )
+          .limit(1);
+
+        const iterateEstateId = iterateEstateResult[0]?.estateId;
+
+        if (iterateEstateId) {
+          const iterateBotAccount = await tx
+            .select({
+              accountId: schemas.account.id,
+            })
+            .from(schemas.estateAccountsPermissions)
+            .innerJoin(
+              schemas.account,
+              eq(schemas.estateAccountsPermissions.accountId, schemas.account.id),
+            )
+            .where(
+              and(
+                eq(schemas.estateAccountsPermissions.estateId, iterateEstateId),
+                eq(schemas.account.providerId, "slack-bot"),
+              ),
+            )
+            .limit(1);
+
+          if (iterateBotAccount[0]) {
+            // 5. Delete the estate account permission
+            await tx
+              .delete(schemas.estateAccountsPermissions)
+              .where(
+                and(
+                  eq(schemas.estateAccountsPermissions.estateId, estateId),
+                  eq(schemas.estateAccountsPermissions.accountId, iterateBotAccount[0].accountId),
+                ),
+              );
+
+            logger.info(`Deleted estate account permission for estate ${estateId}`);
+          }
+        }
+      });
+
+      logger.info(`Successfully upgraded trial estate ${estateId} to full installation`);
+
+      return {
+        success: true,
       };
     }),
 });

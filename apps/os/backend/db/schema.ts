@@ -180,6 +180,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
   slackChannels: many(slackChannel),
+  slackChannelEstateOverrides: many(slackChannelEstateOverride),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -232,11 +233,25 @@ export const providerUserMapping = pgTable(
       .text()
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    externalId: t.text().notNull(),
+    externalId: t.text().notNull(), // Slack user ID (e.g., U_NICK_123, USLACKBOT)
+    // OPTIONAL: Which estate's sync discovered/created this mapping
+    // This represents the "observing estate's perspective" on this user.
+    // Nullable to allow existing rows from before this field was added.
+    estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
+    // OPTIONAL: The user's actual home team ID, only set if external to the estate's workspace
+    // - null = user is from the estate's own OAuth'd workspace (internal user)
+    // - set = user is from a different workspace discovered via Slack Connect (external user)
+    // Example: Estate A (owns T_ITERATE) syncs Slack Connect user from T_STRIPE
+    //   → estateId = estate_A, externalUserTeamId = T_STRIPE
+    externalUserTeamId: t.text(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.providerId, t.externalId)],
+  (t) => [
+    // Global uniqueness: (provider, estate, externalId)
+    // Each external user can have only one mapping per estate
+    uniqueIndex().on(t.providerId, t.estateId, t.externalId),
+  ],
 );
 export const providerUserMappingRelations = relations(providerUserMapping, ({ one }) => ({
   internalUser: one(user, {
@@ -293,6 +308,55 @@ export const slackChannelRelations = relations(slackChannel, ({ one }) => ({
     references: [estate.id],
   }),
 }));
+
+/**
+ * Override table for routing Slack channels to specific estates.
+ * When a webhook is received for a channel with an entry in this table,
+ * the specified estate will be used instead of the default team_id → estate mapping.
+ *
+ * Use cases:
+ * - Route specific channels from a workspace to different estates
+ * - Handle shared Slack Connect channels with custom routing
+ * - Testing and development with specific channel routing
+ */
+export const slackChannelEstateOverride = pgTable(
+  "slack_channel_estate_override",
+  (t) => ({
+    id: iterateId("sceo"),
+    // The Slack channel ID to override routing for
+    slackChannelId: t.text().notNull(),
+    // The Slack team/workspace ID (for context/validation)
+    slackTeamId: t.text().notNull(),
+    // The estate ID to route this channel to
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    // Optional: reason for the override (for documentation)
+    reason: t.text(),
+    // Optional: metadata (e.g., who created it, when, why)
+    metadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Ensure each channel can only have one override
+    uniqueIndex().on(t.slackChannelId, t.slackTeamId),
+    // Index for fast lookups by channel
+    index().on(t.slackChannelId),
+    // Index for finding all overrides for an estate
+    index().on(t.estateId),
+  ],
+);
+
+export const slackChannelEstateOverrideRelations = relations(
+  slackChannelEstateOverride,
+  ({ one }) => ({
+    estate: one(estate, {
+      fields: [slackChannelEstateOverride.estateId],
+      references: [estate.id],
+    }),
+  }),
+);
 
 export const organizationUserMembership = pgTable(
   "organization_user_membership",
