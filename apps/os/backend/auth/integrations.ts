@@ -384,6 +384,12 @@ export const integrationsPlugin = () =>
           ]),
         },
         async (ctx) => {
+          if ("error" in ctx.query) {
+            throw ctx.redirect(
+              `${import.meta.env.VITE_PUBLIC_URL}/api/auth/error?error=${ctx.query.error}&error_description=${ctx.query.error_description}`,
+            );
+          }
+
           const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
           if (!value) {
             return ctx.json({ error: "Invalid state" });
@@ -393,23 +399,6 @@ export const integrationsPlugin = () =>
 
           const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
-
-          if ("error" in ctx.query) {
-            return new Response(
-              dedent`
-                <html>
-                  <body>
-                    <h1>Error</h1>
-                    <p>${ctx.query.error}</p>
-                    <p>${ctx.query.error_description}</p>
-                    <a href="/">Go back</a>
-                  </body>
-                </html>
-              `,
-              { status: 400 },
-              { headers: { "Content-Type": "text/html" } },
-            );
-          }
 
           const code = ctx.query.code;
 
