@@ -241,6 +241,9 @@ async function setupDurableObjects() {
       context: "./backend/sandbox",
       platform: "linux/amd64",
     },
+    instanceType: "standard-4",
+    maxInstances: 10,
+    // todo: ask sam to support rollout_active_grace_period
     adopt: true,
   });
 
