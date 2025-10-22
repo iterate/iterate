@@ -53,14 +53,14 @@ export function LoginProviders() {
   };
 
   return (
-    <div className="w-full space-y-3">
+    <div className="w-full space-y-4">
       <Button
         onClick={handleGoogleSignIn}
         variant="outline"
         size="lg"
-        className="w-full h-12 text-base font-medium"
+        className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
       >
-        <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+        <svg className="mr-3 h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
           <path
             d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
             fill="#4285F4"
@@ -84,9 +84,9 @@ export function LoginProviders() {
         onClick={handleSlackSignIn}
         variant="outline"
         size="lg"
-        className="w-full h-12 text-base font-medium"
+        className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
       >
-        <img src="/slack.svg" alt="Slack" className="mr-2 h-5 w-5" />
+        <img src="/slack.svg" alt="Slack" className="mr-3 h-6 w-6" />
         Continue with Slack
       </Button>
       {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (
@@ -94,7 +94,7 @@ export function LoginProviders() {
           onClick={handleTestAdminUserSignIn}
           variant="outline"
           size="lg"
-          className="w-full h-12 text-base font-medium"
+          className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
         >
           Continue as test admin user
         </Button>
