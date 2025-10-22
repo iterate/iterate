@@ -33,6 +33,7 @@ import {
   AlertDialogTrigger,
 } from "../../components/ui/alert-dialog.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
+import { authClient } from "../../lib/auth-client.ts";
 import type { Route } from "./+types/onboarding.ts";
 import type { loader as orgLoader } from "./loader.tsx";
 
@@ -526,7 +527,23 @@ function SelectRepositoryStep({ estateId, goTo, goBack }: StepProps) {
   );
 }
 
-function SlackStep({ organizationId }: StepProps) {
+function SlackStep({ organizationId, estateId }: StepProps) {
+  const trpc = useTRPC();
+
+  const { data } = useSuspenseQuery(trpc.integrations.list.queryOptions({ estateId: estateId }));
+
+  // Check if Slack bot is connected
+  const slackBotIntegration = data.oauthIntegrations.find((i) => i.id === "slack-bot");
+  const isConnected = slackBotIntegration?.isConnected || false;
+
+  const handleConnect = async () => {
+    const result = await authClient.integrations.link.slackBot({
+      estateId: estateId,
+      callbackURL: `/${organizationId}/onboarding/5`,
+    });
+    window.location.href = result.url.toString();
+  };
+
   const handleOpenSlack = () => {
     window.open("slack://open", "_blank", "noopener,noreferrer");
   };
@@ -537,14 +554,30 @@ function SlackStep({ organizationId }: StepProps) {
         <CardContent className="px-12 py-16">
           <div className="text-center space-y-8">
             <h2 className="text-4xl font-semibold">You're all set!</h2>
-            <Button
-              size="lg"
-              className="h-auto w-full max-w-md px-12 py-6 text-xl"
-              onClick={handleOpenSlack}
-            >
-              <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
-              Continue in Slack
-            </Button>
+            {isConnected ? (
+              <Button
+                size="lg"
+                className="h-auto w-full max-w-md px-12 py-6 text-xl"
+                onClick={handleOpenSlack}
+              >
+                <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
+                Continue in Slack
+              </Button>
+            ) : (
+              <div className="space-y-4">
+                <p className="text-muted-foreground">
+                  Connect Slack to start chatting with iterate
+                </p>
+                <Button
+                  size="lg"
+                  className="h-auto w-full max-w-md px-12 py-6 text-xl"
+                  onClick={handleConnect}
+                >
+                  <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
+                  Connect Slack
+                </Button>
+              </div>
+            )}
             <div>
               <Button
                 variant="ghost"
