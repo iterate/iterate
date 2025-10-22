@@ -102,6 +102,9 @@ export class TagLogger {
   }
 
   run<T>(tags: string | string[] | Record<string, string | undefined>, fn: () => T): T {
+    // todo: consider:
+    // 1) adding a debug log when entering a child context like `this.debug("child context started", tags)`
+    // 2) assigning the child context an id, could be useful for debugging
     let array: string[] = [];
     if (Array.isArray(tags)) array = tags;
     else if (typeof tags === "string") array = [tags];
@@ -110,7 +113,12 @@ export class TagLogger {
         value !== undefined ? [`${key}=${value}`] : [],
       );
     }
-    return this._storage.run({ ...this.context, tags: this.context.tags.concat(array) }, fn);
+    const newContext: TagLogger.Context = {
+      ...this.context,
+      logs: [...this.context.logs], // copy array since children will push to this
+      tags: [...this.context.tags, ...array],
+    };
+    return this._storage.run(newContext, fn);
   }
 
   timed = Object.fromEntries(

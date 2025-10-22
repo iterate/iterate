@@ -25,14 +25,14 @@ test("logger", () => {
 test("stores memories", () => {
   const { logger, calls } = createLogger();
   const one = (input: number) => {
-    logger.debug("dbg-one", { input });
+    logger.debug("dbg-a", { input });
     logger.run("depth=prettydeep", () => {
-      logger.debug("dbg-two", { depth: 1 });
+      logger.debug("dbg-b", { depth: 1 });
       logger.run("depth=deeper", () => {
-        if (input > 0.5) {
-          logger.warn("pretty big input");
-        }
+        logger.debug("dbg-c", { depth: 2 });
+        if (input > 0.5) logger.warn("something concerning happened");
       });
+      if (input > 0.5) logger.warn("maybe something bad happened");
     });
   };
   logger.run("numero=uno", () => one(0.1));
@@ -41,21 +41,30 @@ test("stores memories", () => {
 
   logger.run("numero=dos", () => one(0.9));
 
+  logger.warn("i have a bad feeling about this");
+
+  const isoDateRegex = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z/;
+  const expectDate = expect.stringMatching(isoDateRegex);
   expect(calls).toEqual([
     [
       "warn",
       "[numero=dos][depth=prettydeep][depth=deeper]",
-      "pretty big input",
+      "something concerning happened",
       "memories:",
-      [expect.stringMatching(/^2.*/), "debug", "[numero=dos]", "dbg-one", { input: 0.9 }],
-      [
-        expect.stringMatching(/^2.*/),
-        "debug",
-        "[numero=dos][depth=prettydeep]",
-        "dbg-two",
-        { depth: 1 },
-      ],
+      [expectDate, "debug", "[numero=dos]", "dbg-a", { input: 0.9 }],
+      [expectDate, "debug", "[numero=dos][depth=prettydeep]", "dbg-b", { depth: 1 }],
+      [expectDate, "debug", "[numero=dos][depth=prettydeep][depth=deeper]", "dbg-c", { depth: 2 }],
     ],
+    [
+      "warn",
+      "[numero=dos][depth=prettydeep]",
+      "maybe something bad happened",
+      "memories:",
+      [expectDate, "debug", "[numero=dos]", "dbg-a", { input: 0.9 }],
+      [expectDate, "debug", "[numero=dos][depth=prettydeep]", "dbg-b", { depth: 1 }],
+      // no dbg-c because it was in a child context
+    ],
+    ["warn", "", "i have a bad feeling about this"],
   ]);
 });
 
