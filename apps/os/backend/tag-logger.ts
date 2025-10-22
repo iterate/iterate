@@ -276,7 +276,7 @@ function getLogger() {
     return new PosthogTagLogger(TagLogger.consoleLogFn(console));
   }
 
-  return new TagLogger(function prodLog({ level, args }) {
+  return new PosthogTagLogger(function prodLog({ level, args }) {
     const toLog = {
       // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
       ...(typeof args[0] === "string" ? { message: args[0] } : {}),
