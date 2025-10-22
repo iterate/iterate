@@ -308,7 +308,7 @@ async function deployWorker() {
     domains: isProduction
       ? ["os.iterate.com", "os.iterateproxy.com"]
       : isStaging
-        ? ["os-staging.iterate.dev", "os-staging.iterateproxy.dev"]
+        ? ["os-staging.iterate.com", "os-staging.iterateproxy.com"]
         : [],
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
