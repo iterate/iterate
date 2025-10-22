@@ -22,6 +22,7 @@ const app = await alchemy("iterate", {
 });
 
 const isProduction = app.stage === "prd";
+const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
 // Either a PR or someone deploying locally
 const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
@@ -37,6 +38,12 @@ async function verifyDopplerEnvironment() {
     if (isProduction && dopplerConfig.environment !== "prd") {
       throw new Error(
         `You are trying to deploy to production, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+      );
+    }
+
+    if (isStaging && dopplerConfig.environment !== "stg") {
+      throw new Error(
+        `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
       );
     }
 
@@ -194,10 +201,10 @@ async function setupDatabase() {
     };
   }
 
-  if (isProduction) {
+  if (isProduction || isStaging) {
     // In production, we use the existing production planetscale db without any branching
     const planetscaleDb = await Database("planetscale-db", {
-      name: "production",
+      name: isStaging ? "staging" : "production",
       clusterSize: "PS_10",
       adopt: true,
       arch: "x86",
@@ -297,8 +304,12 @@ async function deployWorker() {
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
     },
-    name: isProduction ? "os" : undefined,
-    domains: isProduction ? ["os.iterate.com", "os.iterateproxy.com"] : [],
+    name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
+    domains: isProduction
+      ? ["os.iterate.com", "os.iterateproxy.com"]
+      : isStaging
+        ? ["os-staging.iterate.dev", "os-staging.iterateproxy.dev"]
+        : [],
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
     crons: ["0 0 * * *"],
