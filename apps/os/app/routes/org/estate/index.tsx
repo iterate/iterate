@@ -324,7 +324,7 @@ export default function Home() {
             <div className="flex gap-3 flex-wrap">
               <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
                 <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
-                {isTrialEstate ? "Open Slack Connect channel" : "Message @iterate on Slack"}
+                Message @iterate on Slack
               </Button>
               {isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
             </div>
