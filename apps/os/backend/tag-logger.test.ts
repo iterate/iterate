@@ -79,6 +79,12 @@ describe("basic logging", () => {
             "url": "http://test.com",
             "userId": undefined,
           },
+          "rawArgs": [
+            "test message",
+            {
+              "data": 123,
+            },
+          ],
         },
       ]
     `);

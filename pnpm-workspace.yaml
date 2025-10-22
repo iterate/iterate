@@ -10,8 +10,8 @@ minimumReleaseAgeExclude:
   - drizzle-kit
   - miniflare
   - wrangler
-  - better-wait-until
   - '@cloudflare/sandbox'
+  - alchemy
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

@@ -91,7 +91,12 @@ async function getDistinctIdForSliceEventData({
           : null;
 
         if (!participant) {
-          throw new Error(`Participant not found for user ${event.user}`);
+          // Participant not yet added (edge case: event processed before PARTICIPANT_JOINED)
+          // Use a fallback ID instead of crashing
+          return {
+            internalUserId: `SLACK[${event.user}]`,
+            identity: { type: "user", email: null },
+          };
         }
 
         const [internalUserId, participantData] = participant;

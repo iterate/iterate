@@ -270,19 +270,19 @@ export const integrationsPlugin = () =>
           const state = generateRandomString(32);
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-          const data = JSON.stringify({
+          const oauthStateData = {
             estateId,
             link: {
               userId: session.user.id,
               email: session.user.email,
             },
             callbackURL,
-          });
+          };
 
           await ctx.context.internalAdapter.createVerificationValue({
             expiresAt,
             identifier: state,
-            value: data,
+            value: JSON.stringify(oauthStateData),
           });
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
@@ -450,6 +450,17 @@ export const integrationsPlugin = () =>
                 image: userInfo.picture,
               });
               user = existingUser.user;
+
+              // REMOVED AUTO-LINKING: Do not auto-link bot accounts to existing estates during signup.
+              // This was causing bot accounts to be linked to multiple estates when users were
+              // synced across organizations via Slack Connect.
+              //
+              // Bot accounts should only be linked when:
+              // 1. estateId is explicitly provided in OAuth state (link flow from integrations page)
+              // 2. A new estate is being created during signup (handled by redirect.tsx)
+              //
+              // If estateId is not provided, the signup flow in redirect.tsx will create a new estate
+              // and link the bot account to it properly.
             } else {
               user = await ctx.context.internalAdapter.createUser({
                 email: userInfo.email,
@@ -523,7 +534,18 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get user" });
           }
 
-          let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          // Store app_id for cross-workspace bot matching
+          const appId = tokens.app_id || (tokens as any).appId;
+
+          // Find existing bot account by userId + providerId (not by bot user ID which is not the account.id)
+          const existingBotAccount = await db.query.account.findFirst({
+            where: and(
+              eq(schema.account.userId, user.id),
+              eq(schema.account.providerId, "slack-bot"),
+            ),
+          });
+
+          let botAccount: typeof existingBotAccount = existingBotAccount;
           if (botAccount) {
             await ctx.context.internalAdapter.updateAccount(botAccount.id, {
               accessToken: tokens.access_token,
@@ -531,13 +553,24 @@ export const integrationsPlugin = () =>
               accountId: botUserId,
             });
           } else {
-            botAccount = await ctx.context.internalAdapter.createAccount({
+            const createdAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
               userId: user.id,
               accessToken: tokens.access_token,
               scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
+            if (!createdAccount) {
+              return ctx.json({ error: "Failed to create bot account" });
+            }
+            botAccount = {
+              ...createdAccount,
+              password: createdAccount.password ?? null,
+              refreshToken: createdAccount.refreshToken ?? null,
+              idToken: createdAccount.idToken ?? null,
+              accessTokenExpiresAt: createdAccount.accessTokenExpiresAt ?? null,
+              refreshTokenExpiresAt: createdAccount.refreshTokenExpiresAt ?? null,
+            };
           }
 
           if (!botAccount) {
@@ -552,7 +585,8 @@ export const integrationsPlugin = () =>
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
             if (!tokens.team?.id) {
-              return ctx.json({ error: "Failed to get Slack team ID" });
+              logger.error("[Slack OAuth] No team_id in link flow");
+              return ctx.json({ error: "Failed to get Slack team ID" }, { status: 500 });
             }
 
             waitUntil(
@@ -576,6 +610,7 @@ export const integrationsPlugin = () =>
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
+                  appId, // Store app_id for cross-workspace bot matching
                 },
               })
               .onConflictDoUpdate({
@@ -588,9 +623,14 @@ export const integrationsPlugin = () =>
                   providerMetadata: {
                     botUserId,
                     team: tokens.team,
+                    appId, // Store app_id for cross-workspace bot matching
                   },
                 },
-              });
+              })
+              .returning();
+          } else {
+            // Don't auto-link in login flow - let redirect.tsx handle it
+            // This avoids linking to wrong estates when users share organizations via Slack sync
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);

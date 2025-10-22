@@ -226,6 +226,27 @@ async function directoryExists(path: string): Promise<boolean> {
 }
 
 /**
+ * Ensure pnpm is installed, installing it if necessary
+ */
+async function ensurePnpmInstalled(): Promise<void> {
+  console.error("=== Checking for pnpm ===");
+  const pnpmResult = await execCommand("pnpm", ["--version"]);
+  if (pnpmResult.exitCode !== 0) {
+    console.error("=== Installing pnpm ===");
+    const installResult = await execCommand("npm", ["install", "-g", "corepack@latest"]);
+    if (installResult.exitCode !== 0) {
+      console.error("=== Failed to install pnpm ===");
+      process.exit(1);
+    }
+    const corepackResult = await execCommand("corepack", ["enable", "pnpm"]);
+    if (corepackResult.exitCode !== 0) {
+      console.error("=== Failed to enable pnpm ===");
+      process.exit(1);
+    }
+  }
+}
+
+/**
  * Main build process
  */
 async function main() {
@@ -234,6 +255,9 @@ async function main() {
     const args = parseInitArgs();
     return subcommandInit(args);
   }
+
+  await ensurePnpmInstalled();
+
   if (subCommand === "install-dependencies") {
     const args = parseInstallDependenciesArgs();
     return subcommandInstallDependencies(args);

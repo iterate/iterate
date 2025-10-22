@@ -12,6 +12,7 @@ import { createStripeCustomerAndSubscriptionForOrganization } from "../../backen
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { Route } from "./+types/redirect";
+import { appendEstatePath } from "./append-estate-path.ts";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
@@ -64,12 +65,39 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
 
             // Get team info from Slack API to create provider-estate mapping
             let teamId: string | undefined;
+            let appId: string | undefined;
             try {
               const slackClient = new WebClient(slackBotAccount.accessToken);
               const authTest = await slackClient.auth.test();
 
               if (authTest.ok && authTest.team_id) {
                 teamId = authTest.team_id;
+
+                // Get appId from any existing providerEstateMapping for this team
+                // (will exist if user has another estate with this Slack workspace already linked)
+                const existingMapping = await db.query.providerEstateMapping.findFirst({
+                  where: and(
+                    eq(schema.providerEstateMapping.providerId, "slack-bot"),
+                    eq(schema.providerEstateMapping.externalId, authTest.team_id),
+                  ),
+                });
+
+                if (existingMapping) {
+                  const existingMetadata = existingMapping.providerMetadata as { appId?: string };
+                  appId = existingMetadata?.appId;
+                  logger.info(
+                    `[redirect.tsx] Found existing mapping with appId=${appId} for team ${authTest.team_id}`,
+                  );
+                } else {
+                  logger.info(
+                    `[redirect.tsx] No existing mapping found for team ${authTest.team_id}, appId will be undefined`,
+                  );
+                }
+
+                logger.info(
+                  `[redirect.tsx] Creating providerEstateMapping for estate ${estateId}, team ${authTest.team_id}, appId=${appId}, botUserId=${slackBotAccount.accountId}`,
+                );
+
                 await db
                   .insert(schema.providerEstateMapping)
                   .values({
@@ -82,6 +110,7 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
                         id: authTest.team_id,
                         name: authTest.team,
                       },
+                      appId, // Include appId for cross-workspace bot matching
                     },
                   })
                   .onConflictDoUpdate({
@@ -97,9 +126,14 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
                           id: authTest.team_id,
                           name: authTest.team,
                         },
+                        appId, // Include appId for cross-workspace bot matching
                       },
                     },
                   });
+
+                logger.info(
+                  `[redirect.tsx] Successfully stored providerEstateMapping with appId=${appId}`,
+                );
               }
             } catch (error) {
               logger.error("Failed to create provider-estate mapping for Slack", error);
@@ -198,7 +232,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   // Determine where to redirect based on user's estates
-  const redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+  let redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+
+  if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
+    const estatePath = new URL(request.url).searchParams.get("estate_path");
+    if (estatePath) {
+      redirectPath = appendEstatePath(redirectPath, estatePath);
+    }
+  }
 
   throw redirect(redirectPath);
 }

@@ -1,4 +1,6 @@
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
+import { createHash } from "node:crypto";
+import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
 import { z } from "zod/v4";
@@ -14,7 +16,6 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
-import { Agent as CloudflareAgent } from "agents";
 import { logger } from "../tag-logger.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -53,6 +54,10 @@ import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-ut
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
+import {
+  betterWaitUntil,
+  monkeyPatchAgentWithBetterWaitUntilSupport,
+} from "./better-wait-until.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -167,9 +172,10 @@ export class IterateAgent<
     Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
     State extends IterateAgentState = IterateAgentState,
   >
-  extends CloudflareAgent<CloudflareEnv, State>
+  extends CloudflareAgent<{}, State>
   implements ToolsInterface
 {
+  declare env: CloudflareEnv;
   override observability = undefined;
 
   protected db: DB;
@@ -263,6 +269,7 @@ export class IterateAgent<
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
+    monkeyPatchAgentWithBetterWaitUntilSupport(this);
 
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
@@ -376,8 +383,11 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // Note that this.ctx.waitUntil is replaced by better-wait-until to actually keep the DO alive...
-        this.ctx.waitUntil(fn());
+        betterWaitUntil(this, fn(), {
+          logErrorAfter: new Date(Date.now() + 1000 * 60 * 60 * 2), // 2 hours
+          logWarningAfter: new Date(Date.now() + 1000 * 60 * 30), // 30 minutes
+          timeout: new Date(Date.now() + 1000 * 60 * 60 * 6), // 6 hours
+        });
       },
 
       getOpenAIClient: async () => {
@@ -1741,9 +1751,126 @@ export class IterateAgent<
       },
     };
     const result = await this.exec(newInput);
-    // TODO: filter the json here and make it token efficient
+
+    // codex exec supports a --json mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
+
+    // Supported event types:
+
+    // thread.started - when a thread is started or resumed.
+    // turn.started - when a turn starts. A turn encompasses all events between the user message and the assistant response.
+    // turn.completed - when a turn completes; includes token usage.
+    // turn.failed - when a turn fails; includes error details.
+    // item.started/item.updated/item.completed - when a thread item is added/updated/completed.
+    // error - when the stream reports an unrecoverable error; includes the error message.
+    // Supported item types:
+
+    // agent_message - assistant message.
+    // reasoning - a summary of the assistant's thinking.
+    // command_execution - assistant executing a command.
+    // file_change - assistant making file changes.
+    // mcp_tool_call - assistant calling an MCP tool.
+    // web_search - assistant performing a web search.
+    // todo_list - the agent's running plan when the plan tool is active, updating as steps change.
+    // Typically, an agent_message is added at the end of the turn.
+
+    // Sample output:
+
+    // {"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
+    // {"type":"turn.started"}
+    // {"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
+    // {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
+    // {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
+    // {"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
+    // {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
+    // {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
+
+    const parsedOutput = result.output?.stdout
+      ?.split("\n")
+      .map((line: string): string | null => {
+        try {
+          const parsed = JSON.parse(line);
+          if (typeof parsed === "object" && parsed.type) {
+            switch (parsed.type) {
+              case "thread.started":
+                return null; // don't need to return this to the iterate agent
+              case "turn.started":
+                return null; // don't need to return this to the iterate agent
+              case "turn.completed":
+                return null; // don't need to return this to the iterate agent
+              case "item.started":
+                return null; // we don't need to add this to the output because we should already have a completed or failed item
+              case "turn.failed":
+                return line; // return the raw line  on failure
+              case "item.updated":
+                // TODO: implement support for these, if the actually exist
+                logger.warn("item.updated message encountered", parsed);
+                return truncateLongString(JSON.stringify(parsed), 250);
+              case "item.completed":
+                switch (parsed.item.type) {
+                  case "file_change":
+                    if (parsed.item.status === "completed") {
+                      return parsed.item.changes
+                        ? `<files changed>\n${JSON.stringify(parsed.item.changes)}</files changed>`
+                        : (parsed.item.text ?? parsed.item);
+                    }
+                    logger.warn("unknown file change status:", parsed.item);
+                    return line;
+                  case "agent_message":
+                    return parsed.item.text ?? parsed.item;
+                  case "reasoning":
+                    return `<reasoning>\n${truncateLongString(parsed.item.text ?? parsed.item, 250)}\n</reasoning>`;
+                  case "command_execution":
+                    if (parsed.item.status === "completed") {
+                      if (parsed.item.command) {
+                        const { command, aggregated_output, exit_code } = parsed.item;
+                        const shortCommand = truncateLongString(command);
+                        const shortAggregatedOutput = truncateLongString(aggregated_output);
+                        return `<command executed>\n<command>${shortCommand}</command>\n<aggregated_output>${shortAggregatedOutput}</aggregated_output>\n<exit_code>${exit_code}</exit_code>\n</command executed>`;
+                      }
+                      return parsed.item.text ?? parsed.item;
+                    }
+                    logger.warn("unknown command execution status:", parsed.item);
+                    return line;
+                  case "web_search":
+                    return `<web search>\n${truncateLongString(parsed.item, 250)}\n</web search>`;
+                  case "todo_list":
+                    return `<todo list>\n${parsed.item}\n</todo list>`;
+                  case "mcp_tool_call":
+                    return `<mcp tool call>\n${truncateLongString(parsed.item, 250)}\n</mcp tool call>`;
+                  default:
+                    logger.warn("unknown item.completed type:", parsed.item.type);
+                    return parsed.item;
+                }
+              case "error":
+                return parsed;
+              default:
+                logger.warn("unknown event type:", parsed.type);
+                return line;
+            }
+          } else {
+            return line;
+          }
+        } catch (err) {
+          logger.warn("error parsing codex output", err);
+          return line;
+        }
+      })
+      .filter(Boolean)
+      .map((line) => {
+        let str = typeof line === "string" ? line : JSON.stringify(line);
+        // Remove leading/trailing asterisks, double, and single quotes from each line
+        str = str.replace(/\\n/g, "\n"); // Replace literal '\n' with actual newlines
+        str = str.replace(/^[*"'\s]+|[*"'\s]+$/g, ""); // Remove leading/trailing asterisks, quotes, and whitespace
+        str = str.replace(/\n{2,}/g, "\n"); // Collapse consecutive newlines into a single newline
+        return str;
+      });
+
     return {
       ...result,
+      output: {
+        ...result.output,
+        stdout: parsedOutput?.join("\n"),
+      },
     };
   }
 
@@ -1810,13 +1937,16 @@ export class IterateAgent<
     const { getSandbox } = await import("@cloudflare/sandbox");
 
     // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
 
     const execInSandbox = async () => {
-      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
+      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
+      logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
-      const sessionDir = `/tmp/session-${sessionId}`;
+      // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
+      // TODO: switch to using branch names instead of session ids
+      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}`;
       try {
         await sandbox.mkdir(sessionDir, { recursive: true });
       } catch (err) {
@@ -1829,178 +1959,198 @@ export class IterateAgent<
         }
       }
 
-      // Create an isolated session
-      const sandboxSession = await sandbox.createSession({
-        id: sessionId,
-        cwd: sessionDir,
-        isolation: true,
-        env: {
-          ...input.env,
-        },
-      });
-
-      // Determine the checkout target and whether it's a commit hash
-      const checkoutTarget = commitHash || branch || "main";
-      const isCommitHash = Boolean(commitHash);
-
-      // Prepare arguments as a JSON object
-      const initArgs = {
-        sessionDir,
-        githubRepoUrl,
-        githubToken,
-        checkoutTarget,
-        isCommitHash,
-      };
-      // Escape the JSON string for shell
-      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-      // Init the sandbox (ignore any errors)
-      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}' && node /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
-      using resultInit = await sandboxSession.exec(commandInit, {
-        timeout: 360 * 1000, // 360 seconds total timeout
-      });
-      if (!resultInit.success) {
-        logger.error(
-          "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
-          resultInit,
-        );
-      }
-
-      if (input.command.length > 256) {
-        if (!input.files) {
-          input.files = [];
-        }
-        const commandId = R.randomInteger(0, 99999);
-        input.files.push({
-          path: `/tmp/command-id-${commandId}.sh`,
-          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
-        });
-        input.command = `bash /tmp/command-id-${commandId}.sh`;
-      }
-      // ------------------------------------------------------------------------
-      // Write files
-      // ------------------------------------------------------------------------
-      await Promise.all(
-        (input.files ?? []).map(async (file) => {
-          await sandboxSession.writeFile(file.path, file.content);
-        }),
-      );
-
-      // ------------------------------------------------------------------------
-      // Run exec
-      // ------------------------------------------------------------------------
-
-      // Run the exec command in streaming mode
-      const commandExec = input.command;
-      const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
-      });
-      let stdout = "";
-      let stderr = "";
-      const stream = resultStream[Symbol.asyncIterator]();
-
-      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
-      let sandboxHealthy = true;
-      const interval = setInterval(async () => {
-        try {
-          const state = await sandbox.getState();
-          if (state.status !== "healthy") {
-            sandboxHealthy = false;
-          }
-          await sandbox.renewActivityTimeout();
-        } catch (err) {
-          logger.error("Error renewing activity timeout", err);
-        }
-      }, 5000);
-
-      // try finallyblock to close the interval
+      let sandboxSession: ReturnType<typeof sandbox.createSession>;
       try {
-        while (true) {
-          if (!sandboxHealthy) {
-            logger.warn("Sandbox is not healthy, exiting");
-            return {
-              success: false,
-              message: "Sandbox crashed after completing this work",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // Create an isolated session
+        sandboxSession = await sandbox.createSession({
+          id: sessionId,
+          cwd: sessionDir,
+          isolation: true,
+          env: {
+            ...input.env,
+            // use the node24 binaries by preference
+            PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          },
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("already exists")) {
+          logger.info("Session already exists, getting existing session");
+          sandboxSession = await sandbox.getSession(sessionId);
+        } else {
+          logger.error("Error creating session", err);
+          throw new Error("Error creating session");
+        }
+      }
+
+      try {
+        // Determine the checkout target and whether it's a commit hash
+        const checkoutTarget = commitHash || branch || "main";
+        const isCommitHash = Boolean(commitHash);
+
+        // Prepare arguments as a JSON object
+        const initArgs = {
+          sessionDir,
+          githubRepoUrl,
+          githubToken,
+          checkoutTarget,
+          isCommitHash,
+        };
+        // Escape the JSON string for shell
+        const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
+        // Init the sandbox (ignore any errors)
+        const commandInit = `pwd && bun /tmp/sandbox-entry.ts init '${initJsonArgs}' && bun /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
+        using resultInit = await sandboxSession.exec(commandInit, {
+          timeout: 360 * 1000, // 360 seconds total timeout
+        });
+        if (!resultInit.success) {
+          logger.error(
+            "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
+            resultInit,
+          );
+        } else {
+          logger.info("Sandbox initialized successfully");
+        }
+
+        if (input.command.length > 256) {
+          if (!input.files) {
+            input.files = [];
           }
+          const commandId = R.randomInteger(0, 99999);
+          input.files.push({
+            path: `/tmp/command-id-${commandId}.sh`,
+            content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
+          });
+          input.command = `bash /tmp/command-id-${commandId}.sh`;
+        }
+        // ------------------------------------------------------------------------
+        // Write files
+        // ------------------------------------------------------------------------
+        await Promise.all(
+          (input.files ?? []).map(async (file) => {
+            await sandboxSession.writeFile(file.path, file.content);
+          }),
+        );
 
-          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
-          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
-          // an event we probably will never get one but we don't get an error either from
-          // sandbox sdk
-          const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
-            signal: abortController.signal,
-          }).then(() => "TIMEOUT" as const);
+        // ------------------------------------------------------------------------
+        // Run exec
+        // ------------------------------------------------------------------------
 
-          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+        // Run the exec command in streaming mode
+        const commandExec = input.command;
+        const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
+          timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
+        });
+        let stdout = "";
+        let stderr = "";
+        const stream = resultStream[Symbol.asyncIterator]();
 
-          // Clean up the timeout regardless of which promise won the race
-          abortController.abort();
-
-          if (result === "TIMEOUT") {
-            return {
-              message: "The connection to codex timed out",
-              success: false,
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
+        // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
+        let sandboxHealthy = true;
+        const interval = setInterval(async () => {
+          try {
+            const state = await sandbox.getState();
+            if (state.status !== "healthy") {
+              sandboxHealthy = false;
+            }
+            await sandbox.renewActivityTimeout();
+          } catch (err) {
+            logger.error("Error renewing activity timeout", err);
           }
-          if (result.done) {
-            logger.info("Exec readable exhausted without complete event", {
-              input,
-              stdout,
-              stderr,
-            });
-            // should not get here
-            return {
-              success: false,
-              message: "Result stream terminated before process completion signal was received",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
-          const event = result.value;
-          switch (event.type) {
-            case "stdout":
-              stdout += event.data;
-              logger.info(`Exec stdout: ${event.data}`);
-              break;
-            case "stderr":
-              stderr += event.data;
-              logger.info(`Exec stderr: ${event.data}`);
-              break;
-            case "error":
-              stderr += event.data;
-              logger.info(`Exec error: ${event.data}`);
-              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+        }, 5000);
+
+        // try finallyblock to close the interval
+        try {
+          while (true) {
+            if (!sandboxHealthy) {
+              logger.warn("Sandbox is not healthy, exiting");
               return {
-                message: "Execution errors occurred",
+                success: false,
+                message: "Sandbox crashed after completing this work",
+                stdout,
+                stderr,
+                exitCode: 1,
+              };
+            }
+
+            // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
+            // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
+            // don't get an event in 510s though we're pretty sure that bun has timed out.
+            const abortController = new AbortController();
+            const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
+              signal: abortController.signal,
+            }).then(() => "TIMEOUT" as const);
+
+            const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
+
+            // Clean up the timeout regardless of which promise won the race
+            abortController.abort();
+
+            if (result === "TIMEOUT") {
+              return {
+                message: "The connection to codex timed out",
                 success: false,
                 stdout,
                 stderr,
                 exitCode: 1,
               };
-            case "complete":
-              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
-              return {
-                message:
-                  event.exitCode === 0
-                    ? "Execution completed successfully"
-                    : "Execution completed with errors",
-                success: event.exitCode === 0,
+            }
+            if (result.done) {
+              logger.info("Exec readable exhausted without complete event", {
+                input,
                 stdout,
                 stderr,
-                exitCode: event.exitCode,
+              });
+              // should not get here
+              return {
+                success: false,
+                message: "Result stream terminated before process completion signal was received",
+                stdout,
+                stderr,
+                exitCode: 1,
               };
+            }
+            const event = result.value;
+            switch (event.type) {
+              case "stdout":
+                stdout += event.data;
+                logger.debug(`Exec stdout: ${event.data}`);
+                break;
+              case "stderr":
+                stderr += event.data;
+                logger.info(`Exec stderr: ${event.data}`);
+                break;
+              case "error":
+                stderr += event.data;
+                logger.info(`Exec error: ${event.data}`);
+                logger.error(`Error running \`${commandExec}\` in sandbox`, event);
+                return {
+                  message: "Execution errors occurred",
+                  success: false,
+                  stdout,
+                  stderr,
+                  exitCode: 1,
+                };
+              case "complete":
+                logger.info(`Exec ${event.exitCode === 0 ? "succeeded" : "failed"}`);
+                return {
+                  message:
+                    event.exitCode === 0
+                      ? "Execution completed successfully"
+                      : "Execution completed with errors",
+                  success: event.exitCode === 0,
+                  stdout,
+                  stderr,
+                  exitCode: event.exitCode,
+                };
+            }
           }
+        } finally {
+          clearInterval(interval);
         }
       } finally {
-        clearInterval(interval);
+        // TODO: uncomment when cloudflare sandbox is fixed
+        // await sandbox.deleteSession(sessionId);
+        logger.info(`TODO: delete session ${sessionId}`);
       }
     };
 
@@ -2013,7 +2163,8 @@ export class IterateAgent<
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
-    if (sandboxState.status !== "healthy") {
+    const runningStatuses = ["healthy", "running"];
+    if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
 
@@ -2286,4 +2437,50 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
+}
+
+function hashSessionId(sessionId: string): string {
+  // Use sha256 for good entropy, then take first 5 bytes (40 bits = 8 base32 chars)
+  const hash = createHash("sha256").update(sessionId).digest();
+  const hashSlice = hash.subarray(0, 5); // first 5 bytes
+  // Use base32 for file path safe encoding
+  const base32 = "abcdefghijklmnopqrstuvwxyz234567";
+  let out = "";
+  let bits = 0,
+    value = 0,
+    i = 0;
+  while (i < hashSlice.length || bits > 0) {
+    if (bits < 5) {
+      if (i < hashSlice.length) {
+        value = (value << 8) | hashSlice[i++];
+        bits += 8;
+      } else {
+        // Padding zero bits if done with all bytes
+        value <<= 5 - bits;
+        bits = 5;
+      }
+    }
+    out += base32[(value >>> (bits - 5)) & 31];
+    bits -= 5;
+    if (out.length === 8) break; // Only 8 characters
+  }
+  return out;
+}
+
+/**
+ * Truncates a long string to show first N and last N characters with a truncation marker in between.
+ * @param str The string to truncate
+ * @param maxLength The maximum length before truncation (default: 100)
+ * @param showChars The number of characters to show from start and end (default: 50)
+ * @returns The original string if short enough, or truncated version with "...[truncated]..." in the middle
+ */
+function truncateLongString(str: string, maxLength = 100): string {
+  const showChars = Math.floor(maxLength / 2);
+
+  if (typeof str !== "string") {
+    str = JSON.stringify(str);
+  }
+  return str.length > maxLength
+    ? str.slice(0, showChars) + "...[truncated]..." + str.slice(-showChars)
+    : str;
 }

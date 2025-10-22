@@ -41,6 +41,7 @@ export const slackUpdateSliceStateFields = {
       })
       .nullable()
       .optional(),
+    estateName: z.string().nullable().optional(),
   }),
 };
 
@@ -87,6 +88,7 @@ export interface SlackSliceState {
   } | null;
   botUserId?: string;
   typingIndicatorStatus?: string | null;
+  estateName?: string | null;
 }
 
 export interface SlackSliceDeps {}
@@ -104,6 +106,7 @@ export const slackSlice = defineAgentCoreSlice<{
     slackChannel: undefined,
     botUserId: undefined,
     typingIndicatorStatus: null,
+    estateName: undefined,
   },
   reduce(state, _deps, event) {
     const next = { ...state };
@@ -118,6 +121,9 @@ export const slackSlice = defineAgentCoreSlice<{
         }
         if (event.data.slackChannel !== undefined) {
           next.slackChannel = event.data.slackChannel;
+        }
+        if (event.data.estateName !== undefined) {
+          next.estateName = event.data.estateName;
         }
         break;
       }
@@ -162,20 +168,26 @@ export const slackSlice = defineAgentCoreSlice<{
 
         // Check if the user who sent the message is in participants.
         // This filters out messages from users who are not participants and the agent would be in read-only mode for them.
+        // Support both 'message' and 'app_mention' event types
         let userIsJoinedParticipant = false;
-        if (payload.event?.type === "message" && "user" in payload.event && payload.event.user) {
+        if (
+          (payload.event?.type === "message" || payload.event?.type === "app_mention") &&
+          "user" in payload.event &&
+          payload.event.user
+        ) {
           const slackUserId = payload.event.user;
           userIsJoinedParticipant = Object.values(next.participants || {}).some(
             (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
           );
-          // TODO: if false, add a CORE:LOG event saying "message from <slackUserId> ignored because they are not a joined participant" or something
 
           // hack to make evals/e2e tests get responses for now
           // TODO: remove! we need to just send the approrpriate add participant events for the test users
           if (slackUserId === "UALICE" || slackUserId === "UBOB") userIsJoinedParticipant = true;
         }
 
-        next.triggerLLMRequest = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
+        const finalTrigger = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;
+
+        next.triggerLLMRequest = finalTrigger;
         break;
       }
     }
@@ -220,6 +232,11 @@ export function createSlackContextForState(params: {
   const promptFragment: PromptFragment = [];
 
   const channelThreadInfo: PromptFragment = [];
+
+  if (state.estateName) {
+    channelThreadInfo.push(`Estate: ${state.estateName}`);
+  }
+
   if (state.slackChannelId) {
     channelThreadInfo.push(`Current channel ID: ${state.slackChannelId}`);
   }
@@ -461,6 +478,26 @@ export function slackWebhookEventToPromptFragment(params: {
     // what's in it - typescript is better than the slack docs!
 
     case "app_mention":
+      // app_mention events are sent when the bot is @-mentioned
+      // Treat them similarly to regular messages
+      return {
+        promptFragment: [
+          "User mentioned bot via Slack:",
+          JSON.stringify(
+            {
+              user: slackEvent.user,
+              text: slackEvent.text,
+              ts: slackEvent.ts,
+              createdAt: webhookEvent.createdAt,
+            },
+            null,
+            2,
+          ),
+        ],
+        shouldTriggerLLM: true,
+        role: "developer",
+      };
+
     case "member_joined_channel":
     case "member_left_channel":
     case "channel_created":

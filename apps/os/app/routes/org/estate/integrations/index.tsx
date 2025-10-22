@@ -144,7 +144,7 @@ export default function Integrations() {
 
   // Filter out Slack connector for trial estates since they're using Slack Connect
   const integrations = (data?.oauthIntegrations || []).filter(
-    (integration: any) => !(isTrialEstate && integration.id === "slack-bot"),
+    (integration) => !(isTrialEstate && integration.id === "slack-bot"),
   );
   const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
 
@@ -232,7 +232,7 @@ export default function Integrations() {
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">Built-in Connectors</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {integrations.map((integration: any) => (
+            {integrations.map((integration) => (
               <Card key={integration.id}>
                 <CardContent>
                   <Item className="p-0 mb-3">

@@ -39,7 +39,7 @@ export async function execStreamOnSandbox(
       Accept: "text/event-stream",
     },
     body: JSON.stringify({
-      id: sessionId,
+      sessionId,
       command,
     }),
     signal: options?.signal,
