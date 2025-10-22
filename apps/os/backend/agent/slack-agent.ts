@@ -43,6 +43,7 @@ import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
 import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
+import { onboardingAgentTools } from "./onboarding-agent-tools.ts";
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -169,9 +170,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   toolDefinitions(): DOToolDefinitions<{}> {
+    // Note: Onboarding tools are provided via context rules in getContextRules(),
+    // and also included here so they can be resolved when replaying/displaying
+    // agent state via tRPC endpoints.
     return {
       ...iterateAgentTools,
       ...slackAgentTools,
+      ...onboardingAgentTools,
     };
   }
 
@@ -188,14 +193,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           agentInstanceName: this.estate.onboardingAgentName,
         });
 
-        // Call onboardingPromptFragment on the stub
-        const onboardingPrompt = await (onboardingAgentStub as any).onboardingPromptFragment();
+        // Call onboardingPromptFragment on the stub - it returns a full ContextRule with prompt and tools
+        const onboardingContextRule = await (onboardingAgentStub as any).onboardingPromptFragment();
 
-        // Add the onboarding context as a context rule
-        rules.push({
-          key: "onboarding-context",
-          prompt: onboardingPrompt,
-        });
+        // Add the onboarding context rule (includes both prompt and tools)
+        rules.push(onboardingContextRule);
       } catch (error) {
         logger.warn(`Failed to get onboarding context for estate ${this.estate.id}:`, error);
       }
@@ -1258,5 +1260,58 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       message:
         "This function no longer exists - but we need it here because otherwise the agent would be bricked",
     };
+  }
+
+  // ===== Onboarding Agent Tool Delegation =====
+  // These methods delegate to the OnboardingAgent when onboarding mode is active
+
+  private async getOnboardingAgentStub() {
+    if (!this.estate.onboardingAgentName) {
+      throw new Error("Onboarding agent not configured for this estate");
+    }
+
+    return await getOrCreateAgentStubByName("OnboardingAgent", {
+      db: this.db,
+      estateId: this.estate.id,
+      agentInstanceName: this.estate.onboardingAgentName,
+    });
+  }
+
+  async exaSearch(input: { query: string; numResults?: number; includeDomains?: string[] }) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).exaSearch(input);
+  }
+
+  async updateResults(input: { results: Record<string, unknown> }) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).updateResults(input);
+  }
+
+  async getResults(_input: {}) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).getResults(_input);
+  }
+
+  async startSlackThread(input: { channel: string; firstMessage?: string }) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).startSlackThread(input);
+  }
+
+  async getOnboardingProgress(_input: {}) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).getOnboardingProgress(_input);
+  }
+
+  async updateOnboardingProgress(input: {
+    step:
+      | "firstToolConnected"
+      | "remoteMCPConnected"
+      | "learnedBotUsageEverywhere"
+      | "editedRulesForTone"
+      | "communityInviteSent";
+    completed?: boolean;
+  }) {
+    const stub = await this.getOnboardingAgentStub();
+    return await (stub as any).updateOnboardingProgress(input);
   }
 }
