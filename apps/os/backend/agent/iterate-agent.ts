@@ -90,6 +90,7 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+import { buildExecCodexResumeScript } from "./exec-codex-script.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -1736,12 +1737,32 @@ export class IterateAgent<
     const instructions: string = input.command;
 
     const instructionsFilePath = `/tmp/instructions-${R.randomInteger(0, 99999)}.txt`;
+    const resumeScriptPath = `/tmp/exec-codex-${R.randomInteger(0, 99999)}.sh`;
+    const codexFlags = [
+      "--json",
+      "--dangerously-bypass-approvals-and-sandbox",
+      "--skip-git-repo-check",
+    ];
+    const resumeScript = buildExecCodexResumeScript({
+      instructionsFilePath,
+      codexFlags,
+    });
+
+    logger.info("execCodex prepared Codex command", {
+      instructionsFilePath,
+      resumeScriptPath,
+    });
+
     const newInput: Inputs["exec"] = {
-      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
+      command: `bash ${resumeScriptPath}`,
       files: [
         {
           path: instructionsFilePath,
           content: instructions,
+        },
+        {
+          path: resumeScriptPath,
+          content: resumeScript,
         },
       ],
       env: {
