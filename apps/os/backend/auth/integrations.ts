@@ -279,10 +279,6 @@ export const integrationsPlugin = () =>
             callbackURL,
           };
 
-          logger.info(
-            `[Slack OAuth] Creating OAuth state with estateId=${estateId}, userId=${session.user.id}, email=${session.user.email}`,
-          );
-
           await ctx.context.internalAdapter.createVerificationValue({
             expiresAt,
             identifier: state,
@@ -392,13 +388,7 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Invalid state" });
           }
 
-          logger.info(`[Slack OAuth Callback] Retrieved OAuth state from DB: ${value.value}`);
-
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
-
-          logger.info(
-            `[Slack OAuth Callback] Parsed state - estateId=${parsedState.estateId}, has link=${!!parsedState.link}`,
-          );
 
           const { link, callbackUrl: callbackURL } = parsedState;
           let estateId = parsedState.estateId;
@@ -420,15 +410,6 @@ export const integrationsPlugin = () =>
             code: code,
             redirect_uri: redirectURI,
           });
-
-          logger.info(
-            `[Slack OAuth] Received tokens response, keys: ${Object.keys(tokens).join(", ")}`,
-          );
-          logger.info(`[Slack OAuth] tokens.app_id=${tokens.app_id}`);
-          logger.info(`[Slack OAuth] tokens.appId=${(tokens as any).appId}`);
-          logger.info(`[Slack OAuth] tokens.bot_user_id=${tokens.bot_user_id}`);
-          logger.info(`[Slack OAuth] tokens.team?.id=${tokens.team?.id}`);
-          logger.info(`[Slack OAuth] Full tokens object: ${JSON.stringify(tokens, null, 2)}`);
 
           if (
             !tokens.ok ||
@@ -480,9 +461,6 @@ export const integrationsPlugin = () =>
               //
               // If estateId is not provided, the signup flow in redirect.tsx will create a new estate
               // and link the bot account to it properly.
-              logger.info(
-                `[Slack OAuth] Existing user login - estateId=${estateId ?? "will be created in redirect flow"}`,
-              );
             } else {
               user = await ctx.context.internalAdapter.createUser({
                 email: userInfo.email,
@@ -569,14 +547,12 @@ export const integrationsPlugin = () =>
 
           let botAccount: typeof existingBotAccount = existingBotAccount;
           if (botAccount) {
-            logger.info(`[Slack OAuth] Updating existing bot account ${botAccount.id}`);
             await ctx.context.internalAdapter.updateAccount(botAccount.id, {
               accessToken: tokens.access_token,
               scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
           } else {
-            logger.info(`[Slack OAuth] Creating new bot account for user ${user.id}`);
             const createdAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
               userId: user.id,
@@ -600,41 +576,23 @@ export const integrationsPlugin = () =>
           if (!botAccount) {
             return ctx.json({ error: "Failed to get account id" });
           }
-          logger.info(`[Slack OAuth] ========== EXTRACTED VALUES ==========`);
-          logger.info(`[Slack OAuth] app_id=${appId}`);
-          logger.info(`[Slack OAuth] bot_user_id=${botUserId}`);
-          logger.info(`[Slack OAuth] team_id=${tokens.team?.id}`);
-          logger.info(`[Slack OAuth] team_name=${tokens.team?.name}`);
-          logger.info(`[Slack OAuth] user.id=${user?.id}`);
-          logger.info(`[Slack OAuth] user.email=${user?.email}`);
-          logger.info(`[Slack OAuth] estateId=${estateId}`);
-          logger.info(`[Slack OAuth] link=${JSON.stringify(link)}`);
-          logger.info(`[Slack OAuth] =====================================`);
 
           // Link estate if we have an ID
           // TODO(rahul): figure out if there are any edge cases
           // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
           // So we can skip this step for them
           if (estateId) {
-            logger.info(`[Slack OAuth] >>> ENTERING LINK FLOW (estateId=${estateId})`);
-
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
             if (!tokens.team?.id) {
-              logger.error("[Slack OAuth] ERROR: No team_id in link flow");
+              logger.error("[Slack OAuth] No team_id in link flow");
               return ctx.json({ error: "Failed to get Slack team ID" });
             }
 
-            logger.info(
-              `[Slack OAuth] Starting background sync for estate ${estateId}, team ${tokens.team.id}`,
-            );
             waitUntil(
               syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
             );
 
-            logger.info(
-              `[Slack OAuth] Inserting estateAccountsPermissions: accountId=${botAccount.id}, estateId=${estateId}`,
-            );
             await db
               .insert(schema.estateAccountsPermissions)
               .values({
@@ -643,11 +601,7 @@ export const integrationsPlugin = () =>
               })
               .onConflictDoNothing();
 
-            logger.info(
-              `[Slack OAuth] Inserting/updating providerEstateMapping with appId=${appId}, botUserId=${botUserId}, teamId=${tokens.team.id}`,
-            );
-
-            const insertResult = await db
+            await db
               .insert(schema.providerEstateMapping)
               .values({
                 internalEstateId: estateId,
@@ -674,15 +628,7 @@ export const integrationsPlugin = () =>
                 },
               })
               .returning();
-
-            logger.info(
-              `[Slack OAuth] Successfully stored providerEstateMapping: ${JSON.stringify(insertResult[0])}`,
-            );
           } else {
-            logger.info(`[Slack OAuth] >>> ENTERING LOGIN FLOW (no estateId)`);
-            logger.info(
-              `[Slack OAuth] Skipping auto-linking in login flow - redirect.tsx will handle estate creation and linking`,
-            );
             // Don't auto-link in login flow - let redirect.tsx handle it
             // This avoids linking to wrong estates when users share organizations via Slack sync
           }

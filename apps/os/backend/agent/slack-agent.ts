@@ -533,7 +533,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               Authorization: `Bearer ${this.slackAPI.token}`,
             },
           });
-          logger.log("File record", fileRecord);
           return {
             iterateFileId: fileRecord.id,
             originalFilename: fileRecord.filename ?? undefined,
@@ -659,10 +658,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       (slackEvent.type === "message" || slackEvent.type === "app_mention") &&
       !isBotMessageThatShouldBeIgnored;
 
-    logger.info(
-      `[extractEventsFromWebhook] estate=${this.databaseRecord.estateId}, type=${slackEvent.type}, participant_events=${eventsLists[0].length}, shouldTriggerLLM=${shouldTriggerLLM}, shouldTriggerLLMForThisEvent=${shouldTriggerLLMForThisEvent}`,
-    );
-
     events.push({
       type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
@@ -723,9 +718,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, user either doesn't exist or doesn't have access to this estate
     if (!result[0]) {
-      logger.info(
-        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
-      );
       return null;
     }
 
@@ -749,9 +741,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     if (channelOverride) {
       // For trial estates, use the team ID from the channel override
-      logger.info(
-        `[SlackAgent JIT] Estate ${estateId} is a trial estate with channel ${channelOverride.slackChannelId}, teamId=${channelOverride.slackTeamId}`,
-      );
       return channelOverride.slackTeamId;
     }
 
@@ -845,33 +834,21 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, try just-in-time sync before giving up
     if (results.length === 0) {
-      logger.info(
-        `[SlackAgent JIT] User ${slackUserId} not found in database, attempting JIT sync for estate ${estateId}`,
-      );
-
       // Get Slack token and team ID for this estate
       const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
       if (!slackAccount) {
-        logger.warn(`[SlackAgent JIT] No Slack token found for estate ${estateId}`);
         return [];
       }
-
-      logger.info(`[SlackAgent JIT] Got Slack token for estate ${estateId}`);
 
       // Get team ID (handles both regular and trial estates)
       const syncingTeamId = await this.getSyncingTeamId(estateId);
 
       if (!syncingTeamId) {
-        logger.warn(`[SlackAgent JIT] No syncing team ID found for estate ${estateId}`);
         return [];
       }
 
-      logger.info(
-        `[SlackAgent JIT] Found syncing team ID for ${estateId}: syncingTeamId=${syncingTeamId}`,
-      );
-
       // Attempt JIT sync
-      const syncSuccess = await ensureUserSynced({
+      await ensureUserSynced({
         db: this.db,
         estateId,
         slackUserId,
@@ -879,29 +856,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         syncingTeamId,
       });
 
-      logger.info(`[SlackAgent JIT] Sync result for user ${slackUserId}: ${syncSuccess}`);
-
-      if (syncSuccess) {
-        // Query again after successful sync
-        results = await this.querySlackUsersByExternalId({
-          slackUserIds: [slackUserId],
-          estateId,
-        });
-        logger.info(
-          `[SlackAgent JIT] Query after sync returned ${results.length} results for user ${slackUserId}`,
-        );
-        if (results.length > 0) {
-          logger.info(
-            `[SlackAgent JIT] Successfully synced user ${slackUserId}: userId=${results[0].userId}, role=${results[0].orgRole}, slackTeamId=${results[0].slackTeamId}`,
-          );
-        }
-      }
+      // Query again after sync attempt
+      results = await this.querySlackUsersByExternalId({
+        slackUserIds: [slackUserId],
+        estateId,
+      });
 
       // If still no results after JIT sync, user doesn't exist or couldn't be synced
       if (results.length === 0) {
-        logger.warn(
-          `[SlackAgent JIT] User ${slackUserId} could not be synced for estate ${estateId} (syncSuccess=${syncSuccess})`,
-        );
         return [];
       }
     }
@@ -997,30 +959,14 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const missingUserIds = newMentionedUserIds.filter((id) => !foundUserIds.has(id));
 
     if (missingUserIds.length > 0) {
-      logger.info(
-        `[SlackAgent JIT] ${missingUserIds.length} mentioned users not found in database: ${missingUserIds.join(", ")} - attempting JIT sync for estate ${estateId}`,
-      );
-
       // Get Slack token and team ID for this estate
       const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
-      if (!slackAccount) {
-        logger.warn(
-          `[SlackAgent JIT] Cannot sync mentioned users - no Slack token for estate ${estateId}`,
-        );
-      } else {
+      if (slackAccount) {
         const syncingTeamId = await this.getSyncingTeamId(estateId);
 
-        if (!syncingTeamId) {
-          logger.warn(
-            `[SlackAgent JIT] Cannot sync mentioned users - no syncing team ID for estate ${estateId}`,
-          );
-        } else {
-          logger.info(
-            `[SlackAgent JIT] Syncing mentioned users with syncingTeamId=${syncingTeamId}`,
-          );
-
+        if (syncingTeamId) {
           // Try to sync each missing user
-          const syncResults = await Promise.all(
+          await Promise.all(
             missingUserIds.map((slackUserId) =>
               ensureUserSynced({
                 db: this.db,
@@ -1032,18 +978,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             ),
           );
 
-          logger.info(
-            `[SlackAgent JIT] Mentioned users sync results: ${syncResults.filter((r) => r).length}/${missingUserIds.length} succeeded`,
-          );
-
           // Query again for all mentioned users after sync attempts
           userMappings = await this.querySlackUsersByExternalId({
             slackUserIds: newMentionedUserIds,
             estateId,
           });
-          logger.info(
-            `[SlackAgent JIT] After sync, found ${userMappings.length}/${newMentionedUserIds.length} mentioned users`,
-          );
         }
       }
     }
