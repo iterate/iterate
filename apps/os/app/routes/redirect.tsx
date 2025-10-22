@@ -8,11 +8,35 @@ import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
 import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
+import type { EstateOnboardingState } from "../../types/estate-onboarding.ts";
 import type { Route } from "./+types/redirect";
 import { appendEstatePath } from "./append-estate-path.ts";
+
+type EstatePathInput = {
+  organizationId: string;
+  estateId: string | null | undefined;
+  onboardingId: string | null;
+  onboardingState: EstateOnboardingState | null;
+};
+
+function getEstatePath({
+  organizationId,
+  estateId,
+  onboardingId,
+  onboardingState,
+}: EstatePathInput) {
+  if (!estateId) {
+    return "/no-access";
+  }
+
+  if (onboardingId && onboardingState !== "completed") {
+    return `/${organizationId}/${estateId}/onboarding`;
+  }
+
+  return `/${organizationId}/${estateId}`;
+}
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath(userId: string, cookieHeader: string | null) {
@@ -30,16 +54,6 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       throw new Error(`User ${userId} not found - this should never happen.`);
     }
     const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
-    waitUntil(
-      createStripeCustomerAndSubscriptionForOrganization(
-        db,
-        newOrgAndEstate.organization,
-        user,
-      ).catch(() => {
-        // Error is already logged in the helper function
-      }),
-    );
-
     // If the user has a Slack bot account, automatically connect it to the new estate
     // and sync Slack users to the organization
     if (newOrgAndEstate.estate) {
@@ -115,7 +129,12 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       );
     }
 
-    return `/${newOrgAndEstate.organization.id}/${newOrgAndEstate.estate?.id}`;
+    return getEstatePath({
+      organizationId: newOrgAndEstate.organization.id,
+      estateId: newOrgAndEstate.estate?.id,
+      onboardingId: newOrgAndEstate.estate?.onboardingId ?? null,
+      onboardingState: newOrgAndEstate.estate?.onboardingId ? "pending" : null,
+    });
   }
 
   // Flatten estates from all organizations
@@ -124,6 +143,8 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       id: estate.id,
       name: estate.name,
       organizationId: estate.organizationId,
+      onboardingId: estate.onboardingId ?? null,
+      onboardingState: estate.onboarding?.state ?? null,
     })),
   );
 
@@ -163,14 +184,24 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
     );
 
     if (validEstate) {
-      return `/${savedEstate.organizationId}/${savedEstate.estateId}`;
+      return getEstatePath({
+        organizationId: savedEstate.organizationId,
+        estateId: savedEstate.estateId,
+        onboardingId: validEstate.onboardingId ?? null,
+        onboardingState: validEstate.onboardingState ?? null,
+      });
     }
   }
 
   // No valid saved estate, use the first available estate
   const defaultEstate = userEstates[0];
   if (defaultEstate) {
-    return `/${defaultEstate.organizationId}/${defaultEstate.id}`;
+    return getEstatePath({
+      organizationId: defaultEstate.organizationId,
+      estateId: defaultEstate.id,
+      onboardingId: defaultEstate.onboardingId ?? null,
+      onboardingState: defaultEstate.onboardingState ?? null,
+    });
   }
 
   // Fallback (shouldn't happen)
