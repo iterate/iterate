@@ -29,20 +29,7 @@ jobs:
         uses: dopplerhq/cli-action@v2
 
       - name: Setup Doppler
-        run: doppler setup --config 'prd' --project os
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-
-      - name: Sync secrets
-        run: doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk
-        env:
-          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        working-directory: apps/os
-
-      - name: Run database migrations
-        run: |
-          export PSCALE_DATABASE_URL=$(doppler secrets get DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING --plain)
-          pnpm db:migrate
+        run: doppler setup --config 'stg' --project os # Currently deploy to staging on merge to main
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 
@@ -54,6 +41,7 @@ jobs:
       - name: Deploy OS
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          STAGE: stg # Currently deploy to staging on merge to main
         run: pnpm run deploy
         working-directory: apps/os
 

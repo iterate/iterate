@@ -41,10 +41,8 @@ export const PushControllerEvent = z.discriminatedUnion("type", [
 
 export type PushControllerEvent = z.infer<typeof PushControllerEvent>;
 
-export class OrganizationWebSocket extends DurableObject<CloudflareEnv> {
-  constructor(ctx: DurableObjectState, env: CloudflareEnv) {
-    super(ctx, env);
-  }
+export class OrganizationWebSocket extends DurableObject {
+  declare env: CloudflareEnv;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);

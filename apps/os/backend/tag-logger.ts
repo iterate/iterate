@@ -321,5 +321,6 @@ export const consoleImplementation: TagLogger.Implementation = {
 };
 
 export const logger = new TagLogger(
-  import.meta.env.MODE === "development" ? devConsoleImplementation : consoleImplementation,
+  // Import.meta.env is vite specific and does not exist when bundled.
+  import.meta.env?.MODE === "development" ? devConsoleImplementation : consoleImplementation,
 );
