@@ -182,8 +182,7 @@ githubApp.post("/webhook", async (c) => {
       const deliveryId = c.req.header("X-GitHub-Delivery") || "unknown";
       const repoFullName = event.repository?.full_name ?? "unknown";
       const prNumber =
-        event.pull_request?.number ??
-        (event.issue?.pull_request ? event.issue.number : undefined);
+        event.pull_request?.number ?? (event.issue?.pull_request ? event.issue.number : undefined);
       const prValue = prNumber !== undefined ? `${prNumber}` : "none";
 
       switch (eventType) {
