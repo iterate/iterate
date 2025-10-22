@@ -384,9 +384,11 @@ export const integrationsPlugin = () =>
         },
         async (ctx) => {
           if ("error" in ctx.query) {
-            throw ctx.redirect(
-              `${import.meta.env.VITE_PUBLIC_URL}/api/auth/error?error=${ctx.query.error}&error_description=${ctx.query.error_description}`,
-            );
+            const url = new URL(`${import.meta.env.VITE_PUBLIC_URL}/api/auth/error`);
+            url.searchParams.set("error", ctx.query.error);
+            if (ctx.query.error_description)
+              url.searchParams.set("error_description", ctx.query.error_description);
+            throw ctx.redirect(url.toString());
           }
 
           const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
