@@ -177,6 +177,48 @@ githubApp.post("/webhook", async (c) => {
     const event = JSON.parse(payload);
     const eventType = c.req.header("X-GitHub-Event");
 
+    const logOnlyMode = c.env.GITHUB_WEBHOOK_LOG_ONLY === "true";
+    if (logOnlyMode && eventType) {
+      const deliveryId = c.req.header("X-GitHub-Delivery") || "unknown";
+      const repoFullName = event.repository?.full_name ?? "unknown";
+      const prNumber =
+        event.pull_request?.number ??
+        (event.issue?.pull_request ? event.issue.number : undefined);
+      const prValue = prNumber !== undefined ? `${prNumber}` : "none";
+
+      switch (eventType) {
+        case "issue_comment": {
+          const commentId = event.comment?.id ?? "none";
+          logger.log(
+            `GH-WEBHOOK event=${eventType} delivery=${deliveryId} repo=${repoFullName} pr=${prValue} comment=${commentId}`,
+          );
+          return c.json({ ok: true }, 200);
+        }
+        case "pull_request": {
+          logger.log(
+            `GH-WEBHOOK event=${eventType} delivery=${deliveryId} repo=${repoFullName} pr=${prValue}`,
+          );
+          return c.json({ ok: true }, 200);
+        }
+        case "pull_request_review": {
+          const reviewId = event.review?.id ?? "none";
+          logger.log(
+            `GH-WEBHOOK event=${eventType} delivery=${deliveryId} repo=${repoFullName} pr=${prValue} review=${reviewId}`,
+          );
+          return c.json({ ok: true }, 200);
+        }
+        case "pull_request_review_comment": {
+          const commentId = event.comment?.id ?? "none";
+          logger.log(
+            `GH-WEBHOOK event=${eventType} delivery=${deliveryId} repo=${repoFullName} pr=${prValue} comment=${commentId}`,
+          );
+          return c.json({ ok: true }, 200);
+        }
+        default:
+          break;
+      }
+    }
+
     // We only handle push events
     if (eventType !== "push") {
       // Silently ignore other event types
