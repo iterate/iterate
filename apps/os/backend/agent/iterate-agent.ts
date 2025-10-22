@@ -172,9 +172,10 @@ export class IterateAgent<
     Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
     State extends IterateAgentState = IterateAgentState,
   >
-  extends CloudflareAgent<CloudflareEnv, State>
+  extends CloudflareAgent<{}, State>
   implements ToolsInterface
 {
+  declare env: CloudflareEnv;
   override observability = undefined;
 
   protected db: DB;

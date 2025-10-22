@@ -11,6 +11,7 @@ minimumReleaseAgeExclude:
   - miniflare
   - wrangler
   - '@cloudflare/sandbox'
+  - alchemy
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
