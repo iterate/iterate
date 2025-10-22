@@ -69,6 +69,7 @@ async function setupEnvironmentVariables() {
   const env = [
     "VITE_PUBLIC_URL",
     "OPENAI_API_KEY",
+    "BETTER_AUTH_SECRET",
     "BRAINTRUST_API_KEY",
     "POSTHOG_PUBLIC_KEY",
     "GOOGLE_CLIENT_ID",
