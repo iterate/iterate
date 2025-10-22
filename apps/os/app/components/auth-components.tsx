@@ -62,7 +62,7 @@ export function LoginProviders() {
     const otp = prompt("Enter the OTP we sent to your email");
     if (!otp) return;
 
-    const signinResult = await authClient.signIn.emailOtp({ email, otp });
+    const _signinResult = await authClient.signIn.emailOtp({ email, otp });
     window.location.href = "/";
   };
 
