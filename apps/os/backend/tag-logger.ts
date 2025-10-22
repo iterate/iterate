@@ -214,23 +214,26 @@ export class TagLogger {
   }
 }
 
-function serializeError<T>(error: T): { [K in keyof T]: T[K] } {
+// #region: utils, could be moved to a separate file if needed
+
+function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
   if (error instanceof Error) {
-    const plain: Record<string, unknown> = {
+    const plain: { class: string } & { [K in keyof Error]: Error[K] } = {
+      class: error.constructor.name,
       name: error.name,
       message: error.message,
       stack: error.stack,
     };
 
     // Include cause if present (recursively serialize it)
-    if (error.cause) {
-      plain.cause = serializeError(error.cause);
+    if ("cause" in error) {
+      plain.cause = errorToPOJO(error.cause);
     }
 
     // Include any additional enumerable properties
     Object.getOwnPropertyNames(error).forEach((key) => {
-      if (!plain[key] && key !== "stack") {
-        plain[key] = (error as typeof plain)[key];
+      if (!(key in plain)) {
+        Object.assign(plain, { [key]: error[key as keyof Error] });
       }
     });
 
@@ -239,6 +242,7 @@ function serializeError<T>(error: T): { [K in keyof T]: T[K] } {
   return error;
 }
 
+/** Opinionated logger that extends TagLogger to send any errors logged to PostHog */
 class PosthogTagLogger extends TagLogger {
   error(...args: [Error] | [string, unknown?]) {
     super.error(...(args as Parameters<TagLogger["error"]>));
@@ -290,8 +294,10 @@ function getLogger() {
     };
     // for now let's use console.info always. But we could do `console[level](...)`, not sure if that'll work as well in Cloudflare/AWS CloudWatch/etc.
     // eslint-disable-next-line no-console -- only usage
-    console.info(JSON.stringify(toLog, (_, value) => serializeError(value)));
+    console.info(JSON.stringify(toLog, (_, value) => errorToPOJO(value)));
   });
 }
+
+// #endregion: utils
 
 export const logger = getLogger();
