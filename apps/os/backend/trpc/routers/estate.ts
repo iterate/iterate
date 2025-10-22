@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
 import * as semver from "semver";
@@ -46,6 +47,7 @@ const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, nex
       /** owner and repo in format needed for octokit.rest api */
       repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
       repoData,
+      connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, ""),
       installationToken,
       refName: ctx.estate.connectedRepoRef,
     },
@@ -241,6 +243,12 @@ export const estateRouter = router({
           addition.contents = Buffer.from(addition.contents).toString("base64");
         });
       }
+      input.commit.fileChanges.additions?.forEach((addition) => {
+        addition.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash!, addition.path);
+      });
+      input.commit.fileChanges.deletions?.forEach((deletion) => {
+        deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash!, deletion.path);
+      });
       const github = new Octokit({ auth: ctx.installationToken });
       const result = await github.graphql(
         dedent`
@@ -279,16 +287,22 @@ export const estateRouter = router({
     const zipball = await zipballResponse.arrayBuffer();
     const unzipped = fflate.unzipSync(new Uint8Array(zipball));
 
+    const pathPrefix = "./" + ctx.connectedRepoPathWithoutLeadingSlash;
     const filesystem: Record<string, string | null> = Object.fromEntries(
       Object.entries(unzipped)
         .map(([filename, data]) => [
           filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
           fflate.strFromU8(data),
         ])
-        .filter(([k, v]) => !k.endsWith("/") && v.trim()),
+        .filter(([k, v]) => !k.endsWith("/") && v.trim())
+        .flatMap(([k, v]) => {
+          const relativePath = path.relative(pathPrefix, k);
+          if (relativePath.startsWith("..")) return [];
+          return [[relativePath, v] as const];
+        }),
     );
     const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
-    return { repoData: ctx.repoData, filesystem, sha, branch: ctx.refName };
+    return { repoData: ctx.repoData, pathPrefix, filesystem, sha, branch: ctx.refName };
   }),
 
   listPulls: iterateBotGithubProcedure

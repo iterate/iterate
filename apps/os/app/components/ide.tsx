@@ -1,7 +1,7 @@
 import Editor from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage } from "usehooks-ts";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTheme } from "next-themes";
 import {
@@ -20,6 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useSearchParams } from "react-router";
+import dedent from "dedent";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
@@ -142,7 +143,7 @@ interface FileTreeViewProps {
   isFileEdited: (path: string) => boolean;
   collapsedFolders: Set<string>;
   onToggleFolder: (path: string) => void;
-  onNewFile: (folderPath: string) => void;
+  onNewFile: (params?: { folderPath?: string; fileName?: string; contents?: string }) => void;
   onNewFolder: (folderPath: string) => void;
   onRename: (oldPath: string, newPath: string) => void;
   onDelete: (path: string) => void;
@@ -221,7 +222,7 @@ function FileTreeView({
                       <button
                         onClick={(e) => {
                           e.stopPropagation();
-                          onNewFile(node.path);
+                          onNewFile({ folderPath: node.path });
                         }}
                         className="p-0.5 hover:bg-accent rounded"
                         title="New File"
@@ -313,11 +314,8 @@ export function IDE() {
     [collapsedFoldersRecord],
   );
 
-  const [bump, setBump] = useState(0);
-  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({
-    estateId,
-    ...({ bump } as {}),
-  });
+  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({ estateId });
+  const queryClient = useQueryClient();
 
   const saveFileMutation = useMutation(
     trpc.estate.updateRepo.mutationOptions({
@@ -326,7 +324,8 @@ export function IDE() {
           ...(variables.commit.fileChanges.additions?.map((addition) => addition.path) || []),
           ...(variables.commit.fileChanges.deletions?.map((deletion) => deletion.path) || []),
         ]);
-        setBump((prev) => prev + 1);
+
+        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
         setExpectedEdits(localEdits || {});
         setLocalEdits(
           localEdits &&
@@ -390,14 +389,14 @@ export function IDE() {
     setCollapsedFolders((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
-  const handleNewFile = (folderPath: string) => {
-    const fileName = prompt("Enter file name:");
+  const handleNewFile = ({ folderPath = "", fileName = "", contents = "" } = {}) => {
+    fileName ||= prompt("Enter file name:") || "";
     if (!fileName) return;
 
     const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
     setLocalEdits((prev) => ({
       ...prev,
-      [fullPath]: "",
+      [fullPath]: contents,
     }));
     setSelectedFile(fullPath);
     // Expand the folder if it's collapsed
@@ -630,6 +629,26 @@ export function IDE() {
             onDelete={handleDelete}
           />
         </div>
+        {getRepoFileSystemQuery.data?.filesystem &&
+          !("iterate.config.ts" in getRepoFileSystemQuery.data.filesystem) && (
+            <div className="p-2 border-b">
+              <Button
+                onClick={() =>
+                  handleNewFile({
+                    fileName: "iterate.config.ts",
+                    contents: templateEstateConfigString,
+                  })
+                }
+                disabled={localEdits?.["iterate.config.ts"] !== undefined}
+                variant="ghost"
+                size="sm"
+                className="w-full h-7 text-xs gap-1.5"
+              >
+                <IterateLetterI className="h-3 w-3" />
+                Create iterate.config.ts
+              </Button>
+            </div>
+          )}
       </div>
 
       {/* Main panel - Editor */}
@@ -685,3 +704,9 @@ export function IDE() {
     </div>
   );
 }
+
+// eslint + autofix will make sure the below variable stays in sync with estates/template/iterate.config.ts
+// codegen:start {preset: str, source: ../../../../estates/template/iterate.config.ts, const: templateEstateConfigString}
+const templateEstateConfigString =
+  'import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";\n\nconst config = defineConfig({\n  contextRules: [\n    // You can use "matchers" to conditionally apply rules\n    // For example to only be active when certain MCP connections are present\n    {\n      key: "how-we-use-linear",\n      prompt: "Tag any new issues with the label `iterate-tutorial`",\n      match: matchers.hasMCPConnection("linear"),\n    },\n\n    // Or when a certain user is on a thread\n    {\n      key: "jonas-rules",\n      prompt: "When Jonas is on a thread, remind him to lock in",\n      match: matchers.hasParticipant("jonas"),\n    },\n\n    // You can also use mathcers.and, matchers.or and matchers.not\n    {\n      key: "jonas-in-the-evening",\n      prompt: "It\'s between 22:00 - 06:00, remind jonas to go to sleep",\n      match: matchers.and(\n        matchers.hasParticipant("jonas"),\n        matchers.timeWindow({\n          timeOfDay: { start: "22:00", end: "06:00" },\n        }),\n      ),\n    },\n    // This file is "just typescript", so you can do whatever you want\n    // e.g. structure your rules in markdown, too, and use a helper to load them\n    ...contextRulesFromFiles("rules/**/*.md"),\n  ],\n});\nexport default config;\n';
+// codegen:end
