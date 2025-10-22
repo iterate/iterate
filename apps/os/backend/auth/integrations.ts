@@ -586,7 +586,7 @@ export const integrationsPlugin = () =>
             // Sync Slack channels, users (internal and external) in the background
             if (!tokens.team?.id) {
               logger.error("[Slack OAuth] No team_id in link flow");
-              return ctx.json({ error: "Failed to get Slack team ID" });
+              return ctx.json({ error: "Failed to get Slack team ID" }, { status: 500 });
             }
 
             waitUntil(
