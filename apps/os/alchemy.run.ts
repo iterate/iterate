@@ -69,6 +69,7 @@ async function setupEnvironmentVariables() {
   const env = [
     "VITE_PUBLIC_URL",
     "OPENAI_API_KEY",
+    "BETTER_AUTH_SECRET",
     "BRAINTRUST_API_KEY",
     "POSTHOG_PUBLIC_KEY",
     "GOOGLE_CLIENT_ID",
@@ -242,6 +243,9 @@ async function setupDurableObjects() {
       context: "./backend/sandbox",
       platform: "linux/amd64",
     },
+    instanceType: "standard-4",
+    maxInstances: 10,
+    // todo: ask sam to support rollout_active_grace_period
     adopt: true,
   });
 

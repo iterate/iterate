@@ -263,7 +263,6 @@ export class IterateAgent<
   }
 
   get iterateConfig() {
-    if (!this._iterateConfig) return {} as IterateConfig;
     return this._iterateConfig;
   }
 
@@ -644,7 +643,7 @@ export class IterateAgent<
           record: updated,
           estate: this.estate,
           organization: this.organization,
-          iterateConfig: this.iterateConfig,
+          iterateConfig: this.iterateConfig || {},
         });
       }
     } catch (error) {
@@ -756,7 +755,7 @@ export class IterateAgent<
       ...defaultContextRules,
       // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
       // That means we want to pull in the tutorial rules
-      ...(this.iterateConfig.contextRules || []),
+      ...(this.iterateConfig?.contextRules || []),
     ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
