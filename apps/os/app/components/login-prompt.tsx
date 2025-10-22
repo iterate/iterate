@@ -1,30 +1,35 @@
 import { useNavigate } from "react-router";
+import { useMutation } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
 
 export function LoginPrompt() {
   const navigate = useNavigate();
 
-  const handleSlackAuth = async () => {
-    const result = await authClient.integrations.directLoginWithSlack({
-      query: {
+  const handleSlackAuth = useMutation({
+    mutationFn: async () => {
+      const result = await authClient.integrations.directLoginWithSlack({
+        query: {
+          callbackURL: "/",
+        },
+      });
+
+      if (!result || !("url" in result)) {
+        return;
+      }
+
+      window.location.href = result.url.toString();
+    },
+  });
+
+  const handleGoogleAuth = useMutation({
+    mutationFn: async () => {
+      await authClient.signIn.social({
+        provider: "google",
         callbackURL: "/",
-      },
-    });
-
-    if (!result || !("url" in result)) {
-      return;
-    }
-
-    window.location.href = result.url.toString();
-  };
-
-  const handleGoogleAuth = async () => {
-    await authClient.signIn.social({
-      provider: "google",
-      callbackURL: "/",
-    });
-  };
+      });
+    },
+  });
 
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
@@ -42,12 +47,20 @@ export function LoginPrompt() {
         </div>
 
         <div className="space-y-3">
-          <Button onClick={handleSlackAuth} variant="outline" className="w-full h-12">
+          <Button
+            onClick={() => handleSlackAuth.mutate()}
+            variant="outline"
+            className="w-full h-12"
+          >
             <img src="/slack.svg" alt="Slack" className="mr-2 h-5 w-5" />
             Continue with Slack
           </Button>
 
-          <Button onClick={handleGoogleAuth} variant="outline" className="w-full h-12">
+          <Button
+            onClick={() => handleGoogleAuth.mutate()}
+            variant="outline"
+            className="w-full h-12"
+          >
             <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
               <path
                 d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
