@@ -76,6 +76,7 @@ async function setupEnvironmentVariables() {
     "SLACK_CLIENT_ID",
     "SLACK_CLIENT_SECRET",
     "SLACK_SIGNING_SECRET",
+    "SLACK_ITERATE_TEAM_ID",
     "GITHUB_APP_CLIENT_ID",
     "GITHUB_APP_CLIENT_SECRET",
     "GITHUB_APP_PRIVATE_KEY",
