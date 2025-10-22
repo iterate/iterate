@@ -100,14 +100,16 @@ async function runConfigInSandboxInternal(
   // Escape the JSON string for shell
   const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
   // Init the sandbox (ignore any errors)
-  const commandInit = `npx tsx /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
+  const nodePath = "/opt/node24/bin/node";
+
+  const commandInit = `${nodePath} /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
   const resultInit = await sandboxSession.exec(commandInit, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
   if (!resultInit.success) {
     logger.error(
       JSON.stringify({
-        message: "Error running `npx tsx /tmp/sandbox-entry.ts init <ARGS>` in sandbox",
+        message: `Error running \`${nodePath} /tmp/sandbox-entry.ts init <ARGS>\` in sandbox`,
         result: resultInit,
       }),
     );
@@ -125,7 +127,7 @@ async function runConfigInSandboxInternal(
   // Escape the JSON string for shell
   const buildJsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
   // Run the build in sandbox
-  const commandBuild = `npx tsx /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
+  const commandBuild = `${nodePath} /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
   const resultBuild = await sandboxSession.exec(commandBuild, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
@@ -133,7 +135,7 @@ async function runConfigInSandboxInternal(
   if (!resultBuild.success) {
     logger.error(
       JSON.stringify({
-        message: "Error running `npx tsx /tmp/sandbox-entry.ts build <ARGS>` in sandbox",
+        message: `Error running \`${nodePath} /tmp/sandbox-entry.ts build <ARGS>\` in sandbox`,
         result: resultBuild,
       }),
     );
