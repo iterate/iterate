@@ -34,6 +34,7 @@ export type CloudflareEnv = Env & {
   GITHUB_APP_SLUG: string;
   EXPIRING_URLS_SIGNING_KEY: string;
   GITHUB_WEBHOOK_SECRET: string;
+  GITHUB_WEBHOOK_LOG_ONLY?: string;
   STAGE__PR_ID?: string;
   PROJECT_NAME: string;
   POSTHOG_ENVIRONMENT: string;

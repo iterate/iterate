@@ -35,3 +35,21 @@ Once all of the above is setup, you can run the e2e tests locally by running `pn
 
 In CI, the setup is mostly same, but done on a separate Slack Dev Workspace as we are using the production bot.
 The Dev workspace and the user who is testing is `iterate@nustom.com`, if you need to access that workspace, you can login with that user to google and access the dev workspace, passwords are in 1password.
+
+### GitHub webhook log-only smoke test
+
+Set `GITHUB_WEBHOOK_LOG_ONLY=true` and provide a payload file (for example `payload.json`) that matches the event you want to replay. Then run:
+
+```bash
+PAYLOAD="$(cat payload.json)"
+SIG="sha256=$(printf '%s' "$PAYLOAD" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | cut -d' ' -f2)"
+curl -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: $SIG" \
+  -H "X-GitHub-Event: pull_request_review" \
+  -H "X-GitHub-Delivery: test-delivery-id" \
+  --data "$PAYLOAD" \
+  http://localhost:8787/api/github/webhook
+```
+
+Update `X-GitHub-Event` to `issue_comment`, `pull_request`, or `pull_request_review_comment` and tweak the payload to spot-check each path. Logs should print with the `GH-WEBHOOK` prefix while the handler returns `{"ok":true}`.
