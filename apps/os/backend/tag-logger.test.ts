@@ -1,4 +1,3 @@
-import { inspect } from "util";
 import { expect, test } from "vitest";
 import { TagLogger } from "./tag-logger.ts";
 
