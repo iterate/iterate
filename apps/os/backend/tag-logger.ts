@@ -273,6 +273,7 @@ class PosthogTagLogger extends TagLogger {
       Promise.resolve().then(async () => {
         const { PostHog } = await import("posthog-node");
         const { env } = await import("../env.ts");
+        if (!env.POSTHOG_PUBLIC_KEY) return;
 
         try {
           const error = args[0] instanceof Error ? args[0] : new Error(args[0], { cause: args[1] });
@@ -295,10 +296,11 @@ class PosthogTagLogger extends TagLogger {
 }
 
 function getLogger() {
-  if (import.meta.env?.MODE === "test") {
+  const mode = import.meta.env?.MODE;
+  if (mode === "test") {
     return new TagLogger(TagLogger.consoleLogFn(console));
   }
-  if (import.meta.env?.DOPPLER_ENVIRONMENT === "dev") {
+  if (mode === "dev") {
     // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
     return new PosthogTagLogger(TagLogger.consoleLogFn(console));
   }
