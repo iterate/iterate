@@ -47,7 +47,7 @@ const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, nex
       /** owner and repo in format needed for octokit.rest api */
       repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
       repoData,
-      connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, ""),
+      connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, "") || "",
       installationToken,
       refName: ctx.estate.connectedRepoRef,
     },
@@ -244,10 +244,10 @@ export const estateRouter = router({
         });
       }
       input.commit.fileChanges.additions?.forEach((addition) => {
-        addition.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash!, addition.path);
+        addition.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, addition.path);
       });
       input.commit.fileChanges.deletions?.forEach((deletion) => {
-        deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash!, deletion.path);
+        deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, deletion.path);
       });
       const github = new Octokit({ auth: ctx.installationToken });
       const result = await github.graphql(
