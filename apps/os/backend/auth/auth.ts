@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -11,7 +12,6 @@ import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
-import { randomInt } from "node:crypto";
 
 export const getAuth = (db: DB) =>
   betterAuth({
