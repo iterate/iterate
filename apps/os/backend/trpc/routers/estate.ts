@@ -1,13 +1,13 @@
 import * as path from "node:path";
 import { Readable } from "node:stream";
 import { createGunzip } from "node:zlib";
+import { inspect } from "node:util";
 import * as semver from "semver";
 import * as tarStream from "tar-stream";
-import * as fflate from "fflate";
+import * as fflate from "fflate/browser";
 import { z } from "zod";
 import { eq, desc, and, notInArray } from "drizzle-orm";
 import dedent from "dedent";
-import { Octokit } from "octokit";
 import { TRPCError } from "@trpc/server";
 import {
   protectedProcedure,
@@ -25,72 +25,81 @@ import {
 } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
-  getGithubInstallationToken,
+  getOctokitForInstallation,
+  githubAppInstance,
   triggerGithubBuild,
 } from "../../integrations/github/github-utils.ts";
 import type { DB } from "../../db/client.ts";
-import type { CloudflareEnv } from "../../../env.ts";
+import { env, type CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./github-schemas.ts";
 
-const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
+export const RepoData = z.object({
+  id: z.number(),
+  full_name: z.string(),
+  html_url: z.string(),
+  clone_url: z.string(),
+});
+
+const getInstallationScopedContext = async (options: {
+  db: DB;
+  estateId: string;
+  connectedRepoId: number;
+}) => {
+  const githubInstallation = await getGithubInstallationForEstate(options.db, options.estateId);
+  const scopedOctokit = await getOctokitForInstallation(
+    githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+  );
+
+  const repoRes = await scopedOctokit.request("GET /repositories/{repository_id}", {
+    repository_id: options.connectedRepoId,
+  });
+
+  if (repoRes.status !== 200) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Failed to fetch repository details",
+    });
+  }
+
+  const repoData = RepoData.parse(repoRes.data);
+
+  return {
+    octokit: scopedOctokit,
+    repoData,
+    githubInstallation,
+  };
+};
+
+const githubInstallationScopedProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
   if (!ctx.estate.connectedRepoId)
     throw new TRPCError({
       code: "NOT_FOUND",
       message: "No GitHub repository connected to this estate",
     });
 
-  const githubInstallation = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
-  let installationToken: string | null = null;
+  const { octokit, repoData } = await getInstallationScopedContext({
+    db: ctx.db,
+    estateId: ctx.estate.id,
+    connectedRepoId: ctx.estate.connectedRepoId,
+  });
 
-  if (githubInstallation)
-    installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-  if (!installationToken) installationToken = ctx.env.GITHUB_ESTATES_TOKEN;
-
-  const { repoData } = await getRepoDetails(ctx.estate.connectedRepoId, installationToken);
-  const octokit = new Octokit({ auth: installationToken });
   return next({
     ctx: {
       ...ctx,
+      estate: { ...ctx.estate, connectedRepoId: ctx.estate.connectedRepoId },
       github: octokit,
       /** owner and repo in format needed for octokit.rest api */
       repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
       repoData,
       connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, "") || "",
-      installationToken,
       refName: ctx.estate.connectedRepoRef,
     },
   });
 });
-
-async function getRepoDetails(repoId: number, installationToken: string) {
-  // Get repository details
-  const repoResponse = await fetch(`https://api.github.com/repositories/${repoId}`, {
-    headers: {
-      Authorization: `Bearer ${installationToken}`,
-      Accept: "application/vnd.github+json",
-      "User-Agent": "Iterate OS",
-    },
-  });
-
-  if (!repoResponse.ok) {
-    throw new Error("Failed to fetch repository details");
-  }
-
-  const repoData = z
-    .object({
-      id: z.number(),
-      full_name: z.string(),
-      html_url: z.string(),
-      clone_url: z.string(),
-    })
-    .parse(await repoResponse.json());
-
-  return { repoData };
-}
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -112,16 +121,26 @@ export async function triggerEstateRebuild(params: {
     throw new Error("No GitHub repository connected to this estate");
   }
 
-  // Get the GitHub installation
-  const githubInstallation = await getGithubInstallationForEstate(db, estateId);
+  const { repoData, githubInstallation } = await getInstallationScopedContext({
+    db,
+    estateId,
+    connectedRepoId: estateWithRepo.connectedRepoId,
+  });
 
-  let installationToken: string | null = null;
-  if (githubInstallation)
-    installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-  // If no installation token is found, use the fallback token
-  if (!installationToken) installationToken = env.GITHUB_ESTATES_TOKEN;
+  const installationToken = await githubAppInstance.octokit.rest.apps.createInstallationAccessToken(
+    {
+      installation_id: parseInt(
+        githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+      ),
+      repository_ids: [estateWithRepo.connectedRepoId],
+    },
+  );
 
-  const { repoData } = await getRepoDetails(estateWithRepo.connectedRepoId, installationToken);
+  if (installationToken.status !== 201) {
+    throw new Error(
+      `Failed to create installation token: ${installationToken.status} ${JSON.stringify(installationToken.data)}`,
+    );
+  }
 
   // Use the common build trigger function
   return await triggerGithubBuild({
@@ -131,7 +150,7 @@ export async function triggerEstateRebuild(params: {
     commitHash,
     commitMessage,
     repoUrl: repoData.clone_url,
-    installationToken,
+    installationToken: installationToken.data.token,
     connectedRepoPath: estateWithRepo.connectedRepoPath || "/",
     branch: estateWithRepo.connectedRepoRef || "main",
     isManual,
@@ -288,7 +307,7 @@ export const estateRouter = router({
       };
     }),
 
-  updateRepo: iterateBotGithubProcedure
+  updateRepo: githubInstallationScopedProcedure
     .input(
       z.object({
         commit: CreateCommitOnBranchInput.omit({ branch: true }),
@@ -307,8 +326,8 @@ export const estateRouter = router({
       input.commit.fileChanges.deletions?.forEach((deletion) => {
         deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, deletion.path);
       });
-      const github = new Octokit({ auth: ctx.installationToken });
-      const result = await github.graphql(
+
+      const result = await ctx.github.graphql(
         dedent`
           mutation ($input: CreateCommitOnBranchInput!) {
             createCommitOnBranch(input: $input) {
@@ -330,20 +349,24 @@ export const estateRouter = router({
       );
       return result;
     }),
-  getRepoFilesystem: iterateBotGithubProcedure.query(async ({ ctx }) => {
-    const zipballResponse = await fetch(
-      `https://api.github.com/repos/${ctx.repoData.full_name}/zipball/${ctx.refName}`,
-      { headers: { Authorization: `Bearer ${ctx.installationToken}`, "User-Agent": "Iterate OS" } },
-    );
+  getRepoFilesystem: githubInstallationScopedProcedure.query(async ({ ctx }) => {
+    const zipball = await ctx.github.rest.repos.downloadZipballArchive({
+      owner: ctx.repo.owner,
+      repo: ctx.repo.repo,
+      ref: ctx.refName ?? "main",
+    });
 
-    if (!zipballResponse.ok) {
-      throw new Error(
-        `Failed to fetch zipball ${zipballResponse.url}: ${await zipballResponse.text()}`,
+    if (!(zipball.data instanceof ArrayBuffer)) {
+      logger.error(
+        `Failed to download repo filesystem: ${inspect(zipball, { depth: null, colors: true })}`,
       );
+      throw new TRPCError({
+        code: "INTERNAL_SERVER_ERROR",
+        message: `Failed to download repo filesystem`,
+      });
     }
 
-    const zipball = await zipballResponse.arrayBuffer();
-    const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+    const unzipped = fflate.unzipSync(new Uint8Array(zipball.data));
 
     const pathPrefix = "./" + ctx.connectedRepoPathWithoutLeadingSlash;
     const filesystem: Record<string, string | null> = Object.fromEntries(
@@ -363,7 +386,7 @@ export const estateRouter = router({
     return { repoData: ctx.repoData, pathPrefix, filesystem, sha, branch: ctx.refName };
   }),
 
-  listPulls: iterateBotGithubProcedure
+  listPulls: githubInstallationScopedProcedure
     .input(
       z.object({
         state: z.enum(["open", "closed", "all"]).default("open"),
@@ -656,7 +679,7 @@ export const estateRouter = router({
     return { results: {} as Record<string, unknown> };
   }),
 
-  triggerRebuild: estateProtectedProcedure
+  triggerRebuild: githubInstallationScopedProcedure
     .input(
       z.object({
         target: z.string().min(1, "Target is required"),
@@ -666,85 +689,41 @@ export const estateRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { estateId, target, targetType } = input;
 
-      // Get the connected GitHub repo for this estate
-      const estateWithRepo = await ctx.db.query.estate.findFirst({
-        where: eq(estate.id, estateId),
-      });
-
-      if (!estateWithRepo?.connectedRepoId) {
-        throw new Error("No GitHub repository connected to this estate");
-      }
-
-      // Get the GitHub installation
-      const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-
-      let installationToken: string | null = null;
-
-      if (githubInstallation)
-        installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-      // If no installation token is found, use the fallback token
-      if (!installationToken) installationToken = ctx.env.GITHUB_ESTATES_TOKEN;
-
-      // GitHub API response schemas
-      const GitHubCommitResponse = z.object({
-        sha: z.string(),
-        commit: z.object({
-          message: z.string(),
-        }),
-      });
-
-      const GitHubBranchResponse = z.object({
-        commit: z.object({
-          sha: z.string(),
-          commit: z.object({
-            message: z.string(),
-          }),
-        }),
-      });
-
       let commitHash: string;
       let commitMessage: string;
 
       if (targetType === "commit") {
-        // Fetch the commit details
-        const commitResponse = await fetch(
-          `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}/commits/${target}`,
-          {
-            headers: {
-              Authorization: `Bearer ${installationToken}`,
-              Accept: "application/vnd.github+json",
-              "User-Agent": "Iterate OS",
-            },
-          },
-        );
+        const commitResponse = await ctx.github.rest.repos.getCommit({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          ref: target,
+        });
 
-        if (!commitResponse.ok) {
-          throw new Error(`Failed to fetch commit details: ${target}`);
+        if (commitResponse.status !== 200) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Failed to fetch commit details: ${target}`,
+          });
         }
 
-        const commitData = GitHubCommitResponse.parse(await commitResponse.json());
-        commitHash = commitData.sha;
-        commitMessage = commitData.commit.message;
+        commitHash = commitResponse.data.sha;
+        commitMessage = commitResponse.data.commit.message;
       } else {
-        // Fetch the latest commit on the branch
-        const branchResponse = await fetch(
-          `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}/branches/${target}`,
-          {
-            headers: {
-              Authorization: `Bearer ${installationToken}`,
-              Accept: "application/vnd.github+json",
-              "User-Agent": "Iterate OS",
-            },
-          },
-        );
+        const branchResponse = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: target,
+        });
 
-        if (!branchResponse.ok) {
-          throw new Error(`Failed to fetch branch details: ${target}`);
+        if (branchResponse.status !== 200) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Failed to fetch branch details: ${target}`,
+          });
         }
 
-        const branchData = GitHubBranchResponse.parse(await branchResponse.json());
-        commitHash = branchData.commit.sha;
-        commitMessage = branchData.commit.commit.message;
+        commitHash = branchResponse.data.commit.sha;
+        commitMessage = branchResponse.data.commit.commit.message;
       }
 
       // Use the helper function to trigger the rebuild

@@ -64,7 +64,6 @@ async function uploadSourcemaps() {
     });
   }
 }
-
 const Required = z.string().nonempty();
 const Optional = z.string().optional();
 const Env = z.object({
@@ -82,8 +81,8 @@ const Env = z.object({
   GITHUB_APP_CLIENT_ID: Required,
   GITHUB_APP_CLIENT_SECRET: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
-  GITHUB_APP_SLUG: Required,
-  GITHUB_ESTATES_TOKEN: Required,
+  GITHUB_APP_ID: Required,
+  GITHUB_ESTATES_DEFAULT_INSTALLATION_ID: Required,
   EXPIRING_URLS_SIGNING_KEY: Required,
   GITHUB_WEBHOOK_SECRET: Required,
   PROJECT_NAME: Required,
