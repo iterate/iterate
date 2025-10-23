@@ -47,12 +47,12 @@ test("stores memories", () => {
   expect(calls).toEqual([
     [
       "warn",
-      "[numero=dos][depth=prettydeep][depth=deeper]",
+      "[numero=dos][depth=deeper]",
       "something concerning happened",
       "memories:",
       [expectDate, "debug", "[numero=dos]", "dbg-a", { input: 0.9 }],
       [expectDate, "debug", "[numero=dos][depth=prettydeep]", "dbg-b", { depth: 1 }],
-      [expectDate, "debug", "[numero=dos][depth=prettydeep][depth=deeper]", "dbg-c", { depth: 2 }],
+      [expectDate, "debug", "[numero=dos][depth=deeper]", "dbg-c", { depth: 2 }],
     ],
     [
       "warn",

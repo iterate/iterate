@@ -66,7 +66,7 @@ app.use("*", async (c, next) => {
     userId: c.var.session?.user?.id || undefined,
     path: c.req.path,
     httpMethod: c.req.method,
-    url: encodeURIComponent(c.req.url),
+    url: c.req.url,
     traceId: typeid("req").toString(),
   };
   return logger.run(requestTags, () => next());
