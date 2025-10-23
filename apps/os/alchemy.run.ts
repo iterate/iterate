@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import alchemy, { type Scope } from "alchemy";
+import alchemy, { type Scope, type Secret } from "alchemy";
 import {
   Hyperdrive,
   R2Bucket,
@@ -66,67 +66,90 @@ async function uploadSourcemaps() {
 }
 
 async function setupEnvironmentVariables() {
-  const env = [
-    "VITE_PUBLIC_URL",
-    "OPENAI_API_KEY",
-    "BETTER_AUTH_SECRET",
-    "BRAINTRUST_API_KEY",
-    "POSTHOG_PUBLIC_KEY",
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
-    "SLACK_CLIENT_ID",
-    "SLACK_CLIENT_SECRET",
-    "SLACK_SIGNING_SECRET",
-    "SLACK_ITERATE_TEAM_ID",
-    "GITHUB_APP_CLIENT_ID",
-    "GITHUB_APP_CLIENT_SECRET",
-    "GITHUB_APP_PRIVATE_KEY",
-    "GITHUB_APP_SLUG",
-    "GITHUB_ESTATES_TOKEN",
-    "EXPIRING_URLS_SIGNING_KEY",
-    "GITHUB_WEBHOOK_SECRET",
-    "PROJECT_NAME",
-    "EXA_API_KEY",
-    "CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_ACCOUNT_ID",
-    "REPLICATE_API_TOKEN",
-    "ITERATE_USER",
-    "STRIPE_SECRET_KEY",
-    "STRIPE_WEBHOOK_SECRET",
-    "STRIPE_PRICING_PLAN_ID",
-    "SERVICE_AUTH_TOKEN",
-  ] as const;
+  const keys = {
+    VITE_PUBLIC_URL: "required",
+    OPENAI_API_KEY: "required",
+    BETTER_AUTH_SECRET: "required",
+    BRAINTRUST_API_KEY: "required",
+    POSTHOG_PUBLIC_KEY: "required",
+    GOOGLE_CLIENT_ID: "required",
+    GOOGLE_CLIENT_SECRET: "required",
+    SLACK_CLIENT_ID: "required",
+    SLACK_CLIENT_SECRET: "required",
+    SLACK_SIGNING_SECRET: "required",
+    SLACK_ITERATE_TEAM_ID: "required",
+    GITHUB_APP_CLIENT_ID: "required",
+    GITHUB_APP_CLIENT_SECRET: "required",
+    GITHUB_APP_PRIVATE_KEY: "required",
+    GITHUB_APP_SLUG: "required",
+    GITHUB_ESTATES_TOKEN: "required",
+    EXPIRING_URLS_SIGNING_KEY: "required",
+    GITHUB_WEBHOOK_SECRET: "required",
+    PROJECT_NAME: "required",
+    EXA_API_KEY: "required",
+    CLOUDFLARE_API_TOKEN: "required",
+    CLOUDFLARE_ACCOUNT_ID: "required",
+    REPLICATE_API_TOKEN: "required",
+    ITERATE_USER: "required",
+    STRIPE_SECRET_KEY: "required",
+    STRIPE_WEBHOOK_SECRET: "required",
+    STRIPE_PRICING_PLAN_ID: "required",
+    SERVICE_AUTH_TOKEN: "required",
 
-  R.forEach(env, (env) => {
-    if (!process.env[env]) {
+    // optional keys
+    ADMIN_EMAIL_HOSTS: "optional",
+    TEST_USER_PATTERNS: "optional",
+    POSTHOG_ENVIRONMENT: "optional",
+    ONBOARDING_E2E_TEST_SETUP_PARAMS: "optional",
+    ITERATE_NOTIFICATION_ESTATE_ID: "optional",
+    RESEND_API_KEY: "optional",
+  } as const satisfies Record<string, "required" | "optional">;
+
+  R.forEachObj(keys, (type, env) => {
+    if (type === "required" && !process.env[env]) {
       throw new Error(
         `${env} is not set in process.env, if its an optional env, use the optionalEnv Array`,
       );
     }
   });
 
-  const envBindings = R.fromEntries(
-    R.map(env, (env) => [env, alchemy.secret(process.env[env])] as const),
-  );
+  type Keys = typeof keys;
+  type KeyName = keyof typeof keys;
+  type RequiredKey = { [K in KeyName]: Keys[K] extends "required" ? K : never }[KeyName];
+  type OptionalKey = { [K in KeyName]: Keys[K] extends "optional" ? K : never }[KeyName];
 
-  const optionalEnv = [
-    "ADMIN_EMAIL_HOSTS",
-    "TEST_USER_PATTERNS",
-    "POSTHOG_ENVIRONMENT",
-    "ONBOARDING_E2E_TEST_SETUP_PARAMS",
-    "ITERATE_NOTIFICATION_ESTATE_ID",
-  ] as const;
+  return R.mapValues(keys, (type, env) => {
+    if (type === "required" && !process.env[env]) {
+      throw new Error(
+        `${env} is not set in process.env, if its an optional env, use the optionalEnv Array`,
+      );
+    }
+    return alchemy.secret(process.env[env]);
+  }) as {} as { [K in RequiredKey]: Secret<string> } & { [K in OptionalKey]?: Secret<string> };
 
-  const optionalEnvBindings = R.fromEntries(
-    R.filter(optionalEnv, (env) => Boolean(process.env[env])).map(
-      (env) => [env, alchemy.secret(process.env[env])] as const,
-    ),
-  );
+  // const envBindings = R.fromEntries(
+  //   R.map(env, (env) => [env, alchemy.secret(process.env[env])] as const),
+  // );
 
-  return {
-    ...envBindings,
-    ...optionalEnvBindings,
-  };
+  // const optionalEnv = [
+  //   "ADMIN_EMAIL_HOSTS",
+  //   "TEST_USER_PATTERNS",
+  //   "POSTHOG_ENVIRONMENT",
+  //   "ONBOARDING_E2E_TEST_SETUP_PARAMS",
+  //   "ITERATE_NOTIFICATION_ESTATE_ID",
+  //   "RESEND_API_KEY",
+  // ] as const;
+
+  // const optionalEnvBindings = R.fromEntries(
+  //   R.filter(optionalEnv, (env) => Boolean(process.env[env])).map(
+  //     (env) => [env, alchemy.secret(process.env[env])] as const,
+  //   ),
+  // );
+
+  // return {
+  //   ...envBindings,
+  //   ...optionalEnvBindings,
+  // };
 }
 
 async function setupDatabase() {
