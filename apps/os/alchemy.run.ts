@@ -104,6 +104,7 @@ const Env = z.object({
   ONBOARDING_E2E_TEST_SETUP_PARAMS: Optional,
   ITERATE_NOTIFICATION_ESTATE_ID: Optional,
   RESEND_API_KEY: Optional,
+  RESEND_FROM_EMAIL: Optional,
   /** comma-separated list of emails to invite to customer slack connect channels by default. e.g. "jonas@nustom.com,misha@nustom.com" */
   SLACK_CONNECT_DEFAULT_INVITEES: Optional,
 } satisfies Record<string, typeof Required | typeof Optional>);

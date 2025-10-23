@@ -570,13 +570,6 @@ export const adminRouter = router({
         iterateBotToken: iterateBotAccount.accessToken,
       });
 
-      if (!result.success) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: result.message,
-        });
-      }
-
       logger.info(
         `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${estateId}`,
       );

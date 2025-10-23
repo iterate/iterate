@@ -1,3 +1,4 @@
+import { randomInt } from "node:crypto";
 import { betterAuth } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -11,7 +12,6 @@ import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
-import { randomInt } from "node:crypto";
 
 export const getAuth = (db: DB) =>
   betterAuth({
@@ -69,7 +69,7 @@ export const getAuth = (db: DB) =>
           if (!env.RESEND_API_KEY) return;
           const resend = new Resend(env.RESEND_API_KEY);
           const result = await resend.emails.send({
-            from: `iterate <${import.meta.env.RESEND_FROM_EMAIL}>`,
+            from: `iterate <${env.RESEND_FROM_EMAIL || "noreply@iterate.com"}>`,
             to: data.email,
             subject: `sign in to iterate`,
             html: `Your sign in code is ${data.otp}`,
