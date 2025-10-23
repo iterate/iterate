@@ -54,8 +54,8 @@ export const getAuth = (db: DB) =>
       emailOTP({
         async sendVerificationOTP(data) {
           logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
-          if (!import.meta.env.RESEND_API_KEY) return;
-          const resend = new Resend(import.meta.env.RESEND_API_KEY);
+          if (!env.RESEND_API_KEY) return;
+          const resend = new Resend(env.RESEND_API_KEY);
           const result = await resend.emails.send({
             from: `iterate <${import.meta.env.RESEND_FROM_EMAIL}>`,
             to: data.email,
