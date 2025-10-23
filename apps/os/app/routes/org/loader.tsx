@@ -8,11 +8,11 @@ import {
 } from "react-router";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle, Home } from "lucide-react";
-import { asc, eq } from "drizzle-orm";
-import { getDb } from "../../../backend/db/client.ts";
+import { eq } from "drizzle-orm";
+import { getDb, schema } from "../../../backend/db/client.ts";
 import { getAuth } from "../../../backend/auth/auth.ts";
 import { getUserOrganizations } from "../../../backend/trpc/trpc.ts";
-import { estate, type UserRole } from "../../../backend/db/schema.ts";
+import { type UserRole } from "../../../backend/db/schema.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { authClient } from "../../lib/auth-client.ts";
@@ -191,14 +191,28 @@ export function ErrorBoundary() {
 }
 
 async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizationId: string) {
-  const firstEstate = await db.query.estate.findFirst({
-    where: eq(estate.organizationId, organizationId),
-    orderBy: asc(estate.createdAt),
+  const organization = await db.query.organization.findFirst({
+    where: eq(schema.organization.id, organizationId),
+    with: {
+      estates: {
+        with: {
+          estateAccountsPermissions: {
+            with: {
+              account: true,
+            },
+          },
+        },
+      },
+    },
   });
 
-  if (!firstEstate) {
-    return false;
-  }
+  // For now, assume that if the organization has a slack bot linked
+  // TODO: This is a temporary hack, figure out what counts as onboarded
+  const hasSlackLinked = organization?.estates.some((estate) =>
+    estate.estateAccountsPermissions.some(
+      (permission) => permission.account.providerId === "slack-bot",
+    ),
+  );
 
-  return Boolean(firstEstate.connectedRepoId);
+  return hasSlackLinked;
 }

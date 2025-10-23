@@ -3,6 +3,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
+import { Octokit } from "octokit";
 import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
@@ -386,34 +387,31 @@ export const integrationsRouter = router({
     let repoName: string | null = null;
     let repoFullName: string | null = null;
 
-    if (githubInstallation) {
-      try {
-        const token = await getGithubInstallationToken(githubInstallation.accountId);
+    let token: string | null = null;
+    if (githubInstallation) token = await getGithubInstallationToken(githubInstallation.accountId);
+    // If no installation token is found, use the fallback token
+    if (!token) token = ctx.env.GITHUB_ESTATES_TOKEN;
 
-        // Fetch repository details from GitHub API
-        const repoResponse = await fetch(
-          `https://api.github.com/repositories/${githubRepo.connectedRepoId}`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-              "User-Agent": "Iterate OS",
-              Accept: "application/vnd.github+json",
-            },
-          },
-        );
+    // Fetch repository details from GitHub API
+    const repoResponse = await fetch(
+      `https://api.github.com/repositories/${githubRepo.connectedRepoId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "User-Agent": "Iterate OS",
+          Accept: "application/vnd.github+json",
+        },
+      },
+    );
 
-        if (repoResponse.ok) {
-          const repoData = (await repoResponse.json()) as { name: string; full_name: string };
-          repoName = repoData.name;
-          repoFullName = repoData.full_name;
-        } else {
-          logger.error(
-            `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
-          );
-        }
-      } catch (error) {
-        logger.error("Error fetching repository details:", error);
-      }
+    if (repoResponse.ok) {
+      const repoData = (await repoResponse.json()) as { name: string; full_name: string };
+      repoName = repoData.name;
+      repoFullName = repoData.full_name;
+    } else {
+      logger.error(
+        `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
+      );
     }
 
     return {
@@ -424,6 +422,7 @@ export const integrationsRouter = router({
       path: githubRepo.connectedRepoPath || "/",
     };
   }),
+
   setGithubRepoForEstate: estateProtectedProcedure
     .input(
       z.object({
@@ -435,6 +434,41 @@ export const integrationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { estateId, repoId, branch, path } = input;
 
+      const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
+      if (!githubInstallation) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message:
+            "GitHub installation not found, make sure you have Github integrated before connecting a repository",
+        });
+      }
+
+      const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      if (!installationToken) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Failed to get installation token, please re-authenticate Github integration",
+        });
+      }
+
+      const oc = new Octokit({ auth: installationToken });
+
+      const repo = await oc.request("GET /repositories/:id", { id: repoId });
+      if (repo.status !== 200) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Failed to fetch repository details",
+        });
+      }
+      const repoData = z
+        .object({
+          name: z.string(),
+          owner: z.object({
+            login: z.string(),
+          }),
+        })
+        .parse(repo.data);
+
       await ctx.db
         .update(schemas.estate)
         .set({
@@ -444,57 +478,33 @@ export const integrationsRouter = router({
         })
         .where(eq(schemas.estate.id, estateId));
 
-      // Trigger an initial build after connecting the repository
-      try {
-        // Get the GitHub installation
-        const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-        if (githubInstallation) {
-          // Get installation token
-          const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      const branchData = await oc.rest.repos.getBranch({
+        owner: repoData.owner.login,
+        repo: repoData.name,
+        branch,
+      });
 
-          // Fetch the latest commit on the branch
-          const branchResponse = await fetch(
-            `https://api.github.com/repositories/${repoId}/branches/${branch}`,
-            {
-              headers: {
-                Authorization: `Bearer ${installationToken}`,
-                Accept: "application/vnd.github+json",
-                "User-Agent": "Iterate OS",
-              },
-            },
-          );
+      if (branchData.status !== 200) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Failed to fetch branch details for branch ${branch}`,
+        });
+      }
 
-          if (branchResponse.ok) {
-            const branchData = z
-              .object({
-                commit: z.object({
-                  sha: z.string(),
-                  commit: z.object({
-                    message: z.string(),
-                  }),
-                }),
-              })
-              .parse(await branchResponse.json());
-            const commitHash = branchData.commit.sha;
-            const commitMessage = branchData.commit.commit.message;
+      const commitHash = branchData.data.commit.sha;
+      const commitMessage = branchData.data.commit.commit.message;
 
-            if (commitHash && commitMessage) {
-              // Import and use the helper function to trigger a build
-              const { triggerEstateRebuild } = await import("./estate.ts");
-              await triggerEstateRebuild({
-                db: ctx.db,
-                env: ctx.env,
-                estateId,
-                commitHash,
-                commitMessage,
-                isManual: false, // This is an automatic build
-              });
-            }
-          }
-        }
-      } catch (error) {
-        // Log the error but don't fail the connection
-        logger.error("Failed to trigger initial build:", error);
+      if (commitHash && commitMessage) {
+        // Import and use the helper function to trigger a build
+        const { triggerEstateRebuild } = await import("./estate.ts");
+        await triggerEstateRebuild({
+          db: ctx.db,
+          env: ctx.env,
+          estateId,
+          commitHash,
+          commitMessage,
+          isManual: false, // This is an automatic build
+        });
       }
 
       return {

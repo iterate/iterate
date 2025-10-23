@@ -338,6 +338,7 @@ export function IDE() {
     ...getRepoFilesystemQueryOptions,
     placeholderData: (old) =>
       old && { ...old, filesystem: { ...old.filesystem, ...expectedEdits }, sha: "" },
+    // enabled:
   });
 
   const dts = useQuery({

@@ -8,6 +8,7 @@ import { z } from "zod";
 import { eq, desc, and, notInArray } from "drizzle-orm";
 import dedent from "dedent";
 import { Octokit } from "octokit";
+import { TRPCError } from "@trpc/server";
 import {
   protectedProcedure,
   estateProtectedProcedure,
@@ -36,17 +37,20 @@ import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./github-schemas.ts";
 
 const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
+  if (!ctx.estate.connectedRepoId)
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "No GitHub repository connected to this estate",
+    });
+
   const githubInstallation = await getGithubInstallationForEstate(ctx.db, ctx.estate.id);
-  if (!githubInstallation) {
-    throw new Error("GitHub installation not found for this estate");
-  }
-  if (!ctx.estate.connectedRepoId) {
-    throw new Error("No GitHub repository connected to this estate");
-  }
-  const { repoData, installationToken } = await getRepoDetails(
-    ctx.estate.connectedRepoId,
-    githubInstallation.accountId,
-  );
+  let installationToken: string | null = null;
+
+  if (githubInstallation)
+    installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+  if (!installationToken) installationToken = ctx.env.GITHUB_ESTATES_TOKEN;
+
+  const { repoData } = await getRepoDetails(ctx.estate.connectedRepoId, installationToken);
   const octokit = new Octokit({ auth: installationToken });
   return next({
     ctx: {
@@ -62,13 +66,7 @@ const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, nex
   });
 });
 
-async function getRepoDetails(repoId: number, installationId: string) {
-  const installationToken = await getGithubInstallationToken(installationId);
-
-  if (!installationToken) {
-    throw new Error("Failed to get installation token");
-  }
-
+async function getRepoDetails(repoId: number, installationToken: string) {
   // Get repository details
   const repoResponse = await fetch(`https://api.github.com/repositories/${repoId}`, {
     headers: {
@@ -91,7 +89,7 @@ async function getRepoDetails(repoId: number, installationId: string) {
     })
     .parse(await repoResponse.json());
 
-  return { repoData, installationToken };
+  return { repoData };
 }
 
 // Helper function to trigger a rebuild for a given commit
@@ -116,15 +114,14 @@ export async function triggerEstateRebuild(params: {
 
   // Get the GitHub installation
   const githubInstallation = await getGithubInstallationForEstate(db, estateId);
-  if (!githubInstallation) {
-    throw new Error("GitHub installation not found for this estate");
-  }
 
-  // Get installation token
-  const { repoData, installationToken } = await getRepoDetails(
-    estateWithRepo.connectedRepoId,
-    githubInstallation.accountId,
-  );
+  let installationToken: string | null = null;
+  if (githubInstallation)
+    installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+  // If no installation token is found, use the fallback token
+  if (!installationToken) installationToken = env.GITHUB_ESTATES_TOKEN;
+
+  const { repoData } = await getRepoDetails(estateWithRepo.connectedRepoId, installationToken);
 
   // Use the common build trigger function
   return await triggerGithubBuild({
@@ -680,12 +677,13 @@ export const estateRouter = router({
 
       // Get the GitHub installation
       const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-      if (!githubInstallation) {
-        throw new Error("GitHub installation not found for this estate");
-      }
 
-      // Get installation token
-      const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      let installationToken: string | null = null;
+
+      if (githubInstallation)
+        installationToken = await getGithubInstallationToken(githubInstallation.accountId);
+      // If no installation token is found, use the fallback token
+      if (!installationToken) installationToken = ctx.env.GITHUB_ESTATES_TOKEN;
 
       // GitHub API response schemas
       const GitHubCommitResponse = z.object({
