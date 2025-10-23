@@ -361,28 +361,37 @@ export const integrationsPlugin = () =>
         "/integrations/callback/slack-bot",
         {
           method: "GET",
-          query: z.object({
-            error: z
-              .string()
-              .meta({
+          query: z.union([
+            z.object({
+              error: z.string().meta({
                 description: "The error message, if any",
-              })
-              .optional(),
-            error_description: z
-              .string()
-              .meta({
-                description: "The error description, if any",
-              })
-              .optional(),
-            code: z.string().meta({
-              description: "The OAuth2 code",
+              }),
+              error_description: z
+                .string()
+                .meta({
+                  description: "The error description, if any",
+                })
+                .optional(),
             }),
-            state: z.string().meta({
-              description: "The state parameter from the OAuth2 request",
+            z.object({
+              code: z.string().meta({
+                description: "The OAuth2 code",
+              }),
+              state: z.string().meta({
+                description: "The state parameter from the OAuth2 request",
+              }),
             }),
-          }),
+          ]),
         },
         async (ctx) => {
+          if ("error" in ctx.query) {
+            const url = new URL(`${import.meta.env.VITE_PUBLIC_URL}/api/auth/error`);
+            url.searchParams.set("error", ctx.query.error);
+            if (ctx.query.error_description)
+              url.searchParams.set("error_description", ctx.query.error_description);
+            throw ctx.redirect(url.toString());
+          }
+
           const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
           if (!value) {
             return ctx.json({ error: "Invalid state" });
