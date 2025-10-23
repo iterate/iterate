@@ -5,11 +5,11 @@ export namespace TagLogger {
   export type Level = keyof typeof TagLogger.levels;
   export type Context = {
     level: TagLogger.Level;
-    tags: string[];
+    tags: Record<string, string>;
     logs: Array<{
       level: TagLogger.Level;
       timestamp: Date;
-      tags: string[];
+      tags: Record<string, string>;
       args: unknown[];
     }>;
   };
@@ -45,7 +45,7 @@ export class TagLogger {
    */
   static consoleLogFn(console: TagLogger.ConsoleImplementation): TagLogger.LogFn {
     return function consoleLog({ level, args }) {
-      if (this.tags.length) console[level](this.tagsString(), ...args);
+      if (Object.keys(this.tags).length) console[level](this.tagsString(), ...args);
       else console[level](...args);
     };
   }
@@ -57,7 +57,7 @@ export class TagLogger {
   }
 
   get context(): TagLogger.Context {
-    return this._storage.getStore() || { level: "info", tags: [], logs: [] };
+    return this._storage.getStore() || { level: "info", tags: {}, logs: [] };
   }
 
   get level() {
@@ -75,22 +75,28 @@ export class TagLogger {
   }
 
   get tags() {
-    return this.context.tags as readonly string[];
+    return this.context.tags as Readonly<Record<string, string>>;
   }
 
-  static tagsToString(tags: readonly string[]) {
-    return tags.map((c) => `[${c}]`).join("");
+  static encodeTagComponent(s: string) {
+    const avoidEscaping = ["+", "/", ":", ".", "-", "_", "#"];
+    let encoded = encodeURIComponent(s);
+    avoidEscaping.forEach((char) => {
+      // unescape characters that don't cause problems in URL search params, so tags don't look too ugly in dev
+      encoded = encoded.replaceAll(encodeURIComponent(char), char);
+    });
+    return encoded;
   }
-  static tagsToRecord(tags: readonly string[]) {
-    return Object.fromEntries(new URLSearchParams(tags.join("&")));
+
+  static tagsToString(tags: Readonly<Record<string, string>>) {
+    const encoded = Object.entries(tags).map(([key, value]) => {
+      return `[${TagLogger.encodeTagComponent(key)}=${TagLogger.encodeTagComponent(value)}]`;
+    });
+    return encoded.join("");
   }
 
   tagsString() {
     return TagLogger.tagsToString(this.tags);
-  }
-
-  tagsRecord() {
-    return TagLogger.tagsToRecord(this.tags);
   }
 
   /**
@@ -98,50 +104,41 @@ export class TagLogger {
    * them anywhere in the async context with this: `logger.getTag('foo') // return 'bar'`
    */
   getTag(name: string): string | undefined {
-    return this.tagsRecord()[name];
+    return this.tags[name];
+  }
+
+  parseTag(tag: string): [string, string] {
+    const [name, rawValue] = tag.split("=");
+    const searchParams = new URLSearchParams(tag);
+    const value = searchParams.get(name) || "";
+    if (rawValue && value && rawValue !== value) {
+      this.warn(`tag ${JSON.stringify(tag)} was passed as a string but has invalid characters`);
+    }
+    return [name, value];
   }
 
   run<T>(tags: string | string[] | Record<string, string | undefined>, fn: () => T): T {
-    // todo: consider:
-    // 1) adding a debug log when entering a child context like `this.debug("child context started", tags)`
-    // 2) assigning the child context an id, could be useful for debugging
-    let array: string[] = [];
-    if (Array.isArray(tags)) array = tags;
-    else if (typeof tags === "string") array = [tags];
-    else {
-      array = Object.entries(tags).flatMap(([key, value]) =>
-        value !== undefined ? [`${key}=${value}`] : [],
-      );
-    }
-    const { problems, fixed } = TagLogger.fixTags(array);
-    if (problems.length > 0) {
-      const msg = `Invalid tags: ${problems.join(", ")}. Avoid using special characters in tags`;
-      this.error(new Error(msg));
-      array = fixed;
+    let record: Record<string, string> = {};
+    if (Array.isArray(tags)) {
+      tags.forEach((tag) => {
+        const [name, value] = this.parseTag(tag);
+        record[name] = value;
+      });
+    } else if (typeof tags === "string") {
+      const [name, value] = this.parseTag(tags);
+      record[name] = value;
+    } else {
+      record = Object.fromEntries(
+        Object.entries(tags).filter(([_, value]) => value !== undefined),
+      ) as Record<string, string>;
     }
 
     const newContext: TagLogger.Context = {
       ...this.context,
       logs: [...this.context.logs], // copy array since children will push to this
-      tags: [...this.context.tags, ...array],
+      tags: { ...this.context.tags, ...record },
     };
     return this._storage.run(newContext, fn);
-  }
-
-  /** Takes an array of tags and makes sure they don't have special characters which will cause problems. Returns an array of problems, and the fixed array. */
-  static fixTags(array: string[]) {
-    const problems: string[] = [];
-    const fixed = array.map((tag) => {
-      const [name, ...rest] = tag.split("=");
-      const value = rest.join("=");
-      const encodedName = encodeURIComponent(name);
-      const encodedValue = encodeURIComponent(value);
-      if (encodedName !== name || encodedValue !== value) {
-        problems.push(tag);
-      }
-      return rest.length ? `${encodedName}=${encodedValue}` : encodedName;
-    });
-    return { problems, fixed };
   }
 
   timed = Object.fromEntries(
@@ -175,7 +172,7 @@ export class TagLogger {
 
   _log({ level, args, forget }: { level: TagLogger.Level; args: unknown[]; forget?: boolean }) {
     if (!forget)
-      this.context.logs.push({ level, timestamp: new Date(), tags: this.tags.slice(), args });
+      this.context.logs.push({ level, timestamp: new Date(), tags: { ...this.tags }, args });
 
     if (this.levelNumber > TagLogger.levels[level]) return;
     this._logFn({ level, args });
@@ -281,7 +278,7 @@ class PosthogTagLogger extends TagLogger {
 
           posthog.captureException(error, this.getTag("userId") || "anonymous", {
             environment: env.POSTHOG_ENVIRONMENT,
-            ...this.tagsRecord(),
+            ...this.tags,
             memories: this.memories(),
           });
 
@@ -300,7 +297,7 @@ function getLogger() {
   if (mode === "test") {
     return new TagLogger(TagLogger.consoleLogFn(console));
   }
-  if (mode === "dev") {
+  if (mode === "development") {
     // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
     return new PosthogTagLogger(TagLogger.consoleLogFn(console));
   }
@@ -310,8 +307,7 @@ function getLogger() {
       // let's make a special case for the first argument, which will very often be a string, to avoid having to search for `args[0]` in the dashboard all the time
       ...(typeof args[0] === "string" ? { message: args[0] } : {}),
       level,
-      // spread metadata to get rid of Symbol.for("nodejs.util.inspect.custom") symbol
-      metadata: this.tagsRecord(),
+      metadata: { ...this.tags },
       // raw args
       args,
       // Same info as `level` but useful for filtering by `levelNumber >= 2` (warn or worse) in dashboards

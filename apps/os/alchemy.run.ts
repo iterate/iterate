@@ -65,68 +65,52 @@ async function uploadSourcemaps() {
   }
 }
 
+const Required = z.string().nonempty();
+const Optional = z.string().optional();
+const Env = z.object({
+  VITE_PUBLIC_URL: Required,
+  OPENAI_API_KEY: Required,
+  BETTER_AUTH_SECRET: Required,
+  BRAINTRUST_API_KEY: Required,
+  POSTHOG_PUBLIC_KEY: Required,
+  GOOGLE_CLIENT_ID: Required,
+  GOOGLE_CLIENT_SECRET: Required,
+  SLACK_CLIENT_ID: Required,
+  SLACK_CLIENT_SECRET: Required,
+  SLACK_SIGNING_SECRET: Required,
+  SLACK_ITERATE_TEAM_ID: Required,
+  GITHUB_APP_CLIENT_ID: Required,
+  GITHUB_APP_CLIENT_SECRET: Required,
+  GITHUB_APP_PRIVATE_KEY: Required,
+  GITHUB_APP_SLUG: Required,
+  GITHUB_ESTATES_TOKEN: Required,
+  EXPIRING_URLS_SIGNING_KEY: Required,
+  GITHUB_WEBHOOK_SECRET: Required,
+  PROJECT_NAME: Required,
+  EXA_API_KEY: Required,
+  CLOUDFLARE_API_TOKEN: Required,
+  CLOUDFLARE_ACCOUNT_ID: Required,
+  REPLICATE_API_TOKEN: Required,
+  ITERATE_USER: Required,
+  STRIPE_SECRET_KEY: Required,
+  STRIPE_WEBHOOK_SECRET: Required,
+  STRIPE_PRICING_PLAN_ID: Required,
+  SERVICE_AUTH_TOKEN: Required,
+
+  // optional keys
+  ADMIN_EMAIL_HOSTS: Optional,
+  TEST_USER_PATTERNS: Optional,
+  POSTHOG_ENVIRONMENT: Optional,
+  ONBOARDING_E2E_TEST_SETUP_PARAMS: Optional,
+  ITERATE_NOTIFICATION_ESTATE_ID: Optional,
+  RESEND_API_KEY: Optional,
+} satisfies Record<string, typeof Required | typeof Optional>);
 async function setupEnvironmentVariables() {
-  const env = [
-    "VITE_PUBLIC_URL",
-    "OPENAI_API_KEY",
-    "BETTER_AUTH_SECRET",
-    "BRAINTRUST_API_KEY",
-    "POSTHOG_PUBLIC_KEY",
-    "GOOGLE_CLIENT_ID",
-    "GOOGLE_CLIENT_SECRET",
-    "SLACK_CLIENT_ID",
-    "SLACK_CLIENT_SECRET",
-    "SLACK_SIGNING_SECRET",
-    "SLACK_ITERATE_TEAM_ID",
-    "GITHUB_APP_CLIENT_ID",
-    "GITHUB_APP_CLIENT_SECRET",
-    "GITHUB_APP_PRIVATE_KEY",
-    "GITHUB_APP_SLUG",
-    "GITHUB_ESTATES_TOKEN",
-    "EXPIRING_URLS_SIGNING_KEY",
-    "GITHUB_WEBHOOK_SECRET",
-    "PROJECT_NAME",
-    "EXA_API_KEY",
-    "CLOUDFLARE_API_TOKEN",
-    "CLOUDFLARE_ACCOUNT_ID",
-    "REPLICATE_API_TOKEN",
-    "ITERATE_USER",
-    "STRIPE_SECRET_KEY",
-    "STRIPE_WEBHOOK_SECRET",
-    "STRIPE_PRICING_PLAN_ID",
-    "SERVICE_AUTH_TOKEN",
-  ] as const;
-
-  R.forEach(env, (env) => {
-    if (!process.env[env]) {
-      throw new Error(
-        `${env} is not set in process.env, if its an optional env, use the optionalEnv Array`,
-      );
-    }
-  });
-
-  const envBindings = R.fromEntries(
-    R.map(env, (env) => [env, alchemy.secret(process.env[env])] as const),
-  );
-
-  const optionalEnv = [
-    "ADMIN_EMAIL_HOSTS",
-    "TEST_USER_PATTERNS",
-    "POSTHOG_ENVIRONMENT",
-    "ONBOARDING_E2E_TEST_SETUP_PARAMS",
-    "ITERATE_NOTIFICATION_ESTATE_ID",
-  ] as const;
-
-  const optionalEnvBindings = R.fromEntries(
-    R.filter(optionalEnv, (env) => Boolean(process.env[env])).map(
-      (env) => [env, alchemy.secret(process.env[env])] as const,
-    ),
-  );
-
-  return {
-    ...envBindings,
-    ...optionalEnvBindings,
-  };
+  const parsed = Env.safeParse(process.env);
+  if (!parsed.success) {
+    throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);
+  }
+  return R.mapValues(parsed.data, alchemy.secret);
 }
 
 async function setupDatabase() {
