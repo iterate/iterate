@@ -115,8 +115,8 @@ export class TagLogger {
     }
     const { problems, fixed } = TagLogger.fixTags(array);
     if (problems.length > 0) {
-      const msg = `Invalid tags: ${problems.join(", ")}. Avoid using special characters in tags`;
-      this.error(new Error(msg));
+      // const msg = `Invalid tags: ${problems.join(", ")}. Avoid using special characters in tags`;
+      // this.error(new Error(msg));
       array = fixed;
     }
 
