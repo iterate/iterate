@@ -11,6 +11,7 @@ import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
+import { randomInt } from "node:crypto";
 
 export const getAuth = (db: DB) =>
   betterAuth({
@@ -52,6 +53,17 @@ export const getAuth = (db: DB) =>
     plugins: [
       admin(),
       emailOTP({
+        generateOTP: (o) => {
+          // magic: turns `bob+123456@nustom.com` into `123456`. or `alice+oct23.001001@nustom.com` into `001001`
+          const getSpecialEmailOtp = (email: string) => {
+            const [beforeAt, domain, ...rest] = email.split("@");
+            if (domain !== "nustom.com") return null;
+            if (rest.length !== 0) throw new Error("Invalid email " + email);
+            const plusDigits = beforeAt.split("+").at(-1)?.split(/\D/).at(-1);
+            return plusDigits?.match(/^\d{6}$/)?.[0];
+          };
+          return getSpecialEmailOtp(o.email) || randomInt(100000, 999999).toString();
+        },
         async sendVerificationOTP(data) {
           logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
           if (!env.RESEND_API_KEY) return;
