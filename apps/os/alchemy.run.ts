@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import alchemy, { type Scope, type Secret } from "alchemy";
+import alchemy, { type Scope } from "alchemy";
 import {
   Hyperdrive,
   R2Bucket,
