@@ -21,7 +21,7 @@ import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { useTRPC } from "../../../lib/trpc.ts";
-import { useEstateId, useOrganizationId } from "../../../hooks/use-estate.ts";
+import { useEstateId } from "../../../hooks/use-estate.ts";
 import {
   Select,
   SelectContent,
@@ -101,6 +101,7 @@ export async function loader({ params }: Route.LoaderArgs) {
     return data({
       isConnected: false,
       isActive: false,
+      isManagedByIterate: false,
     });
   }
 
@@ -112,6 +113,7 @@ export async function loader({ params }: Route.LoaderArgs) {
     return data({
       isConnected: false,
       isActive: false,
+      isManagedByIterate: true,
     });
   }
 
@@ -121,12 +123,14 @@ export async function loader({ params }: Route.LoaderArgs) {
     return data({
       isConnected: true,
       isActive: false,
+      isManagedByIterate: false,
     });
   }
 
   return data({
     isConnected: true,
     isActive: true,
+    isManagedByIterate: false,
   });
 }
 
@@ -135,7 +139,7 @@ function EstateContent({
 }: {
   installationStatus: Awaited<ReturnType<typeof loader>>["data"];
 }) {
-  const { isConnected, isActive } = installationStatus;
+  const { isConnected, isActive, isManagedByIterate } = installationStatus;
 
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
   const [isIterateConfigSheetOpen, setIsIterateConfigSheetOpen] = useState(false);
@@ -150,7 +154,6 @@ function EstateContent({
 
   // Get estate ID from URL
   const estateId = useEstateId();
-  const organizationId = useOrganizationId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
@@ -204,15 +207,7 @@ function EstateContent({
   );
 
   const disconnectGithubRepoMutation = useMutation(
-    trpc.integrations.disconnectGithubRepo.mutationOptions({
-      onSuccess: async () => {
-        const { installationUrl } = await startGithubAppInstallFlowMutation.mutateAsync({
-          estateId: estateId!,
-          callbackURL: `${window.location.origin}/${organizationId}/onboarding/4`,
-        });
-        window.location.href = installationUrl;
-      },
-    }),
+    trpc.integrations.disconnectGithubRepo.mutationOptions({}),
   );
   const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
 
@@ -435,7 +430,12 @@ function EstateContent({
             <div className="flex items-center justify-between">
               <CardTitle>Repository Configuration</CardTitle>
               {connectedRepo && (
-                <Button variant="outline" size="sm" onClick={() => setIsConfigDialogOpen(true)}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setIsConfigDialogOpen(true)}
+                  disabled={isManagedByIterate}
+                >
                   <Edit2 className="h-4 w-4 mr-2" />
                   Edit
                 </Button>
@@ -443,7 +443,7 @@ function EstateContent({
             </div>
           </CardHeader>
           <CardContent>
-            {isConnected && isActive && connectedRepo ? (
+            {((isConnected && isActive) || isManagedByIterate) && connectedRepo ? (
               <>
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
                   <div className="text-sm text-muted-foreground">Repository:</div>
@@ -462,6 +462,10 @@ function EstateContent({
                   <div className="text-sm text-muted-foreground">Path:</div>
                   <span className="font-mono text-sm">{connectedRepo.path}</span>
                 </div>
+                <span className="text-xs text-muted-foreground">
+                  This repository is managed by Iterate, connect github integration to add custom
+                  repository
+                </span>
               </>
             ) : isConnected && !isActive ? (
               <>
@@ -807,13 +811,13 @@ function EstateContent({
               <Button
                 type="button"
                 variant="destructive"
-                onClick={() =>
-                  // The best way to handle this is just to delete the installation, which will prompt the user to reconnect new repo
-                  disconnectGithubRepoMutation.mutate({
-                    estateId: estateId,
-                    deleteInstallation: true,
-                  })
-                }
+                onClick={() => {
+                  // TODO: temporary disabled
+                  // Upon redirect the estate will be disconnected from GitHub
+                  // Which will automatically create a new repo in the estate pool
+                  // That is not ideal, so we're temporarily disabling this feature
+                  toast.error("This feature is temporarily disabled");
+                }}
                 disabled={startGithubAppInstallFlowMutation.isPending}
                 className="flex-1"
               >

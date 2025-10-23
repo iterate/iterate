@@ -1,5 +1,7 @@
 import { eq } from "drizzle-orm";
 import dedent from "dedent";
+import { Octokit } from "octokit";
+import { typeid } from "typeid-js";
 import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
@@ -8,6 +10,34 @@ import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils
 import { getUserOrganizations } from "./trpc/trpc.ts";
 import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
+
+export const createGithubRepoInEstatePool = async (metadata: {
+  organizationId: string;
+  organizationName: string;
+}) => {
+  const gh = new Octokit({ auth: env.GITHUB_ESTATES_TOKEN });
+  const repoName = typeid("repo").toString();
+  const repo = await gh.rest.repos.createUsingTemplate({
+    name: repoName,
+    template_owner: "iterate",
+    template_repo: "estate-template",
+    owner: "iterate-estates",
+    private: true,
+    description: JSON.stringify(metadata),
+  });
+
+  if (repo.status !== 201 || !repo.data) {
+    throw new Error(`Failed to create repository: ${JSON.stringify(repo.data)}`);
+  }
+
+  await gh.rest.repos.update({
+    owner: repo.data.owner.login,
+    repo: repo.data.name,
+    homepage: `${env.VITE_PUBLIC_URL}/${metadata.organizationId}`,
+  });
+
+  return repo.data;
+};
 
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
@@ -52,6 +82,11 @@ export const createUserOrganizationAndEstate = async (
     role: "owner",
   });
 
+  const repo = await createGithubRepoInEstatePool({
+    organizationName: organization.name,
+    organizationId: organization.id,
+  });
+
   const [estate] = await db
     .insert(schema.estate)
     .values({
@@ -59,6 +94,9 @@ export const createUserOrganizationAndEstate = async (
       // But in the future users will be able to create multiple estates in one organization
       name: `${user.email}'s primary estate`,
       organizationId: organization.id,
+      connectedRepoId: repo.id,
+      connectedRepoRef: repo.default_branch,
+      connectedRepoPath: "/",
     })
     .returning();
 

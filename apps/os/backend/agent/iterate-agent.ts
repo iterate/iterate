@@ -53,6 +53,7 @@ import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
+import { getGithubInstallationToken } from "../integrations/github/github-utils.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
@@ -1910,13 +1911,13 @@ export class IterateAgent<
       .limit(1)
       .then((rows) => rows[0]);
 
-    if (!githubInstallation) {
-      throw new Error("No GitHub installation found for this estate");
-    }
+    let githubToken: string | null = null;
 
-    // Get installation token
-    const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
-    const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
+    if (githubInstallation)
+      githubToken = await getGithubInstallationToken(githubInstallation.accountId);
+
+    // If no installation token is found, use the fallback token
+    if (!githubToken) githubToken = env.GITHUB_ESTATES_TOKEN;
 
     // Fetch repository details using Octokit
     const { Octokit } = await import("octokit");
