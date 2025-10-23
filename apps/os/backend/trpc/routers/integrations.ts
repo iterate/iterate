@@ -4,7 +4,7 @@ import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
-import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
+import { estateProtectedProcedure, protectedProcedure, publicProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
@@ -22,6 +22,7 @@ import {
 } from "../../auth/token-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
+import { AdvisoryLock } from "../../durable-objects/advisory-lock.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -1193,14 +1194,11 @@ export const integrationsRouter = router({
    * handled automatically by slack-agent.ts JIT sync logic.
    */
   setupSlackConnectTrial: protectedProcedure
-    .input(
-      z.object({
-        userEmail: z.string().email(),
-        userName: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { userEmail, userName } = input;
+    .use(({ ctx, path, next }) => next({ ctx: { advisoryLockKey: `${path}:${ctx.user.email}` } }))
+    .concat(AdvisoryLock.trpcPlugin())
+    .mutation(async ({ ctx }) => {
+      const userEmail = ctx.user.email;
+      const userName = ctx.user.name;
       const userId = ctx.user.id;
 
       logger.info(`Setting up Slack Connect trial for ${userEmail}`);
@@ -1231,30 +1229,17 @@ export const integrationsRouter = router({
       });
 
       // Find the first estate that has a trial override
-      let existingTrial:
-        | {
-            estate: typeof schemas.estate.$inferSelect & {
-              organization: typeof schemas.organization.$inferSelect;
-            };
+      const existingTrial = existingUserWithTrial?.organizationUserMembership
+        .flatMap((m) => {
+          const overridenEstate = m.organization.estates.find(
+            (e) => e.slackChannelEstateOverrides.length > 0,
+          );
+          if (overridenEstate) {
+            return { estate: { ...overridenEstate, organization: m.organization } };
           }
-        | undefined;
-
-      if (existingUserWithTrial) {
-        for (const membership of existingUserWithTrial.organizationUserMembership) {
-          for (const estate of membership.organization.estates) {
-            if (estate.slackChannelEstateOverrides.length > 0) {
-              existingTrial = {
-                estate: {
-                  ...estate,
-                  organization: membership.organization,
-                },
-              };
-              break;
-            }
-          }
-          if (existingTrial) break;
-        }
-      }
+          return [];
+        })
+        .find(Boolean);
 
       let estate;
       let organization;
@@ -1377,6 +1362,15 @@ export const integrationsRouter = router({
         channelId: result.channelId,
         channelName: result.channelName,
       };
+
+      if (!result.success) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "A Slack Connect trial is already in progress for this email",
+        });
+      }
+
+      return result.data;
     }),
 
   /**

@@ -267,7 +267,21 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
-  return { ITERATE_AGENT, SLACK_AGENT, ONBOARDING_AGENT, ORGANIZATION_WEBSOCKET, SANDBOX };
+  const ADVISORY_LOCK = DurableObjectNamespace<
+    import("./backend/durable-objects/advisory-lock.ts").AdvisoryLock
+  >("advisory-lock", {
+    className: "AdvisoryLock",
+    sqlite: true,
+  });
+
+  return {
+    ITERATE_AGENT,
+    SLACK_AGENT,
+    ONBOARDING_AGENT,
+    ORGANIZATION_WEBSOCKET,
+    SANDBOX,
+    ADVISORY_LOCK,
+  };
 }
 
 async function setupStorage() {

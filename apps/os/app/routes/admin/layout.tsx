@@ -9,8 +9,6 @@ import {
   Database,
   Building2,
   Server,
-  Route as RouteIcon,
-  Beaker,
 } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";

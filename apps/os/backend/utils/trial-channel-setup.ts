@@ -63,7 +63,7 @@ export async function getIterateSlackEstateId(db: DB): Promise<string | undefine
 function slackChannelNameFromEmail(email: string): string {
   let full = `iterate-${email}`.replace(/\.com$/, "").replace(/\W+/g, "-");
   full = full.replace(/^[-_]+/, "").replace(/[-_]+$/, ""); // remove leading and trailing hyphens and underscores
-  return full.slice(0, 80);
+  return full.slice(0, 80 - 15); // subtract 15 from slack max channel name length so we can add `-${Date.now()}` if the channel name is taken
 }
 
 function assertOk<T extends { ok: boolean; error?: string; message?: string }>(
@@ -105,15 +105,10 @@ export async function createTrialSlackConnectChannel(params: {
   let channelName = slackChannelNameFromEmail(userEmail);
   const slackAPI = new WebClient(iterateBotToken);
 
-  const existingOverride = await db.query.slackChannelEstateOverride.findFirst({
-    where: and(
-      eq(schema.slackChannelEstateOverride.slackTeamId, iterateTeamId),
-      eq(schema.slackChannelEstateOverride.estateId, userEstateId),
-    ),
-  });
-
   // removed the logic for reusing existing channels/overrides
   // if we want to put that kind of thing back in, we should move it to a different function. it was added in https://github.com/iterate/iterate/pull/361
+  // without it, there's some risk of creating duplicate channels for the same user, if they click the button in two differrent tabs or something.
+  // an outbox system, or just an advisory lock, could fix this.
 
   // 1. Create Slack channel in iterate's workspace (or find existing one)
   logger.info(`Creating trial channel: ${channelName}`);
@@ -144,18 +139,18 @@ export async function createTrialSlackConnectChannel(params: {
 
   // 2. Ensure bot is a member of the channel
   logger.info(`Joining bot to channel ${channelId}`);
-  const joinResult2 = await slackAPI.conversations.join({
+  const joinResult = await slackAPI.conversations.join({
     channel: channelId,
   });
   // If already in channel, that's fine - continue
-  if (!joinResult2.ok && joinResult2.error !== "already_in_channel") {
-    logger.warn(`Failed to join channel ${channelId}: ${joinResult2.error}`);
+  if (!joinResult.ok && joinResult.error !== "already_in_channel") {
+    logger.warn(`Failed to join channel ${channelId}: ${joinResult.error}`);
     // Don't fail the whole operation - we can still try to send the invite
   }
 
   // 3. Send Slack Connect invite
   logger.info(`Sending Slack Connect invite to ${userEmail}`);
-  const inviteResult2 = assertOk(
+  assertOk(
     await slackAPI.conversations.inviteShared({
       channel: channelId,
       emails: [userEmail],
