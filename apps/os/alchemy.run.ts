@@ -309,6 +309,10 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
+      /** alchemy's `app.stage` value */
+      APP_STAGE: app.stage,
+      /** alchemy's `app.stage` value, alias for `APP_STAGE` that vite can make available via import.meta.env too */
+      VITE_APP_STAGE: app.stage,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains: isProduction
