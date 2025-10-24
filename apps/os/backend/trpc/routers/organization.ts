@@ -10,10 +10,7 @@ import {
   getUserOrganizations,
 } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
-import {
-  createStripeCustomerAndSubscriptionForOrganization,
-  stripeClient,
-} from "../../integrations/stripe/stripe.ts";
+import { stripeClient } from "../../integrations/stripe/stripe.ts";
 import { logger } from "../../tag-logger.ts";
 
 type SlackUserProperties = {
@@ -77,6 +74,8 @@ export const organizationRouter = router({
       });
 
       // Create a default estate for this organization
+      // Note: This flow is for manually creating additional organizations
+      // For new user signups, use createUserOrganizationAndEstate instead
       const [estate] = await ctx.db
         .insert(schema.estate)
         .values({
@@ -92,14 +91,9 @@ export const organizationRouter = router({
         });
       }
 
-      // Create Stripe customer and subscribe in the background (non-blocking)
-      waitUntil(
-        createStripeCustomerAndSubscriptionForOrganization(ctx.db, organization, ctx.user).catch(
-          () => {
-            // Error is already logged in the helper function
-          },
-        ),
-      );
+      // TODO: Consider if we need onboarding for manually created organizations
+      // For now, we don't create an onboarding record here since this is for
+      // users creating additional organizations (not initial signup)
 
       return {
         organization,

@@ -30,6 +30,7 @@ import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
+import { processPendingOnboardings } from "./onboarding-cron.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -264,7 +265,21 @@ export default class extends WorkerEntrypoint {
 
   async scheduled(controller: ScheduledController) {
     switch (controller.cron) {
+      case "*/5 * * * *": {
+        // Process pending onboardings every 5 minutes
+        const db = getDb();
+
+        try {
+          logger.info("Running scheduled onboarding processor");
+          const result = await processPendingOnboardings(db);
+          logger.info("Scheduled onboarding processor completed", result);
+        } catch (error) {
+          logger.error("Scheduled onboarding processor failed:", error);
+        }
+        break;
+      }
       case "0 0 * * *": {
+        // Sync Slack for all estates once per day
         const db = getDb();
 
         try {

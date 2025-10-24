@@ -10,6 +10,7 @@ export default defineConfig({
   },
   build: {
     sourcemap: true,
+    minify: false,
   },
   server: {
     allowedHosts: [".dev.iterate.com"],

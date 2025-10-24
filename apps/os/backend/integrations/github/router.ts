@@ -13,6 +13,7 @@ import {
   getGithubInstallationToken,
   triggerGithubBuild,
 } from "./github-utils.ts";
+import { updateUserStep } from "../../onboarding-user-steps.ts";
 
 export const UserAccessTokenResponse = z.object({
   access_token: z.string(),
@@ -143,6 +144,11 @@ githubApp.get(
     await c.var.db.insert(schema.estateAccountsPermissions).values({
       accountId: account.id,
       estateId,
+    });
+
+    // Mark GitHub connection as complete in user onboarding (synchronously to avoid race condition)
+    await updateUserStep(c.var.db, estateId, "connect_github", "completed").catch((error) => {
+      logger.error("Failed to mark connect_github as complete:", error);
     });
 
     return c.redirect(callbackURL || "/");

@@ -32,8 +32,6 @@ export default [
 
   // loader.tsx doesn't apply a layout
   route(":organizationId", "./routes/org/loader.tsx", [
-    route("onboarding/:step?", "./routes/org/onboarding.tsx"),
-
     layout("./routes/org/layout.tsx", [
       // Redirect org index to first estate
       index("./routes/org/redirect.tsx"),
@@ -46,6 +44,7 @@ export default [
       route(":estateId", "./routes/org/estate/loader.tsx", [
         index("./routes/org/estate/index.tsx"),
         route("repo", "./routes/org/estate/repo.tsx"),
+        route("onboarding", "./routes/org/estate/onboarding.tsx"),
 
         ...prefix("integrations", [
           index("./routes/org/estate/integrations/index.tsx"),

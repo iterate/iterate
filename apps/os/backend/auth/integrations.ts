@@ -15,9 +15,9 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
 import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
+import { updateUserStep } from "../onboarding-user-steps.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
@@ -489,16 +489,9 @@ export const integrationsPlugin = () =>
                 }
               }
 
+              // Create "naked" organization, estate, and onboarding record
+              // Onboarding (Stripe, agent warmup) happens in the background
               const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
-              waitUntil(
-                createStripeCustomerAndSubscriptionForOrganization(
-                  db,
-                  newOrgAndEstate.organization,
-                  user,
-                ).catch(() => {
-                  // Error is already logged in the helper function
-                }),
-              );
 
               if (!newOrgAndEstate.estate) {
                 return ctx.json({ error: "Failed to create an estate for the user" });
@@ -601,6 +594,11 @@ export const integrationsPlugin = () =>
             waitUntil(
               syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
             );
+
+            // Mark Slack connection as complete in user onboarding (synchronously to avoid race condition)
+            await updateUserStep(db, estateId, "connect_slack", "completed").catch((error) => {
+              logger.error("Failed to mark connect_slack as complete:", error);
+            });
 
             await db
               .insert(schema.estateAccountsPermissions)

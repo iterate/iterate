@@ -35,6 +35,11 @@ import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-ge
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import { logger } from "../../tag-logger.ts";
 import { CreateCommitOnBranchInput } from "./github-schemas.ts";
+import {
+  getPendingUserSteps,
+  updateUserStep,
+  getOnboardingStatus,
+} from "../../onboarding-user-steps.ts";
 
 const iterateBotGithubProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
   if (!ctx.estate.connectedRepoId)
@@ -550,7 +555,7 @@ export const estateRouter = router({
       return estateBuilds;
     }),
 
-  getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
+  getOnboardingAgentData: estateProtectedProcedure.query(async ({ ctx }) => {
     const estateId = ctx.estate.id;
 
     // Get the estate with onboarding agent name
@@ -762,5 +767,72 @@ export const estateRouter = router({
         status: "in_progress",
         message: "Build triggered successfully",
       };
+    }),
+
+  // Get pending user onboarding steps for an estate
+  getPendingUserOnboardingSteps: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+      }),
+    )
+    .query(async ({ ctx }) => {
+      return getPendingUserSteps(ctx.db, ctx.estate.id);
+    }),
+
+  // Get complete onboarding status (system + user)
+  getOnboardingStatus: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+      }),
+    )
+    .query(async ({ ctx }) => {
+      return getOnboardingStatus(ctx.db, ctx.estate.id);
+    }),
+
+  // Mark a user onboarding step as complete
+  completeUserOnboardingStep: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        step: z.enum(["connect_slack", "connect_github", "setup_repo", "confirm_org_name"]),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Verify the estate ID matches the context
+      if (input.estateId !== ctx.estate.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Estate ID mismatch",
+        });
+      }
+
+      await updateUserStep(ctx.db, ctx.estate.id, input.step, "completed", input.metadata ?? {});
+
+      return { success: true };
+    }),
+
+  // Skip a user onboarding step
+  skipUserOnboardingStep: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        step: z.enum(["connect_slack", "connect_github", "setup_repo", "confirm_org_name"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Verify the estate ID matches the context
+      if (input.estateId !== ctx.estate.id) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Estate ID mismatch",
+        });
+      }
+
+      await updateUserStep(ctx.db, ctx.estate.id, input.step, "skipped");
+
+      return { success: true };
     }),
 });

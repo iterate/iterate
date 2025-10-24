@@ -181,6 +181,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   mcpConnectionParam: many(mcpConnectionParam),
   slackChannels: many(slackChannel),
   slackChannelEstateOverrides: many(slackChannelEstateOverride),
+  onboarding: one(estateOnboarding),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -546,5 +547,104 @@ export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one 
   estate: one(estate, {
     fields: [mcpConnectionParam.estateId],
     references: [estate.id],
+  }),
+}));
+
+// Estate onboarding state tracking
+export const estateOnboarding = pgTable(
+  "estate_onboarding",
+  (t) => ({
+    id: iterateId("onb"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    ownerUserId: t
+      .text()
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    // Overall state: pending -> in_progress -> completed | error
+    state: t
+      .text({ enum: ["pending", "in_progress", "completed", "error"] })
+      .notNull()
+      .default("pending"),
+    // When onboarding was started (when state moved to in_progress)
+    startedAt: t.timestamp(),
+    // When onboarding completed or errored
+    completedAt: t.timestamp(),
+    // Number of retry attempts
+    retryCount: t.integer().default(0).notNull(),
+    // Last error message if state is error
+    lastError: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId), index().on(t.state), index().on(t.createdAt)],
+);
+
+// Estate onboarding event tracking (both system and user steps)
+export const estateOnboardingTasks = pgTable(
+  "estate_onboarding_event",
+  (t) => ({
+    id: iterateId("onbe"),
+    onboardingId: t
+      .text()
+      .notNull()
+      .references(() => estateOnboarding.id, { onDelete: "cascade" }),
+    eventType: t
+      .text({
+        enum: [
+          "stripe_customer",
+          "onboarding_agent",
+          "connect_slack",
+          "connect_github",
+          "setup_repo",
+          "confirm_org_name",
+        ],
+      })
+      .notNull(),
+    category: t.text({ enum: ["system", "user"] }).notNull(),
+    // user steps can be "skipped", system steps cannot
+    status: t
+      .text({ enum: ["pending", "in_progress", "completed", "error", "skipped"] })
+      .notNull()
+      .default("pending"),
+    startedAt: t.timestamp(),
+    completedAt: t.timestamp(),
+    detail: t.text(),
+    metadata: t.jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.onboardingId, t.eventType),
+    index().on(t.onboardingId),
+    index().on(t.onboardingId, t.category, t.status),
+    index().on(t.category, t.status),
+  ],
+);
+
+export const estateOnboardingRelations = relations(estateOnboarding, ({ one, many }) => ({
+  estate: one(estate, {
+    fields: [estateOnboarding.estateId],
+    references: [estate.id],
+  }),
+  organization: one(organization, {
+    fields: [estateOnboarding.organizationId],
+    references: [organization.id],
+  }),
+  owner: one(user, {
+    fields: [estateOnboarding.ownerUserId],
+    references: [user.id],
+  }),
+  events: many(estateOnboardingEvent),
+}));
+
+export const estateOnboardingEventRelations = relations(estateOnboardingEvent, ({ one }) => ({
+  onboarding: one(estateOnboarding, {
+    fields: [estateOnboardingEvent.onboardingId],
+    references: [estateOnboarding.id],
   }),
 }));

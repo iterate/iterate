@@ -3,7 +3,7 @@ import { admin } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { stripe } from "@better-auth/stripe";
-import { type DB } from "../db/client.ts";
+import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
 import { logger } from "../tag-logger.ts";

@@ -128,6 +128,8 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
     },
   });
 
+  // Create "naked" organization, estate, and onboarding record
+  // Onboarding (Stripe, agent warmup) happens in the background
   const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
 
   if (!estate) {

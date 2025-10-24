@@ -8,8 +8,7 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
+import { processOnboarding } from "./onboarding-processor.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
   organizationId: string;
@@ -114,24 +113,77 @@ export const createUserOrganizationAndEstate = async (
     })
     .where(eq(schema.estate.id, estate.id));
 
+  // Create the onboarding record and initialize all events atomically
+  const onboardingRecord = await db.transaction(async (tx) => {
+    const [record] = await tx
+      .insert(schema.estateOnboarding)
+      .values({
+        estateId: estate.id,
+        organizationId: organization.id,
+        ownerUserId: user.id,
+        state: "pending",
+      })
+      .returning();
+
+    if (!record) {
+      throw new Error("Failed to create onboarding record");
+    }
+
+    // Initialize all onboarding events (system + user steps)
+    await tx.insert(schema.estateOnboardingEvent).values([
+      // System events
+      {
+        onboardingId: record.id,
+        eventType: "stripe_customer",
+        category: "system",
+        status: "pending",
+      },
+      {
+        onboardingId: record.id,
+        eventType: "onboarding_agent",
+        category: "system",
+        status: "pending",
+      },
+      // User steps
+      {
+        onboardingId: record.id,
+        eventType: "connect_slack",
+        category: "user",
+        status: "pending",
+      },
+      {
+        onboardingId: record.id,
+        eventType: "connect_github",
+        category: "user",
+        status: "pending",
+      },
+      {
+        onboardingId: record.id,
+        eventType: "setup_repo",
+        category: "user",
+        status: "pending",
+      },
+      {
+        onboardingId: record.id,
+        eventType: "confirm_org_name",
+        category: "user",
+        status: "pending",
+      },
+    ]);
+
+    return record;
+  });
+
   const result = { organization, estate };
 
+  // Kick off background onboarding processing
   waitUntil(
     (async () => {
       try {
-        await createStripeCustomerAndSubscriptionForOrganization(db, result.organization, user);
-
-        const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
-          db,
-          estateId: estate.id,
-          agentInstanceName: agentName,
-          reason: "Auto-provisioned OnboardingAgent during estate creation",
-        });
-        // We need to call some method on the stub, otherwise the agent durable object
-        // wouldn't boot up. Obtaining a stub doesn't in itself do anything.
-        await onboardingAgent.doNothing();
+        await processOnboarding(db, onboardingRecord.id);
       } catch (error) {
-        logger.error("Failed to create stripe customer and start onboarding agent", error);
+        // Errors are already logged in processOnboarding
+        // The cron will retry failed onboardings
       }
     })(),
   );

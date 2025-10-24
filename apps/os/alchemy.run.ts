@@ -301,7 +301,7 @@ async function deployWorker() {
         : [],
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
-    crons: ["0 0 * * *"],
+    crons: ["*/5 * * * *", "0 0 * * *"],
     adopt: true,
     build: {
       command: "pnpm build && pnpm posthog:sourcemaps:inject",
