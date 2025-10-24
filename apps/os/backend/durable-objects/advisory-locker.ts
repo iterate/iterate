@@ -11,7 +11,6 @@ export class AdvisoryLocker extends DurableObject {
     }>()
     .create()
     .procedure.use(({ ctx, next }) => {
-      console.log("trpcWithLocker middleware running", ctx.advisoryLockKey);
       return next({
         ctx: {
           lockStub: ctx.env.ADVISORY_LOCKER.get(
@@ -58,7 +57,7 @@ export class AdvisoryLocker extends DurableObject {
    * @returns true if lock was released, false if not held
    */
   async release() {
-    let old = this._isLocked;
+    const old = this._isLocked;
     this._isLocked = false;
     return !old;
   }

@@ -4,7 +4,7 @@ import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
-import { estateProtectedProcedure, protectedProcedure, publicProcedure, router } from "../trpc.ts";
+import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
