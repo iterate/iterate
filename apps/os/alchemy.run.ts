@@ -267,8 +267,8 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
-  const ADVISORY_LOCK = DurableObjectNamespace<
-    import("./backend/durable-objects/advisory-lock.ts").AdvisoryLock
+  const ADVISORY_LOCKER = DurableObjectNamespace<
+    import("./backend/durable-objects/advisory-locker.ts").AdvisoryLocker
   >("advisory-lock", {
     className: "AdvisoryLock",
     sqlite: true,
@@ -280,7 +280,7 @@ async function setupDurableObjects() {
     ONBOARDING_AGENT,
     ORGANIZATION_WEBSOCKET,
     SANDBOX,
-    ADVISORY_LOCK,
+    ADVISORY_LOCKER,
   };
 }
 

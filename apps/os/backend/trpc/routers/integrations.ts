@@ -22,7 +22,7 @@ import {
 } from "../../auth/token-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
-import { AdvisoryLock } from "../../durable-objects/advisory-lock.ts";
+import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -1195,7 +1195,7 @@ export const integrationsRouter = router({
    */
   setupSlackConnectTrial: protectedProcedure
     .use(({ ctx, path, next }) => next({ ctx: { advisoryLockKey: `${path}:${ctx.user.email}` } }))
-    .concat(AdvisoryLock.trpcPlugin())
+    .concat(AdvisoryLocker.trpcPlugin())
     .mutation(async ({ ctx }) => {
       const userEmail = ctx.user.email;
       const userName = ctx.user.name;
@@ -1362,15 +1362,6 @@ export const integrationsRouter = router({
         channelId: result.channelId,
         channelName: result.channelName,
       };
-
-      if (!result.success) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "A Slack Connect trial is already in progress for this email",
-        });
-      }
-
-      return result.data;
     }),
 
   /**
