@@ -57,12 +57,12 @@ export function LoginProviders() {
     const email = prompt("Enter your email");
     if (!email) return;
 
-    const _otpResult = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+    await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
 
     const otp = prompt("Enter the OTP we sent to your email");
     if (!otp) return;
 
-    const _signinResult = await authClient.signIn.emailOtp({ email, otp });
+    await authClient.signIn.emailOtp({ email, otp });
     window.location.href = "/";
   };
 

@@ -37,14 +37,12 @@ export default function OnboardingPage() {
   const emailOTPLoginThenSlackConnect = async () => {
     const email = prompt("Enter your email");
     if (!email) return;
-    const _otpResult = await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
-    if (!_otpResult) return;
+    await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
 
     const otp = prompt("Enter the OTP we sent to your email");
     if (!otp) return;
 
-    const signinResult = await authClient.signIn.emailOtp({ email, otp });
-    if (!signinResult) return;
+    await authClient.signIn.emailOtp({ email, otp });
 
     window.location.href = "/trial/slack-connect";
   };
