@@ -16,7 +16,7 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { data, useLoaderData } from "react-router";
+import { data, redirect, useLoaderData } from "react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
@@ -76,7 +76,7 @@ import { SerializedObjectCodeBlock } from "../../../components/serialized-object
 import { IDE } from "../../../components/ide.tsx";
 import {
   getGithubInstallationForEstate,
-  getGithubInstallationToken,
+  getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
 import { getDb } from "../../../../backend/db/client.ts";
 import type { Route } from "./+types/repo.ts";
@@ -97,41 +97,27 @@ export function meta() {
 
 export async function loader({ params }: Route.LoaderArgs) {
   const { estateId } = params;
-  if (!estateId) {
-    return data({
-      isConnected: false,
-      isActive: false,
-      isManagedByIterate: false,
-    });
-  }
-
+  if (!estateId) throw redirect("/");
   const db = getDb();
 
   const githubInstallation = await getGithubInstallationForEstate(db, estateId);
 
-  if (!githubInstallation) {
-    return data({
-      isConnected: false,
-      isActive: false,
-      isManagedByIterate: true,
-    });
-  }
+  // There is no github app installation, that means its using a managed installation
+  if (!githubInstallation) return data({ status: "ITERATE_MANAGED_INSTALLATION" as const });
 
-  const token = await getGithubInstallationToken(githubInstallation.accountId);
+  const octokit = await getOctokitForInstallation(githubInstallation.accountId).catch(() => null);
+  const authInfo = octokit
+    ? await octokit
+        .request("GET /app/installations/{installation_id}", {
+          installation_id: parseInt(githubInstallation.accountId),
+        })
+        .catch(() => null)
+    : null;
 
-  if (!token) {
-    return data({
-      isConnected: true,
-      isActive: false,
-      isManagedByIterate: false,
-    });
-  }
+  if (!authInfo || authInfo.status !== 200 || authInfo.data.suspended_at)
+    return data({ status: "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" as const });
 
-  return data({
-    isConnected: true,
-    isActive: true,
-    isManagedByIterate: false,
-  });
+  return data({ status: "ACTIVE_USER_MANAGED_INSTALLATION" as const });
 }
 
 function EstateContent({
@@ -139,7 +125,7 @@ function EstateContent({
 }: {
   installationStatus: Awaited<ReturnType<typeof loader>>["data"];
 }) {
-  const { isConnected, isActive, isManagedByIterate } = installationStatus;
+  const { status } = installationStatus;
 
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
   const [isIterateConfigSheetOpen, setIsIterateConfigSheetOpen] = useState(false);
@@ -434,7 +420,7 @@ function EstateContent({
                   variant="outline"
                   size="sm"
                   onClick={() => setIsConfigDialogOpen(true)}
-                  disabled={isManagedByIterate}
+                  disabled={status === "ITERATE_MANAGED_INSTALLATION"}
                 >
                   <Edit2 className="h-4 w-4 mr-2" />
                   Edit
@@ -443,7 +429,9 @@ function EstateContent({
             </div>
           </CardHeader>
           <CardContent>
-            {((isConnected && isActive) || isManagedByIterate) && connectedRepo ? (
+            {(status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
+              status === "ITERATE_MANAGED_INSTALLATION") &&
+            connectedRepo ? (
               <>
                 <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
                   <div className="text-sm text-muted-foreground">Repository:</div>
@@ -467,11 +455,11 @@ function EstateContent({
                   repository
                 </span>
               </>
-            ) : isConnected && !isActive ? (
+            ) : status === "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" ? (
               <>
                 <CardDescription className="text-amber-600 dark:text-amber-400">
-                  Your GIthub App connection has expired or been revoked. You will need to remove
-                  the connection and reconnect the repo.
+                  Your GIthub App connection has expired, suspended or been revoked. You will need
+                  to remove the connection and reconnect the repo.
                 </CardDescription>
                 <div className="flex gap-2 mt-4">
                   <Button
@@ -523,7 +511,9 @@ function EstateContent({
         </Card>
       </div>
 
-      <IDE />
+      {(status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
+        status === "ITERATE_MANAGED_INSTALLATION") &&
+        connectedRepo && <IDE />}
 
       {/* Build History */}
       {connectedRepo && (
@@ -564,9 +554,9 @@ function EstateContent({
                       >
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           {isExpanded ? (
-                            <ChevronDown className="h-5 w-5 text-gray-500 flex-shrink-0" />
+                            <ChevronDown className="h-5 w-5 text-gray-500 shrink-0" />
                           ) : (
-                            <ChevronRight className="h-5 w-5 text-gray-500 flex-shrink-0" />
+                            <ChevronRight className="h-5 w-5 text-gray-500 shrink-0" />
                           )}
                           {getBuildStatusIcon(build.status)}
                           <div className="text-left flex-1 min-w-0 overflow-hidden">

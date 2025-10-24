@@ -1,6 +1,6 @@
-import { createPrivateKey, createHmac } from "crypto";
-import { SignJWT } from "jose";
+import { createPrivateKey } from "crypto";
 import { eq, and } from "drizzle-orm";
+import { App, Octokit } from "octokit";
 import { waitUntil, env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schemas from "../../db/schema.ts";
@@ -9,21 +9,28 @@ import { runConfigInSandbox } from "../../sandbox/run-config.ts";
 import { signUrl } from "../../utils/url-signing.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
-export const generateGithubJWT = async () => {
-  const alg = "RS256";
-  const now = Math.floor(Date.now() / 1000);
-  const key = createPrivateKey({
-    key: env.GITHUB_APP_PRIVATE_KEY,
-    format: "pem",
-  });
+const privateKey = createPrivateKey({
+  key: env.GITHUB_APP_PRIVATE_KEY,
+  format: "pem",
+}).export({
+  type: "pkcs8",
+  format: "pem",
+}) as string;
 
-  return await new SignJWT({})
-    .setProtectedHeader({ alg, typ: "JWT" })
-    .setIssuedAt(now - 60)
-    .setExpirationTime(now + 9 * 60)
-    .setIssuer(env.GITHUB_APP_CLIENT_ID)
-    .sign(key);
-};
+export type GithubAppInstance = App & { octokit: Octokit };
+export const githubAppInstance: GithubAppInstance = new App({
+  appId: env.GITHUB_APP_ID,
+  privateKey,
+  oauth: {
+    clientId: env.GITHUB_APP_CLIENT_ID,
+    clientSecret: env.GITHUB_APP_CLIENT_SECRET,
+    allowSignup: true,
+  },
+  webhooks: {
+    secret: env.GITHUB_WEBHOOK_SECRET,
+  },
+  Octokit: Octokit.defaults({ userAgent: "Iterate OS" }),
+});
 
 export const getGithubInstallationForEstate = async (db: DB, estateId: string) => {
   const installations = await db
@@ -77,47 +84,11 @@ export const getEstateByRepoId = async (db: DB, repoId: number) => {
   return estate;
 };
 
-export const validateGithubWebhookSignature = (
-  payload: string,
-  signature: string | null,
-  secret: string,
-): boolean => {
-  if (!signature) return false;
+export const validateGithubWebhookSignature = async (payload: string, signature: string) =>
+  await githubAppInstance.webhooks.verify(payload, signature).catch(() => false);
 
-  const hmac = createHmac("sha256", secret);
-  hmac.update(payload);
-  const expectedSignature = `sha256=${hmac.digest("hex")}`;
-
-  // Timing-safe comparison
-  return signature === expectedSignature;
-};
-
-export const getGithubInstallationToken = async (installationId: string) => {
-  const jwt = await generateGithubJWT();
-
-  const tokenRes = await fetch(
-    `https://api.github.com/app/installations/${installationId}/access_tokens`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        "User-Agent": "Iterate OS",
-      },
-    },
-  );
-
-  // If the installation is deleted, return null
-  if (tokenRes.status === 404) {
-    return null;
-  }
-
-  if (!tokenRes.ok) {
-    throw new Error(`Failed to fetch installation token: ${tokenRes.statusText}`);
-  }
-
-  const { token } = (await tokenRes.json()) as { token: string };
-  return token;
-};
+export const getOctokitForInstallation = async (installationId: string): Promise<Octokit> =>
+  await githubAppInstance.getInstallationOctokit(parseInt(installationId));
 
 // Helper function to trigger a GitHub estate build
 export async function triggerGithubBuild(params: {
