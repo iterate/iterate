@@ -82,10 +82,7 @@ export default function TrialSlackConnectPage() {
 
   const handleContinueWithEmail = () => {
     setStep("processing");
-    setupTrialMutation.mutate({
-      userEmail: user.email,
-      userName: user.name,
-    });
+    setupTrialMutation.mutate();
   };
 
   const handleGoToDashboard = () => {

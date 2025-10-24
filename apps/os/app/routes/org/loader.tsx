@@ -201,6 +201,7 @@ async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizatio
               account: true,
             },
           },
+          slackChannelEstateOverrides: true,
         },
       },
     },
@@ -208,10 +209,11 @@ async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizatio
 
   // For now, assume that if the organization has a slack bot linked
   // TODO: This is a temporary hack, figure out what counts as onboarded
-  const hasSlackLinked = organization?.estates.some((estate) =>
-    estate.estateAccountsPermissions.some(
-      (permission) => permission.account.providerId === "slack-bot",
-    ),
+  const hasSlackLinked = organization?.estates.some(
+    (estate) =>
+      estate.estateAccountsPermissions.some(
+        (permission) => permission.account.providerId === "slack-bot",
+      ) || estate.slackChannelEstateOverrides.length > 0,
   );
 
   return hasSlackLinked;

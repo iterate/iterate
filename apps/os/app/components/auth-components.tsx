@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { useSearchParams } from "react-router";
+import { MailIcon } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
 import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
@@ -52,6 +53,19 @@ export function LoginProviders() {
     window.location.href = result?.url ?? "/";
   };
 
+  const handleEmailAuth = async () => {
+    const email = prompt("Enter your email");
+    if (!email) return;
+
+    await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+
+    const otp = prompt("Enter the OTP we sent to your email");
+    if (!otp) return;
+
+    await authClient.signIn.emailOtp({ email, otp });
+    window.location.href = "/";
+  };
+
   return (
     <div className="w-full space-y-4">
       <Button
@@ -97,6 +111,12 @@ export function LoginProviders() {
           className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
         >
           Continue as test admin user
+        </Button>
+      )}
+      {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
+        <Button onClick={handleEmailAuth} variant="outline" className="w-full h-12">
+          <MailIcon className="mr-2 h-5 w-5" />
+          Continue with Email
         </Button>
       )}
     </div>

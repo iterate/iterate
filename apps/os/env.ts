@@ -21,6 +21,15 @@ try {
 export type CloudflareEnv = typeof worker.Env;
 export const env = _env as CloudflareEnv;
 
+// todo: better way to determine if we're in production
+/** 🤷 */
+export const isProduction =
+  import.meta.env.VITE_APP_STAGE === "prd" ||
+  import.meta.env.VITE_APP_STAGE === "production" ||
+  import.meta.env.VITE_APP_STAGE === "prod";
+
+export const isNonProd = !isProduction;
+
 /**
  * Wrapper around cloudflare:workers waitUntil that catches and logs errors.
  * Use this instead of importing waitUntil directly from "cloudflare:workers".

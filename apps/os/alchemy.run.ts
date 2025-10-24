@@ -103,6 +103,9 @@ const Env = z.object({
   ONBOARDING_E2E_TEST_SETUP_PARAMS: Optional,
   ITERATE_NOTIFICATION_ESTATE_ID: Optional,
   RESEND_API_KEY: Optional,
+  RESEND_FROM_EMAIL: Optional,
+  /** comma-separated list of emails to invite to customer slack connect channels by default. e.g. "jonas@nustom.com,misha@nustom.com" */
+  SLACK_CONNECT_DEFAULT_INVITEES: Optional,
 } satisfies Record<string, typeof Required | typeof Optional>);
 async function setupEnvironmentVariables() {
   const parsed = Env.safeParse(process.env);
@@ -263,7 +266,21 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
-  return { ITERATE_AGENT, SLACK_AGENT, ONBOARDING_AGENT, ORGANIZATION_WEBSOCKET, SANDBOX };
+  const ADVISORY_LOCKER = DurableObjectNamespace<
+    import("./backend/durable-objects/advisory-locker.ts").AdvisoryLocker
+  >("advisory-lock", {
+    className: "AdvisoryLocker",
+    sqlite: true,
+  });
+
+  return {
+    ITERATE_AGENT,
+    SLACK_AGENT,
+    ONBOARDING_AGENT,
+    ORGANIZATION_WEBSOCKET,
+    SANDBOX,
+    ADVISORY_LOCKER,
+  };
 }
 
 async function setupStorage() {
@@ -291,6 +308,10 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
+      /** alchemy's `app.stage` value */
+      APP_STAGE: app.stage,
+      /** alchemy's `app.stage` value, alias for `APP_STAGE` that vite can make available via import.meta.env too */
+      VITE_APP_STAGE: app.stage,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains: isProduction

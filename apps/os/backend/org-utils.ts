@@ -179,6 +179,7 @@ function isTestSignup(
 ): boolean {
   // Add example.com to the patterns to catch test onboarding users
   if (userEmail?.endsWith("@example.com")) return true;
+  if (userEmail?.match(/^[\w.-]+\+\d+@(nustom|iterate)\.com$/)) return true;
 
   const raw = env.TEST_USER_PATTERNS;
   if (!raw) return false;

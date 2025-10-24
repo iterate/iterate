@@ -535,27 +535,18 @@ export const adminRouter = router({
       // Get iterate's Slack workspace estate
       const iterateTeamId = env.SLACK_ITERATE_TEAM_ID;
       if (!iterateTeamId) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)",
-        });
+        throw new Error("Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)");
       }
 
       const iterateEstateId = await getIterateSlackEstateId(ctx.db);
       if (!iterateEstateId) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack workspace estate not found",
-        });
+        throw new Error("Iterate Slack workspace estate not found");
       }
 
       // Get iterate's bot account and token
       const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
       if (!iterateBotAccount) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack bot account not found",
-        });
+        throw new Error("Iterate Slack bot account not found");
       }
 
       // Link trial estate to iterate's bot account
@@ -578,13 +569,6 @@ export const adminRouter = router({
         iterateTeamId,
         iterateBotToken: iterateBotAccount.accessToken,
       });
-
-      if (!result.success) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: result.message,
-        });
-      }
 
       logger.info(
         `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${estateId}`,

@@ -170,12 +170,19 @@ export class TagLogger {
     return result;
   }
 
-  _log({ level, args, forget }: { level: TagLogger.Level; args: unknown[]; forget?: boolean }) {
-    if (!forget)
-      this.context.logs.push({ level, timestamp: new Date(), tags: { ...this.tags }, args });
+  _log({
+    level,
+    args,
+    memories,
+  }: {
+    level: TagLogger.Level;
+    args: unknown[];
+    memories?: unknown[];
+  }) {
+    this.context.logs.push({ level, timestamp: new Date(), tags: { ...this.tags }, args });
 
     if (this.levelNumber > TagLogger.levels[level]) return;
-    this._logFn({ level, args });
+    this._logFn({ level, args: args.concat(memories || []) });
   }
 
   debug(...args: unknown[]) {
@@ -192,13 +199,13 @@ export class TagLogger {
   }
 
   warn(...args: unknown[]) {
-    this._log({ level: "warn", args: args.concat(this.memories()) });
+    this._log({ level: "warn", args, memories: this.memories() });
   }
 
   error(error: Error): void;
   error(message: string, cause?: unknown): void;
   error(...args: unknown[]) {
-    this._log({ level: "error", args: args.concat(this.memories()) });
+    this._log({ level: "error", args, memories: this.memories() });
   }
 
   /**
@@ -217,20 +224,6 @@ export class TagLogger {
         ...log.args,
       ]),
     ];
-  }
-
-  /** Like `.run(...)`, but if there is an error, it will log the "memories" of its context, including all log levels, even debug */
-  try<T>(tag: string, fn: () => Promise<T>): Promise<T> {
-    return this.run(tag, async () => {
-      try {
-        return fn();
-      } catch (error) {
-        this.run("memories", () =>
-          this._log({ level: "error", args: [this.memories()], forget: true }),
-        );
-        throw error;
-      }
-    });
   }
 }
 

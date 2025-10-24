@@ -30,6 +30,7 @@ import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
+import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -286,5 +287,11 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket };
+export {
+  IterateAgent,
+  OnboardingAgent,
+  SlackAgent,
+  OrganizationWebSocket,
+  AdvisoryLocker as AdvisoryLock,
+};
 export { Sandbox } from "@cloudflare/sandbox";

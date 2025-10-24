@@ -276,6 +276,9 @@ importers:
       replicate:
         specifier: ^1.3.0
         version: 1.3.0
+      resend:
+        specifier: ^6.1.2
+        version: 6.1.2(@react-email/render@1.1.2(react-dom@19.2.0(react@19.2.0))(react@19.2.0))
       semver:
         specifier: ^7.7.3
         version: 7.7.3

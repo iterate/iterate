@@ -23,8 +23,6 @@ export default [
     index("./routes/admin/index.tsx"),
     route("session-info", "./routes/admin/session-info.tsx"),
     route("slack-notification", "./routes/admin/slack-notification.tsx"),
-    route("slack-channel-routing", "./routes/admin/slack-channel-routing.tsx"),
-    route("trial-channel-setup", "./routes/admin/trial-channel-setup.tsx"),
     route("db-tools", "./routes/admin/db-tools.tsx"),
     route("trpc-tools", "./routes/admin/trpc-tools.tsx"),
     route("estates", "./routes/admin/estates.tsx"),

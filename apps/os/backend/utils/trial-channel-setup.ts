@@ -1,9 +1,9 @@
-import { env } from "process";
 import { WebClient } from "@slack/web-api";
 import { eq, and } from "drizzle-orm";
 import type { DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
+import { env } from "../../env.ts";
 
 export async function slackChannelOverrideExists(db: DB, estateId: string): Promise<boolean> {
   const override = await db.query.slackChannelEstateOverride.findFirst({
@@ -60,6 +60,21 @@ export async function getIterateSlackEstateId(db: DB): Promise<string | undefine
   return result[0]?.estateId || undefined;
 }
 
+function slackChannelNameFromEmail(email: string): string {
+  let full = `iterate-${email}`.replace(/\.com$/, "").replace(/\W+/g, "-");
+  full = full.replace(/^[-_]+/, "").replace(/[-_]+$/, ""); // remove leading and trailing hyphens and underscores
+  return full.slice(0, 80 - 15); // subtract 15 from slack max channel name length so we can add `-${Date.now()}` if the channel name is taken
+}
+
+function assertOk<T extends { ok: boolean; error?: string; message?: string }>(
+  result: T,
+): T & { ok: true } {
+  if (!result.ok) {
+    throw new Error(`Slack API error: ${result.error}: ${result.message}`, { cause: result });
+  }
+  return result as T & { ok: true };
+}
+
 /**
  * Creates a trial Slack Connect channel and sets up routing
  *
@@ -84,280 +99,96 @@ export async function createTrialSlackConnectChannel(params: {
   userName: string;
   iterateTeamId: string;
   iterateBotToken: string;
-}): Promise<
-  | { success: true; channelId: string; channelName: string }
-  | { success: false; error: "invalid_email" | "channel_exists" | "api_error"; message: string }
-> {
+}): Promise<{ channelId: string; channelName: string }> {
   const { db, userEstateId, userEmail, userName, iterateTeamId, iterateBotToken } = params;
 
-  const channelName = estateIdToChannelName(userEstateId);
+  let channelName = slackChannelNameFromEmail(userEmail);
   const slackAPI = new WebClient(iterateBotToken);
 
-  try {
-    const existingOverride = await db.query.slackChannelEstateOverride.findFirst({
-      where: and(
-        eq(schema.slackChannelEstateOverride.slackTeamId, iterateTeamId),
-        eq(schema.slackChannelEstateOverride.estateId, userEstateId),
-      ),
-    });
+  // removed the logic for reusing existing channels/overrides
+  // if we want to put that kind of thing back in, we should move it to a different function. it was added in https://github.com/iterate/iterate/pull/361
+  // without it, there's some risk of creating duplicate channels for the same user, if they click the button in two differrent tabs or something.
+  // an outbox system, or just an advisory lock, could fix this.
 
-    if (existingOverride) {
-      logger.info(
-        `Trial channel already exists for estate ${userEstateId}, reusing channel ${existingOverride.slackChannelId}`,
-      );
+  // 1. Create Slack channel in iterate's workspace (or find existing one)
+  logger.info(`Creating trial channel: ${channelName}`);
+  let channelResult = await slackAPI.conversations.create({
+    name: channelName,
+    is_private: false,
+  });
 
-      const channelId = existingOverride.slackChannelId;
-
-      // Check if channel is archived and unarchive if needed
-      const channelInfo = await slackAPI.conversations.info({
-        channel: channelId,
-      });
-
-      if (channelInfo.ok && channelInfo.channel?.is_archived) {
-        logger.info(`Channel ${channelId} is archived, attempting to unarchive...`);
-        const unarchiveResult = await slackAPI.conversations.unarchive({
-          channel: channelId,
-        });
-
-        if (!unarchiveResult.ok) {
-          const errorCode = unarchiveResult.error;
-          logger.error(`Failed to unarchive channel ${channelId}: ${errorCode}`);
-
-          // If bot can't unarchive (not in channel or lacks permissions), return a clear error
-          if (errorCode === "not_in_channel" || errorCode === "cant_unarchive_channel") {
-            return {
-              success: false,
-              error: "channel_exists",
-              message: `Your trial channel (#${channelName}) is archived. Please ask a Slack workspace admin to unarchive the channel, or contact support for assistance.`,
-            };
-          }
-          // Other unarchive errors should fail the operation
-          return {
-            success: false,
-            error: "api_error",
-            message: `Failed to unarchive channel: ${errorCode}`,
-          };
-        }
-        logger.info(`Successfully unarchived channel ${channelId}`);
-      }
-
-      // Ensure bot is a member of the channel
-      logger.info(`Joining bot to existing channel ${channelId}`);
-      const joinResult = await slackAPI.conversations.join({
-        channel: channelId,
-      });
-      if (!joinResult.ok && joinResult.error !== "already_in_channel") {
-        logger.warn(`Failed to join channel ${channelId}: ${joinResult.error}`);
-      }
-
-      // Resend Slack Connect invite (in case user needs it)
-      logger.info(`Sending Slack Connect invite to ${userEmail}`);
-      const inviteResult = await slackAPI.conversations.inviteShared({
-        channel: channelId,
-        external_limited: false,
-        emails: [userEmail],
-      });
-      if (!inviteResult.ok && inviteResult.error === "invalid_email") {
-        logger.warn(`Email ${userEmail} not found in Slack`);
-        return {
-          success: false,
-          error: "invalid_email",
-          message: `The email ${userEmail} is not associated with any Slack account. Please provide your Slack email address.`,
-        };
-      }
-
-      logger.info(
-        `Successfully reused existing trial channel for ${userEmail}: ${channelName} → estate ${userEstateId}`,
-      );
-
-      return {
-        success: true,
-        channelId,
-        channelName,
-      };
-    }
-
-    // 1. Create Slack channel in iterate's workspace (or find existing one)
-    let channelWasCreated = false;
-
-    logger.info(`Creating trial channel: ${channelName}`);
-    const channelResult = await slackAPI.conversations.create({
+  if (channelResult.error === "name_taken") {
+    channelName = `${channelName}-${Date.now()}`;
+    channelResult = await slackAPI.conversations.create({
       name: channelName,
       is_private: false,
     });
+  }
 
-    if (!channelResult.ok) {
-      // If channel name is already taken, this shouldn't happen with estate-based naming
-      // since the database check above should have found the override.
-      // This could only happen if:
-      // 1. The channel exists but isn't in our database (orphaned channel)
-      // 2. There's a race condition (very unlikely)
-      if (channelResult.error === "name_taken") {
-        logger.error(
-          `Channel ${channelName} (for estate ${userEstateId}) already exists but no override found in database. This indicates orphaned data.`,
-        );
-        return {
-          success: false,
-          error: "channel_exists",
-          message: `A trial channel for your account already exists. Please contact support for assistance.`,
-        };
-      }
+  channelResult = assertOk(channelResult);
 
-      logger.error("Failed to create Slack channel", channelResult);
-      return {
-        success: false,
-        error: "api_error",
-        message: `Failed to create Slack channel: ${channelResult.error}`,
-      };
-    }
-
-    if (!channelResult.channel?.id) {
-      logger.error("Failed to create Slack channel - no channel ID returned", channelResult);
-      return {
-        success: false,
-        error: "api_error",
-        message: "Failed to create Slack channel",
-      };
-    }
-
-    const channelId = channelResult.channel.id;
-    channelWasCreated = true;
-    logger.info(`Created Slack channel ${channelName} (${channelId})`);
-
-    // 2. Ensure bot is a member of the channel
-    logger.info(`Joining bot to channel ${channelId}`);
-    const joinResult2 = await slackAPI.conversations.join({
-      channel: channelId,
+  if (!channelResult.channel?.id) {
+    // This should never happen, but slack's types aren't great
+    throw new Error("Failed to create Slack channel - no channel ID returned", {
+      cause: channelResult,
     });
-    // If already in channel, that's fine - continue
-    if (!joinResult2.ok && joinResult2.error !== "already_in_channel") {
-      logger.warn(`Failed to join channel ${channelId}: ${joinResult2.error}`);
-      // Don't fail the whole operation - we can still try to send the invite
-    }
+  }
 
-    // 3. Send Slack Connect invite
-    logger.info(`Sending Slack Connect invite to ${userEmail}`);
-    const inviteResult2 = await slackAPI.conversations.inviteShared({
+  const channelId = channelResult.channel.id;
+  logger.info(`Created Slack channel #${channelName} (${channelId})`);
+
+  // 2. Ensure bot is a member of the channel
+  logger.info(`Joining bot to channel ${channelId}`);
+  const joinResult = await slackAPI.conversations.join({
+    channel: channelId,
+  });
+  // If already in channel, that's fine - continue
+  if (!joinResult.ok && joinResult.error !== "already_in_channel") {
+    logger.warn(`Failed to join channel ${channelId}: ${joinResult.error}`);
+    // Don't fail the whole operation - we can still try to send the invite
+  }
+
+  // 3. Send Slack Connect invite
+  logger.info(`Sending Slack Connect invite to ${userEmail}`);
+  assertOk(
+    await slackAPI.conversations.inviteShared({
       channel: channelId,
       emails: [userEmail],
-    });
+    }),
+  );
 
-    if (!inviteResult2.ok) {
-      // Check if it's an invalid email error
-      if (inviteResult2.error === "invalid_email" || inviteResult2.error === "user_not_found") {
-        logger.warn(`Email ${userEmail} not found in Slack, will need alternate email`);
-        return {
-          success: false,
-          error: "invalid_email",
-          message: `The email ${userEmail} is not associated with any Slack account. Please provide your Slack email address.`,
-        };
-      }
-
-      logger.error("Failed to send Slack Connect invite", inviteResult2);
-      // Continue anyway - admin can manually invite later
-    }
-
-    // 4. Create or update routing override
-    // Check if this channel already has an override (from a previous trial attempt)
-    const existingChannelOverride = await db.query.slackChannelEstateOverride.findFirst({
-      where: and(
-        eq(schema.slackChannelEstateOverride.slackChannelId, channelId),
-        eq(schema.slackChannelEstateOverride.slackTeamId, iterateTeamId),
-      ),
-    });
-
-    if (existingChannelOverride) {
-      // Update the existing override to point to the new estate
-      logger.info(
-        `Updating existing routing override: channel ${channelId} (was estate ${existingChannelOverride.estateId}) → estate ${userEstateId}`,
-      );
-      await db
-        .update(schema.slackChannelEstateOverride)
-        .set({
-          estateId: userEstateId,
-          reason: `Trial via Slack Connect for ${userName} (${userEmail})`,
-          metadata: {
-            createdVia: "trial_signup",
-            userEmail,
-            userName,
-            channelName,
-            createdAt: new Date().toISOString(),
-            previousEstateId: existingChannelOverride.estateId,
-            updatedAt: new Date().toISOString(),
-          },
-        })
-        .where(eq(schema.slackChannelEstateOverride.id, existingChannelOverride.id));
-    } else {
-      // Create new override
-      logger.info(`Creating routing override: channel ${channelId} → estate ${userEstateId}`);
-      await db.insert(schema.slackChannelEstateOverride).values({
-        slackChannelId: channelId,
-        slackTeamId: iterateTeamId,
-        estateId: userEstateId,
-        reason: `Trial via Slack Connect for ${userName} (${userEmail})`,
-        metadata: {
-          createdVia: "trial_signup",
-          userEmail,
-          userName,
-          channelName,
-          createdAt: new Date().toISOString(),
-        },
-      });
-    }
-
-    logger.info(
-      `Successfully ${channelWasCreated ? "created" : "reused existing"} trial channel for ${userEmail}: ${channelName} → estate ${userEstateId}`,
-    );
-
-    return {
-      success: true,
-      channelId,
+  // Create new override - note that if this user has already created a channel, there will be two records. We look for the most recent one when mapping to an estate.
+  logger.info(`Creating routing override: channel ${channelId} → estate ${userEstateId}`);
+  await db.insert(schema.slackChannelEstateOverride).values({
+    slackChannelId: channelId,
+    slackTeamId: iterateTeamId,
+    estateId: userEstateId,
+    reason: `Trial via Slack Connect for ${userName} (${userEmail})`,
+    metadata: {
+      createdVia: "trial_signup",
+      userEmail,
+      userName,
       channelName,
-    };
-  } catch (error) {
-    logger.error("Error in createTrialSlackConnectChannel", error);
-    return {
-      success: false,
-      error: "api_error",
-      message:
-        error instanceof Error ? `Unexpected error: ${error.message}` : "Unexpected error occurred",
-    };
-  }
-}
-
-/**
- * Resends Slack Connect invite to a different email address
- */
-export async function resendSlackConnectInvite(params: {
-  channelId: string;
-  alternateEmail: string;
-  iterateBotToken: string;
-}): Promise<{ success: boolean; error?: string }> {
-  const { channelId, alternateEmail, iterateBotToken } = params;
-
-  const slackAPI = new WebClient(iterateBotToken);
-
-  logger.info(`Resending Slack Connect invite to ${alternateEmail} for channel ${channelId}`);
-  const inviteResult = await slackAPI.conversations.inviteShared({
-    channel: channelId,
-    emails: [alternateEmail],
+      createdAt: new Date().toISOString(),
+    },
   });
 
-  if (!inviteResult.ok) {
-    if (inviteResult.error === "invalid_email" || inviteResult.error === "user_not_found") {
-      return {
-        success: false,
-        error: `The email ${alternateEmail} is not associated with any Slack account.`,
-      };
-    }
+  logger.info(`Created channel for ${userEmail}: ${channelName}. Estate: ${userEstateId}`);
 
-    logger.error("Failed to resend Slack Connect invite", inviteResult);
-    return {
-      success: false,
-      error: inviteResult.error || "Failed to send invite",
-    };
+  await slackAPI.chat.postMessage({
+    channel: channelId,
+    text: `hi. @ me if you need anything.`,
+  });
+  const slackConnectDefaultInvitees = env.SLACK_CONNECT_DEFAULT_INVITEES?.split(",");
+  if (slackConnectDefaultInvitees?.length) {
+    await slackAPI.conversations.inviteShared({
+      channel: channelId,
+      emails: slackConnectDefaultInvitees,
+    });
   }
 
-  logger.info(`Successfully sent Slack Connect invite to ${alternateEmail}`);
-  return { success: true };
+  return {
+    channelId,
+    channelName,
+  };
 }
