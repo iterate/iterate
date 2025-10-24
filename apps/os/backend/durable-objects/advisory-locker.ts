@@ -53,13 +53,8 @@ export class AdvisoryLocker extends DurableObject {
     return true;
   }
 
-  /**
-   * @returns true if lock was released, false if not held
-   */
   async release() {
-    const old = this._isLocked;
     this._isLocked = false;
-    return !old;
   }
 
   async isLocked() {
