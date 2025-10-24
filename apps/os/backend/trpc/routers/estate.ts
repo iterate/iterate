@@ -127,14 +127,13 @@ export async function triggerEstateRebuild(params: {
     connectedRepoId: estateWithRepo.connectedRepoId,
   });
 
-  const installationToken = await githubAppInstance.octokit.rest.apps.createInstallationAccessToken(
-    {
+  const installationToken =
+    await githubAppInstance().octokit.rest.apps.createInstallationAccessToken({
       installation_id: parseInt(
         githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
       ),
       repository_ids: [estateWithRepo.connectedRepoId],
-    },
-  );
+    });
 
   if (installationToken.status !== 201) {
     throw new Error(

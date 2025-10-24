@@ -295,7 +295,7 @@ export const integrationsRouter = router({
         expiresAt,
       });
 
-      const installationUrl = await githubAppInstance.getInstallationUrl({ state });
+      const installationUrl = await githubAppInstance().getInstallationUrl({ state });
 
       return {
         installationUrl,
@@ -333,7 +333,7 @@ export const integrationsRouter = router({
     }
 
     const repos = await Array.fromAsync(
-      githubAppInstance.eachRepository.iterator({
+      githubAppInstance().eachRepository.iterator({
         installationId: parseInt(githubInstallation.accountId),
       }),
     ).then((arr) =>
@@ -570,7 +570,7 @@ export const integrationsRouter = router({
               if (acc && acc.providerId === "github-app" && acc.accountId) {
                 try {
                   const deleteResponse =
-                    await githubAppInstance.octokit.rest.apps.deleteInstallation({
+                    await githubAppInstance().octokit.rest.apps.deleteInstallation({
                       installation_id: parseInt(acc.accountId),
                     });
 

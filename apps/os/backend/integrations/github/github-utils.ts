@@ -18,19 +18,20 @@ const privateKey = createPrivateKey({
 }) as string;
 
 export type GithubAppInstance = App & { octokit: Octokit };
-export const githubAppInstance: GithubAppInstance = new App({
-  appId: env.GITHUB_APP_ID,
-  privateKey,
-  oauth: {
-    clientId: env.GITHUB_APP_CLIENT_ID,
-    clientSecret: env.GITHUB_APP_CLIENT_SECRET,
-    allowSignup: true,
-  },
-  webhooks: {
-    secret: env.GITHUB_WEBHOOK_SECRET,
-  },
-  Octokit: Octokit.defaults({ userAgent: "Iterate OS" }),
-});
+export const githubAppInstance = (): GithubAppInstance =>
+  new App({
+    appId: env.GITHUB_APP_ID,
+    privateKey,
+    oauth: {
+      clientId: env.GITHUB_APP_CLIENT_ID,
+      clientSecret: env.GITHUB_APP_CLIENT_SECRET,
+      allowSignup: true,
+    },
+    webhooks: {
+      secret: env.GITHUB_WEBHOOK_SECRET,
+    },
+    Octokit: Octokit.defaults({ userAgent: "Iterate OS" }),
+  });
 
 export const getGithubInstallationForEstate = async (db: DB, estateId: string) => {
   const installations = await db
@@ -85,10 +86,12 @@ export const getEstateByRepoId = async (db: DB, repoId: number) => {
 };
 
 export const validateGithubWebhookSignature = async (payload: string, signature: string) =>
-  await githubAppInstance.webhooks.verify(payload, signature).catch(() => false);
+  await githubAppInstance()
+    .webhooks.verify(payload, signature)
+    .catch(() => false);
 
 export const getOctokitForInstallation = async (installationId: string): Promise<Octokit> =>
-  await githubAppInstance.getInstallationOctokit(parseInt(installationId));
+  await githubAppInstance().getInstallationOctokit(parseInt(installationId));
 
 // Helper function to trigger a GitHub estate build
 export async function triggerGithubBuild(params: {

@@ -53,8 +53,8 @@ githubApp.get(
 
     const { estateId, redirectUri, userId, callbackURL } = parsedState;
 
-    const oauthResult = await githubAppInstance.oauth
-      .createToken({
+    const oauthResult = await githubAppInstance()
+      .oauth.createToken({
         code,
         redirectUrl: redirectUri,
         state,
@@ -66,7 +66,7 @@ githubApp.get(
 
     if (!oauthResult) return c.json({ error: "Failed to create token" }, 400);
 
-    const userOctokit = await githubAppInstance.oauth.getUserOctokit(oauthResult.authentication);
+    const userOctokit = await githubAppInstance().oauth.getUserOctokit(oauthResult.authentication);
     const userInfo = await userOctokit.rest.users.getAuthenticated();
     if (userInfo.status !== 200) {
       logger.error("Failed to get user info", userInfo.data);
@@ -189,12 +189,14 @@ githubApp.post("/webhook", async (c) => {
     // Get the GitHub installation for this estate
     const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
 
-    const tokenResponse = await githubAppInstance.octokit.rest.apps.createInstallationAccessToken({
-      installation_id: parseInt(
-        githubInstallation?.accountId ?? c.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-      ),
-      repository_ids: [repoId],
-    });
+    const tokenResponse = await githubAppInstance().octokit.rest.apps.createInstallationAccessToken(
+      {
+        installation_id: parseInt(
+          githubInstallation?.accountId ?? c.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+        ),
+        repository_ids: [repoId],
+      },
+    );
 
     if (tokenResponse.status !== 201) {
       logger.error(
