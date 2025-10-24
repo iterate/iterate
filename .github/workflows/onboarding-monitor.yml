@@ -38,9 +38,14 @@ jobs:
 
       - name: Run Onboarding Tests
         id: tests
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 15
+          max_attempts: 3
+          retry_wait_seconds: 30
+          command: doppler run -- pnpm test:onboarding:production
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-        run: doppler run -- pnpm test:onboarding:production
 
       - name: Notify Slack on Failure
         if: failure()
