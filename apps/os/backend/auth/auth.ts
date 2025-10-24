@@ -52,31 +52,35 @@ export const getAuth = (db: DB) =>
       : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
     plugins: [
       admin(),
-      emailOTP({
-        generateOTP: (o) => {
-          // magic: turns `bob+123456@nustom.com` into `123456`. or `alice+oct23.001001@nustom.com` into `001001`
-          const getSpecialEmailOtp = (email: string) => {
-            const [beforeAt, domain, ...rest] = email.split("@");
-            if (domain !== "nustom.com") return null;
-            if (rest.length !== 0) throw new Error("Invalid email " + email);
-            const plusDigits = beforeAt.split("+").at(-1)?.split(/\D/).at(-1);
-            return plusDigits?.match(/^\d{6}$/)?.[0];
-          };
-          return getSpecialEmailOtp(o.email) || randomInt(100000, 999999).toString();
-        },
-        async sendVerificationOTP(data) {
-          logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
-          if (!env.RESEND_API_KEY) return;
-          const resend = new Resend(env.RESEND_API_KEY);
-          const result = await resend.emails.send({
-            from: `iterate <${env.RESEND_FROM_EMAIL || "noreply@iterate.com"}>`,
-            to: data.email,
-            subject: `sign in to iterate`,
-            html: `Your sign in code is ${data.otp}`,
-          });
-          if (result.error) logger.error("Error sending verification OTP", result.error);
-        },
-      }),
+      ...(import.meta.env.VITE_ENABLE_EMAIL_OTP
+        ? [
+            emailOTP({
+              generateOTP: (o) => {
+                // magic: turns `bob+123456@nustom.com` into `123456`. or `alice+oct23.001001@nustom.com` into `001001`
+                const getSpecialEmailOtp = (email: string) => {
+                  const [beforeAt, domain, ...rest] = email.split("@");
+                  if (domain !== "nustom.com") return null;
+                  if (rest.length !== 0) throw new Error("Invalid email " + email);
+                  const plusDigits = beforeAt.split("+").at(-1)?.split(/\D/).at(-1);
+                  return plusDigits?.match(/^\d{6}$/)?.[0];
+                };
+                return getSpecialEmailOtp(o.email) || randomInt(100000, 999999).toString();
+              },
+              async sendVerificationOTP(data) {
+                logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
+                if (!env.RESEND_API_KEY) return;
+                const resend = new Resend(env.RESEND_API_KEY);
+                const result = await resend.emails.send({
+                  from: `iterate <${env.RESEND_FROM_EMAIL || "noreply@iterate.com"}>`,
+                  to: data.email,
+                  subject: `sign in to iterate`,
+                  html: `Your sign in code is ${data.otp}`,
+                });
+                if (result.error) logger.error("Error sending verification OTP", result.error);
+              },
+            }),
+          ]
+        : []),
       integrationsPlugin(),
       serviceAuthPlugin(),
       // We don't use any of the better auth stripe plugin's database schema or

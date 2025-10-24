@@ -270,7 +270,7 @@ async function setupDurableObjects() {
   const ADVISORY_LOCKER = DurableObjectNamespace<
     import("./backend/durable-objects/advisory-locker.ts").AdvisoryLocker
   >("advisory-lock", {
-    className: "AdvisoryLock",
+    className: "AdvisoryLocker",
     sqlite: true,
   });
 
