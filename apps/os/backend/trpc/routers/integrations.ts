@@ -3,26 +3,22 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
-import { Octokit } from "octokit";
 import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
-import { logger } from "../../tag-logger.ts";
 import {
-  generateGithubJWT,
   getGithubInstallationForEstate,
   getGithubRepoForEstate,
-  getGithubInstallationToken,
+  githubAppInstance,
+  getOctokitForInstallation,
 } from "../../integrations/github/github-utils.ts";
 import { MCPParam } from "../../agent/tool-schemas.ts";
 import { getMCPVerificationKey } from "../../agent/mcp/mcp-oauth-provider.ts";
-import {
-  getGithubUserAccessTokenForEstate,
-  getSlackAccessTokenForEstate,
-} from "../../auth/token-utils.ts";
+import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
+import { logger } from "../../tag-logger.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -275,8 +271,6 @@ export const integrationsRouter = router({
         isConnected: accounts.length > 0,
       };
     }),
-  // Make it work
-  // TODO: Make this good later
   startGithubAppInstallFlow: estateProtectedProcedure
     .input(
       z.object({
@@ -302,7 +296,7 @@ export const integrationsRouter = router({
         expiresAt,
       });
 
-      const installationUrl = `https://github.com/apps/${ctx.env.GITHUB_APP_SLUG}/installations/new?state=${state}&redirect_uri=${redirectUri}`;
+      const installationUrl = await githubAppInstance().getInstallationUrl({ state });
 
       return {
         installationUrl,
@@ -310,110 +304,88 @@ export const integrationsRouter = router({
     }),
   listAvailableGithubRepos: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
+
     const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
 
     if (!githubInstallation) {
-      // Return empty array instead of throwing - this is a normal state when GitHub isn't connected
-      return [];
-    }
+      const scopedOctokit = await getOctokitForInstallation(
+        ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+      );
 
-    const token = await getGithubInstallationToken(githubInstallation.accountId);
-
-    // If there is no token, that means the installation has been deleted
-    if (!token) {
-      return [];
-    }
-
-    // GitHub API schema for paginated repository response
-    const GitHubReposResponse = z.object({
-      total_count: z.number(),
-      repositories: z.array(
-        z.object({
+      const repo = await getGithubRepoForEstate(ctx.db, estateId);
+      if (!repo) return [];
+      const repoInfo = await scopedOctokit.request("GET /repositories/{repository_id}", {
+        repository_id: repo.connectedRepoId,
+      });
+      if (repoInfo.status !== 200) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to fetch repository details",
+        });
+      }
+      const repoData = z
+        .object({
           id: z.number(),
           full_name: z.string(),
           private: z.boolean(),
-        }),
-      ),
-    });
-
-    const allRepos: z.infer<typeof GitHubReposResponse>["repositories"] = [];
-    let page = 1;
-    const perPage = 100; // Maximum allowed by GitHub
-    let hasMore = true;
-
-    // Fetch all pages of repositories
-    while (hasMore) {
-      const availableRepos = await fetch(
-        `https://api.github.com/installation/repositories?per_page=${perPage}&page=${page}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "User-Agent": "Iterate OS",
-            Accept: "application/vnd.github+json",
-          },
-        },
-      );
-
-      if (!availableRepos.ok) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to fetch available repositories",
-        });
-      }
-
-      const reposData = GitHubReposResponse.parse(await availableRepos.json());
-      allRepos.push(...reposData.repositories);
-
-      // Check if there are more pages
-      // GitHub returns total_count, so we can check if we've fetched all
-      hasMore = allRepos.length < reposData.total_count;
-      page++;
-
-      // Safety check to prevent infinite loops (max 10 pages = 1000 repos)
-      if (page > 10) {
-        logger.warn(`Stopping repository fetch at page ${page - 1} to prevent excessive API calls`);
-        break;
-      }
+        })
+        .parse(repoInfo.data);
+      return [repoData];
     }
 
-    return allRepos;
+    const repos = await Array.fromAsync(
+      githubAppInstance().eachRepository.iterator({
+        installationId: parseInt(githubInstallation.accountId),
+      }),
+    ).then((arr) =>
+      arr.map(({ repository }) => ({
+        id: repository.id,
+        full_name: repository.full_name,
+        private: repository.private,
+      })),
+    );
+
+    return repos;
   }),
   getGithubRepoForEstate: estateProtectedProcedure.query(async ({ ctx, input }) => {
     const { estateId } = input;
     const githubRepo = await getGithubRepoForEstate(ctx.db, estateId);
-    if (!githubRepo) return null;
+
+    if (!githubRepo)
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No repository connected to this estate",
+      });
 
     // Get the GitHub installation to fetch the repository details
     const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
     let repoName: string | null = null;
     let repoFullName: string | null = null;
 
-    let token: string | null = null;
-    if (githubInstallation) token = await getGithubInstallationToken(githubInstallation.accountId);
-    // If no installation token is found, use the fallback token
-    if (!token) token = ctx.env.GITHUB_ESTATES_TOKEN;
-
-    // Fetch repository details from GitHub API
-    const repoResponse = await fetch(
-      `https://api.github.com/repositories/${githubRepo.connectedRepoId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "User-Agent": "Iterate OS",
-          Accept: "application/vnd.github+json",
-        },
-      },
+    const scopedOctokit = await getOctokitForInstallation(
+      githubInstallation?.accountId ?? ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
     );
 
-    if (repoResponse.ok) {
-      const repoData = (await repoResponse.json()) as { name: string; full_name: string };
-      repoName = repoData.name;
-      repoFullName = repoData.full_name;
-    } else {
-      logger.error(
-        `Failed to fetch repository details: ${repoResponse.status} ${repoResponse.statusText}`,
-      );
+    const repoResponse = await scopedOctokit.request("GET /repositories/{repository_id}", {
+      repository_id: githubRepo.connectedRepoId,
+    });
+
+    if (repoResponse.status !== 200) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: `Failed to fetch repository details for repository id ${githubRepo.connectedRepoId}`,
+      });
     }
+
+    const repoData = z
+      .object({
+        name: z.string(),
+        full_name: z.string(),
+      })
+      .parse(repoResponse.data);
+
+    repoName = repoData.name;
+    repoFullName = repoData.full_name;
 
     return {
       repoId: githubRepo.connectedRepoId,
@@ -436,7 +408,7 @@ export const integrationsRouter = router({
       const { estateId, repoId, branch, path } = input;
 
       const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-      if (!githubInstallation) {
+      if (!githubInstallation || !githubInstallation.accountId) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message:
@@ -444,23 +416,16 @@ export const integrationsRouter = router({
         });
       }
 
-      const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-      if (!installationToken) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message: "Failed to get installation token, please re-authenticate Github integration",
-        });
-      }
+      const scopedOctokit = await getOctokitForInstallation(githubInstallation.accountId);
 
-      const oc = new Octokit({ auth: installationToken });
-
-      const repo = await oc.request("GET /repositories/:id", { id: repoId });
+      const repo = await scopedOctokit.request("GET /repositories/{id}", { id: repoId });
       if (repo.status !== 200) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "Failed to fetch repository details",
         });
       }
+
       const repoData = z
         .object({
           name: z.string(),
@@ -479,7 +444,7 @@ export const integrationsRouter = router({
         })
         .where(eq(schemas.estate.id, estateId));
 
-      const branchData = await oc.rest.repos.getBranch({
+      const branchData = await scopedOctokit.rest.repos.getBranch({
         owner: repoData.owner.login,
         repo: repoData.name,
         branch,
@@ -605,30 +570,16 @@ export const integrationsRouter = router({
             for (const { account: acc } of estateAccountsToDisconnect) {
               if (acc && acc.providerId === "github-app" && acc.accountId) {
                 try {
-                  // Generate JWT for authentication
-                  const jwt = await generateGithubJWT();
+                  const deleteResponse =
+                    await githubAppInstance().octokit.rest.apps.deleteInstallation({
+                      installation_id: parseInt(acc.accountId),
+                    });
 
-                  // Call GitHub API to delete the installation
-                  const deleteResponse = await fetch(
-                    `https://api.github.com/app/installations/${acc.accountId}`,
-                    {
-                      method: "DELETE",
-                      headers: {
-                        Accept: "application/vnd.github+json",
-                        Authorization: `Bearer ${jwt}`,
-                        "X-GitHub-Api-Version": "2022-11-28",
-                        "User-Agent": "Iterate OS",
-                      },
-                    },
-                  );
-
-                  if (!deleteResponse.ok && deleteResponse.status !== 404) {
+                  if (deleteResponse.status !== 204) {
                     // Log error but don't fail the disconnection
                     logger.error(
-                      `Failed to revoke GitHub installation ${acc.accountId}: ${deleteResponse.status} ${deleteResponse.statusText}`,
+                      `Failed to revoke GitHub installation ${acc.accountId}: ${deleteResponse.status} ${deleteResponse.data}`,
                     );
-                  } else if (deleteResponse.ok) {
-                    logger.log(`Successfully revoked GitHub installation ${acc.accountId}`);
                   }
                 } catch (error) {
                   // Log error but don't fail the disconnection
@@ -1027,97 +978,6 @@ export const integrationsRouter = router({
       ]);
 
       return { success: true };
-    }),
-  createTemplateRepo: estateProtectedProcedure
-    .input(
-      z.object({
-        repoName: z.string(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      const { estateId, repoName } = input;
-      const { accessToken, installationId } = await getGithubUserAccessTokenForEstate(
-        ctx.db,
-        estateId,
-      ).catch((e) => {
-        logger.log(e);
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message:
-            "Failed to get GitHub user access token, Pleased reconnect your GitHub account if this persists",
-        });
-      });
-
-      const githubJWT = await generateGithubJWT();
-      const installationInfoRes = await fetch(
-        `https://api.github.com/app/installations/${installationId}`,
-        {
-          headers: {
-            Authorization: `Bearer ${githubJWT}`,
-            "User-Agent": "Iterate OS",
-          },
-        },
-      );
-
-      if (!installationInfoRes.ok) {
-        logger.log("Failed to get GitHub installation info", await installationInfoRes.text());
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to get GitHub installation info",
-        });
-      }
-
-      const installationInfoData = z
-        .object({ account: z.object({ login: z.string() }) })
-        .parse(await installationInfoRes.json());
-
-      const TEMPLATE_REPO_NAME = "iterate-com/estate-template";
-      const createRepoRes = await fetch(
-        `https://api.github.com/repos/${TEMPLATE_REPO_NAME}/generate`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-            "User-Agent": "Iterate OS",
-          },
-          body: JSON.stringify({
-            owner: installationInfoData.account.login,
-            name: repoName,
-            description: "Your iterate estate",
-            private: true,
-          }),
-        },
-      );
-
-      if (createRepoRes.status === 409) {
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "Repository already exists, Please try a different name",
-        });
-      }
-
-      if (!createRepoRes.ok) {
-        logger.error(await createRepoRes.text());
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create repository",
-        });
-      }
-
-      const repoRes = z.object({ id: z.number() }).parse(await createRepoRes.json());
-
-      await ctx.db
-        .update(schemas.estate)
-        .set({
-          connectedRepoId: repoRes.id,
-          connectedRepoRef: "main",
-          connectedRepoPath: "/",
-        })
-        .where(eq(schemas.estate.id, estateId));
-
-      return {
-        success: true,
-      };
     }),
 
   startThreadWithAgent: estateProtectedProcedure

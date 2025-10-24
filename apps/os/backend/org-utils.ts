@@ -1,6 +1,5 @@
 import { eq } from "drizzle-orm";
 import dedent from "dedent";
-import { Octokit } from "octokit";
 import { typeid } from "typeid-js";
 import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
@@ -10,12 +9,13 @@ import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils
 import { getUserOrganizations } from "./trpc/trpc.ts";
 import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
+import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
   organizationId: string;
   organizationName: string;
 }) => {
-  const gh = new Octokit({ auth: env.GITHUB_ESTATES_TOKEN });
+  const gh = await getOctokitForInstallation(env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID);
   const repoName = typeid("repo").toString();
   const repo = await gh.rest.repos.createUsingTemplate({
     name: repoName,

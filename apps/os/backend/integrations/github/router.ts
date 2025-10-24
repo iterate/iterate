@@ -10,25 +10,9 @@ import {
   validateGithubWebhookSignature,
   getEstateByRepoId,
   getGithubInstallationForEstate,
-  getGithubInstallationToken,
   triggerGithubBuild,
+  githubAppInstance,
 } from "./github-utils.ts";
-
-export const UserAccessTokenResponse = z.object({
-  access_token: z.string(),
-  refresh_token: z.string(),
-  expires_in: z.number(),
-  refresh_token_expires_in: z.number(),
-});
-
-export const InstallationInfoResponse = z.looseObject({
-  installations: z.array(
-    z.looseObject({
-      id: z.number(),
-      permissions: z.record(z.string(), z.string()),
-    }),
-  ),
-});
 
 export const githubApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 githubApp.get(
@@ -36,16 +20,20 @@ githubApp.get(
   zValidator(
     "query",
     z.object({
-      state: z.string(),
+      state: z.string().optional(),
       code: z.string(),
       installation_id: z.string().transform((val) => parseInt(val)),
     }),
   ),
   async (c) => {
-    if (!c.var.session) {
-      return c.json({ error: "Unauthorized" }, 401);
-    }
+    if (!c.var.session) return c.json({ error: "Unauthorized" }, 401);
     const { state, code, installation_id } = c.req.valid("query");
+
+    // If there is state missing, that means the user might have clicked save in the github ui without initiating the flow
+    // just redirect them to the home page, this should not show an error to the user
+    // TODO: Handle this better, find the associated estate and update stuff
+    if (!state) return c.redirect("/");
+
     const verification = await c.var.db.query.verification.findFirst({
       where: eq(schema.verification.identifier, state),
     });
@@ -65,64 +53,50 @@ githubApp.get(
 
     const { estateId, redirectUri, userId, callbackURL } = parsedState;
 
-    const userAccessTokenRes = await fetch(`https://github.com/login/oauth/access_token`, {
-      method: "POST",
-      body: new URLSearchParams({
+    const oauthResult = await githubAppInstance()
+      .oauth.createToken({
         code,
-        client_id: c.env.GITHUB_APP_CLIENT_ID,
-        client_secret: c.env.GITHUB_APP_CLIENT_SECRET,
-        redirect_uri: redirectUri,
-      }),
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Iterate OS",
-      },
-    });
-    if (!userAccessTokenRes.ok) {
-      logger.error(
-        "Failed to get user access token",
-        new Error(await userAccessTokenRes.text(), {
-          cause: { status: userAccessTokenRes.status, statusText: userAccessTokenRes.statusText },
-        }),
-      );
-      return c.json({ error: "Failed to get user access token" }, 400);
-    }
-    let userAccessTokenData;
-    const data = await userAccessTokenRes.json();
-    try {
-      userAccessTokenData = UserAccessTokenResponse.parse(data);
-    } catch (error) {
-      logger.error(
-        "Failed to parse user access token",
-        new Error(JSON.stringify(data), { cause: error }),
-      );
-      return c.json({ error: "Failed to get user access token" }, 400);
+        redirectUrl: redirectUri,
+        state,
+      })
+      .catch((error) => {
+        logger.error("Failed to create token", error);
+        return null;
+      });
+
+    if (!oauthResult) return c.json({ error: "Failed to create token" }, 400);
+
+    const userOctokit = await githubAppInstance().oauth.getUserOctokit(oauthResult.authentication);
+    const userInfo = await userOctokit.rest.users.getAuthenticated();
+    if (userInfo.status !== 200) {
+      logger.error("Failed to get user info", userInfo.data);
+      return c.json({ error: "Failed to get user info" }, 400);
     }
 
-    const installationInfoRes = await fetch(`https://api.github.com/user/installations`, {
-      headers: {
-        Authorization: `Bearer ${userAccessTokenData.access_token}`,
-        "User-Agent": "Iterate OS",
-      },
+    const installationsForUser = await userOctokit.rest.apps.listInstallationsForAuthenticatedUser({
+      per_page: 100,
     });
 
-    if (!installationInfoRes.ok) {
-      logger.log(await installationInfoRes.text());
-      return c.json({ error: "Failed to get installation info" }, 400);
+    if (installationsForUser.status !== 200) {
+      logger.error("Failed to get installations for user", installationsForUser.data);
+      return c.json({ error: "Failed to get installations for user" }, 400);
     }
 
-    const installationInfoData = InstallationInfoResponse.parse(await installationInfoRes.json());
-
-    const installation = installationInfoData.installations.find(
+    const installation = installationsForUser.data.installations.find(
       (installation) => installation.id === installation_id,
     );
 
     if (!installation) {
-      return c.json({ error: "Installation not found" }, 400);
+      logger.error(
+        `User ${userInfo.data.id} does not have access to installation ${installation_id}`,
+      );
+      return c.json(
+        {
+          error: `User ${userInfo.data.id} does not have access to installation ${installation_id}`,
+        },
+        400,
+      );
     }
-    const scope = Object.entries(installation.permissions)
-      .map(([key, value]) => `${key}:${value}`)
-      .join(",");
 
     const [account] = await c.var.db
       .insert(schema.account)
@@ -130,13 +104,13 @@ githubApp.get(
         providerId: "github-app",
         accountId: installation_id.toString(),
         userId,
-        accessToken: userAccessTokenData.access_token,
-        refreshToken: userAccessTokenData.refresh_token,
-        accessTokenExpiresAt: new Date(Date.now() + userAccessTokenData.expires_in * 1000),
-        refreshTokenExpiresAt: new Date(
-          Date.now() + userAccessTokenData.refresh_token_expires_in * 1000,
-        ),
-        scope,
+        accessToken: oauthResult.authentication.token,
+        refreshToken: oauthResult.authentication.refreshToken,
+        accessTokenExpiresAt: new Date(oauthResult.authentication.expiresAt!),
+        refreshTokenExpiresAt: new Date(oauthResult.authentication.refreshTokenExpiresAt!),
+        scope: Object.entries(installation.permissions)
+          .map(([key, value]) => `${key}:${value}`)
+          .join(","),
       })
       .returning();
 
@@ -156,17 +130,12 @@ githubApp.post("/webhook", async (c) => {
     const signature = c.req.header("X-Hub-Signature-256");
     const payload = await c.req.text();
 
-    // Validate the webhook signature
-    if (!c.env.GITHUB_WEBHOOK_SECRET) {
-      logger.error("GITHUB_WEBHOOK_SECRET not configured");
-      return c.json({ error: "Webhook secret not configured" }, 500);
+    if (!signature || !payload) {
+      logger.error("Missing webhook headers");
+      return c.json({ error: "Missing webhook headers" }, 400);
     }
 
-    const isValid = validateGithubWebhookSignature(
-      payload,
-      signature || null,
-      c.env.GITHUB_WEBHOOK_SECRET,
-    );
+    const isValid = await validateGithubWebhookSignature(payload, signature);
 
     if (!isValid) {
       logger.error("Invalid webhook signature");
@@ -220,27 +189,29 @@ githubApp.post("/webhook", async (c) => {
     // Get the GitHub installation for this estate
     const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
 
-    // Get an installation access token
-    let installationToken: string | null = null;
+    const tokenResponse = await githubAppInstance().octokit.rest.apps.createInstallationAccessToken(
+      {
+        installation_id: parseInt(
+          githubInstallation?.accountId ?? c.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+        ),
+        repository_ids: [repoId],
+      },
+    );
 
-    if (githubInstallation)
-      installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-    // If no installation token is found, use the fallback token
-    if (!installationToken) installationToken = c.env.GITHUB_ESTATES_TOKEN;
+    if (tokenResponse.status !== 201) {
+      logger.error(
+        `Failed to create installation access token (repoId: ${repoId}, installationId: ${githubInstallation?.accountId ?? "default"}): ${tokenResponse.status} ${tokenResponse.data}`,
+      );
+      return c.json(
+        { error: `Failed to create installation access token for repository with id ${repoId}` },
+        400,
+      );
+    }
 
     // Construct the repository URL
     const repoUrl = event.repository?.html_url || event.repository?.url;
     if (!repoUrl) {
       return c.json({ error: "Repository URL not found in webhook payload" }, 400);
-    }
-
-    if (!installationToken) {
-      logger.error(`No installation token found for estate ${estate.id}`);
-      return c.json(
-        { error: "Installation token not found, please re-authenticate github app" },
-        400,
-      );
     }
 
     // Use the common build trigger function
@@ -251,7 +222,7 @@ githubApp.post("/webhook", async (c) => {
       commitHash: commitHash!,
       commitMessage: commitMessage || "No commit message",
       repoUrl,
-      installationToken,
+      installationToken: tokenResponse.data.token,
       connectedRepoPath: estate.connectedRepoPath || undefined,
       branch: estate.connectedRepoRef || "main",
       webhookId: event.id || `webhook-${Date.now()}`,

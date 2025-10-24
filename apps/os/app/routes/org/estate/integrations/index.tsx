@@ -624,7 +624,7 @@ function MCPConnectionsTable({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="flex-shrink-0"
+                            className="shrink-0"
                             onClick={() => {
                               setParams(params.filter((_, i) => i !== index));
                             }}

@@ -53,7 +53,10 @@ import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
-import { getGithubInstallationToken } from "../integrations/github/github-utils.ts";
+import {
+  getGithubInstallationForEstate,
+  getOctokitForInstallation,
+} from "../integrations/github/github-utils.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
@@ -1894,40 +1897,30 @@ export class IterateAgent<
       throw new Error("No repository connected to this estate");
     }
 
-    // Get GitHub installation and token
-    const githubInstallation = await this.db
-      .select({
-        accountId: schema.account.accountId,
-        accessToken: schema.account.accessToken,
-      })
-      .from(schema.estateAccountsPermissions)
-      .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
-      .where(
-        and(
-          eq(schema.estateAccountsPermissions.estateId, estateId),
-          eq(schema.account.providerId, "github-app"),
-        ),
-      )
-      .limit(1)
-      .then((rows) => rows[0]);
+    const installation = await getGithubInstallationForEstate(this.db, estateId);
+    const octokit = await getOctokitForInstallation(
+      installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+    );
 
-    let githubToken: string | null = null;
-
-    if (githubInstallation)
-      githubToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-    // If no installation token is found, use the fallback token
-    if (!githubToken) githubToken = env.GITHUB_ESTATES_TOKEN;
-
-    // Fetch repository details using Octokit
-    const { Octokit } = await import("octokit");
-    const octokit = new Octokit({ auth: githubToken });
     const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
       repository_id: estate.connectedRepoId,
     });
     const githubRepoUrl = repoData.html_url;
     const branch = estate.connectedRepoRef || repoData.default_branch || "main";
     const commitHash = undefined; // Use the latest commit on the branch
+
+    const scopedToken = await octokit.rest.apps
+      .createInstallationAccessToken({
+        installation_id: parseInt(
+          installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+        ),
+        repository_ids: [estate.connectedRepoId],
+      })
+      .catch(() => null);
+
+    if (!scopedToken || scopedToken.status !== 201) {
+      throw new Error("Failed to create scoped token");
+    }
 
     // ------------------------------------------------------------------------
     // Init sandbox
@@ -1991,7 +1984,7 @@ export class IterateAgent<
         const initArgs = {
           sessionDir,
           githubRepoUrl,
-          githubToken,
+          githubToken: scopedToken.data.token,
           checkoutTarget,
           isCommitHash,
         };
