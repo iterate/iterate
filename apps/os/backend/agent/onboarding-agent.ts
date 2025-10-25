@@ -2,6 +2,7 @@ import { z } from "zod/v4";
 import dedent from "dedent";
 import * as yaml from "yaml";
 import { SearchRequest } from "../default-tools.ts";
+import { tools } from "../../sdk/index.ts";
 import type { ContextRule } from "./context-schemas.ts";
 import { createDOToolFactory, type DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -9,6 +10,7 @@ import { IterateAgent } from "./iterate-agent.ts";
 import type { CoreAgentSlices, IterateAgentState } from "./iterate-agent.ts";
 import { onboardingAgentTools } from "./onboarding-agent-tools.ts";
 import { startSlackAgentInChannel } from "./start-slack-agent-in-channel.ts";
+import { matchers } from "./context.ts";
 
 type ToolsInterface = typeof onboardingAgentTools.$infer.interface;
 type Inputs = typeof onboardingAgentTools.$infer.inputTypes;
@@ -73,6 +75,31 @@ export class OnboardingAgent
           onboardingAgentTool.updateResults(),
           onboardingAgentTool.getResults(),
         ],
+      },
+      {
+        key: "estate-repository-agent",
+        prompt: dedent`
+            ### Estate repository agent
+          - One of your most important skills is to update your own estate repo
+          - You have access to a coding agent which has a copy of your "estate repository" checked out
+          - You can instruct the coding agent to make changes to the estate repository and you can create PRs for those changes
+          - Changes to the estate repository can be used to create memories and to modify your own behaviour
+          - The estate repository contains the very instructions you are reading right now
+          - To interact with the docker container, use the execCodex tool
+          - WHen asked to make changes to the estate repo, use the execCodex tool to instruct a Codex AI agent to perform the task.
+          - When asked to "commit changes" or "make a pull request", always do the following
+            - use the exec tool to run \`git\` to make a branch, commit and push to origin
+            - use the exec tool to run \`gh\` to make a pull request for the branch after pushing it
+            - don't worry about authentication for git and gh, this is already configured
+          - Use execCodex tool to delegate tasks to a Codex agent running in the sandbox, this is your primary interface to your estate repository.
+          - Use the exec tool for running git, gh and to check the agent's work using simple read-only shell commands.
+          - after edits: git status -sb; nl -ba file | sed -n to inspect exact lines that changed
+          - branch flow: git checkout -b <branch-name>; git add -A; git commit; git push -u origin <branch-name>
+          - if gh pr create fails, check branch exists remotely (gh pr list --head); push first
+          - following running codex tools, give the user a summary of what codex did, espescially decisions codex made and issues it found. Then an update with next steps for the user.git
+        `,
+        tools: [tools.execCodex(), tools.exec()],
+        match: matchers.always(), // slackChannel("#general"),
       },
     ];
   }
