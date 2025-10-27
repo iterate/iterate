@@ -48,20 +48,6 @@ export default function TrialSlackConnectPage() {
   // TODO: Check if estate has actual Slack integration via providerEstateMapping
   const existingFullEstate = null as (typeof userEstates)[0] | null;
 
-  // Show loading state while redirecting to existing trial
-  if (existingTrialEstate) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <div className="w-full max-w-sm space-y-6 text-center">
-          <Spinner className="h-12 w-12 mx-auto" />
-          <div>
-            <h2 className="text-2xl font-semibold">Redirecting to your trial...</h2>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   // Setup trial mutation
   const setupTrialMutation = useMutation({
     ...trpc.integrations.setupSlackConnectTrial.mutationOptions({}),
@@ -94,6 +80,20 @@ export default function TrialSlackConnectPage() {
       navigate("/");
     }
   };
+
+  // Show loading state while redirecting to existing trial
+  if (existingTrialEstate) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <div className="w-full max-w-sm space-y-6 text-center">
+          <Spinner className="h-12 w-12 mx-auto" />
+          <div>
+            <h2 className="text-2xl font-semibold">Redirecting to your trial...</h2>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Check if user already has a full estate (not trial)
   if (existingFullEstate) {
