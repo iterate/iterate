@@ -8,8 +8,8 @@ import { getDb } from "../../../backend/db/client.ts";
 import { estate } from "../../../backend/db/schema.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
-import { Card, CardContent } from "../../components/ui/card.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
+import { OnboardingSlackStep } from "./onboarding-slack-step.tsx";
 import type { Route } from "./+types/onboarding.ts";
 import type { loader as orgLoader } from "./loader.tsx";
 
@@ -126,57 +126,8 @@ function OrganizationNameStep({ organizationId, goTo }: StepProps) {
   );
 }
 
-function SlackStep({ organizationId }: StepProps) {
-  const handleOpenSlack = () => {
-    window.open("slack://open", "_blank", "noopener,noreferrer");
-  };
-
-  const isConnected = false;
-
-  return (
-    <div className="flex justify-center">
-      <Card variant="muted" className="w-full max-w-2xl">
-        <CardContent className="px-12 py-16">
-          <div className="text-center space-y-8">
-            <h2 className="text-4xl font-semibold">You're all set!</h2>
-            {isConnected ? (
-              <Button
-                size="lg"
-                className="h-auto w-full max-w-md px-12 py-6 text-xl"
-                onClick={handleOpenSlack}
-              >
-                <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
-                Continue in Slack
-              </Button>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-muted-foreground">
-                  Connect Slack to start chatting with iterate
-                </p>
-                <Button
-                  size="lg"
-                  className="h-auto w-full max-w-md px-12 py-6 text-xl"
-                  onClick={() => {}}
-                >
-                  <img src="/slack.svg" alt="Slack" className="h-6 w-6 mr-3" />
-                  Connect Slack
-                </Button>
-              </div>
-            )}
-            <div>
-              <Button
-                variant="ghost"
-                className="text-sm text-muted-foreground hover:text-foreground"
-                asChild
-              >
-                <a href={`/${organizationId}`}>Or go to your dashboard</a>
-              </Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
+function SlackStep({ organizationId, estateId }: StepProps) {
+  return <OnboardingSlackStep organizationId={organizationId} estateId={estateId} />;
 }
 
 export default function OrganizationOnboarding() {
