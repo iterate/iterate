@@ -1,4 +1,5 @@
-import { getSandbox } from "@cloudflare/sandbox";
+import { getSandbox, parseSSEStream } from "@cloudflare/sandbox";
+import { match, P } from "ts-pattern";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 
@@ -103,14 +104,31 @@ async function runConfigInSandboxInternal(
   const nodePath = "/opt/node24/bin/node";
 
   const commandInit = `${nodePath} /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-  const resultInit = await sandboxSession.exec(commandInit, {
+  const stream = await sandboxSession.execStream(commandInit, {
     timeout: 360 * 1000, // 360 seconds total timeout
   });
-  if (!resultInit.success) {
+  let result: { exitCode: number } | undefined;
+  for await (const event of parseSSEStream(stream)) {
+    match(event)
+      .with({ type: "stdout", data: P.any }, (ev) =>
+        logger.info(ev.data, "sandbox_stdout", { sandboxId }),
+      )
+      .with({ type: "stderr", data: P.any }, (ev) =>
+        logger.info(ev.data, "sandbox_stderr", { sandboxId }),
+      )
+      .with({ type: "complete", exitCode: P.number }, (ev) => {
+        logger.info(ev.exitCode, "complete", { sandboxId });
+        result = ev;
+      })
+      .with({ type: "error", error: P.any }, (ev) =>
+        logger.error(`Sandbox ${sandboxId} error`, ev.error),
+      );
+  }
+  if (result?.exitCode !== 0) {
     logger.error(
       JSON.stringify({
         message: `Error running \`${nodePath} /tmp/sandbox-entry.ts init <ARGS>\` in sandbox`,
-        result: resultInit,
+        result,
       }),
     );
   }
