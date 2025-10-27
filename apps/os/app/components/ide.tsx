@@ -39,6 +39,13 @@ interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+function Foo() {
+  if (Math.random()) {
+    useEffect(() => {});
+  }
+  return <div>Foo</div>;
+}
+
 // Get appropriate icon for file type
 function getFileIcon(filename: string) {
   // Special case for iterate.config.ts

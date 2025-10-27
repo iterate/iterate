@@ -34,7 +34,7 @@ export class AdvisoryLocker extends DurableObject {
   }
 
   static async runWithLock<T>(
-    /** The stub to the AdvisoryLock Durable Object. */
+    /** The stub to the Durable Object. */
     stub: DurableObjectStub<AdvisoryLocker>,
     /** Function to run once the lock is acquired. Will be wrapped in a try/finally block to release the lock. */
     fn: () => Promise<T>,

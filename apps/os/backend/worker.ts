@@ -287,11 +287,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export {
-  IterateAgent,
-  OnboardingAgent,
-  SlackAgent,
-  OrganizationWebSocket,
-  AdvisoryLocker as AdvisoryLock,
-};
+export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket, AdvisoryLocker };
 export { Sandbox } from "@cloudflare/sandbox";
