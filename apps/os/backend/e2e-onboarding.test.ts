@@ -1,4 +1,4 @@
-import { test, expect, vi } from "vitest";
+import { test, expect } from "vitest";
 import { z } from "zod/v4";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
@@ -230,23 +230,25 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       const buildTimeout = 5 * 60 * 1000; // 5 minutes
       const pollInterval = 5000; // 5 seconds
 
-      const latestBuild = await vi.waitUntil(
-        async () => {
-          const builds = await userTrpc.estate.getBuilds.query({
-            estateId: estate.id,
-            limit: 10,
-          });
-          const latestStatus = builds[0]?.status;
-          console.log(`Latest build status: ${latestStatus} (${builds[0]?.id})`);
-          if (!latestStatus || latestStatus === "in_progress") {
-            return null;
-          }
-          return builds[0];
-        },
-        { timeout: buildTimeout, interval: pollInterval },
-      );
+      const getLatestBuild = async () => {
+        const builds = await userTrpc.estate.getBuilds.query({
+          estateId: estate.id,
+          limit: 1,
+        });
+        console.log(`Latest build status: ${builds[0]?.status} (${builds[0]?.id})`);
+        return builds[0];
+      };
 
-      expect(latestBuild).toMatchObject({ status: "complete" });
+      await expect
+        .poll(getLatestBuild, { timeout: 10_000, interval: 1000 })
+        .toMatchObject({ status: expect.any(String) }); // make sure we get started fairly quicklky
+
+      await expect
+        .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+        .not.toMatchObject({ status: "in_progress" }); // give it a few minutes for "in_progress"
+
+      // now that it's not in progress, it *must* be complete
+      expect(await getLatestBuild()).toMatchObject({ status: "complete" });
 
       console.log("Build completed successfully");
 
