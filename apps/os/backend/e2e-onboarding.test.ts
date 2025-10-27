@@ -155,14 +155,6 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       console.log("Successfully impersonated test user");
 
-      // Create TRPC client with impersonated user session
-      const userTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: impersonationCookies,
-        },
-      });
-
       // Note: GitHub installation linking would normally happen through the OAuth callback
 
       // Step 4: Clone estate-template and push to new repository
@@ -196,8 +188,18 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       // Wait a bit for GitHub to process the new repository
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
+      // Create TRPC client with impersonated user session
+      const userTrpc = makeVitestTrpcClient({
+        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
+        headers: {
+          cookie: impersonationCookies,
+        },
+      });
+
       // Step 5: List available GitHub repos and verify our new repo is there
-      console.log("Step 6: Listing available GitHub repositories...");
+      console.log(
+        `Step 6: Listing available GitHub repositories using ${env.VITE_PUBLIC_URL}/api/trpc endpoint`,
+      );
 
       const availableRepos = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,
@@ -240,8 +242,8 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       };
 
       await expect
-        .poll(getLatestBuild, { timeout: 10_000, interval: 1000 })
-        .toMatchObject({ status: expect.any(String) }); // make sure we get started fairly quicklky
+        .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+        .toMatchObject({ status: expect.any(String) }); // make sure we get started fairly quickly
 
       await expect
         .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
