@@ -1,2 +1,2 @@
 **/pnpm-lock.yaml linguist-generated=true
-**/drizzle/migrations/meta/* linguist-generated=true
+**/db/migrations/meta/* linguist-generated=true
