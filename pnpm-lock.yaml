@@ -108,6 +108,9 @@ importers:
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mmkal/jsonata':
+        specifier: ^2.2.0
+        version: 2.2.0
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.54.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
@@ -207,9 +210,6 @@ importers:
       json5:
         specifier: ^2.2.3
         version: 2.2.3
-      jsonata:
-        specifier: github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337
-        version: https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337
       lucide-react:
         specifier: ^0.546.0
         version: 0.546.0(react@19.2.0)
@@ -653,12 +653,12 @@ importers:
 
   packages/sdk:
     dependencies:
+      '@mmkal/jsonata':
+        specifier: ^2.2.0
+        version: 2.2.0
       dedent:
         specifier: ^1.7.0
         version: 1.7.0
-      jsonata:
-        specifier: github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337
-        version: https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337
       type-fest:
         specifier: ^5.1.0
         version: 5.1.0
@@ -2335,6 +2335,10 @@ packages:
 
   '@mjackson/node-fetch-server@0.7.0':
     resolution: {integrity: sha512-un8diyEBKU3BTVj3GzlTPA1kIjCkGdD+AMYQy31Gf9JCkfoZzwgJ79GUtHrF2BN3XPNMLpubbzPcxys+a3uZEw==}
+
+  '@mmkal/jsonata@2.2.0':
+    resolution: {integrity: sha512-FGqtpTuyALAiWUiEY5cPH0+JCgE6Cj5/Wg6LKvFhIVoR6106EbhCO+KaAJ9f0bYVop1mSIQ8+ZiylcRrYe/6kg==}
+    engines: {node: '>= 8'}
 
   '@modelcontextprotocol/sdk@1.20.1':
     resolution: {integrity: sha512-j/P+yuxXfgxb+mW7OEoRCM3G47zCTDqUPivJo/VzpjbG8I9csTXtOprCf5FfOfHK4whOJny0aHuBEON+kS7CCA==}
@@ -7178,11 +7182,6 @@ packages:
     resolution: {integrity: sha512-XmOWe7eyHYH14cLdVPoyg+GOH3rYX++KpzrylJwSW98t3Nk+U8XOl8FWKOgwtzdb8lXGf6zYwDUzeHMWfxasyg==}
     engines: {node: '>=6'}
     hasBin: true
-
-  jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337:
-    resolution: {tarball: https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337}
-    version: 2.1.0
-    engines: {node: '>= 8'}
 
   jsonfile@6.2.0:
     resolution: {integrity: sha512-FGuPw30AdOIUTRMC2OMRtQV+jkVj2cfPqSeWXv1NEAJ1qZ5zb1X6z1mFhbfOB/iy3ssJCD+3KuZ8r8C3uVFlAg==}
@@ -12392,6 +12391,8 @@ snapshots:
 
   '@mjackson/node-fetch-server@0.7.0':
     optional: true
+
+  '@mmkal/jsonata@2.2.0': {}
 
   '@modelcontextprotocol/sdk@1.20.1':
     dependencies:
@@ -18832,8 +18833,6 @@ snapshots:
       minimist: 1.2.8
 
   json5@2.2.3: {}
-
-  jsonata@https://codeload.github.com/mmkal/jsonata/tar.gz/23fbb59fa991213b29f732c91d9e2e455733f337: {}
 
   jsonfile@6.2.0:
     dependencies:

@@ -21,7 +21,7 @@
   },
   "dependencies": {
     "dedent": "^1.7.0",
-    "jsonata": "github:mmkal/jsonata#23fbb59fa991213b29f732c91d9e2e455733f337",
+    "@mmkal/jsonata": "^2.2.0",
     "type-fest": "^5.1.0",
     "zod": "^4.1.12"
   },

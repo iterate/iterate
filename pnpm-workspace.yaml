@@ -12,6 +12,7 @@ minimumReleaseAgeExclude:
   - wrangler
   - '@cloudflare/sandbox'
   - alchemy
+  - '@mmkal/jsonata'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

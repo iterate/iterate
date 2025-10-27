@@ -21,7 +21,7 @@
  */
 
 import { Mutex } from "async-mutex";
-import jsonata from "jsonata/sync";
+import jsonata from "@mmkal/jsonata/sync";
 import type { OpenAI } from "openai";
 import type {
   ResponseFunctionToolCall,

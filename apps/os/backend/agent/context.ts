@@ -2,7 +2,7 @@ import { dirname, join, resolve } from "path";
 import { readFileSync, accessSync } from "fs";
 import { fileURLToPath } from "url";
 import { globSync } from "glob";
-import jsonataLib from "jsonata/sync";
+import jsonataLib from "@mmkal/jsonata/sync";
 import { parse as parseYaml } from "yaml";
 import { logger } from "../tag-logger.ts";
 import type {
