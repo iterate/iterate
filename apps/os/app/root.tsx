@@ -48,7 +48,7 @@ const PostHogProvider =
 export default function App() {
   return (
     <PostHogProvider
-      apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY as string}
+      apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}
       options={{
         api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
       }}
