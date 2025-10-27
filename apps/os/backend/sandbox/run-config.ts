@@ -117,7 +117,7 @@ async function runConfigInSandboxInternal(
         logger.info(ev.data, "sandbox_stderr", { sandboxId }),
       )
       .with({ type: "complete", exitCode: P.number }, (ev) => {
-        logger.info(ev.exitCode, "complete", { sandboxId });
+        logger.info(ev.exitCode, "sandbox_complete", { sandboxId });
         result = ev;
       })
       .with({ type: "error", error: P.any }, (ev) =>
