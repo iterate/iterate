@@ -29,27 +29,6 @@ export default function NewOrganization() {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
   const [organizationName, setOrganizationName] = useState("");
 
-  // Only allow debugMode users to create organizations
-  if (!user.debugMode) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Access Denied</CardTitle>
-            <CardDescription>
-              Organization creation is currently restricted to debug mode users only.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={() => navigate("/")} className="w-full">
-              Go Back
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
-
   const createOrganization = useMutation(
     trpc.organization.create.mutationOptions({
       onSuccess: (data) => {
@@ -72,6 +51,27 @@ export default function NewOrganization() {
 
     createOrganization.mutate({ name: organizationName });
   };
+
+  // Only allow debugMode users to create organizations
+  if (!user.debugMode) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Access Denied</CardTitle>
+            <CardDescription>
+              Organization creation is currently restricted to debug mode users only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => navigate("/")} className="w-full">
+              Go Back
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">
