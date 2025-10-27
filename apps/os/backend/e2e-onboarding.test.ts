@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import { z } from "zod/v4";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
@@ -229,40 +229,24 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       const buildTimeout = 5 * 60 * 1000; // 5 minutes
       const pollInterval = 5000; // 5 seconds
-      const _gracePeriod = 30000; // 30 seconds grace before checking for empty
 
-      await expect
-        .poll(
-          async () => {
-            const builds = await userTrpc.estate.getBuilds.query({
-              estateId: estate.id,
-              limit: 10,
-            });
-
-            return builds;
-          },
-          {
-            timeout: buildTimeout,
-            interval: pollInterval,
-          },
-        )
-        .toSatisfy((builds) => {
-          if (builds.length === 0) {
-            // Allow grace period before failing
-            return false;
+      const latestBuild = await vi.waitUntil(
+        async () => {
+          const builds = await userTrpc.estate.getBuilds.query({
+            estateId: estate.id,
+            limit: 10,
+          });
+          const latestStatus = builds[0]?.status;
+          console.log(`Latest build status: ${latestStatus}`);
+          if (!latestStatus || latestStatus === "in_progress") {
+            return null;
           }
+          return builds[0];
+        },
+        { timeout: buildTimeout, interval: pollInterval },
+      );
 
-          const latestBuild = builds[0];
-          if (!latestBuild) return false;
-
-          console.log(`Build status: ${latestBuild.status} (${latestBuild.id})`);
-
-          if (latestBuild.status === "failed") {
-            throw new Error(`Build failed: ${latestBuild.errorMessage || "Unknown error"}`);
-          }
-
-          return latestBuild.status === "complete";
-        });
+      expect(latestBuild).toMatchObject({ status: "complete" });
 
       console.log("Build completed successfully");
 
