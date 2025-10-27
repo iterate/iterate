@@ -67,7 +67,6 @@ async function uploadSourcemaps() {
 const Required = z.string().nonempty();
 const Optional = z.string().optional();
 const Env = z.object({
-  VITE_PUBLIC_URL: Required,
   OPENAI_API_KEY: Required,
   BETTER_AUTH_SECRET: Required,
   BRAINTRUST_API_KEY: Required,
@@ -106,9 +105,18 @@ const Env = z.object({
   RESEND_FROM_EMAIL: Optional,
   /** comma-separated list of emails to invite to customer slack connect channels by default. e.g. "jonas@nustom.com,misha@nustom.com" */
   SLACK_CONNECT_DEFAULT_INVITEES: Optional,
+
+  // Vite environment variables
+  VITE_PUBLIC_URL: Required,
+  VITE_APP_STAGE: Required,
+  VITE_ENABLE_TEST_ADMIN_USER: Optional,
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
+  VITE_POSTHOG_PUBLIC_KEY: Optional,
+  VITE_POSTHOG_PROXY_URI: Optional,
+  VITE_TEST_ADMIN_CREDENTIALS: Optional,
 } satisfies Record<string, typeof Required | typeof Optional>);
 async function setupEnvironmentVariables() {
-  const parsed = Env.safeParse(process.env);
+  const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
   if (!parsed.success) {
     throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);
   }
@@ -309,10 +317,6 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
-      /** alchemy's `app.stage` value */
-      APP_STAGE: app.stage,
-      /** alchemy's `app.stage` value, alias for `APP_STAGE` that vite can make available via import.meta.env too */
-      VITE_APP_STAGE: app.stage,
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains: isProduction
@@ -335,7 +339,7 @@ async function deployWorker() {
   return worker;
 }
 
-verifyDopplerEnvironment();
+await verifyDopplerEnvironment();
 export const worker = await deployWorker();
 await uploadSourcemaps();
 await app.finalize();

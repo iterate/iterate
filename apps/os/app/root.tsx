@@ -40,14 +40,15 @@ export function Layout({ children }: { children: React.ReactNode }) {
 }
 
 // Fills up the network traffic with useless events in dev
-const PostHogProvider = !import.meta.env.DEV
-  ? _PostHogProvider
-  : ({ children }: PropsWithChildren) => <>{children}</>;
+const PostHogProvider =
+  import.meta.env.PROD && import.meta.env.VITE_POSTHOG_PUBLIC_KEY
+    ? _PostHogProvider
+    : ({ children }: PropsWithChildren) => <>{children}</>;
 
 export default function App() {
   return (
     <PostHogProvider
-      apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY}
+      apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY as string}
       options={{
         api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
       }}
