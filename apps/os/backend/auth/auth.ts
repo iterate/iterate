@@ -52,7 +52,7 @@ export const getAuth = (db: DB) =>
       : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
     plugins: [
       admin(),
-      ...(import.meta.env.VITE_ENABLE_EMAIL_OTP
+      ...(import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN
         ? [
             emailOTP({
               ...(isNonProd && {
