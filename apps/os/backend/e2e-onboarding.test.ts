@@ -237,7 +237,7 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
             limit: 10,
           });
           const latestStatus = builds[0]?.status;
-          console.log(`Latest build status: ${latestStatus}`);
+          console.log(`Latest build status: ${latestStatus} (${builds[0]?.id})`);
           if (!latestStatus || latestStatus === "in_progress") {
             return null;
           }
