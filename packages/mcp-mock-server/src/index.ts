@@ -4,31 +4,16 @@ import { MockOAuthMCPAgent } from "./mock-oauth-mcp-agent.ts";
 import { MockOAuthHandler } from "./mock-oauth-handler.ts";
 import type { Env } from "./env.ts";
 
-/**
- * Main worker entry point for the Mock MCP Server.
- *
- * Supports two modes:
- * 1. No-auth mode: /mcp endpoint (no authentication required)
- * 2. OAuth mode: /oauth/mcp endpoint (requires OAuth authentication)
- *
- * For programmatic OAuth testing, use:
- *   POST /oauth/mock-auth/setup with { sessionId: "test123", ... }
- *   Then include ?session_id=test123 in the OAuth authorize URL
- */
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
-    console.log(`[Mock MCP] ${request.method} ${url.pathname}${url.search}`);
-
-    // Landing page (HTML)
     if (url.pathname === "/") {
       return new Response(renderLandingPage(url.origin), {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     }
 
-    // Health check endpoint (JSON)
     if (url.pathname === "/health") {
       return new Response(
         JSON.stringify({
@@ -58,7 +43,6 @@ export default {
       );
     }
 
-    // No-auth mode endpoints
     if (url.pathname === "/mcp") {
       return MockMCPAgent.serve("/mcp").fetch(request, env, ctx);
     }
@@ -67,103 +51,17 @@ export default {
       return MockMCPAgent.serveSSE("/sse").fetch(request, env, ctx);
     }
 
-    // OAuth mode - always auto-approves with generated mock user
     if (
       url.pathname.startsWith("/oauth") ||
       url.pathname === "/.well-known/oauth-authorization-server"
     ) {
-      console.log(`[OAuth] Handling OAuth endpoint: ${url.pathname}`);
-
-      // Log request body for POST requests
-      if (request.method === "POST") {
-        const clonedReq = request.clone();
-        const contentType = request.headers.get("Content-Type");
-        if (contentType?.includes("application/json")) {
-          try {
-            const body = await clonedReq.json();
-            console.log(`[OAuth] Request body:`, body);
-          } catch {
-            console.log(`[OAuth] Could not parse request body as JSON`);
-          }
-        } else if (contentType?.includes("application/x-www-form-urlencoded")) {
-          try {
-            const body = await clonedReq.text();
-            console.log(`[OAuth] Request form data:`, body);
-          } catch {
-            console.log(`[OAuth] Could not parse request body`);
-          }
-        }
-      }
-
-      const response = await oauthProvider.fetch(request, env, ctx);
-      console.log(`[OAuth] Response status: ${response.status}`);
-
-      // Log response body for debugging (clone first)
-      if (response.status === 401) {
-        const cloned = response.clone();
-        const body = await cloned.text();
-        console.log(`[OAuth] 401 Response body:`, body);
-        console.log(`[OAuth] 401 Response headers:`, Object.fromEntries(response.headers));
-      }
-
-      // Log registration response (MUST happen before other checks)
-      if (url.pathname === "/oauth/register") {
-        const cloned = response.clone();
-        try {
-          if (response.ok) {
-            const body = await cloned.json();
-            console.log(`[OAuth] ✅ Registration SUCCESS (status ${response.status}):`, body);
-          } else {
-            const body = await cloned.text();
-            console.log(`[OAuth] ❌ Registration FAILED (status ${response.status}):`, body);
-          }
-        } catch (e) {
-          console.log(`[OAuth] ⚠️ Could not parse registration response:`, e);
-        }
-      }
-
-      // Log discovery metadata
-      if (url.pathname === "/.well-known/oauth-authorization-server" && response.ok) {
-        const cloned = response.clone();
-        const metadata = await cloned.json();
-        console.log(`[OAuth] Discovery metadata:`, metadata);
-      }
-
-      // Log token endpoint
-      if (url.pathname === "/oauth/token") {
-        const cloned = response.clone();
-        if (response.ok) {
-          const body = await cloned.json();
-          console.log(`[OAuth] Token response:`, body);
-        } else {
-          const body = await cloned.text();
-          console.log(`[OAuth] Token error:`, body);
-        }
-      }
-
-      // Catch-all: log any other response
-      if (
-        url.pathname !== "/oauth/register" &&
-        url.pathname !== "/oauth/token" &&
-        url.pathname !== "/.well-known/oauth-authorization-server" &&
-        response.status !== 401
-      ) {
-        console.log(`[OAuth] Generic response for ${url.pathname}:`, {
-          status: response.status,
-          headers: Object.fromEntries(response.headers),
-        });
-      }
-
-      return response;
+      return oauthProvider.fetch(request, env, ctx);
     }
 
     return new Response("Not found", { status: 404 });
   },
 };
 
-/**
- * Render landing page with links to both modes
- */
 function renderLandingPage(origin: string): string {
   return `<!DOCTYPE html>
 <html lang="en">
@@ -303,13 +201,10 @@ function renderLandingPage(origin: string): string {
 </html>`;
 }
 
-/**
- * OAuth Provider instance for authenticated mode
- */
 const oauthProvider = new OAuthProvider({
   apiHandlers: {
-    "/oauth/sse": MockOAuthMCPAgent.serveSSE("/oauth/sse"), // deprecated SSE protocol
-    "/oauth/mcp": MockOAuthMCPAgent.serve("/oauth/mcp"), // Streamable-HTTP protocol
+    "/oauth/sse": MockOAuthMCPAgent.serveSSE("/oauth/sse"),
+    "/oauth/mcp": MockOAuthMCPAgent.serve("/oauth/mcp"),
   },
   authorizeEndpoint: "/oauth/authorize",
   tokenEndpoint: "/oauth/token",
@@ -317,5 +212,4 @@ const oauthProvider = new OAuthProvider({
   defaultHandler: MockOAuthHandler as any,
 });
 
-// Export the Durable Object classes for alchemy
 export { MockMCPAgent, MockOAuthMCPAgent };

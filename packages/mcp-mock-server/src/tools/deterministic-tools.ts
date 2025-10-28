@@ -1,15 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-/**
- * Register deterministic tools that return predictable results.
- * Perfect for testing tool invocation flows.
- */
 export function registerDeterministicTools(server: McpServer) {
-  // Echo tool - returns the input message
   server.tool(
     "mock_echo",
-    "Returns the provided message exactly as received. Useful for testing basic tool invocation.",
+    "Returns the provided message exactly as received",
     {
       message: z.string().describe("The message to echo back"),
     },
@@ -18,10 +13,9 @@ export function registerDeterministicTools(server: McpServer) {
     }),
   );
 
-  // Add tool - simple math operation
   server.tool(
     "mock_add",
-    "Adds two numbers together. Useful for testing parameter passing and number handling.",
+    "Adds two numbers together",
     {
       a: z.number().describe("First number"),
       b: z.number().describe("Second number"),
@@ -31,10 +25,9 @@ export function registerDeterministicTools(server: McpServer) {
     }),
   );
 
-  // Calculator - multiple operations
   server.tool(
     "mock_calculate",
-    "Performs basic arithmetic operations. Tests enum parameters and conditional logic.",
+    "Performs basic arithmetic operations",
     {
       operation: z.enum(["add", "subtract", "multiply", "divide"]).describe("Operation to perform"),
       a: z.number().describe("First operand"),
@@ -68,10 +61,9 @@ export function registerDeterministicTools(server: McpServer) {
     },
   );
 
-  // JSON echo - tests complex object handling
   server.tool(
     "mock_json_echo",
-    "Returns a JSON representation of the provided data. Tests complex object serialization.",
+    "Returns a JSON representation of the provided data",
     {
       data: z.record(z.string(), z.unknown()).describe("Arbitrary JSON data to echo"),
     },

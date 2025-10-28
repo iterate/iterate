@@ -6,9 +6,6 @@ import { registerErrorTools } from "./tools/error-tools.ts";
 import { registerAsyncTools } from "./tools/async-tools.ts";
 import { z } from "zod";
 
-/**
- * Props from the OAuth authentication flow
- */
 export interface MockOAuthProps {
   userId: string;
   userName: string;
@@ -18,12 +15,6 @@ export interface MockOAuthProps {
   [key: string]: unknown;
 }
 
-/**
- * Mock MCP Agent with OAuth authentication for E2E testing.
- *
- * This agent includes user context from the OAuth flow and provides
- * authenticated tools for testing OAuth-enabled MCP servers.
- */
 export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, MockOAuthProps> {
   server = new McpServer({
     name: "Mock MCP Server with OAuth",
@@ -31,12 +22,10 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
   });
 
   async init() {
-    // Register standard test tools
     registerDeterministicTools(this.server);
     registerErrorTools(this.server);
     registerAsyncTools(this.server);
 
-    // Add authenticated user info tool
     this.server.tool("userInfo", "Get information about the authenticated user", {}, async () => ({
       content: [
         {
@@ -56,7 +45,6 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
       ],
     }));
 
-    // Add a tool that demonstrates using auth context
     this.server.tool(
       "greet",
       "Get a personalized greeting for the authenticated user",
@@ -90,7 +78,6 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
       },
     );
 
-    // Add a tool that simulates permission-based access
     this.server.tool(
       "adminAction",
       "Perform an admin action (only for specific users)",
@@ -109,7 +96,6 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
           };
         }
 
-        // Simulate permission check - only users with "admin" in their userId
         if (!this.props.userId.includes("admin")) {
           return {
             content: [
