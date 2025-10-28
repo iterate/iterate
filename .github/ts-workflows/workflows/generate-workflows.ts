@@ -8,7 +8,8 @@ export default workflow({
   },
   jobs: {
     generate: {
-      "runs-on": "ubuntu-latest",
+      "runs-on":
+        "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       steps: [
         {
           name: "Checkout code",
@@ -45,7 +46,7 @@ export default workflow({
           run: dedent`
             status=$(git status --porcelain)
             if [ -z "$status" ]; then
-              echo "No changes to commit"
+              echo "No changes to commit!"
               exit 0
             fi
             git config --global user.name "\${{ github.actor }}"
