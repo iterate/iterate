@@ -90,19 +90,19 @@ export default workflow({
                     "fields": [
                       {
                         "type": "mrkdwn",
-                        "text": "*Repository:*\n\${{ github.repository }}"
+                        "text": "*Repository:* \${{ github.repository }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Branch:*\n\${{ github.ref_name }}"
+                        "text": "*Branch:* \${{ github.ref_name }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Workflow:*\n\${{ github.workflow }}"
+                        "text": "*Workflow:* \${{ github.workflow }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Run Number:*\n\${{ github.run_number }}"
+                        "text": "*Run Number:* \${{ github.run_number }}"
                       }
                     ]
                   },

@@ -61,23 +61,19 @@ jobs:
                   "fields": [
                     {
                       "type": "mrkdwn",
-                      "text": "*Repository:*
-          ${{ github.repository }}"
+                      "text": "*Repository:* ${{ github.repository }}"
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Branch:*
-          ${{ github.ref_name }}"
+                      "text": "*Branch:* ${{ github.ref_name }}"
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Workflow:*
-          ${{ github.workflow }}"
+                      "text": "*Workflow:* ${{ github.workflow }}"
                     },
                     {
                       "type": "mrkdwn",
-                      "text": "*Run Number:*
-          ${{ github.run_number }}"
+                      "text": "*Run Number:* ${{ github.run_number }}"
                     }
                   ]
                 },
