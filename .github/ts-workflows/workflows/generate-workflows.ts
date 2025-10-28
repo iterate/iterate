@@ -47,7 +47,7 @@ export default workflow({
           run: dedent`
             status=$(git status --porcelain)
             if [ -z "$status" ]; then
-              echo "No changes to commit!"
+              echo "No changes to commit."
               exit 0
             fi
             git config --global user.name "\${{ github.actor }}"
