@@ -18,7 +18,7 @@ export default workflow({
   jobs: {
     "test-onboarding": {
       "runs-on":
-        "ubuntu-24.04" ||
+        // "ubuntu-24.04" ||
         "${{ (github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4') || 'ubuntu-24.04' }}",
       steps: [
         {
