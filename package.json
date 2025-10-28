@@ -14,7 +14,7 @@
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
-    "prepare": "cd apps/os && pnpm tsdown",
+    "prepare": "(cd apps/os && pnpm tsdown) && (is-ci || husky)",
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
@@ -30,7 +30,6 @@
     "db:query:file": "docker exec -i postgres-iterate psql -U postgres -d iterate -f",
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
-    "postinstall:husky": "husky install",
     "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
     "postinstall": "is-ci || pnpm /postinstall:/"
