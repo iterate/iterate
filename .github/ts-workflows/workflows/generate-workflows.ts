@@ -43,6 +43,7 @@ export default workflow({
         },
         {
           name: "commit changes",
+          if: "always()",
           run: dedent`
             status=$(git status --porcelain)
             if [ -z "$status" ]; then
