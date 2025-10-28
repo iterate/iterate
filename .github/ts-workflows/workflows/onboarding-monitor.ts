@@ -60,13 +60,14 @@ export default workflow({
           name: "Run Onboarding Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",
-          "working-directory": "apps/os",
           with: {
             timeout_minutes: 15,
             max_attempts: 3,
             retry_wait_seconds: 30,
-            command:
-              "doppler run --config ${{ steps.get_stage.outputs.stage }} -- vitest run ./backend/e2e-onboarding.test.ts",
+            command: dedent`
+              cd apps/os
+              doppler run --config \${{ steps.get_stage.outputs.stage }} -- vitest run ./backend/e2e-onboarding.test.ts
+            `,
           },
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
