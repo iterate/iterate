@@ -1,10 +1,10 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
 import type { Env } from "./env.ts";
 import { registerDeterministicTools } from "./tools/deterministic-tools.ts";
 import { registerErrorTools } from "./tools/error-tools.ts";
 import { registerAsyncTools } from "./tools/async-tools.ts";
-import { z } from "zod";
 
 export interface MockOAuthProps {
   userId: string;
