@@ -1,6 +1,6 @@
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import type { Workflow } from "@jlarky/gha-ts/workflow-types";
 
-export default workflow({
+export default {
   name: "Deploy to Cloudflare",
   on: {
     push: {
@@ -129,4 +129,4 @@ export default workflow({
       ],
     },
   },
-});
+} satisfies Workflow;

@@ -7,11 +7,18 @@ on:
       - main
   schedule:
     - cron: 0 9 * * *
-  workflow_dispatch: null
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
+        required: true
 jobs:
   test-onboarding:
     runs-on: ${{ (github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4') || 'ubuntu-24.04' }}
     steps:
+      - id: get_stage
+        name: Get stage
+        run: echo "stage=${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup pnpm
@@ -26,7 +33,7 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config 'prd' --project os
+        run: doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run Onboarding Tests
@@ -36,7 +43,7 @@ jobs:
           timeout_minutes: 15
           max_attempts: 3
           retry_wait_seconds: 30
-          command: doppler run -- pnpm test:onboarding:production
+          command: doppler run --config ${{ steps.get_stage.outputs.stage }} -- vitest run ./backend/e2e-onboarding.test.ts
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Notify Slack on Failure
