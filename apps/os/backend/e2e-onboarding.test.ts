@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { test, expect } from "vitest";
 import { z } from "zod";
 import { WebClient } from "@slack/web-api";
@@ -87,12 +88,17 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       if (!serviceAuthResponse.ok) {
         const error = await serviceAuthResponse.text();
-        throw new Error(`Failed to authenticate with service auth: ${error}`);
+        const headers = inspect(serviceAuthResponse.headers);
+        throw new Error(`Failed to authenticate with service auth: ${error}. Headers: ${headers}`);
       }
 
       const sessionCookies = serviceAuthResponse.headers.get("set-cookie");
       if (!sessionCookies) {
-        throw new Error("Failed to get session cookies from service auth");
+        const text = await serviceAuthResponse.text();
+        const headers = inspect(serviceAuthResponse.headers);
+        throw new Error(
+          `Failed to get session cookies from service auth. Response: ${text}. Headers: ${headers}`,
+        );
       }
 
       console.log("Successfully authenticated");
