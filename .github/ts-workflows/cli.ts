@@ -3,7 +3,7 @@ import * as path from "node:path";
 import assert from "node:assert";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
-import { Workflow } from "@jlarky/gha-ts/workflow-types";
+import { type Workflow } from "@jlarky/gha-ts/workflow-types";
 import * as YAML from "yaml";
 import { initTRPC } from "@trpc/server";
 
@@ -75,7 +75,9 @@ const workflowsProcedure = t.procedure
       return [];
     });
 
-    const updateMessage = `Updates were needed:\n\n${updatesNeeded.map((u) => u.reason).join("\n")}`;
+    const updateMessage = updatesNeeded.length
+      ? `Updates were needed:\n\n${updatesNeeded.map((u) => u.reason).join("\n")}`
+      : null;
 
     return next({
       ctx: {
@@ -97,7 +99,8 @@ const router = t.router({
       const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
       if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
     }
-    if (ctx.updatesNeeded.length) throw new Error(ctx.updateMessage);
+    if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
+    return ctx.updateMessage;
   }),
   fromYaml: workflowsProcedure.mutation(async ({ ctx, input }) => {
     for (const { yaml } of ctx.updatesNeeded) {
@@ -138,7 +141,8 @@ const router = t.router({
         await fs.writeFile(tsPath, ts.join("\n"));
       }
     }
-    if (ctx.updatesNeeded.length) throw new Error(ctx.updateMessage);
+    if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
+    return ctx.updateMessage;
   }),
 });
 
