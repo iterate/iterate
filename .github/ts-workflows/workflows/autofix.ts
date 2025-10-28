@@ -50,6 +50,11 @@ export default workflow({
           run: "pnpm run format",
         },
         {
+          name: "revert changes to workflows", // autofix.ci can't update this folder
+          run: "git checkout .github/workflows",
+          if: "always()",
+        },
+        {
           run: "git diff",
           if: "always()",
         },
