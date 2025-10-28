@@ -14,7 +14,7 @@
     "lint": "eslint . --fix",
     "lint:check": "eslint . --max-warnings 0",
     "lint:inspect": "pnpx @eslint/config-inspector",
-    "prepare": "cd apps/os && pnpm tsdown",
+    "prepare": "(cd apps/os && pnpm tsdown) && (is-ci || husky)",
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
@@ -30,9 +30,9 @@
     "db:query:file": "docker exec -i postgres-iterate psql -U postgres -d iterate -f",
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
-    "vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
+    "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
-    "postinstall": "pnpm vibe-rules"
+    "postinstall": "is-ci || pnpm /postinstall:/"
   },
   "devDependencies": {
     "@eslint/js": "^9.38.0",
@@ -49,6 +49,8 @@
     "eslint-plugin-react-refresh": "^0.4.24",
     "eslint-plugin-unicorn": "^61.0.2",
     "globals": "^16.4.0",
+    "husky": "9.1.7",
+    "is-ci": "4.1.0",
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"

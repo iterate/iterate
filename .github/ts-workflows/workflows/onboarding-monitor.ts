@@ -1,0 +1,121 @@
+import dedent from "dedent";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
+
+export default workflow({
+  name: "Onboarding Monitor",
+  on: {
+    push: {
+      branches: ["main"],
+    },
+    schedule: [
+      {
+        cron: "0 9 * * *",
+      },
+    ],
+    workflow_dispatch: null,
+  },
+  jobs: {
+    "test-onboarding": {
+      "runs-on":
+        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@v4",
+        },
+        {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@v4",
+        },
+        {
+          name: "Setup Node",
+          uses: "actions/setup-node@v4",
+          with: {
+            "node-version": 24,
+            cache: "pnpm",
+          },
+        },
+        {
+          name: "Install dependencies",
+          run: "pnpm install",
+        },
+        {
+          name: "Install Doppler CLI",
+          uses: "dopplerhq/cli-action@v2",
+        },
+        {
+          name: "Setup Doppler",
+          run: "doppler setup --config 'prd' --project os",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+        },
+        {
+          name: "Run Onboarding Tests",
+          id: "tests",
+          uses: "nick-fields/retry@v3",
+          with: {
+            timeout_minutes: 15,
+            max_attempts: 3,
+            retry_wait_seconds: 30,
+            command: "doppler run -- pnpm test:onboarding:production",
+          },
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+        },
+        {
+          name: "Notify Slack on Failure",
+          if: "failure()",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: dedent`
+            WEBHOOK_URL=$(doppler secrets get GITHUB_E2E_TEST_FAIL_SLACK_WEBHOOK --plain)
+
+            curl -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d '{
+                "text": "🚨 Production Onboarding Tests Failed",
+                "blocks": [
+                  {
+                    "type": "header",
+                    "text": {
+                      "type": "plain_text",
+                      "text": "🚨 Production Onboarding Tests Failed"
+                    }
+                  },
+                  {
+                    "type": "section",
+                    "fields": [
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Repository:* \${{ github.repository }}"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Branch:* \${{ github.ref_name }}"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Workflow:* \${{ github.workflow }}"
+                      },
+                      {
+                        "type": "mrkdwn",
+                        "text": "*Run Number:* \${{ github.run_number }}"
+                      }
+                    ]
+                  },
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "<\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}|View Workflow Run>"
+                    }
+                  }
+                ]
+              }'
+          `,
+        },
+      ],
+    },
+  },
+});
