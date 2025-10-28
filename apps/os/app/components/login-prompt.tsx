@@ -1,9 +1,6 @@
-import { useNavigate } from "react-router";
 import { LoginProviders } from "./auth-components.tsx";
 
 export function LoginPrompt() {
-  const navigate = useNavigate();
-
   return (
     <div className="min-h-screen flex items-center justify-center p-4">
       <div className="w-full max-w-sm space-y-6">
@@ -20,16 +17,6 @@ export function LoginPrompt() {
         </div>
 
         <LoginProviders />
-
-        <div className="text-center text-sm text-muted-foreground">
-          Don't have an account?{" "}
-          <button
-            onClick={() => navigate("/signup")}
-            className="underline underline-offset-4 hover:text-foreground"
-          >
-            Sign up
-          </button>
-        </div>
       </div>
     </div>
   );
