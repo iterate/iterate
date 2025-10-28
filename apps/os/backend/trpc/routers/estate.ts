@@ -746,7 +746,7 @@ export const estateRouter = router({
     .input(
       z.object({
         estateId: z.string(),
-        step: z.enum(["confirm_org_name"]),
+        step: z.enum(["confirm_org", "slack"]),
         detail: z.string().optional(),
       }),
     )
@@ -758,7 +758,7 @@ export const estateRouter = router({
           .values({
             estateId: input.estateId,
             organizationId: ctx.estate.organizationId,
-            eventType: "OrgNameConfirmed",
+            eventType: input.step === "confirm_org" ? "OrgNameConfirmed" : "SlackAdded",
             category: "user",
             detail: input.detail ?? null,
             metadata: { skipped: false },

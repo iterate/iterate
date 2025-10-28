@@ -613,7 +613,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             {/* TODO Breadcrumbs */}
           </header>
 
-          <main className="flex flex-1 flex-col gap-4 p-6 max-w-5xl">{children}</main>
+          <main className="flex flex-1 flex-col gap-4 p-6 max-w-6xl">{children}</main>
         </SidebarInset>
       </div>
     </SidebarProvider>
