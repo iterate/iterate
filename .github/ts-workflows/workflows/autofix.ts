@@ -35,6 +35,11 @@ export default workflow({
           run: "pnpm install --no-frozen-lockfile",
         },
         {
+          name: "Generate YAML workflows from TS workflows",
+          "working-directory": ".github/ts-workflows",
+          run: "node cli.ts from-ts",
+        },
+        {
           name: "disable check annotations",
           run: dedent`
             echo "::remove-matcher owner=eslint-compact::"
