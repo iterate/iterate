@@ -11,7 +11,7 @@ export default workflow({
   jobs: {
     test: {
       "runs-on":
-        "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       steps: [
         {
           name: "Checkout code",
