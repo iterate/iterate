@@ -72,6 +72,7 @@ export default workflow({
           },
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            VITEST_RUN_ONBOARDING_TEST: "true",
           },
         },
         {

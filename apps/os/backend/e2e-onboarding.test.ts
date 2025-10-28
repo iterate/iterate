@@ -42,7 +42,7 @@ function generateRepoName() {
   return `estate-test-${Date.now()}-${Math.random().toString(36).substring(7)}`;
 }
 
-test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
+test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
   "end-to-end onboarding flow",
   {
     timeout: 15 * 60 * 1000, // 15 minutes total timeout

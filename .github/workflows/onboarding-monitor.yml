@@ -48,6 +48,7 @@ jobs:
             doppler run --config ${{ steps.get_stage.outputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          VITEST_RUN_ONBOARDING_TEST: "true"
       - name: Notify Slack on Failure
         if: failure()
         env:
