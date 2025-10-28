@@ -94,56 +94,63 @@ const workflowsProcedure = t.procedure
   });
 
 const router = t.router({
-  fromTs: workflowsProcedure.mutation(async ({ ctx, input }) => {
-    for (const { ts: tsWorkflow } of ctx.updatesNeeded) {
-      const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
-      if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
-    }
-    if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
-    return ctx.updateMessage;
-  }),
-  fromYaml: workflowsProcedure.mutation(async ({ ctx, input }) => {
-    for (const { yaml } of ctx.updatesNeeded) {
-      const tsPath = path.join(ctx.tsWorkflowsDir, `${yaml.name}.ts`);
-      const multilineStrings: string[] = [];
-      let pojo = JSON.stringify(
-        yaml.workflow,
-        (_key, value) => {
-          if (typeof value === "string" && value.includes("\n")) {
-            multilineStrings.push(value);
-            return `MULTILINE_STRING_${multilineStrings.length - 1}`;
-          }
-          return value;
-        },
-        2,
-      );
+  fromTs: workflowsProcedure
+    .meta({ description: "Generate YAML workflows from TS workflows" })
+    .mutation(async ({ ctx, input }) => {
+      for (const { ts: tsWorkflow } of ctx.updatesNeeded) {
+        const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
+        if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
+      }
+      if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
+      return ctx.updateMessage;
+    }),
+  fromYaml: workflowsProcedure
+    .meta({
+      description:
+        "Generate TS workflows from YAML workflows. Will attempt to convert multiline strings to dedent expressions - make sure you check the output.",
+    })
+    .mutation(async ({ ctx, input }) => {
+      for (const { yaml } of ctx.updatesNeeded) {
+        const tsPath = path.join(ctx.tsWorkflowsDir, `${yaml.name}.ts`);
+        const multilineStrings: string[] = [];
+        let pojo = JSON.stringify(
+          yaml.workflow,
+          (_key, value) => {
+            if (typeof value === "string" && value.includes("\n")) {
+              multilineStrings.push(value);
+              return `MULTILINE_STRING_${multilineStrings.length - 1}`;
+            }
+            return value;
+          },
+          2,
+        );
 
-      for (const [index, multilineString] of multilineStrings.entries()) {
-        const escaped = multilineString.trimEnd().replaceAll("`", "\\`").replaceAll("${", "\\${");
-        const marker = `MULTILINE_STRING_${index}`;
-        const line = pojo.split("\n").find((line) => line.includes(marker));
-        const indent = line?.match(/^(\s*)/)?.[1] || "";
-        const indented = escaped.replaceAll("\n", `\n${indent}  `);
-        const dedentExpression = [
-          `dedent\``,
-          `${indent}  ${indented}`, //
-          `${indent}\``,
-        ].join("\n");
-        pojo = pojo.replace(`"${marker}"`, dedentExpression);
+        for (const [index, multilineString] of multilineStrings.entries()) {
+          const escaped = multilineString.trimEnd().replaceAll("`", "\\`").replaceAll("${", "\\${");
+          const marker = `MULTILINE_STRING_${index}`;
+          const line = pojo.split("\n").find((line) => line.includes(marker));
+          const indent = line?.match(/^(\s*)/)?.[1] || "";
+          const indented = escaped.replaceAll("\n", `\n${indent}  `);
+          const dedentExpression = [
+            `dedent\``,
+            `${indent}  ${indented}`, //
+            `${indent}\``,
+          ].join("\n");
+          pojo = pojo.replace(`"${marker}"`, dedentExpression);
+        }
+        const ts = [
+          ...(multilineStrings.length ? [`import dedent from "dedent";`] : []),
+          `import { workflow } from "@jlarky/gha-ts/workflow-types";`,
+          ``,
+          `export default workflow(${pojo})`,
+        ];
+        if (!input.dryRun) {
+          await fs.writeFile(tsPath, ts.join("\n"));
+        }
       }
-      const ts = [
-        ...(multilineStrings.length ? [`import dedent from "dedent";`] : []),
-        `import { workflow } from "@jlarky/gha-ts/workflow-types";`,
-        ``,
-        `export default workflow(${pojo})`,
-      ];
-      if (!input.dryRun) {
-        await fs.writeFile(tsPath, ts.join("\n"));
-      }
-    }
-    if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
-    return ctx.updateMessage;
-  }),
+      if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
+      return ctx.updateMessage;
+    }),
 });
 
 createCli({ router }).run();
