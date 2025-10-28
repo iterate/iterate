@@ -7,8 +7,7 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
+import { processOutboxEvents } from "./onboarding-outbox.ts";
 import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
@@ -39,6 +38,89 @@ export const createGithubRepoInEstatePool = async (metadata: {
   return repo.data;
 };
 
+export async function createOrganizationAndEstateInTransaction(
+  tx: DBLike,
+  params: {
+    organizationName: string;
+    ownerUserId: string;
+    estateName?: string;
+    onboardingAgentName?: string | null;
+    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
+  },
+): Promise<{
+  organization: typeof schema.organization.$inferSelect;
+  estate: typeof schema.estate.$inferSelect;
+}> {
+  const { organizationName, ownerUserId, estateName, onboardingAgentName, connectedRepo } = params;
+
+  const [organization] = await tx
+    .insert(schema.organization)
+    .values({ name: organizationName })
+    .returning();
+  if (!organization) throw new Error("Failed to create organization");
+
+  await tx.insert(schema.organizationUserMembership).values({
+    organizationId: organization.id,
+    userId: ownerUserId,
+    role: "owner",
+  });
+
+  const [estate] = await tx
+    .insert(schema.estate)
+    .values({
+      name: estateName ?? `${organizationName} Estate`,
+      organizationId: organization.id,
+      connectedRepoId: connectedRepo?.id ?? null,
+      connectedRepoRef: connectedRepo?.defaultBranch ?? null,
+      connectedRepoPath: connectedRepo?.path ?? "/",
+    })
+    .returning();
+  if (!estate) throw new Error("Failed to create estate");
+
+  const agentName = `${estate.id}-Onboarding`;
+  await tx
+    .update(schema.estate)
+    .set({ onboardingAgentName: onboardingAgentName ?? agentName })
+    .where(eq(schema.estate.id, estate.id));
+
+  await initializeOnboardingForEstateInTransaction(tx, {
+    estateId: estate.id,
+    organizationId: organization.id,
+    onboardingAgentName: onboardingAgentName ?? agentName,
+  });
+
+  return { organization, estate };
+}
+
+export async function createOrganizationAndEstate(
+  db: DB,
+  params: {
+    organizationName: string;
+    ownerUserId: string;
+    estateName?: string;
+    onboardingAgentName?: string | null;
+    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
+  },
+): Promise<{
+  organization: typeof schema.organization.$inferSelect;
+  estate: typeof schema.estate.$inferSelect;
+}> {
+  let result!: {
+    organization: typeof schema.organization.$inferSelect;
+    estate: typeof schema.estate.$inferSelect;
+  };
+  await db.transaction(async (tx) => {
+    result = await createOrganizationAndEstateInTransaction(tx, params);
+  });
+  // Kick outbox processing in background; cron also processes
+  waitUntil(
+    (async () => {
+      await processOutboxEvents(db);
+    })(),
+  );
+  return result;
+}
+
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
   db: DB,
@@ -62,79 +144,22 @@ export const createUserOrganizationAndEstate = async (
     };
   }
 
-  // Perform sequential inserts without opening a new transaction to avoid
-  // cross-transaction FK visibility issues with the user record.
-  // If the auth layer wraps this in a transaction, these operations will be part of it.
-  const organizationResult = await db
-    .insert(schema.organization)
-    .values({ name: `${user.email}'s Organization` })
-    .returning();
-
-  const organization = organizationResult[0];
-
-  if (!organization) {
-    throw new Error("Failed to create organization");
-  }
-
-  await db.insert(schema.organizationUserMembership).values({
-    organizationId: organization.id,
-    userId: user.id,
-    role: "owner",
-  });
-
+  // Create repo first, then centralize DB work via shared helper
+  const provisionalOrgName = `${user.email}'s Organization`;
+  // Create the repo optimistically with provisional org name; updated during tx
   const repo = await createGithubRepoInEstatePool({
-    organizationName: organization.name,
-    organizationId: organization.id,
+    organizationName: provisionalOrgName,
+    organizationId: "pending",
   });
 
-  const [estate] = await db
-    .insert(schema.estate)
-    .values({
-      // For now we don't allow people to make more estates or edit theirs and never show this anywhere
-      // But in the future users will be able to create multiple estates in one organization
-      name: `${user.email}'s primary estate`,
-      organizationId: organization.id,
-      connectedRepoId: repo.id,
-      connectedRepoRef: repo.default_branch,
-      connectedRepoPath: "/",
-    })
-    .returning();
-
-  if (!estate) {
-    throw new Error("Failed to create estate");
-  }
-
-  const agentName = `${estate.id}-Onboarding`;
-
-  // Update the estate with the onboarding agent name
-  await db
-    .update(schema.estate)
-    .set({
-      onboardingAgentName: agentName,
-    })
-    .where(eq(schema.estate.id, estate.id));
+  const { organization, estate } = await createOrganizationAndEstate(db, {
+    organizationName: provisionalOrgName,
+    ownerUserId: user.id,
+    estateName: `${user.email}'s primary estate`,
+    connectedRepo: { id: repo.id, defaultBranch: repo.default_branch, path: "/" },
+  });
 
   const result = { organization, estate };
-
-  waitUntil(
-    (async () => {
-      try {
-        await createStripeCustomerAndSubscriptionForOrganization(db, result.organization, user);
-
-        const onboardingAgent = await getOrCreateAgentStubByName("OnboardingAgent", {
-          db,
-          estateId: estate.id,
-          agentInstanceName: agentName,
-          reason: "Auto-provisioned OnboardingAgent during estate creation",
-        });
-        // We need to call some method on the stub, otherwise the agent durable object
-        // wouldn't boot up. Obtaining a stub doesn't in itself do anything.
-        await onboardingAgent.doNothing();
-      } catch (error) {
-        logger.error("Failed to create stripe customer and start onboarding agent", error);
-      }
-    })(),
-  );
 
   // Send Slack notification to our own slack instance, unless suppressed for test users
   // In production ITERATE_NOTIFICATION_ESTATE_ID is set to iterate's own iterate estate id
@@ -152,6 +177,45 @@ export const createUserOrganizationAndEstate = async (
   }
   return result;
 };
+
+type DBLike = Pick<DB, "insert" | "update" | "query">;
+
+export async function initializeOnboardingForEstateInTransaction(
+  tx: DBLike,
+  params: {
+    estateId: string;
+    organizationId: string;
+    onboardingAgentName?: string | null;
+  },
+) {
+  const { estateId, organizationId, onboardingAgentName } = params;
+
+  await tx
+    .insert(schema.estateOnboardingEvent)
+    .values({
+      estateId,
+      organizationId,
+      eventType: "EstateCreated",
+      category: "system",
+      detail: onboardingAgentName ? `Onboarding agent: ${onboardingAgentName}` : null,
+    })
+    .onConflictDoNothing();
+
+  await tx.insert(schema.systemTasks).values([
+    {
+      aggregateType: "estate",
+      aggregateId: estateId,
+      taskType: "CreateStripeCustomer",
+      payload: { organizationId, estateId },
+    },
+    {
+      aggregateType: "estate",
+      aggregateId: estateId,
+      taskType: "WarmOnboardingAgent",
+      payload: { estateId, onboardingAgentName },
+    },
+  ]);
+}
 
 async function sendEstateCreatedNotificationToSlack(
   organization: typeof schema.organization.$inferSelect,

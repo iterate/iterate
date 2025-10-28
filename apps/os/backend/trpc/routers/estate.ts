@@ -22,6 +22,7 @@ import {
   iterateConfig,
   organizationUserMembership,
   organization,
+  estateOnboardingEvent,
 } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
@@ -724,7 +725,6 @@ export const estateRouter = router({
         commitHash = branchResponse.data.commit.sha;
         commitMessage = branchResponse.data.commit.commit.message;
       }
-
       // Use the helper function to trigger the rebuild
       const build = await triggerEstateRebuild({
         db: ctx.db,
@@ -734,11 +734,48 @@ export const estateRouter = router({
         commitMessage,
         isManual: true,
       });
-
       return {
         buildId: build.id,
         status: "in_progress",
         message: "Build triggered successfully",
       };
+    }),
+
+  // Mark a user onboarding step as completed
+  completeUserOnboardingStep: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        step: z.enum(["confirm_org_name"]),
+        detail: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.transaction(async (tx) => {
+        // Append immutable confirmation event
+        await tx
+          .insert(estateOnboardingEvent)
+          .values({
+            estateId: input.estateId,
+            organizationId: ctx.estate.organizationId,
+            eventType: "OrgNameConfirmed",
+            category: "user",
+            detail: input.detail ?? null,
+            metadata: { skipped: false },
+          })
+          .onConflictDoNothing();
+
+        await tx
+          .insert(estateOnboardingEvent)
+          .values({
+            estateId: input.estateId,
+            organizationId: ctx.estate.organizationId,
+            eventType: "OnboardingCompleted",
+            category: "user",
+          })
+          .onConflictDoNothing();
+      });
+
+      return { success: true } as const;
     }),
 });

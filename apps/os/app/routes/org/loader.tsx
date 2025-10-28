@@ -49,13 +49,19 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   // Step 3: Load all organizations and check onboarding status in parallel
   // This is more efficient than separate queries since we need all orgs anyway
   const requestUrl = new URL(request.url);
-  const onboardingPath = `/${organizationId}/onboarding`;
-  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
+  // Compute onboarding path for the first estate (used only as a redirect target)
+  const firstEstate = await db.query.estate.findFirst({
+    where: eq(schema.estate.organizationId, organizationId),
+    orderBy: (t, { asc }) => [asc(t.createdAt)],
+  });
+  if (!firstEstate) {
+    // No estate for this org; redirect to home
+    throw redirect("/");
+  }
+  // Treat ANY estate onboarding route as an onboarding page, not just the first estate
+  const parts = requestUrl.pathname.split("/").filter(Boolean);
 
-  const [userOrganizations, isOnboarded] = await Promise.all([
-    getUserOrganizations(db, session.user.id),
-    isOnboardingRoute ? Promise.resolve(true) : isOrganizationOnboarded(db, organizationId),
-  ]);
+  const userOrganizations = await getUserOrganizations(db, session.user.id);
 
   // Check if user has access to the requested organization
   // Note: External users are already filtered out at query level
@@ -88,10 +94,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     createdAt: organization.createdAt.toISOString(),
     updatedAt: organization.updatedAt.toISOString(),
   };
-
-  if (!isOnboardingRoute && !isOnboarded) {
-    throw redirect(onboardingPath);
-  }
 
   const responseHeaders = new Headers({ "Content-Type": "application/json" });
 
@@ -192,34 +194,4 @@ export function ErrorBoundary() {
       </div>
     </DashboardLayout>
   );
-}
-
-async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizationId: string) {
-  const organization = await db.query.organization.findFirst({
-    where: eq(schema.organization.id, organizationId),
-    with: {
-      estates: {
-        with: {
-          estateAccountsPermissions: {
-            with: {
-              account: true,
-            },
-          },
-          slackChannelEstateOverrides: true,
-        },
-      },
-    },
-  });
-
-  const hasSlackConnected = organization?.estates.some((estate) => {
-    const hasSlackBotAccount = estate.estateAccountsPermissions.some(
-      (permission) => permission.account.providerId === "slack-bot",
-    );
-
-    const hasSlackConnectTrial = estate.slackChannelEstateOverrides.length > 0;
-
-    return hasSlackBotAccount || hasSlackConnectTrial;
-  });
-
-  return hasSlackConnected ?? false;
 }
