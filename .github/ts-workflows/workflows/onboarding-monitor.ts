@@ -67,7 +67,7 @@ export default workflow({
             retry_wait_seconds: 30,
             command: dedent`
               cd apps/os
-              doppler run --config \${{ steps.get_stage.outputs.stage }} -- vitest run ./backend/e2e-onboarding.test.ts
+              doppler run --config \${{ steps.get_stage.outputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
             `,
           },
           env: {
