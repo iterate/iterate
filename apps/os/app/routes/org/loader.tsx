@@ -29,6 +29,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw new Error("Organization ID is required");
   }
 
+  if (!organizationId.startsWith("org_")) {
+    throw new Response("Not Found", { status: 404 });
+  }
+
   // Get the database and auth instances
   const db = getDb();
   const auth = getAuth(db);
@@ -207,14 +211,15 @@ async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizatio
     },
   });
 
-  // For now, assume that if the organization has a slack bot linked
-  // TODO: This is a temporary hack, figure out what counts as onboarded
-  const hasSlackLinked = organization?.estates.some(
-    (estate) =>
-      estate.estateAccountsPermissions.some(
-        (permission) => permission.account.providerId === "slack-bot",
-      ) || estate.slackChannelEstateOverrides.length > 0,
-  );
+  const hasSlackConnected = organization?.estates.some((estate) => {
+    const hasSlackBotAccount = estate.estateAccountsPermissions.some(
+      (permission) => permission.account.providerId === "slack-bot",
+    );
 
-  return hasSlackLinked;
+    const hasSlackConnectTrial = estate.slackChannelEstateOverrides.length > 0;
+
+    return hasSlackBotAccount || hasSlackConnectTrial;
+  });
+
+  return hasSlackConnected ?? false;
 }

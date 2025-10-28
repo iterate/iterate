@@ -1,4 +1,4 @@
-import z from "zod/v4";
+import z from "zod";
 
 export const E2ETestParams = z.object({
   github: z.object({

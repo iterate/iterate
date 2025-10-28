@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
-import { z } from "zod/v4";
+import { z } from "zod";
 import dedent from "dedent";
 import { typeid } from "typeid-js";
 import * as fflate from "fflate/browser";

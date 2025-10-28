@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { MCPClientManager } from "agents/mcp/client";
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { AgentCoreDeps, MergedStateForSlices } from "../agent-core.ts";
 import type { AgentCoreEvent } from "../agent-core-schemas.ts";
 import type { LocalFunctionRuntimeTool } from "../tool-schemas.ts";

@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { and, eq, ne } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { waitUntil } from "../../../env.ts";

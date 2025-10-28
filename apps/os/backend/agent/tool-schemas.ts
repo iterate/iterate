@@ -1,4 +1,4 @@
-import z from "zod/v4";
+import z from "zod";
 import type { FunctionTool } from "openai/resources/responses/responses.mjs";
 import { JSONSerializable } from "../utils/type-helpers.ts";
 import { FunctionCall, OpenAIBuiltinTool } from "./openai-response-schemas.ts";
