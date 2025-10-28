@@ -44,11 +44,11 @@ export default {
     }
 
     if (url.pathname === "/mcp") {
-      return MockMCPAgent.serve("/mcp").fetch(request, env, ctx);
+      return MockMCPAgent.serve("/mcp", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
     }
 
     if (url.pathname === "/sse") {
-      return MockMCPAgent.serveSSE("/sse").fetch(request, env, ctx);
+      return MockMCPAgent.serveSSE("/sse", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
     }
 
     if (
@@ -203,8 +203,8 @@ function renderLandingPage(origin: string): string {
 
 const oauthProvider = new OAuthProvider({
   apiHandlers: {
-    "/oauth/sse": MockOAuthMCPAgent.serveSSE("/oauth/sse"),
-    "/oauth/mcp": MockOAuthMCPAgent.serve("/oauth/mcp"),
+    "/oauth/sse": MockOAuthMCPAgent.serveSSE("/oauth/sse", { binding: "MCP_OAUTH_OBJECT" }),
+    "/oauth/mcp": MockOAuthMCPAgent.serve("/oauth/mcp", { binding: "MCP_OAUTH_OBJECT" }),
   },
   authorizeEndpoint: "/oauth/authorize",
   tokenEndpoint: "/oauth/token",
