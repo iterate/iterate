@@ -58,11 +58,14 @@ npx @modelcontextprotocol/inspector@latest
 
 **Available Tools:**
 
-- `add(a, b)` - Add two numbers
-- `echo(message)` - Echo back a message
-- `getCurrentTime()` - Get current server time
-- `throwError()` - Simulate an error
-- `delayedResponse(delayMs)` - Respond after a delay
+- `mock_add(a, b)` - Add two numbers
+- `mock_echo(message)` - Echo back a message
+- `mock_calculate(operation, a, b)` - Arithmetic operations (add, subtract, multiply, divide)
+- `mock_json_echo(data)` - Echo JSON data
+- `mock_error(errorType, message?)` - Throw specified error type
+- `mock_conditional_error(shouldFail, value)` - Conditional error
+- `mock_delay(delayMs, message)` - Respond after delay
+- `mock_counter(prefix?)` - Timestamp-based counter
 
 ### 2. OAuth Mode (Authentication Testing)
 
@@ -72,225 +75,97 @@ Use this mode when testing OAuth flows, authentication, and user-specific functi
 
 - `/oauth/mcp` - MCP Streamable-HTTP endpoint with OAuth (recommended)
 - `/oauth/sse` - MCP SSE endpoint with OAuth (deprecated)
-- `POST /oauth/mock-auth/setup` - (Optional) Pre-configure custom test users
 
 **Key Feature: Zero-Setup OAuth!**
 
 Just connect to `/oauth/mcp` - it **automatically approves** with a generated mock user. No pre-registration needed!
 
-**Additional Tools (OAuth mode only):**
+**OAuth-Specific Tools** (in addition to all the tools from no-auth mode):
 
-- `userInfo()` - Get authenticated user information
-- `greet(formal?)` - Get personalized greeting
-- `adminAction(action)` - Perform admin-only actions (permission-based)
+- `userInfo()` - Get authenticated user information (`userId`, `userName`, `email`, `sessionId`)
+- `greet(formal?)` - Get personalized greeting using authenticated user's name
+- `adminAction(action)` - Demonstrate permission-based access (requires "admin" in `userId`)
 
-## Simple OAuth Testing
+**How it works:**
 
-**Zero Setup Required!** Just connect to the OAuth endpoint and it auto-approves:
+When you connect to `/oauth/mcp`, the server automatically:
 
-```bash
-# With MCP Inspector
-npx @modelcontextprotocol/inspector@latest
-# URL: http://localhost:8789/oauth/mcp
-```
-
-The server automatically:
-
-1. ✅ Generates a mock user
-2. ✅ Auto-approves OAuth authorization
-3. ✅ Issues access tokens
-4. ✅ Establishes authenticated MCP session
-
-### Custom Test Users (Optional)
-
-If you need specific user IDs, names, or emails for testing:
-
-```bash
-curl -X POST http://localhost:8789/oauth/mock-auth/setup \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sessionId": "admin-test",
-    "userId": "test-admin-user",
-    "userName": "Admin User",
-    "email": "admin@example.com"
-  }'
-```
-
-Response:
-
-```json
-{
-  "success": true,
-  "sessionId": "admin-test",
-  "user": {
-    "userId": "test-admin-user",
-    "userName": "Admin User",
-    "email": "admin@example.com"
-  },
-  "message": "Custom user configured. When OAuth authorizes, it will use this user's details."
-}
-```
-
-The authorization endpoint will check for this session ID and use those specific user details.
-
-## Example: E2E Test with OAuth
-
-```typescript
-import { test, expect } from "vitest";
-
-test("MCP server with OAuth - zero setup", async () => {
-  const serverUrl = "http://localhost:8789";
-
-  // Just connect - no setup needed!
-  const client = new MCPClient({
-    transport: "http",
-    url: `${serverUrl}/oauth/mcp`,
-  });
-
-  await client.connect(); // Auto-approves with generated mock user
-
-  // Test authenticated tools
-  const result = await client.callTool("userInfo", {});
-  expect(result.content[0].text).toContain("mock-user");
-});
-
-test("MCP server with custom user", async () => {
-  const serverUrl = "http://localhost:8789";
-  const sessionId = "admin-test";
-
-  // Optional: Pre-configure a specific test user
-  await fetch(`${serverUrl}/oauth/mock-auth/setup`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      sessionId,
-      userId: "test-admin-user",
-      userName: "Admin User",
-      email: "admin@example.com",
-    }),
-  });
-
-  const client = new MCPClient({
-    transport: "http",
-    url: `${serverUrl}/oauth/mcp`,
-  });
-
-  await client.connect(); // Uses the pre-configured admin user
-
-  const result = await client.callTool("userInfo", {});
-  expect(result.content[0].text).toContain("test-admin-user");
-  expect(result.content[0].text).toContain("Admin User");
-});
-```
-
-## Testing Permission-Based Access
-
-The OAuth mode includes a permission demonstration with the `adminAction` tool:
-
-```typescript
-// User with "admin" in userId can access admin tools
-const adminSession = {
-  sessionId: "admin-test",
-  userId: "test-admin-user", // Contains "admin"
-  userName: "Admin User",
-};
-
-// User without "admin" will be denied
-const regularSession = {
-  sessionId: "regular-test",
-  userId: "test-regular-user", // No "admin"
-  userName: "Regular User",
-};
-```
-
-## Manual OAuth Testing
-
-If you don't provide a `session_id` in the authorize URL, the server shows a simple approval page where you can manually approve the OAuth request. This is useful for:
-
-- Interactive testing with MCP Inspector
-- Debugging OAuth flows
-- Demonstrating OAuth to stakeholders
+1. Generates a unique mock user (e.g., `mock-user-auto-1234567890-abc123`)
+2. Completes the OAuth authorization flow
+3. Provides the authenticated user context to the MCP agent via `this.props`
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                   Mock MCP Server                       │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  No-Auth Mode              OAuth Mode                   │
-│  ┌────────────┐           ┌──────────────────┐        │
-│  │ /mcp       │           │ /oauth/mcp       │        │
-│  │ /sse       │           │ /oauth/sse       │        │
-│  └────────────┘           └──────────────────┘        │
-│       │                            │                    │
-│       │                            │                    │
-│       v                            v                    │
-│  MockMCPAgent            MockOAuthMCPAgent             │
-│  (Durable Object)        (Durable Object)              │
-│                                                         │
-│                          ┌──────────────────┐          │
-│                          │ OAuth Endpoints  │          │
-│                          │  /authorize      │          │
-│                          │  /token          │          │
-│                          │  /register       │          │
-│                          └──────────────────┘          │
-│                                    │                    │
-│                          ┌─────────v─────────┐         │
-│                          │ Mock OAuth Handler│         │
-│                          │ + KV Storage      │         │
-│                          └───────────────────┘         │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    Worker Entry Point                       │
+│                      (src/index.ts)                         │
+└───────────────────┬─────────────────────────────────────────┘
+                    │
+        ┌───────────┴───────────┐
+        │                       │
+        v                       v
+┌───────────────┐     ┌─────────────────────────────────┐
+│  /mcp, /sse   │     │  /oauth/*, /.well-known/*       │
+│               │     │                                  │
+│ MockMCPAgent  │     │      OAuthProvider               │
+│  (Durable     │     │  ┌─────────────────────────┐   │
+│   Object)     │     │  │ OAuth Endpoints:        │   │
+│               │     │  │  /oauth/authorize       │   │
+│ • Tools       │     │  │  /oauth/token           │   │
+│ • No auth     │     │  │  /oauth/register        │   │
+└───────────────┘     │  └───────────┬─────────────┘   │
+                      │              │                  │
+                      │              v                  │
+                      │  ┌─────────────────────────┐   │
+                      │  │ MockOAuthHandler        │   │
+                      │  │  (Hono app)             │   │
+                      │  │ • Auto-generates user   │   │
+                      │  │ • Auto-approves auth    │   │
+                      │  └─────────────────────────┘   │
+                      │                                 │
+                      │  API Handlers:                  │
+                      │  ┌─────────────────────────┐   │
+                      │  │ /oauth/mcp, /oauth/sse  │   │
+                      │  │                         │   │
+                      │  │ MockOAuthMCPAgent       │   │
+                      │  │  (Durable Object)       │   │
+                      │  │ • Tools + OAuth context │   │
+                      │  │ • User in this.props    │   │
+                      │  └─────────────────────────┘   │
+                      │                                 │
+                      │  Storage:                       │
+                      │  • OAUTH_KV (clients, tokens)   │
+                      └─────────────────────────────────┘
 ```
+
+**Key Components:**
+
+- **MockMCPAgent**: Stateless tools for no-auth testing
+- **MockOAuthMCPAgent**: Same tools + OAuth user context via `this.props`
+- **MockOAuthHandler**: Auto-generates mock users and approves OAuth requests
+- **OAuthProvider**: Standard OAuth 2.1 provider from `@cloudflare/workers-oauth-provider`
 
 ## Development
 
 ### Adding New Tools
 
-Edit the tool registration files in `src/tools/`:
+Add tools by editing:
 
-- `deterministic-tools.ts` - Simple, predictable tools
-- `error-tools.ts` - Tools that simulate errors
-- `async-tools.ts` - Tools with delays
-
-For OAuth-specific tools, edit `src/mock-oauth-mcp-agent.ts`.
-
-### Running Tests
-
-```bash
-pnpm test
-```
-
-### Type Checking
-
-```bash
-pnpm typecheck
-```
+- `src/tools/deterministic-tools.ts` - Predictable tools for basic testing
+- `src/tools/error-tools.ts` - Error simulation tools
+- `src/tools/async-tools.ts` - Async/delay tools
+- `src/mock-oauth-mcp-agent.ts` - OAuth-specific tools with user context
 
 ## Deployment
 
-The mock server is deployed via Alchemy and uses Cloudflare Workers + Durable Objects.
+Deployed via Alchemy to Cloudflare Workers:
 
-```bash
-# Deploy to your personal dev environment
-pnpm deploy
-
-# Deploy to staging
-STAGE=stg pnpm deploy
-
-# Deploy to production (requires auth)
-STAGE=prd pnpm deploy
-```
-
-## Environment Variables
-
-No environment variables required! The mock OAuth provider is completely self-contained.
+- **Dev**: `pnpm deploy` (personal environment)
+- **Staging**: `STAGE=stg pnpm deploy` → `mock-staging.iterate.com`
+- **Production**: `STAGE=prd pnpm deploy` → `mock.iterate.com`
 
 ## Troubleshooting
-
-### OAuth Session Not Found
-
-Sessions expire after 1 hour. Create a new session if you get "Session not found or expired".
 
 ### Port Conflicts
 
@@ -298,18 +173,4 @@ The dev server runs on port 8789 by default. Change it in `alchemy.run.ts` if ne
 
 ### Type Errors
 
-Make sure you've installed dependencies and run `pnpm typecheck` to verify.
-
-## Contributing
-
-When adding new features:
-
-1. Update the relevant tool registration files
-2. Add tests in `.test.ts` files
-3. Update this README
-4. Run `pnpm typecheck` and `pnpm test`
-5. Deploy to staging first: `STAGE=stg pnpm deploy`
-
-## License
-
-MIT
+Run `pnpm typecheck` to verify types after making changes.
