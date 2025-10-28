@@ -55,6 +55,7 @@ const workflowsProcedure = t.procedure
 
     const updatesNeeded = Object.values({ ...tsWorkflows, ...yamlWorkflows }).flatMap((w) => {
       const trimStrings = (obj: {}) =>
+        obj &&
         JSON.parse(JSON.stringify(obj), (_key, value) =>
           typeof value === "string" ? value.trim() : value,
         );
