@@ -32,7 +32,10 @@ import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 const TestEnv = z.object({
   VITE_PUBLIC_URL: z.string().url().default("http://localhost:5173"),
   SERVICE_AUTH_TOKEN: z.string().optional(),
-  ONBOARDING_E2E_TEST_SETUP_PARAMS: z.string().transform((val) => JSON.parse(val)),
+  ONBOARDING_E2E_TEST_SETUP_PARAMS: z
+    .string()
+    .transform((val) => JSON.parse(val))
+    .pipe(E2ETestParams),
 });
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
@@ -55,7 +58,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       ONBOARDING_E2E_TEST_SETUP_PARAMS: process.env.ONBOARDING_E2E_TEST_SETUP_PARAMS,
     });
 
-    const testSeedData = E2ETestParams.parse(env.ONBOARDING_E2E_TEST_SETUP_PARAMS);
+    const testSeedData = env.ONBOARDING_E2E_TEST_SETUP_PARAMS;
     const repoName = generateRepoName();
     let createdRepoFullName: string | null = null;
     let createdUserEmail: string | null = null;
