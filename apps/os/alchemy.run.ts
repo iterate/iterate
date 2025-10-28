@@ -136,6 +136,7 @@ async function setupDatabase() {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
 
+    // "Production already has it" -- @Rahul
     await addSuperAdminUser(origin);
   };
 
