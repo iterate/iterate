@@ -12,6 +12,7 @@ import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import z from "zod";
+import { addSuperAdminUser } from "./sdk/cli/commands/admin.ts";
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -191,6 +192,8 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
+
+    await addSuperAdminUser(role.connectionUrl.unencrypted);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
