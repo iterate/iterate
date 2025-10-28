@@ -21,11 +21,7 @@
   },
   "dependencies": {
     "dedent": "^1.7.0",
-    "@mmkal/jsonata": "^2.2.0",
-    "type-fest": "^5.1.0",
-    "zod": "^4.1.12"
-  },
-  "devDependencies": {
-    "tinyexec": "^1.0.1"
+    "zod": "^4.1.12",
+    "yaml": "^2.8.1"
   }
 }

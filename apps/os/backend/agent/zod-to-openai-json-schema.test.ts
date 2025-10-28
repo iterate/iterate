@@ -1,5 +1,5 @@
 import { describe, expect, it, test } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { subtractObjectPropsFromJSONSchema } from "./schema-utils.ts";
 import {
   makeJSONSchemaOpenAICompatible,

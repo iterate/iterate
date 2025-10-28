@@ -1,7 +1,7 @@
 // I'd like to move this to the SDK as soon as possible, but it requires some package reorganisation
 
 import dedent from "dedent";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { SearchRequest } from "../default-tools.ts";
 import { defineRules, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
