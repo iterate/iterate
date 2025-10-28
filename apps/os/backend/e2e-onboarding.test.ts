@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";

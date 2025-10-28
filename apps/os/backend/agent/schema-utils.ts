@@ -1,8 +1,8 @@
 // This file is ported from v1 - not sure we strictly need it or if its well organised
 
 import { type Schema, Validator } from "@cfworker/json-schema";
-import type z from "zod/v4";
-import { toJSONSchema, type ZodType } from "zod/v4";
+import type z from "zod";
+import { toJSONSchema, type ZodType } from "zod";
 import type { JSONSchema } from "zod/v4/core";
 import { logger } from "../tag-logger.ts";
 

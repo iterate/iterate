@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { or, eq, asc } from "drizzle-orm";
 import { env } from "../env.ts";
 import type { AgentCoreEvent } from "./agent/agent-core-schemas.ts";

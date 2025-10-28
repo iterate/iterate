@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { JSONSchema } from "zod/v4/core";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { makeJSONSchemaOpenAICompatible } from "./zod-to-openai-json-schema.ts";

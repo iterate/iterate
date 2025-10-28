@@ -1,5 +1,5 @@
 import { permalink as getPermalink } from "braintrust/browser";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { and, eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";

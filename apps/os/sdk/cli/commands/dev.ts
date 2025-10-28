@@ -2,7 +2,7 @@ import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 import { existsSync, statSync } from "node:fs";
 import { tsImport } from "tsx/esm/api";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
