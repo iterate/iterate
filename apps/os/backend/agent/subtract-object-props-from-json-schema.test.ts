@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import type { JSONSchema } from "zod/v4/core";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { subtractObjectPropsFromJSONSchema } from "./subtract-object-props-from-json-schema.js";
 
 describe("subtractObjectPropsFromJSONSchema", () => {

@@ -1,4 +1,4 @@
-import z, { ZodError } from "zod/v4";
+import z, { ZodError } from "zod";
 
 import type { $ZodType } from "zod/v4/core";
 import type { JSONSerializable } from "./type-helpers.ts";
@@ -290,7 +290,7 @@ export function stripNonSerializableProperties(value: any): JSONSerializable {
  *
  * Example:
  *   import { typedParse } from "@iterate-com/helpers/schema-helpers";
- *   import z from "zod/v4";
+ *   import z from "zod";
  *
  *   const userSchema = z.object({
  *     name: z.string(),

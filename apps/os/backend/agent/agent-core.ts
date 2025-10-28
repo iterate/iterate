@@ -27,7 +27,7 @@ import type {
   ResponseFunctionToolCall,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.mjs";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { mergeDeep } from "remeda";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";

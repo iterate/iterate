@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
@@ -155,14 +155,6 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       console.log("Successfully impersonated test user");
 
-      // Create TRPC client with impersonated user session
-      const userTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: impersonationCookies,
-        },
-      });
-
       // Note: GitHub installation linking would normally happen through the OAuth callback
 
       // Step 4: Clone estate-template and push to new repository
@@ -196,8 +188,18 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       // Wait a bit for GitHub to process the new repository
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
+      // Create TRPC client with impersonated user session
+      const userTrpc = makeVitestTrpcClient({
+        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
+        headers: {
+          cookie: impersonationCookies,
+        },
+      });
+
       // Step 5: List available GitHub repos and verify our new repo is there
-      console.log("Step 6: Listing available GitHub repositories...");
+      console.log(
+        `Step 6: Listing available GitHub repositories using ${env.VITE_PUBLIC_URL}/api/trpc endpoint`,
+      );
 
       const availableRepos = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,
@@ -229,40 +231,26 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       const buildTimeout = 5 * 60 * 1000; // 5 minutes
       const pollInterval = 5000; // 5 seconds
-      const _gracePeriod = 30000; // 30 seconds grace before checking for empty
+
+      const getLatestBuild = async () => {
+        const builds = await userTrpc.estate.getBuilds.query({
+          estateId: estate.id,
+          limit: 1,
+        });
+        console.log(`Latest build status: ${builds[0]?.status} (${builds[0]?.id})`);
+        return builds[0];
+      };
 
       await expect
-        .poll(
-          async () => {
-            const builds = await userTrpc.estate.getBuilds.query({
-              estateId: estate.id,
-              limit: 10,
-            });
+        .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+        .toMatchObject({ status: expect.any(String) }); // make sure we get started fairly quickly
 
-            return builds;
-          },
-          {
-            timeout: buildTimeout,
-            interval: pollInterval,
-          },
-        )
-        .toSatisfy((builds) => {
-          if (builds.length === 0) {
-            // Allow grace period before failing
-            return false;
-          }
+      await expect
+        .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+        .not.toMatchObject({ status: "in_progress" }); // give it a few minutes for "in_progress"
 
-          const latestBuild = builds[0];
-          if (!latestBuild) return false;
-
-          console.log(`Build status: ${latestBuild.status} (${latestBuild.id})`);
-
-          if (latestBuild.status === "failed") {
-            throw new Error(`Build failed: ${latestBuild.errorMessage || "Unknown error"}`);
-          }
-
-          return latestBuild.status === "complete";
-        });
+      // now that it's not in progress, it *must* be complete
+      expect(await getLatestBuild()).toMatchObject({ status: "complete" });
 
       console.log("Build completed successfully");
 

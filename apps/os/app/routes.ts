@@ -3,11 +3,7 @@ import { type RouteConfig, index, prefix, route, layout } from "@react-router/de
 export default [
   // Public routes (no auth required)
   route("/login", "./routes/login.tsx"),
-  route("/signup", "./routes/signup.tsx"),
   route("/no-access", "./routes/no-access.tsx"),
-
-  // Trial routes (requires auth but no specific org/estate context)
-  route("/trial/slack-connect", "./routes/trial/slack-connect.tsx"),
 
   // User settings route (requires auth but no specific org/estate context)
   route("/user-settings", "./routes/user-settings.tsx"),
