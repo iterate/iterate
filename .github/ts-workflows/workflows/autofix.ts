@@ -4,7 +4,7 @@ import { workflow } from "@jlarky/gha-ts/workflow-types";
 export default workflow({
   name: "autofix.ci",
   on: {
-    pull_request: {},
+    pull_request: null,
     push: {
       branches: ["main", "**/*autofix*", "*autofix*"],
     },

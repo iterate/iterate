@@ -6,6 +6,15 @@ export default workflow({
     push: {
       branches: ["main"],
     },
+    workflow_dispatch: {
+      inputs: {
+        stage: {
+          description:
+            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+          required: true,
+        },
+      },
+    },
   },
   permissions: {
     contents: "read",
@@ -16,6 +25,11 @@ export default workflow({
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       steps: [
+        {
+          id: "get_stage",
+          name: "Get stage",
+          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
+        },
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
@@ -41,7 +55,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config 'stg' --project os",
+          run: "doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
@@ -57,7 +71,7 @@ export default workflow({
           name: "Deploy OS",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            STAGE: "stg",
+            STAGE: "${{ steps.get_stage.outputs.stage }}",
           },
           run: "pnpm run deploy",
           "working-directory": "apps/os",
@@ -67,7 +81,13 @@ export default workflow({
     "deploy-website": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      if: "inputs.stage == 'prd'",
       steps: [
+        {
+          id: "get_stage",
+          name: "Get stage",
+          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
+        },
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
@@ -93,7 +113,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config 'prd' --project os",
+          run: "doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },

@@ -12,7 +12,7 @@ export default workflow({
         cron: "0 9 * * *",
       },
     ],
-    workflow_dispatch: {},
+    workflow_dispatch: null,
   },
   jobs: {
     "test-onboarding": {
@@ -72,6 +72,7 @@ export default workflow({
           },
           run: dedent`
             WEBHOOK_URL=$(doppler secrets get GITHUB_E2E_TEST_FAIL_SLACK_WEBHOOK --plain)
+
             curl -X POST "$WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
               -d '{
@@ -89,19 +90,19 @@ export default workflow({
                     "fields": [
                       {
                         "type": "mrkdwn",
-                        "text": "*Repository:* \${{ github.repository }}"
+                        "text": "*Repository:*\n\${{ github.repository }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Branch:* \${{ github.ref_name }}"
+                        "text": "*Branch:*\n\${{ github.ref_name }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Workflow:* \${{ github.workflow }}"
+                        "text": "*Workflow:*\n\${{ github.workflow }}"
                       },
                       {
                         "type": "mrkdwn",
-                        "text": "*Run Number:* \${{ github.run_number }}"
+                        "text": "*Run Number:*\n\${{ github.run_number }}"
                       }
                     ]
                   },

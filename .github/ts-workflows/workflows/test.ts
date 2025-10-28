@@ -6,7 +6,7 @@ export default workflow({
     push: {
       branches: ["main"],
     },
-    pull_request: {},
+    pull_request: null,
   },
   jobs: {
     test: {
@@ -39,7 +39,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config 'dev' --project os",
+          run: "doppler setup --config dev --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
