@@ -6,6 +6,7 @@ interface MockOAuthSession {
   userId: string;
   userName: string;
   email: string;
+  sessionId: string;
 }
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>();
@@ -35,6 +36,7 @@ async function completeAuthorizationFlow(
       userId: session.userId,
       userName: session.userName,
       email: session.email,
+      sessionId: session.sessionId,
       accessToken: `mock-token-${session.userId}`,
     },
     metadata: {
@@ -51,6 +53,7 @@ function generateMockSession(): MockOAuthSession {
     userId: `mock-user-${id}`,
     userName: "Mock Test User",
     email: `mock-${id}@example.com`,
+    sessionId: `mock-session-${id}`,
   };
 }
 
