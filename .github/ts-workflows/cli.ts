@@ -54,8 +54,12 @@ const workflowsProcedure = t.procedure
     );
 
     const updatesNeeded = Object.values({ ...tsWorkflows, ...yamlWorkflows }).flatMap((w) => {
-      const ts = tsWorkflows[w.name];
-      const yaml = yamlWorkflows[w.name];
+      const trimStrings = (obj: {}) =>
+        JSON.parse(JSON.stringify(obj), (_key, value) =>
+          typeof value === "string" ? value.trim() : value,
+        );
+      const ts = trimStrings(tsWorkflows[w.name]);
+      const yaml = trimStrings(yamlWorkflows[w.name]);
       try {
         assert.deepStrictEqual(ts?.workflow, yaml?.workflow);
       } catch (error) {
