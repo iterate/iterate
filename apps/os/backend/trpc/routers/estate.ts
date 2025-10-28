@@ -745,7 +745,6 @@ export const estateRouter = router({
   completeUserOnboardingStep: estateProtectedProcedure
     .input(
       z.object({
-        estateId: z.string(),
         step: z.enum(["confirm_org", "slack"]),
         detail: z.string().optional(),
       }),
@@ -756,7 +755,7 @@ export const estateRouter = router({
         await tx
           .insert(estateOnboardingEvent)
           .values({
-            estateId: input.estateId,
+            estateId: ctx.estate.id,
             organizationId: ctx.estate.organizationId,
             eventType: input.step === "confirm_org" ? "OrgNameConfirmed" : "SlackAdded",
             category: "user",
