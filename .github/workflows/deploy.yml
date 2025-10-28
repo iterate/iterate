@@ -5,9 +5,8 @@ on:
   workflow_dispatch:
     inputs:
       stage:
-        description: "The stage to deploy to. Must correspond to a Doppler config in the os project."
+        description: "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.)."
         required: true
-        default: stg
 
 permissions:
   contents: read
@@ -18,7 +17,7 @@ jobs:
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - id: get_stage
-        name: Get stage # if workflow_dispatch, inputs.stage is set, otherwise use 'stg'
+        name: Get stage # if workflow_dispatch, inputs.stage is set, otherwise use staging
         run: echo "stage=${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
       - name: Checkout code
         uses: actions/checkout@v4
@@ -50,16 +49,17 @@ jobs:
       - name: Deploy OS
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          STAGE: stg # Currently deploy to staging on merge to main
+          STAGE: ${{ steps.get_stage.outputs.stage }}
         run: pnpm run deploy
         working-directory: apps/os
 
   deploy-website:
     runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    # for now only deploy the website to production
     if: inputs.stage == 'prd'
     steps:
       - id: get_stage
-        name: Get stage # if workflow_dispatch, inputs.stage is set, otherwise use 'stg'
+        name: Get stage # if workflow_dispatch, inputs.stage is set, otherwise use staging
         run: echo "stage=${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
       - name: Checkout code
         uses: actions/checkout@v4
