@@ -7,7 +7,7 @@ on:
   schedule:
     # Run daily at 9am UTC
     - cron: "0 9 * * *"
-  workflow_dispatch: # Allow manual triggers
+  workflow_dispatch: {} # Allow manual triggers
 
 jobs:
   test-onboarding:
