@@ -1,4 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Deploy to Cloudflare",
@@ -22,8 +23,7 @@ export default workflow({
   },
   jobs: {
     "deploy-os": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      ...utils.runsOn,
       steps: [
         {
           id: "get_stage",

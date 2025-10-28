@@ -1,5 +1,6 @@
 import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Publish to pkg.pr.new",
@@ -15,7 +16,7 @@ export default workflow({
   },
   jobs: {
     "pkg-pr": {
-      "runs-on": "ubuntu-latest",
+      ...utils.runsOn,
       steps: [
         {
           name: "Checkout code",

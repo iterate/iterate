@@ -1,5 +1,6 @@
 import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Onboarding Monitor",
@@ -16,8 +17,7 @@ export default workflow({
   },
   jobs: {
     "test-onboarding": {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      ...utils.runsOn,
       steps: [
         {
           name: "Checkout code",
