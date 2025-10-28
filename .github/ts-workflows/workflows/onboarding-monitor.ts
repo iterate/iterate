@@ -13,7 +13,7 @@ export default workflow({
         cron: "0 9 * * *",
       },
     ],
-    workflow_dispatch: null,
+    workflow_dispatch: {},
   },
   jobs: {
     "test-onboarding": {

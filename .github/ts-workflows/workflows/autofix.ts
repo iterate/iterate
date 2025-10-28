@@ -5,7 +5,7 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "autofix.ci",
   on: {
-    pull_request: null,
+    pull_request: {},
     push: {
       branches: ["main", "**/*autofix*", "*autofix*"],
     },

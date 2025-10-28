@@ -7,7 +7,7 @@ export default workflow({
     push: {
       branches: ["main"],
     },
-    pull_request: null,
+    pull_request: {},
   },
   jobs: {
     "lint-typecheck": {

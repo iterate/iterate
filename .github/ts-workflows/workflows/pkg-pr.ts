@@ -8,8 +8,8 @@ export default workflow({
     push: {
       branches: ["main"],
     },
-    pull_request: null,
-    workflow_dispatch: null,
+    pull_request: {},
+    workflow_dispatch: {},
   },
   permissions: {
     contents: "read",
