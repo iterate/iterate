@@ -135,6 +135,8 @@ async function setupDatabase() {
     if (res.exitCode !== 0) {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
+
+    await addSuperAdminUser(origin);
   };
 
   if (isDevelopment) {
@@ -192,8 +194,6 @@ async function setupDatabase() {
     });
 
     await migrate(role.connectionUrl.unencrypted);
-
-    await addSuperAdminUser(role.connectionUrl.unencrypted);
 
     return {
       ITERATE_POSTGRES: hyperdrive,

@@ -90,6 +90,9 @@ importers:
       '@octokit/rest':
         specifier: ^22.0.0
         version: 22.0.0
+      '@slack/web-api':
+        specifier: ^7.11.0
+        version: 7.11.0
       '@trpc/server':
         specifier: ^11.7.0
         version: 11.7.0(typescript@5.9.3)
