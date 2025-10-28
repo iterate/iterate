@@ -1,0 +1,77 @@
+import { workflow } from "@jlarky/gha-ts/workflow-types";
+
+export default workflow({
+  name: "Deploy Garple to Cloudflare",
+  on: {
+    push: {
+      branches: ["main"],
+      paths: ["estates/garple/**", ".github/workflows/deploy-garple.yml"],
+    },
+  },
+  permissions: {
+    contents: "read",
+    deployments: "write",
+  },
+  jobs: {
+    deploy: {
+      "runs-on":
+        "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@v4",
+        },
+        {
+          name: "Setup pnpm",
+          uses: "pnpm/action-setup@v4",
+        },
+        {
+          uses: "actions/setup-node@v4",
+          with: {
+            "node-version": 24,
+            cache: "pnpm",
+          },
+        },
+        {
+          name: "Install dependencies",
+          run: "pnpm install",
+        },
+        {
+          name: "Install Doppler CLI",
+          uses: "dopplerhq/cli-action@v2",
+        },
+        {
+          name: "Setup Doppler",
+          run: "doppler setup --config 'prd' --project os",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+        },
+        {
+          name: "Sync secrets",
+          run: "doppler secrets --json | jq -c 'with_entries(.value = .value.computed)' | doppler run -- pnpx wrangler secret bulk",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          "working-directory": "estates/garple/apps/website",
+        },
+        {
+          name: "Run D1 database migrations",
+          run: "pnpm db:migrate:production",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          "working-directory": "estates/garple",
+        },
+        {
+          name: "Deploy Garple",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+          },
+          run: "pnpm run deploy",
+          "working-directory": "estates/garple",
+        },
+      ],
+    },
+  },
+});

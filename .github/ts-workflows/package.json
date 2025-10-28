@@ -1,0 +1,21 @@
+{
+  "name": "@iterate-com/ts-workflows",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@jlarky/gha-ts": "^0.1.3",
+    "@trpc/server": "^11.7.0",
+    "dedent": "^1.7.0",
+    "trpc-cli": "^0.12.0",
+    "typescript": "^5.7.3",
+    "yaml": "^2.8.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/yaml": "1.9.7"
+  }
+}
