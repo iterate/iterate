@@ -17,7 +17,7 @@ export default workflow({
           with: {
             "fetch-depth": 0,
             token: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}",
-            ref: "${{ github.head_ref }}",
+            // ref: "${{ github.head_ref }}", // might want this if triggering for PRs
           },
         },
         {
