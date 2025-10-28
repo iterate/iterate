@@ -4,7 +4,7 @@ export default {
   name: "Deploy to Cloudflare",
   on: {
     push: {
-      branches: ["main"],
+      branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
     },
     workflow_dispatch: {
       inputs: {
