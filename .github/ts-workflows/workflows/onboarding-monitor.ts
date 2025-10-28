@@ -6,7 +6,7 @@ export default workflow({
   name: "Onboarding Monitor",
   on: {
     push: {
-      branches: ["main"],
+      branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
     },
     schedule: [
       {
