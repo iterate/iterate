@@ -37,7 +37,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
 
   const directSlackLogin = async () => {
     const result = await authClient.integrations.link.slackBot({
-      callbackURL: `/${organizationId}`,
+      callbackURL: `/${organizationId}/${estateId}/onboarding?step=slack_complete`,
       estateId: estateId,
     });
 

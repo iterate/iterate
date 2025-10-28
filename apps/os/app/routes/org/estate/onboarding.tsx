@@ -1,6 +1,6 @@
-import { useState } from "react";
-import { redirect, useLoaderData } from "react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { redirect, useLoaderData, useNavigate, useSearchParams } from "react-router";
+import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../backend/db/client.ts";
@@ -35,13 +35,52 @@ export async function loader({
 export default function EstateOnboarding() {
   const { organization, estateId, organizationId } = useLoaderData<typeof loader>();
   const trpc = useTRPC();
-  const [step, setStep] = useState<"confirm_org" | "slack">("confirm_org");
+  const [searchParams] = useSearchParams();
+  const initialStep = searchParams.get("step") as
+    | "confirm_org"
+    | "slack"
+    | "slack_complete"
+    | undefined;
 
+  const [step, setStep] = useState<"confirm_org" | "slack" | "slack_complete">(
+    initialStep || "confirm_org",
+  );
   const completeOnboarding = useMutation(
     trpc.estate.completeUserOnboardingStep.mutationOptions({
       onError: (error) => toast.error(error.message),
     }),
   );
+  const navigate = useNavigate();
+
+  const { data, isFetching } = useQuery(
+    trpc.integrations.list.queryOptions(
+      {
+        estateId: estateId,
+      },
+      {
+        enabled: step === "slack_complete",
+      },
+    ),
+  );
+
+  // Filter out Slack connector for trial estates since they're using Slack Connect
+  const integrations = (data?.oauthIntegrations || []).filter(
+    (integration) => integration.id === "slack-bot" && integration.isConnected,
+  );
+
+  useEffect(() => {
+    if (isFetching) return;
+    if (integrations.length === 0) {
+      navigate(`/${organizationId}/${estateId}/onboarding?step=slack`);
+      return;
+    }
+    if (step === "slack_complete") {
+      completeOnboarding.mutate(
+        { estateId, step: "slack" },
+        { onSuccess: () => navigate(`/${organizationId}/${estateId}`) },
+      );
+    }
+  }, [initialStep, isFetching, integrations.length]);
 
   return (
     <>
