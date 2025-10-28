@@ -39,6 +39,7 @@ jobs:
       - name: Run Onboarding Tests
         id: tests
         uses: nick-fields/retry@v3
+        working-directory: apps/os
         with:
           timeout_minutes: 15
           max_attempts: 3

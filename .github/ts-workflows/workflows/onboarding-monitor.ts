@@ -1,5 +1,5 @@
 import dedent from "dedent";
-import { type Step, workflow } from "@jlarky/gha-ts/workflow-types";
+import { workflow } from "@jlarky/gha-ts/workflow-types";
 import deployWorkflow from "./deploy.ts";
 
 export default workflow({
@@ -60,6 +60,7 @@ export default workflow({
           name: "Run Onboarding Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",
+          "working-directory": "apps/os",
           with: {
             timeout_minutes: 15,
             max_attempts: 3,
