@@ -10,7 +10,7 @@ import * as schema from "../db/schema.ts";
 import { env, isNonProd } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
-import { integrationsPlugin } from "./integrations.ts";
+import { integrationsPlugin, SLACK_USER_AUTH_SCOPES } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
 
 export const getAuth = (db: DB) =>
@@ -108,6 +108,12 @@ export const getAuth = (db: DB) =>
         ],
         clientId: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
+      },
+      slack: {
+        clientId: env.SLACK_CLIENT_ID,
+        clientSecret: env.SLACK_CLIENT_SECRET,
+        scope: SLACK_USER_AUTH_SCOPES,
+        redirectURI: `${env.VITE_PUBLIC_URL}/api/auth/callback/slack`,
       },
     },
     advanced: {

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
 import { Card, CardContent } from "../../../../components/ui/card.tsx";

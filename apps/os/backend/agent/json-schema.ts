@@ -1,4 +1,4 @@
-import { prettifyError, z } from "zod/v4";
+import { prettifyError, z } from "zod";
 import type { AnyProcedure, AnyTRPCRouter } from "@trpc/server";
 import { constructMergeSchema } from "../utils/schema-helpers.ts";
 import { logger } from "../tag-logger.ts";

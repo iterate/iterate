@@ -8,7 +8,7 @@ import {
   type ZodObject,
   type ZodType,
   type ZodUnion,
-} from "zod/v4";
+} from "zod";
 import { logger } from "../tag-logger.ts";
 import type { BaseJSONSchema, SchemaBranded } from "./schema-utils.ts";
 

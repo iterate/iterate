@@ -1,6 +1,6 @@
 import { expectTypeOf } from "expect-type";
 import { describe, expect, it } from "vitest";
-import z from "zod/v4";
+import z from "zod";
 import { typedParse } from "./schema-helpers.ts";
 
 describe("typedParse", () => {

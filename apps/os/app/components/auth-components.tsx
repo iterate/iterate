@@ -1,4 +1,3 @@
-import { toast } from "sonner";
 import { useSearchParams } from "react-router";
 import { MailIcon } from "lucide-react";
 import { authClient } from "../lib/auth-client.ts";
@@ -15,7 +14,7 @@ export function LoginProviders() {
 
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: redirectUrl || "/", // Redirect to home after login
+        callbackURL: redirectUrl || "/",
       });
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
@@ -25,18 +24,10 @@ export function LoginProviders() {
   const handleSlackSignIn = async () => {
     try {
       console.log("🚀 Attempting Slack sign-in...");
-      const result = await authClient.integrations.directLoginWithSlack({
-        query: {
-          callbackURL: redirectUrl || "/",
-        },
+      await authClient.signIn.social({
+        provider: "slack",
+        callbackURL: redirectUrl || "/",
       });
-
-      if (!result || !("url" in result)) {
-        toast.error("Failed to sign in with Slack");
-        return;
-      }
-
-      window.location.href = result.url.toString();
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }

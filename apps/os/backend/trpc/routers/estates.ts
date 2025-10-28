@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc.ts";
 import { organizationUserMembership } from "../../db/schema.ts";

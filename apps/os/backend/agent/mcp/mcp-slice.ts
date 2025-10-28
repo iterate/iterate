@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { defineAgentCoreSlice } from "../agent-core.ts";
 import {
   agentCoreBaseEventFields,

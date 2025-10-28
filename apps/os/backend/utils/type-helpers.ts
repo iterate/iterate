@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export type Branded<Brand extends string, Value = string> = Value & z.$brand<Brand>;
 

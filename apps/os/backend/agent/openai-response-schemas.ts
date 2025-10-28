@@ -6,7 +6,7 @@ import type {
   Tool,
   WebSearchTool,
 } from "openai/resources/responses/responses.mjs";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { createZodSchemaThatSatisfies } from "../utils/type-helpers.ts";
 
 // These schemas are designed to match OpenAI's Responses API types

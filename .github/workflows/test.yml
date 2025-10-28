@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    runs-on: "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,7 +19,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 24
-          cache: "pnpm"
+          cache: pnpm
 
       - name: Install dependencies
         run: pnpm install
@@ -28,7 +28,7 @@ jobs:
         uses: dopplerhq/cli-action@v2
 
       - name: Setup Doppler
-        run: doppler setup --config 'dev' --project os
+        run: doppler setup --config dev --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
 

@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   deploy-os:
-    runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    runs-on: "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     steps:
       - id: get_stage
         name: Get stage # if workflow_dispatch, inputs.stage is set, otherwise use 'stg'
@@ -55,7 +55,7 @@ jobs:
         working-directory: apps/os
 
   deploy-website:
-    runs-on: "${{ github.repository_owner == 'iterate-com' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
+    runs-on: "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}"
     if: inputs.stage == 'prd'
     steps:
       - id: get_stage
