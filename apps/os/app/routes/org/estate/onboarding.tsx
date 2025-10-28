@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { redirect, useLoaderData, useNavigate, useSearchParams } from "react-router";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { eq } from "drizzle-orm";
 import { getDb } from "../../../../backend/db/client.ts";
@@ -80,7 +80,16 @@ export default function EstateOnboarding() {
         { onSuccess: () => navigate(`/${organizationId}/${estateId}`) },
       );
     }
-  }, [initialStep, isFetching, integrations.length]);
+  }, [
+    initialStep,
+    isFetching,
+    integrations.length,
+    estateId,
+    organizationId,
+    navigate,
+    completeOnboarding,
+    step,
+  ]);
 
   return (
     <>

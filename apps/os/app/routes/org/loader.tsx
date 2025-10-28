@@ -37,7 +37,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const db = getDb();
   const auth = getAuth(db);
 
-  // Step 1: Check for session, redirect to login if no session
+  // Check for session, redirect to login if no session
   const session = await auth.api.getSession({
     headers: request.headers,
   });
@@ -46,10 +46,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Step 3: Load all organizations and check onboarding status in parallel
-  // This is more efficient than separate queries since we need all orgs anyway
-  const requestUrl = new URL(request.url);
-  // Compute onboarding path for the first estate (used only as a redirect target)
   const firstEstate = await db.query.estate.findFirst({
     where: eq(schema.estate.organizationId, organizationId),
     orderBy: (t, { asc }) => [asc(t.createdAt)],
@@ -58,9 +54,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     // No estate for this org; redirect to home
     throw redirect("/");
   }
-  // Treat ANY estate onboarding route as an onboarding page, not just the first estate
-  const parts = requestUrl.pathname.split("/").filter(Boolean);
-
   const userOrganizations = await getUserOrganizations(db, session.user.id);
 
   // Check if user has access to the requested organization
@@ -119,7 +112,6 @@ export default function OrganizationLayout({ loaderData }: Route.ComponentProps)
   );
 }
 
-// Error boundary to display access errors nicely
 // Error boundary to display access errors nicely
 export function ErrorBoundary() {
   const error = useRouteError();
