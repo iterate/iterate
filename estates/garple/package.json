@@ -11,16 +11,16 @@
     "@uidotdev/usehooks": "^2.4.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "drizzle-orm": "^0.44.6",
-    "hono": "^4.10.1",
-    "lucide-react": "0.546.0",
+    "drizzle-orm": "^0.44.7",
+    "hono": "^4.10.3",
+    "lucide-react": "0.548.0",
     "posthog-js": "^1.275.1",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-router": "7.9.4",
-    "resend": "^6.1.2",
+    "resend": "^6.3.0",
     "stripe": "^19.1.0",
-    "superjson": "^2.2.2",
+    "superjson": "^2.2.3",
     "tailwind-merge": "^3.3.1",
     "typeid-js": "^1.2.0",
     "zod": "^4.1.12"
@@ -45,12 +45,12 @@
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "autoprefixer": "^10.4.21",
-    "drizzle-kit": "^0.31.5",
+    "drizzle-kit": "^0.31.6",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "typescript": "^5.9.3",
-    "vite": "^7.1.11",
+    "vite": "^7.1.12",
     "vitest": "^3.2.4",
-    "wrangler": "^4.42.2"
+    "wrangler": "^4.45.1"
   }
 }
