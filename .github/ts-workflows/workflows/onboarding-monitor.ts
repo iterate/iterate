@@ -72,7 +72,6 @@ export default workflow({
           },
           run: dedent`
             WEBHOOK_URL=$(doppler secrets get GITHUB_E2E_TEST_FAIL_SLACK_WEBHOOK --plain)
-
             curl -X POST "$WEBHOOK_URL" \
               -H 'Content-Type: application/json' \
               -d '{
