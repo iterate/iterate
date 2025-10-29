@@ -10,11 +10,9 @@ import {
   getUserOrganizations,
 } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
-import {
-  createStripeCustomerAndSubscriptionForOrganization,
-  stripeClient,
-} from "../../integrations/stripe/stripe.ts";
+import { stripeClient } from "../../integrations/stripe/stripe.ts";
 import { logger } from "../../tag-logger.ts";
+import { createOrganizationAndEstate } from "../../org-utils.ts";
 
 type SlackUserProperties = {
   discoveredInChannels: string[] | undefined;
@@ -56,54 +54,18 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Create the organization
-      const [organization] = await ctx.db
-        .insert(schema.organization)
-        .values({ name: input.name })
-        .returning();
-
-      if (!organization) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create organization",
-        });
-      }
-
-      // Make the current user the owner
-      await ctx.db.insert(schema.organizationUserMembership).values({
-        organizationId: organization.id,
-        userId: ctx.user.id,
-        role: "owner",
+      const created = await createOrganizationAndEstate(ctx.db, {
+        organizationName: input.name,
+        ownerUserId: ctx.user.id,
+        estateName: `${input.name} Estate`,
       });
+      const organization = created.organization;
+      const estate = created.estate;
 
-      // Create a default estate for this organization
-      const [estate] = await ctx.db
-        .insert(schema.estate)
-        .values({
-          name: `${input.name} Estate`,
-          organizationId: organization.id,
-        })
-        .returning();
-
-      if (!estate) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create default estate",
-        });
-      }
-
-      // Create Stripe customer and subscribe in the background (non-blocking)
-      waitUntil(
-        createStripeCustomerAndSubscriptionForOrganization(ctx.db, organization, ctx.user).catch(
-          () => {
-            // Error is already logged in the helper function
-          },
-        ),
-      );
-
+      // Return created resources
       return {
-        organization,
-        estate,
+        organization: organization,
+        estate: estate,
       };
     }),
 
