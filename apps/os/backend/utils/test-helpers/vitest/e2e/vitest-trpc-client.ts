@@ -1,6 +1,6 @@
 // Creates a TRPC client that can be used in vitest tests running in Node.js
 
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../../../../trpc/root";
 
 // TODO this needs a better place and obvs depends on which app we want to hit etc.
@@ -54,7 +54,9 @@ export interface VitestTrpcClientConfig {
  * const result = await client.agents.list.query();
  * ```
  */
-export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
+export function makeVitestTrpcClient(
+  config: VitestTrpcClientConfig = {},
+): TRPCClient<AppRouter> & { url: string } {
   const {
     url = _getDeployedURI() + "/api/trpc",
     authHeaders = {},
