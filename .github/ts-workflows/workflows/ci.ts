@@ -4,6 +4,10 @@ import * as utils from "../utils/index.ts";
 
 export default {
   name: "CI",
+  permissions: {
+    contents: "read",
+    deployments: "write",
+  },
   on: {
     push: {
       branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
