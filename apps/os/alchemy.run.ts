@@ -355,4 +355,7 @@ if (process.env.GITHUB_OUTPUT) {
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
 // await uploadSourcemaps();
+
+console.log("Finalizing app");
 await app.finalize();
+console.log("Deployment complete");
