@@ -25,7 +25,7 @@ export interface VitestTrpcClientConfig {
   /**
    * Enable debug logging for requests and responses
    */
-  debug?: boolean;
+  log?: (...args: any[]) => void;
 
   /**
    * Additional headers to include in all requests
@@ -58,7 +58,7 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
   const {
     url = _getDeployedURI() + "/api/trpc",
     authHeaders = {},
-    debug = false,
+    log = () => {},
     headers: additionalHeaders = {},
     fetchOptions = {},
   } = config;
@@ -87,19 +87,17 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
     const body = init?.body;
 
     // Log request details if debug is enabled
-    if (debug) {
-      console.log(`[TRPC Request] ${method} ${url}`);
-      if (Object.keys(allHeaders).length > 0) {
-        console.log(`[TRPC Headers]`, allHeaders);
-      }
-      if (body) {
-        try {
-          const bodyString = typeof body === "string" ? body : JSON.stringify(body);
-          const parsedBody = JSON.parse(bodyString);
-          console.log(`[TRPC Request Body]`, JSON.stringify(parsedBody, null, 2));
-        } catch {
-          console.log(`[TRPC Request Body]`, body);
-        }
+    log(`[TRPC Request] ${method} ${url}`);
+    if (Object.keys(allHeaders).length > 0) {
+      log(`[TRPC Headers]`, allHeaders);
+    }
+    if (body) {
+      try {
+        const bodyString = typeof body === "string" ? body : JSON.stringify(body);
+        const parsedBody = JSON.parse(bodyString);
+        log(`[TRPC Request Body]`, JSON.stringify(parsedBody, null, 2));
+      } catch {
+        log(`[TRPC Request Body]`, body);
       }
     }
 
@@ -116,35 +114,26 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
 
       // Log the response body if it's not JSON, temporarily
       const responseClone = response.clone();
-      const responseData = await responseClone.text();
+      const responseText = await responseClone.text();
       try {
-        JSON.parse(responseData);
+        JSON.parse(responseText);
       } catch {
-        console.log(`[TRPC Response didn't return JSON]`, responseData);
+        console.log(`[TRPC Response didn't return JSON]`, responseText);
       }
 
-      if (debug) {
-        // Clone response to read body for logging
-        const responseClone = response.clone();
-        try {
-          const responseData = await responseClone.json();
-          console.log(`[TRPC Response] ${response.status} ${response.statusText} (${duration}ms)`);
-          console.log(`[TRPC Response Body]`, JSON.stringify(responseData, null, 2));
+      try {
+        const responseData = JSON.parse(responseText);
+        log(`[TRPC Response] ${response.status} ${response.statusText} (${duration}ms)`);
+        log(`[TRPC Response Body]`, JSON.stringify(responseData, null, 2));
 
-          // Log errors specifically
-          if (!response.ok || (responseData as any).error) {
-            console.error(
-              `[TRPC Error] ${method} ${url} failed:`,
-              (responseData as any).error || responseData,
-            );
-          }
-        } catch (_e) {
-          if (debug) {
-            console.log(
-              `[TRPC Response] ${response.status} ${response.statusText} (${duration}ms) - Non-JSON response`,
-            );
-          }
+        // Log errors specifically
+        if (!response.ok || (responseData as any).error) {
+          log(`[TRPC Error] ${method} ${url} failed:`, (responseData as any).error || responseData);
         }
+      } catch (_e) {
+        log(
+          `[TRPC Response] ${response.status} ${response.statusText} (${duration}ms) - Non-JSON response`,
+        );
       }
 
       return response;
@@ -155,24 +144,15 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
     }
   };
 
-  // Create links array
-  const links = [];
-
-  if (debug) {
-    links.push(loggerLink({ enabled: () => true }));
-  }
-
-  links.push(
-    httpBatchLink({
-      url,
-      methodOverride: "POST",
-      fetch: customFetch as any,
-    }),
-  );
-
   // Create and return the TRPC client
   return createTRPCClient<AppRouter>({
-    links,
+    links: [
+      httpBatchLink({
+        url,
+        methodOverride: "POST",
+        fetch: customFetch as any,
+      }),
+    ],
   });
 }
 

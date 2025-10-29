@@ -52,6 +52,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
     timeout: 15 * 60 * 1000, // 15 minutes total timeout
   },
   async () => {
+    const trpcLogs: unknown[][] = [];
     // Parse and validate environment
     const env = TestEnv.parse({
       VITE_PUBLIC_URL: process.env.VITE_PUBLIC_URL,
@@ -112,6 +113,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
         headers: {
           cookie: sessionCookies,
         },
+        log: (...args) => trpcLogs.push(["adminTrpc", ...args]),
       });
 
       const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
@@ -176,6 +178,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
         headers: {
           cookie: impersonationCookies,
         },
+        log: (...args) => trpcLogs.push(["userTrpc", ...args]),
       });
 
       // Step 5: List available GitHub repos and verify our new repo is there
@@ -276,6 +279,9 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       console.log("✅ Bot replied successfully!");
       console.log("End-to-end test completed successfully!");
+    } catch {
+      console.log("Error occurred, here are the trpc request logs:");
+      trpcLogs.forEach((log) => console.log(...log));
     } finally {
       if (createdRepoFullName) {
         console.log(`Cleaning up: Deleting repository ${createdRepoFullName}...`);
