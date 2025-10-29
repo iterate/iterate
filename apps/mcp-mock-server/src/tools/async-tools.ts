@@ -39,3 +39,4 @@ export function registerAsyncTools(server: McpServer) {
     },
   );
 }
+

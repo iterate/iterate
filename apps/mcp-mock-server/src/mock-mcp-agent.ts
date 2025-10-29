@@ -17,3 +17,4 @@ export class MockMCPAgent extends McpAgent<Env> {
     registerAsyncTools(this.server);
   }
 }
+
