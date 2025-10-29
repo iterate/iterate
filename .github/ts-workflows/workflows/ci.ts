@@ -20,6 +20,7 @@ export default {
         stage: {
           description:
             "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+          default: "prd",
           required: true,
           type: "string",
         },
@@ -41,7 +42,7 @@ export default {
      * and then pass those values as inputs to the reusable workflow.
      */
     variables: {
-      ...utils.runsOn,
+      "runs-on": "ubuntu-latest",
       steps: [
         {
           id: "get_env",
