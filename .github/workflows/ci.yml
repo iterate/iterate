@@ -22,7 +22,7 @@ jobs:
     steps:
       - id: get_env
         name: Get environment variables
-        run: echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT
+        run: echo stage="${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
   deploy:
@@ -33,6 +33,7 @@ jobs:
     with:
       stage: ${{ needs.variables.outputs.stage }}
   onboarding_monitor:
+    if: needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'
     uses: ./.github/workflows/onboarding-monitor.yml
     secrets: inherit
     needs:
