@@ -22,7 +22,7 @@ jobs:
     steps:
       - id: get_env
         name: Get environment variables
-        run: echo stage="${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
+        run: echo stage=${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
   deploy:
