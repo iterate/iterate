@@ -16,7 +16,7 @@ export default {
       outputs: {
         worker_url: {
           description: "The URL of the deployed worker.",
-          value: "${{ steps.deploy_os.outputs.worker_url }}",
+          value: "${{ jobs.deploy-os.outputs.worker_url }}",
         },
       },
     },
@@ -40,6 +40,9 @@ export default {
   jobs: {
     "deploy-os": {
       ...utils.runsOn,
+      outputs: {
+        worker_url: "${{ steps.alchemy_deploy.outputs.worker_url }}",
+      },
       steps: [
         {
           id: "get_stage",
@@ -84,8 +87,8 @@ export default {
           },
         },
         {
-          id: "deploy_os",
-          name: "Deploy OS",
+          id: "alchemy_deploy",
+          name: "Deploy using Alchemy",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             STAGE: "${{ steps.get_stage.outputs.stage }}",
