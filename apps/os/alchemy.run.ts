@@ -319,14 +319,11 @@ async function setupStorage() {
   }
 }
 
-const subdomain = `os-${app.stage}`
-  .replace(/^os-prd$/, "os") // production domain is just "os"
-  .replace(/^os-stg$/, "os-staging"); // staging domain is "os-staging" for historical reasons
-
-const domains = [
-  `${subdomain}.iterate.com`, // main domain
-  `${subdomain}.iterateproxy.com`, // proxy, used for callback urls to ourselves, sometimes
-];
+const domain = isProduction
+  ? ["os.iterate.com", "os.iterateproxy.com"]
+  : isStaging
+    ? ["os-staging.iterate.com", "os-staging.iterateproxy.com"]
+    : [];
 
 async function deployWorker() {
   const worker = await ReactRouter("os", {
@@ -337,7 +334,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    domains,
+    domains: domain,
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
     crons: ["0 0 * * *"],
@@ -354,7 +351,7 @@ async function deployWorker() {
 }
 
 if (process.env.GITHUB_OUTPUT) {
-  const workerUrl = `https://${domains[0]}`;
+  const workerUrl = `https://${domain[0]}`;
   console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
 }
@@ -365,4 +362,5 @@ await uploadSourcemaps();
 
 await app.finalize();
 console.log("Deployment complete");
-process.exit(0);
+
+if (!app.local) process.exit(0);

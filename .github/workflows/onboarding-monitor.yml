@@ -17,6 +17,8 @@ on:
 jobs:
   test-onboarding:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    env:
+      WORKER_URL: ${{ inputs.worker_url }}
     steps:
       - id: get_stage
         name: Get stage
@@ -35,7 +37,7 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os
+        run: doppler setup --config ${{ inputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Run Onboarding Tests
@@ -47,8 +49,9 @@ jobs:
           retry_wait_seconds: 30
           command: |-
             cd apps/os
-            doppler run --config ${{ steps.get_stage.outputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
+            doppler run --config ${{ inputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
         env:
+          WORKER_URL: ${{ inputs.worker_url }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
           VITEST_RUN_ONBOARDING_TEST: "true"
       - name: Notify Slack on Failure

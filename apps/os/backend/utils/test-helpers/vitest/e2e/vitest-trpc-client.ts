@@ -54,9 +54,7 @@ export interface VitestTrpcClientConfig {
  * const result = await client.agents.list.query();
  * ```
  */
-export function makeVitestTrpcClient(
-  config: VitestTrpcClientConfig = {},
-): TRPCClient<AppRouter> & { url: string } {
+export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}): TRPCClient<AppRouter> {
   const {
     url = _getDeployedURI() + "/api/trpc",
     authHeaders = {},
@@ -90,9 +88,6 @@ export function makeVitestTrpcClient(
 
     // Log request details if debug is enabled
     log(`[TRPC Request] ${method} ${url}`);
-    if (Object.keys(allHeaders).length > 0) {
-      log(`[TRPC Headers]`, allHeaders);
-    }
     if (body) {
       try {
         const bodyString = typeof body === "string" ? body : JSON.stringify(body);
@@ -156,7 +151,8 @@ export function makeVitestTrpcClient(
       }),
     ],
   });
-  return Object.assign(client, { url });
+
+  return client;
 }
 
 /**
@@ -170,72 +166,72 @@ export function makeVitestTrpcClient(
  * });
  * ```
  */
-export function makeServiceTrpcClient(
-  config: VitestTrpcClientConfig & {
-    serviceAuthToken: string;
-    impersonateUserId?: string;
-    impersonateUserEmail?: string;
-  },
-) {
-  const { serviceAuthToken, impersonateUserId, impersonateUserEmail, ...rest } = config;
+// export function makeServiceTrpcClient(
+//   config: VitestTrpcClientConfig & {
+//     serviceAuthToken: string;
+//     impersonateUserId?: string;
+//     impersonateUserEmail?: string;
+//   },
+// ) {
+//   const { serviceAuthToken, impersonateUserId, impersonateUserEmail, ...rest } = config;
 
-  const authHeaders: Record<string, string> = {
-    "x-iterate-service-auth-token": serviceAuthToken,
-  };
+//   const authHeaders: Record<string, string> = {
+//     "x-iterate-service-auth-token": serviceAuthToken,
+//   };
 
-  const baseClient = makeVitestTrpcClient({
-    ...rest,
-    authHeaders: {
-      ...authHeaders,
-      ...rest.authHeaders,
-    },
-  });
+//   const baseClient = makeVitestTrpcClient({
+//     ...rest,
+//     authHeaders: {
+//       ...authHeaders,
+//       ...rest.authHeaders,
+//     },
+//   });
 
-  // If no impersonation is needed, return the base client
-  if (!impersonateUserId && !impersonateUserEmail) {
-    return baseClient;
-  }
+//   // If no impersonation is needed, return the base client
+//   if (!impersonateUserId && !impersonateUserEmail) {
+//     return baseClient;
+//   }
 
-  // Create a proxy that adds __auth to input for all calls
-  function createImpersonationProxy(target: any, path: string[] = []): any {
-    return new Proxy(target, {
-      get(target, prop: string | symbol) {
-        if (typeof prop === "symbol") {
-          return target[prop];
-        }
+//   // Create a proxy that adds __auth to input for all calls
+//   function createImpersonationProxy(target: any, path: string[] = []): any {
+//     return new Proxy(target, {
+//       get(target, prop: string | symbol) {
+//         if (typeof prop === "symbol") {
+//           return target[prop];
+//         }
 
-        const newPath = [...path, prop];
-        const value = target[prop];
+//         const newPath = [...path, prop];
+//         const value = target[prop];
 
-        // If this is a function (likely query/mutation), wrap it
-        if (typeof value === "function") {
-          return function (this: any, input?: any) {
-            // Add __auth object to input, can be overridden by the input
-            const authInput = {
-              ...input,
-              __auth: {
-                ...(impersonateUserId && { impersonateUserId }),
-                ...(impersonateUserEmail && { impersonateUserEmail }),
-                ...(input?.__auth || {}),
-              },
-            };
+//         // If this is a function (likely query/mutation), wrap it
+//         if (typeof value === "function") {
+//           return function (this: any, input?: any) {
+//             // Add __auth object to input, can be overridden by the input
+//             const authInput = {
+//               ...input,
+//               __auth: {
+//                 ...(impersonateUserId && { impersonateUserId }),
+//                 ...(impersonateUserEmail && { impersonateUserEmail }),
+//                 ...(input?.__auth || {}),
+//               },
+//             };
 
-            return value.call(this, authInput);
-          };
-        }
+//             return value.call(this, authInput);
+//           };
+//         }
 
-        // If this is an object, continue proxying
-        if (value && typeof value === "object") {
-          return createImpersonationProxy(value, newPath);
-        }
+//         // If this is an object, continue proxying
+//         if (value && typeof value === "object") {
+//           return createImpersonationProxy(value, newPath);
+//         }
 
-        return value;
-      },
-    });
-  }
+//         return value;
+//       },
+//     });
+//   }
 
-  return createImpersonationProxy(baseClient);
-}
+//   return createImpersonationProxy(baseClient);
+// }
 
 // export const makeTrpcClientWithMockOauth = async (_mockUserEmail: string, platformUrl: string) => {
 // return makeVitestTrpcClient({

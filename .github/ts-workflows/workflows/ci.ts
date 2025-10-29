@@ -46,7 +46,7 @@ export default {
           name: "Get environment variables",
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
           run: dedent`
-            echo \"stage=\${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT
+            echo stage=\${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
           `,
         },
       ],
@@ -57,7 +57,7 @@ export default {
     deploy: {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
-      // @ts-expect-error - is jlarky wrong here?
+      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
@@ -66,7 +66,7 @@ export default {
     onboarding_monitor: {
       if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
       uses: "./.github/workflows/onboarding-monitor.yml",
-      // @ts-expect-error - is jlarky wrong here?
+      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       needs: ["variables", "deploy"],
       with: {

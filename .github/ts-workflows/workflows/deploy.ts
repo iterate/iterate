@@ -35,11 +35,6 @@ export default {
       },
       steps: [
         {
-          id: "get_stage",
-          name: "Get stage",
-          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
-        },
-        {
           name: "Checkout code",
           uses: "actions/checkout@v4",
         },
@@ -64,7 +59,7 @@ export default {
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os",
+          run: "doppler setup --config ${{ inputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
@@ -81,7 +76,7 @@ export default {
           name: "Deploy using Alchemy",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            STAGE: "${{ steps.get_stage.outputs.stage }}",
+            STAGE: "${{ inputs.stage }}",
           },
           run: "pnpm run deploy",
           "working-directory": "apps/os",
@@ -93,11 +88,6 @@ export default {
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       if: "inputs.stage == 'prd'",
       steps: [
-        {
-          id: "get_stage",
-          name: "Get stage",
-          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
-        },
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
@@ -123,7 +113,7 @@ export default {
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os",
+          run: "doppler setup --config ${{ inputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
