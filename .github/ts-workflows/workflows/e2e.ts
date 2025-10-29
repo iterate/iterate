@@ -14,7 +14,7 @@ export default workflow({
           type: "string",
         },
         worker_url: {
-          description: "The deployed url to run the onboarding tests against.",
+          description: "The deployed url to run the e2e tests against.",
           required: true,
           type: "string",
         },
@@ -23,7 +23,7 @@ export default workflow({
     schedule: [{ cron: "0 9 * * *" }],
   },
   jobs: {
-    "test-onboarding": {
+    run: {
       ...utils.runsOn,
       env: {
         WORKER_URL: "${{ inputs.worker_url }}",
@@ -61,7 +61,7 @@ export default workflow({
           },
         },
         {
-          name: "Run Onboarding Tests",
+          name: "Run E2E Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",
           with: {
@@ -76,7 +76,6 @@ export default workflow({
           env: {
             WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            VITEST_RUN_ONBOARDING_TEST: "true",
           },
         },
         {
