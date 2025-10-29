@@ -12,9 +12,6 @@ export default {
     push: {
       branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
     },
-    // pull_request: {
-    //   types: ["opened", "synchronize", "reopened"],
-    // },
     workflow_dispatch: {
       inputs: {
         stage: {
@@ -42,11 +39,12 @@ export default {
      * and then pass those values as inputs to the reusable workflow.
      */
     variables: {
-      "runs-on": "ubuntu-latest",
+      ...utils.runsOnUbuntuLatest,
       steps: [
         {
           id: "get_env",
           name: "Get environment variables",
+          // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
           run: dedent`
             echo \"stage=\${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT
           `,
