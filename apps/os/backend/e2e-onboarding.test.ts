@@ -279,7 +279,8 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       console.log("✅ Bot replied successfully!");
       console.log("End-to-end test completed successfully!");
-    } catch {
+    } catch (error) {
+      console.log(inspect(error, { depth: null, colors: true }));
       console.log("Error occurred, here are the trpc request logs:");
       trpcLogs.forEach((log) => console.log(...log));
     } finally {
