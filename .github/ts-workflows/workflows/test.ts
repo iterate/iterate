@@ -1,4 +1,5 @@
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Test",
@@ -6,12 +7,11 @@ export default workflow({
     push: {
       branches: ["main"],
     },
-    pull_request: null,
+    pull_request: {},
   },
   jobs: {
     test: {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      ...utils.runsOn,
       steps: [
         {
           name: "Checkout code",
