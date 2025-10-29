@@ -25,12 +25,10 @@ export default workflow({
   jobs: {
     "test-onboarding": {
       ...utils.runsOn,
+      env: {
+        WORKER_URL: "${{ inputs.worker_url }}",
+      },
       steps: [
-        {
-          id: "get_stage",
-          name: "Get stage",
-          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
-        },
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
@@ -57,7 +55,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os",
+          run: "doppler setup --config ${{ inputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
@@ -72,7 +70,7 @@ export default workflow({
             retry_wait_seconds: 30,
             command: dedent`
               cd apps/os
-              doppler run --config \${{ steps.get_stage.outputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
+              doppler run --config \${{ inputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
             `,
           },
           env: {

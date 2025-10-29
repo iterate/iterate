@@ -57,7 +57,7 @@ export default {
     deploy: {
       uses: "./.github/workflows/deploy.yml",
       needs: ["variables"],
-      // @ts-expect-error - is jlarky wrong here?
+      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
@@ -65,7 +65,7 @@ export default {
     },
     onboarding_monitor: {
       uses: "./.github/workflows/onboarding-monitor.yml",
-      // @ts-expect-error - is jlarky wrong here?
+      // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       needs: ["variables", "deploy"],
       with: {
