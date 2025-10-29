@@ -13,6 +13,7 @@ import { getDb, schema } from "../../../backend/db/client.ts";
 import { getAuth } from "../../../backend/auth/auth.ts";
 import { getUserOrganizations } from "../../../backend/trpc/trpc.ts";
 import { type UserRole } from "../../../backend/db/schema.ts";
+import { isEstateOnboardingRequired } from "../../../backend/onboarding-utils.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { authClient } from "../../lib/auth-client.ts";
@@ -37,7 +38,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const db = getDb();
   const auth = getAuth(db);
 
-  // Step 1: Check for session, redirect to login if no session
+  // Check for session, redirect to login if no session
   const session = await auth.api.getSession({
     headers: request.headers,
   });
@@ -46,7 +47,17 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Step 3: Load all organizations and check onboarding status in parallel
+  // Check if organization has an estate
+  const firstEstate = await db.query.estate.findFirst({
+    where: eq(schema.estate.organizationId, organizationId),
+    orderBy: (t, { asc }) => [asc(t.createdAt)],
+  });
+  if (!firstEstate) {
+    // No estate for this org; redirect to home
+    throw redirect("/");
+  }
+
+  // Load all organizations and check onboarding status in parallel
   // This is more efficient than separate queries since we need all orgs anyway
   const requestUrl = new URL(request.url);
   const onboardingPath = `/${organizationId}/onboarding`;
@@ -55,9 +66,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     requestUrl.pathname.includes("/integrations/redirect") ||
     requestUrl.pathname.includes("/integrations/callback");
 
-  const [userOrganizations, isOnboarded] = await Promise.all([
+  const [userOrganizations, onboardingRequired] = await Promise.all([
     getUserOrganizations(db, session.user.id),
-    isOnboardingRoute ? Promise.resolve(true) : isOrganizationOnboarded(db, organizationId),
+    isOnboardingRoute ? Promise.resolve(false) : isEstateOnboardingRequired(db, firstEstate.id),
   ]);
 
   // Check if user has access to the requested organization
@@ -92,7 +103,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     updatedAt: organization.updatedAt.toISOString(),
   };
 
-  if (!isOnboardingRoute && !isIntegrationsRoute && !isOnboarded) {
+  if (!isOnboardingRoute && !isIntegrationsRoute && onboardingRequired) {
     throw redirect(onboardingPath);
   }
 
@@ -120,7 +131,6 @@ export default function OrganizationLayout({ loaderData }: Route.ComponentProps)
   );
 }
 
-// Error boundary to display access errors nicely
 // Error boundary to display access errors nicely
 export function ErrorBoundary() {
   const error = useRouteError();
@@ -195,34 +205,4 @@ export function ErrorBoundary() {
       </div>
     </DashboardLayout>
   );
-}
-
-async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizationId: string) {
-  const organization = await db.query.organization.findFirst({
-    where: eq(schema.organization.id, organizationId),
-    with: {
-      estates: {
-        with: {
-          estateAccountsPermissions: {
-            with: {
-              account: true,
-            },
-          },
-          slackChannelEstateOverrides: true,
-        },
-      },
-    },
-  });
-
-  const hasSlackConnected = organization?.estates.some((estate) => {
-    const hasSlackBotAccount = estate.estateAccountsPermissions.some(
-      (permission) => permission.account.providerId === "slack-bot",
-    );
-
-    const hasSlackConnectTrial = estate.slackChannelEstateOverrides.length > 0;
-
-    return hasSlackBotAccount || hasSlackConnectTrial;
-  });
-
-  return hasSlackConnected ?? false;
 }

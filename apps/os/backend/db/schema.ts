@@ -1,4 +1,12 @@
-import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  timestamp,
+  text,
+  uniqueIndex,
+  jsonb,
+  index,
+  bigserial,
+} from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
 import { relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
@@ -548,3 +556,47 @@ export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one 
     references: [estate.id],
   }),
 }));
+
+// Estate events (append-only, immutable)
+export const estateOnboardingEvent = pgTable(
+  "estate_onboarding_event",
+  (t) => ({
+    id: iterateId("onbe"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    eventType: t.text().notNull(),
+    category: t.text({ enum: ["system", "user"] }).notNull(),
+    detail: t.text(),
+    metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.estateId, t.eventType),
+    index().on(t.estateId),
+    index().on(t.estateId, t.category),
+    index().on(t.category),
+  ],
+);
+
+// Outbox events for async onboarding tasks
+export const systemTasks = pgTable(
+  "system_tasks",
+  (t) => ({
+    id: bigserial("id", { mode: "number" }).primaryKey(),
+    aggregateType: t.text().notNull(),
+    aggregateId: t.text().notNull(),
+    taskType: t.text().notNull(),
+    payload: jsonb().$type<Record<string, unknown>>().default({}),
+    processedAt: t.timestamp(),
+    attempts: t.integer().default(0).notNull(),
+    error: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.processedAt), index().on(t.aggregateType), index().on(t.aggregateId)],
+);

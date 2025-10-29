@@ -276,8 +276,8 @@ export const integrationsPlugin = () =>
               userId: session.user.id,
               email: session.user.email,
             },
-            callbackURL,
-          };
+            callbackUrl: callbackURL,
+          } satisfies SlackBotOAuthState;
 
           await ctx.context.internalAdapter.createVerificationValue({
             expiresAt,
