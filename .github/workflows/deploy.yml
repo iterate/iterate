@@ -12,15 +12,6 @@ on:
       worker_url:
         description: The URL of the deployed worker.
         value: ${{ jobs.deploy-os.outputs.worker_url }}
-  push:
-    branches:
-      - main
-      - mmkal/25/10/28/runonboardingagainststaging
-  workflow_dispatch:
-    inputs:
-      stage:
-        description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
-        required: true
 permissions:
   contents: read
   deployments: write

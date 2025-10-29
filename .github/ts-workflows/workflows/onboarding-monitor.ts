@@ -20,15 +20,7 @@ export default workflow({
         },
       },
     },
-    push: {
-      branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
-    },
-    schedule: [
-      {
-        cron: "0 9 * * *",
-      },
-    ],
-    workflow_dispatch: {},
+    schedule: [{ cron: "0 9 * * *" }],
   },
   jobs: {
     "test-onboarding": {

@@ -4,6 +4,7 @@ import * as utils from "../utils/index.ts";
 export default {
   name: "Deploy to Cloudflare",
   on: {
+    // this should be called from ci.ts (/ci.yml)
     workflow_call: {
       inputs: {
         stage: {
@@ -17,18 +18,6 @@ export default {
         worker_url: {
           description: "The URL of the deployed worker.",
           value: "${{ jobs.deploy-os.outputs.worker_url }}",
-        },
-      },
-    },
-    push: {
-      branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
-    },
-    workflow_dispatch: {
-      inputs: {
-        stage: {
-          description:
-            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
-          required: true,
         },
       },
     },

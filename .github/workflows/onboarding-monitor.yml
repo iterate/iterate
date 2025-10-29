@@ -12,13 +12,8 @@ on:
         description: The deployed url to run the onboarding tests against.
         required: true
         type: string
-  push:
-    branches:
-      - main
-      - mmkal/25/10/28/runonboardingagainststaging
   schedule:
     - cron: 0 9 * * *
-  workflow_dispatch: {}
 jobs:
   test-onboarding:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
