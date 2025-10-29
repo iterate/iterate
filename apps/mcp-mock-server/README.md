@@ -37,6 +37,22 @@ curl http://localhost:8789/health
 
 Returns information about available endpoints and modes.
 
+### Interactive OAuth Guide
+
+Visit `/docs` for an interactive step-by-step OAuth 2.1 walkthrough:
+
+```
+http://localhost:8789/docs
+```
+
+The guide lets you:
+- Discover OAuth server metadata
+- Register a client and see the response
+- Complete the authorization flow
+- Exchange code for access token
+- Each step unlocks after completing the previous one
+- Progress is saved in localStorage
+
 ## Usage Modes
 
 ### 1. No-Auth Mode (Simple Testing)
@@ -58,14 +74,31 @@ npx @modelcontextprotocol/inspector@latest
 
 **Available Tools:**
 
+Deterministic Tools:
+
 - `mock_add(a, b)` - Add two numbers
 - `mock_echo(message)` - Echo back a message
 - `mock_calculate(operation, a, b)` - Arithmetic operations (add, subtract, multiply, divide)
 - `mock_json_echo(data)` - Echo JSON data
+
+Error Simulation Tools:
+
 - `mock_error(errorType, message?)` - Throw specified error type
 - `mock_conditional_error(shouldFail, value)` - Conditional error
+
+Async Tools:
+
 - `mock_delay(delayMs, message)` - Respond after delay
 - `mock_counter(prefix?)` - Timestamp-based counter
+
+Stateful CRUD Tools (demonstrates Durable Object storage):
+
+- `mock_create_note(title, content)` - Create a new note
+- `mock_list_notes()` - List all notes
+- `mock_get_note(id)` - Get a specific note by ID
+- `mock_update_note(id, title?, content?)` - Update an existing note
+- `mock_delete_note(id)` - Delete a note
+- `mock_clear_all_notes()` - Delete all notes
 
 ### 2. OAuth Mode (Authentication Testing)
 
@@ -76,23 +109,46 @@ Use this mode when testing OAuth flows, authentication, and user-specific functi
 - `/oauth/mcp` - MCP Streamable-HTTP endpoint with OAuth (recommended)
 - `/oauth/sse` - MCP SSE endpoint with OAuth (deprecated)
 
-**Key Feature: Zero-Setup OAuth!**
-
-Just connect to `/oauth/mcp` - it **automatically approves** with a generated mock user. No pre-registration needed!
-
 **OAuth-Specific Tools** (in addition to all the tools from no-auth mode):
 
 - `userInfo()` - Get authenticated user information (`userId`, `userName`, `email`, `sessionId`)
 - `greet(formal?)` - Get personalized greeting using authenticated user's name
 - `adminAction(action)` - Demonstrate permission-based access (requires "admin" in `userId`)
 
-**How it works:**
+**Authorization Modes:**
 
-When you connect to `/oauth/mcp`, the server automatically:
+The OAuth server supports three ways to authorize:
 
-1. Generates a unique mock user (e.g., `mock-user-auto-1234567890-abc123`)
-2. Completes the OAuth authorization flow
-3. Provides the authenticated user context to the MCP agent via `this.props`
+1. **Interactive Consent Page** (default):
+   - Navigate to the authorization URL
+   - Click "Authorize with Auto-Generated User" for a quick test
+   - OR enter email/password to authenticate as a specific user
+   - New emails create new users; existing emails validate password
+
+2. **Auto-Approve with Generated User** (for automated tests):
+   - Add `?auto_approve=true` to auto-approve with a generated user
+   - Example: `/oauth/authorize?auto_approve=true&...other-params`
+
+3. **Programmatic Login** (for consistent test users):
+   - Add `?auto_approve_email=user@example.com&auto_approve_password=secret` to authenticate as a specific user
+   - Creates user if email doesn't exist; validates password if it does
+   - Example: `/oauth/authorize?auto_approve_email=test@example.com&auto_approve_password=mypass&...other-params`
+
+**Token Expiration:**
+
+By default, tokens do not expire. To create expiring tokens for testing:
+
+- Add `?expires_in=3600` (seconds) to the authorization URL
+- Example: `/oauth/authorize?auto_approve=true&expires_in=60&...other-params` (expires in 60 seconds)
+- Works with all authorization modes (interactive, auto-approve, and programmatic login)
+
+**User Persistence:**
+
+Users created via auto_approve_email/auto_approve_password are stored in KV and persist across connections. This allows you to:
+
+- Test with consistent user identities
+- Simulate multi-session scenarios with the same user
+- Test password validation flows
 
 ## Architecture
 
@@ -120,8 +176,9 @@ When you connect to `/oauth/mcp`, the server automatically:
                       │  ┌─────────────────────────┐   │
                       │  │ MockOAuthHandler        │   │
                       │  │  (Hono app)             │   │
-                      │  │ • Auto-generates user   │   │
-                      │  │ • Auto-approves auth    │   │
+                      │  │ • Consent page          │   │
+                      │  │ • User management       │   │
+                      │  │ • Bypass support        │   │
                       │  └─────────────────────────┘   │
                       │                                 │
                       │  API Handlers:                  │
@@ -135,7 +192,8 @@ When you connect to `/oauth/mcp`, the server automatically:
                       │  └─────────────────────────┘   │
                       │                                 │
                       │  Storage:                       │
-                      │  • OAUTH_KV (clients, tokens)   │
+                      │  • OAUTH_KV (clients, tokens,   │
+                      │    and mock users)              │
                       └─────────────────────────────────┘
 ```
 
@@ -155,7 +213,32 @@ Add tools by editing:
 - `src/tools/deterministic-tools.ts` - Predictable tools for basic testing
 - `src/tools/error-tools.ts` - Error simulation tools
 - `src/tools/async-tools.ts` - Async/delay tools
+- `src/tools/stateful-crud-tools.ts` - Stateful CRUD operations using Durable Object SQLite storage
 - `src/mock-oauth-mcp-agent.ts` - OAuth-specific tools with user context
+
+### Stateful CRUD Example
+
+The stateful CRUD tools demonstrate how to use the Durable Object's SQLite storage to maintain state across tool calls. Each MCP connection gets its own isolated Durable Object instance with its own SQLite database.
+
+Example workflow:
+
+```typescript
+// Create a note
+mock_create_note({ title: "My First Note", content: "Hello World" });
+// Returns: { id: "note-1234567890-abc123", title: "My First Note", ... }
+
+// List all notes
+mock_list_notes({});
+// Returns: { count: 1, notes: [...] }
+
+// Update the note
+mock_update_note({ id: "note-1234567890-abc123", content: "Updated content" });
+
+// Delete the note
+mock_delete_note({ id: "note-1234567890-abc123" });
+```
+
+Each connection maintains its own isolated collection of notes. When you reconnect, you get a fresh Durable Object instance with an empty database.
 
 ## Deployment
 

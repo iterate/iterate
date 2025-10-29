@@ -5,6 +5,7 @@ import type { Env } from "./env.ts";
 import { registerDeterministicTools } from "./tools/deterministic-tools.ts";
 import { registerErrorTools } from "./tools/error-tools.ts";
 import { registerAsyncTools } from "./tools/async-tools.ts";
+import { registerStatefulCRUDTools } from "./tools/stateful-crud-tools.ts";
 
 export interface MockOAuthProps {
   userId: string;
@@ -25,6 +26,7 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
     registerDeterministicTools(this.server);
     registerErrorTools(this.server);
     registerAsyncTools(this.server);
+    registerStatefulCRUDTools(this.server, this);
 
     this.server.tool("userInfo", "Get information about the authenticated user", {}, async () => ({
       content: [
@@ -72,46 +74,6 @@ export class MockOAuthMCPAgent extends McpAgent<Env, Record<string, never>, Mock
             {
               type: "text",
               text: greeting,
-            },
-          ],
-        };
-      },
-    );
-
-    this.server.tool(
-      "adminAction",
-      "Perform an admin action (only for specific users)",
-      {
-        action: z.string().describe("The admin action to perform"),
-      },
-      async ({ action }) => {
-        if (!this.props) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: "Error: Not authenticated",
-              },
-            ],
-          };
-        }
-
-        if (!this.props.userId.includes("admin")) {
-          return {
-            content: [
-              {
-                type: "text",
-                text: `Permission denied: User ${this.props.userName} does not have admin privileges`,
-              },
-            ],
-          };
-        }
-
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Admin action "${action}" performed successfully by ${this.props.userName}`,
             },
           ],
         };

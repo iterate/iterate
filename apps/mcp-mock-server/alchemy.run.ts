@@ -1,6 +1,7 @@
 import alchemy, { type Scope } from "alchemy";
 import { Worker, DurableObjectNamespace, KVNamespace } from "alchemy/cloudflare";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
+import type { MockMCPAgent, MockOAuthMCPAgent } from "./src/index.ts";
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -13,20 +14,16 @@ const app = await alchemy("mcp-mock", {
 const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 
-const MCP_OBJECT = DurableObjectNamespace<import("./src/index.ts").MockMCPAgent>("mcp-mock-agent", {
+const MCP_OBJECT = DurableObjectNamespace<MockMCPAgent>("mcp-mock-agent", {
   className: "MockMCPAgent",
   sqlite: true,
 });
 
-const MCP_OAUTH_OBJECT = DurableObjectNamespace<import("./src/index.ts").MockOAuthMCPAgent>(
-  "mcp-oauth-mock-agent",
-  {
-    className: "MockOAuthMCPAgent",
-    sqlite: true,
-  },
-);
+const MCP_OAUTH_OBJECT = DurableObjectNamespace<MockOAuthMCPAgent>("mcp-oauth-mock-agent", {
+  className: "MockOAuthMCPAgent",
+  sqlite: true,
+});
 
-const MOCK_OAUTH_SESSIONS = await KVNamespace("mock-oauth-sessions");
 const OAUTH_KV = await KVNamespace("oauth-provider-storage");
 
 const worker = await Worker("mcp-mock-server", {
@@ -36,7 +33,6 @@ const worker = await Worker("mcp-mock-server", {
   bindings: {
     MCP_OBJECT,
     MCP_OAUTH_OBJECT,
-    MOCK_OAUTH_SESSIONS,
     OAUTH_KV,
   },
   domains: isProduction ? ["mock.iterate.com"] : isStaging ? ["mock-staging.iterate.com"] : [],
