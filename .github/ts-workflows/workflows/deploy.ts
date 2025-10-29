@@ -35,11 +35,6 @@ export default {
       },
       steps: [
         {
-          id: "get_stage",
-          name: "Get stage",
-          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
-        },
-        {
           name: "Checkout code",
           uses: "actions/checkout@v4",
         },
