@@ -320,8 +320,8 @@ async function setupStorage() {
 }
 
 const subdomain = `os-${app.stage}`
-  .replace("os-prd", "os") // production domain is just "os"
-  .replace("os-stg", "os-staging"); // staging domain is "os-staging" for historical reasons
+  .replace(/^os-prd$/, "os") // production domain is just "os"
+  .replace(/^os-stg$/, "os-staging"); // staging domain is "os-staging" for historical reasons
 
 const domains = [
   `${subdomain}.iterate.com`, // main domain
