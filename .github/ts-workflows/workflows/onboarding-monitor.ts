@@ -5,6 +5,21 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "Onboarding Monitor",
   on: {
+    workflow_call: {
+      inputs: {
+        stage: {
+          description:
+            "The stage to get doppler secrets from. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+          required: true,
+          type: "string",
+        },
+        worker_url: {
+          description: "The deployed url to run the onboarding tests against.",
+          required: true,
+          type: "string",
+        },
+      },
+    },
     push: {
       branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
     },

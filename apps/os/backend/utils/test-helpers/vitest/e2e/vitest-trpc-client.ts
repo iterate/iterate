@@ -3,9 +3,9 @@
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { AppRouter } from "../../../../trpc/root";
 
-// TODO this needs a better place and obvs depends on which app we want to hit etc. Also needs a better env var name like `WORKER_URL` because it doesn't have to be "deployed"
+// TODO this needs a better place and obvs depends on which app we want to hit etc.
 export function _getDeployedURI() {
-  return process.env.DEPLOYED_WORKER_URL || "http://localhost:6004";
+  return process.env.WORKER_URL || process.env.VITE_PUBLIC_URL!.toString();
 }
 
 /**

@@ -4,6 +4,22 @@ import * as utils from "../utils/index.ts";
 export default {
   name: "Deploy to Cloudflare",
   on: {
+    workflow_call: {
+      inputs: {
+        stage: {
+          description:
+            "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+          required: true,
+          type: "string",
+        },
+      },
+      outputs: {
+        worker_url: {
+          description: "The URL of the deployed worker.",
+          value: "${{ steps.deploy_os.outputs.worker_url }}",
+        },
+      },
+    },
     push: {
       branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
     },
@@ -68,6 +84,7 @@ export default {
           },
         },
         {
+          id: "deploy_os",
           name: "Deploy OS",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
