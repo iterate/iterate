@@ -172,34 +172,6 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       // Step 4: Clone estate-template and push to new repository
       console.log("Step 5: Cloning estate-template repository...");
 
-      const octokit = new Octokit({
-        auth: testSeedData.github.accessToken,
-      });
-
-      // Generate new repository from template
-      const templateOwner = "iterate";
-      const templateRepo = "estate-template";
-
-      const newRepoResponse = await octokit.rest.repos.createUsingTemplate({
-        template_owner: templateOwner,
-        template_repo: templateRepo,
-        owner: "iterate-estates",
-        name: repoName,
-        private: false,
-        description: "E2E test estate repository",
-      });
-
-      if (newRepoResponse.status !== 201) {
-        throw new Error(`Failed to create repository: ${JSON.stringify(newRepoResponse)}`);
-      }
-
-      const newRepo = newRepoResponse.data;
-      createdRepoFullName = newRepo.full_name;
-      console.log(`Created repository from template: ${createdRepoFullName}`);
-
-      // Wait a bit for GitHub to process the new repository
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
       // Create TRPC client with impersonated user session
       const userTrpc = makeVitestTrpcClient({
         url: `${env.VITE_PUBLIC_URL}/api/trpc`,
@@ -214,33 +186,15 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
         `Step 6: Listing available GitHub repositories using ${env.VITE_PUBLIC_URL}/api/trpc endpoint`,
       );
 
-      const availableRepos = await userTrpc.integrations.listAvailableGithubRepos.query({
+      const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,
       });
-
-      const foundRepo = availableRepos.find((repo) => repo.full_name === createdRepoFullName);
-
       expect(foundRepo).toBeDefined();
+      createdRepoFullName = foundRepo!.full_name;
+
       console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
 
-      // Link the repository
-      console.log("Step 7: Linking repository to estate...");
-
-      if (!foundRepo) {
-        throw new Error(`Repository ${createdRepoFullName} not found in available repos`);
-      }
-
-      await userTrpc.integrations.setGithubRepoForEstate.mutate({
-        estateId: estate.id,
-        repoId: foundRepo.id,
-        path: "/",
-        branch: "main",
-      });
-
-      console.log("Repository linked successfully");
-
-      // Step 6: Poll for build completion
-      console.log("Step 8: Waiting for initial build to complete...");
+      console.log("Step 7: Waiting for initial build to complete...");
 
       const buildTimeout = 5 * 60 * 1000; // 5 minutes
       const pollInterval = 5000; // 5 seconds
@@ -326,7 +280,6 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("✅ Bot replied successfully!");
       console.log("End-to-end test completed successfully!");
     } finally {
-      // Cleanup: Delete the created repository
       if (createdRepoFullName) {
         console.log(`Cleaning up: Deleting repository ${createdRepoFullName}...`);
 
