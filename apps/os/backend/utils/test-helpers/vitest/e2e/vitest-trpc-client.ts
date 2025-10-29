@@ -235,68 +235,68 @@ export function makeServiceTrpcClient(
   return createImpersonationProxy(baseClient);
 }
 
-export const makeTrpcClientWithMockOauth = async (_mockUserEmail: string, platformUrl: string) => {
-  return makeVitestTrpcClient({
-    url: platformUrl + "/api/trpc",
-    debug: process.env.DEBUG === "true",
-  });
+// export const makeTrpcClientWithMockOauth = async (_mockUserEmail: string, platformUrl: string) => {
+// return makeVitestTrpcClient({
+//   url: platformUrl + "/api/trpc",
+//   log: process.env.DEBUG === "true" ? console.log : undefined,
+// });
 
-  // // Simulating a Mock OAuth flow
-  // const mockOauthUrl = await trpc.integrations.loginWithOAuth.mutate({
-  //   integrationSlug: "mock",
-  //   finalRedirectUrl: platformUrl,
-  // });
+// // Simulating a Mock OAuth flow
+// const mockOauthUrl = await trpc.integrations.loginWithOAuth.mutate({
+//   integrationSlug: "mock",
+//   finalRedirectUrl: platformUrl,
+// });
 
-  // // we can replace `/authorize` with `/api/login` in the mock oauth url to login programmatically
-  // const mockLoginUrl = mockOauthUrl.replace("/authorize", "/api/login");
+// // we can replace `/authorize` with `/api/login` in the mock oauth url to login programmatically
+// const mockLoginUrl = mockOauthUrl.replace("/authorize", "/api/login");
 
-  // const loginReq = await fetch(mockLoginUrl, {
-  //   method: "POST",
-  //   headers: {
-  //     "Content-Type": "application/json",
-  //   },
-  //   body: JSON.stringify({
-  //     email: mockUserEmail,
-  //     password: "test",
-  //   }),
-  // });
+// const loginReq = await fetch(mockLoginUrl, {
+//   method: "POST",
+//   headers: {
+//     "Content-Type": "application/json",
+//   },
+//   body: JSON.stringify({
+//     email: mockUserEmail,
+//     password: "test",
+//   }),
+// });
 
-  // const loginCookies = await loginReq
-  //   .json()
-  //   // Find the redirect url from the completed oauth flow
-  //   .then((data: any) => data.redirect)
-  //   // Request the redirect url to integrations proxy
-  //   .then((redirectUrl) =>
-  //     fetch(redirectUrl, {
-  //       method: "GET",
-  //       redirect: "manual",
-  //     }),
-  //   )
-  //   // Request the redirect url to the final redirect url
-  //   .then((res) => {
-  //     const nextUrl = res.headers.get("Location");
-  //     if (!nextUrl) {
-  //       throw new Error("No redirected url");
-  //     }
-  //     return fetch(nextUrl, {
-  //       method: "GET",
-  //       redirect: "manual",
-  //     });
-  //   })
-  //   // Get the cookies from the platform response
-  //   .then((res) => {
-  //     // @ts-ignore, not sure why its complaining about this
-  //     return res.headers.getSetCookie();
-  //   });
+// const loginCookies = await loginReq
+//   .json()
+//   // Find the redirect url from the completed oauth flow
+//   .then((data: any) => data.redirect)
+//   // Request the redirect url to integrations proxy
+//   .then((redirectUrl) =>
+//     fetch(redirectUrl, {
+//       method: "GET",
+//       redirect: "manual",
+//     }),
+//   )
+//   // Request the redirect url to the final redirect url
+//   .then((res) => {
+//     const nextUrl = res.headers.get("Location");
+//     if (!nextUrl) {
+//       throw new Error("No redirected url");
+//     }
+//     return fetch(nextUrl, {
+//       method: "GET",
+//       redirect: "manual",
+//     });
+//   })
+//   // Get the cookies from the platform response
+//   .then((res) => {
+//     // @ts-ignore, not sure why its complaining about this
+//     return res.headers.getSetCookie();
+//   });
 
-  // // replace the trpc client with a new one that has the cookies
-  // const trpcWithMockOauth = makeVitestTrpcClient({
-  //   url: platformUrl + "/api/trpc",
-  //   debug: process.env.DEBUG === "true",
-  //   headers: {
-  //     Cookie: loginCookies.join("; "),
-  //   },
-  // });
+// // replace the trpc client with a new one that has the cookies
+// const trpcWithMockOauth = makeVitestTrpcClient({
+//   url: platformUrl + "/api/trpc",
+//   debug: process.env.DEBUG === "true",
+//   headers: {
+//     Cookie: loginCookies.join("; "),
+//   },
+// });
 
-  // return trpcWithMockOauth;
-};
+// return trpcWithMockOauth;
+// };
