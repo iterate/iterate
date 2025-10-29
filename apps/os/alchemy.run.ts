@@ -346,11 +346,13 @@ async function deployWorker() {
   return worker;
 }
 
+if (process.env.GITHUB_OUTPUT) {
+  const workerUrl = `https://${domain[0]}`;
+  console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
+}
+
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
 await uploadSourcemaps();
 await app.finalize();
-
-if (process.env.GITHUB_OUTPUT) {
-  fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=https://${domain[0]}\n`);
-}
