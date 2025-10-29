@@ -28,7 +28,7 @@ export default {
   },
   concurrency: {
     group: "ci-${{ github.ref }}",
-    "cancel-in-progress": true,
+    "cancel-in-progress": false,
   },
   jobs: {
     /**
