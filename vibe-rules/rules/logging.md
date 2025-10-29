@@ -2,7 +2,7 @@
 description: "Logging guidelines"
 globs: ["apps/os/backend/**/*.ts"]
 eslint:
-  ignores: ["**/*test*/**", "**/*test*"]
+  ignores: ["**/*test*/**", "**/*test*", "**/*e2e*"]
   rules:
     no-console: "error"
 ---

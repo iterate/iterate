@@ -1,9 +1,9 @@
 import dedent from "dedent";
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { uses, workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "Onboarding Monitor",
+  name: "e2e tests",
   on: {
     workflow_call: {
       inputs: {
@@ -66,11 +66,11 @@ export default workflow({
           uses: "nick-fields/retry@v3",
           with: {
             timeout_minutes: 15,
-            max_attempts: 3,
+            max_attempts: 1, // todo: back to 3 before merge
             retry_wait_seconds: 30,
             command: dedent`
               cd apps/os
-              doppler run --config \${{ inputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
+              doppler run --config \${{ inputs.stage }} -- pnpm vitest --config vitest.e2e.config.ts
             `,
           },
           env: {
@@ -78,6 +78,14 @@ export default workflow({
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             VITEST_RUN_ONBOARDING_TEST: "true",
           },
+        },
+        {
+          name: "upload e2e logs",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "e2e-logs",
+            path: "apps/os/ignoreme/e2e-logs",
+          }),
         },
         {
           name: "Notify Slack on Failure",
