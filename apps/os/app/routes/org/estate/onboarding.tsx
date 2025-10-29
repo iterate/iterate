@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { redirect, useLoaderData, useNavigate, useSearchParams } from "react-router";
+import { redirect, useLoaderData, useNavigate, useNavigation, useSearchParams } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { eq } from "drizzle-orm";
@@ -51,6 +51,7 @@ export default function EstateOnboarding() {
     }),
   );
   const navigate = useNavigate();
+  const { state } = useNavigation();
 
   const { data, isFetching } = useQuery(
     trpc.integrations.list.queryOptions(
@@ -64,13 +65,14 @@ export default function EstateOnboarding() {
   );
 
   // Filter out Slack connector for trial estates since they're using Slack Connect
-  const integrations = (data?.oauthIntegrations || []).filter(
-    (integration) => integration.id === "slack-bot" && integration.isConnected,
-  );
+  const isSlackConnected =
+    data?.oauthIntegrations?.some(
+      (integration) => integration.id === "slack-bot" && integration.isConnected,
+    ) ?? false;
 
   useEffect(() => {
-    if (isFetching) return;
-    if (integrations.length === 0) {
+    if (isFetching || state === "loading") return;
+    if (!isSlackConnected) {
       navigate(`/${organizationId}/${estateId}/onboarding?step=slack`);
       return;
     }
@@ -83,12 +85,13 @@ export default function EstateOnboarding() {
   }, [
     initialStep,
     isFetching,
-    integrations.length,
+    isSlackConnected,
     estateId,
     organizationId,
     navigate,
     completeOnboarding,
     step,
+    state,
   ]);
 
   return (
