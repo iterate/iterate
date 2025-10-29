@@ -319,7 +319,10 @@ async function setupStorage() {
   }
 }
 
-const subdomain = isProduction ? "os" : `os-${app.stage}`;
+const subdomain = `os-${app.stage}`
+  .replace("os-prd", "os") // production domain is just "os"
+  .replace("os-stg", "os-staging"); // staging domain is "os-staging" for historical reasons
+
 const domains = [
   `${subdomain}.iterate.com`, // main domain
   `${subdomain}.iterateproxy.com`, // proxy, used for callback urls to ourselves, sometimes
