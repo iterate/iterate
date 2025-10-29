@@ -113,6 +113,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
         headers: {
           cookie: sessionCookies,
         },
+        debug: true,
       });
 
       const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
@@ -205,6 +206,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
         headers: {
           cookie: impersonationCookies,
         },
+        debug: true,
       });
 
       // Step 5: List available GitHub repos and verify our new repo is there
