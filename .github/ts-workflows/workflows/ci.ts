@@ -10,7 +10,7 @@ export default {
   },
   on: {
     push: {
-      branches: ["main", "*e2eworkflow"],
+      branches: ["main", "**/*e2eworkflow"],
     },
     workflow_dispatch: {
       inputs: {

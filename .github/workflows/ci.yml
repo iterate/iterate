@@ -8,7 +8,7 @@ on:
   push:
     branches:
       - main
-      - "*e2eworkflow"
+      - "**/*e2eworkflow"
   workflow_dispatch:
     inputs:
       stage:
