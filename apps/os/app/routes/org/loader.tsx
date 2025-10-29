@@ -51,6 +51,9 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const requestUrl = new URL(request.url);
   const onboardingPath = `/${organizationId}/onboarding`;
   const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
+  const isIntegrationsRoute =
+    requestUrl.pathname.includes("/integrations/redirect") ||
+    requestUrl.pathname.includes("/integrations/callback");
 
   const [userOrganizations, isOnboarded] = await Promise.all([
     getUserOrganizations(db, session.user.id),
@@ -89,7 +92,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     updatedAt: organization.updatedAt.toISOString(),
   };
 
-  if (!isOnboardingRoute && !isOnboarded) {
+  if (!isOnboardingRoute && !isIntegrationsRoute && !isOnboarded) {
     throw redirect(onboardingPath);
   }
 
