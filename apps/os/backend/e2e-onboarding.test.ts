@@ -161,7 +161,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       });
 
       // Step 5: List available GitHub repos and verify our new repo is there
-      console.log(`Step 6: Listing available GitHub repositories using ${userTrpc.url} endpoint`);
+      console.log(`Step 6: Listing available GitHub repositories`);
 
       const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,

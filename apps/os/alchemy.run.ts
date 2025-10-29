@@ -358,4 +358,5 @@ await uploadSourcemaps();
 
 await app.finalize();
 console.log("Deployment complete");
-process.exit(0);
+
+if (!app.local) process.exit(0);
