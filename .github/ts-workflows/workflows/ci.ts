@@ -64,7 +64,6 @@ export default {
       },
     },
     onboarding_monitor: {
-      if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
       uses: "./.github/workflows/onboarding-monitor.yml",
       // @ts-expect-error - is jlarky wrong here?
       secrets: "inherit",

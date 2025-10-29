@@ -76,6 +76,7 @@ export default workflow({
             `,
           },
           env: {
+            WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
             VITEST_RUN_ONBOARDING_TEST: "true",
           },
