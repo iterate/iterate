@@ -2,6 +2,7 @@ import { Outlet, redirect, data } from "react-router";
 import { getDb } from "../../../../backend/db/client.ts";
 import { getAuth } from "../../../../backend/auth/auth.ts";
 import { getUserEstateAccess } from "../../../../backend/trpc/trpc.ts";
+import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import type { Route } from "./+types/loader.ts";
 
 export async function loader({ request, params }: Route.LoaderArgs) {
@@ -23,13 +24,14 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Check if the user has access to the estate
-  const { hasAccess: hasEstateAccess, estate: userEstate } = await getUserEstateAccess(
-    db,
-    session.user.id,
-    estateId,
-    organizationId,
-  );
+  // Determine onboarding redirect and access in parallel to reduce latency
+  const isOnboardingPath = new URL(request.url).pathname.endsWith("/onboarding");
+  const [accessResult, needsOnboarding] = await Promise.all([
+    getUserEstateAccess(db, session.user.id, estateId, organizationId),
+    isOnboardingPath ? Promise.resolve(false) : isEstateOnboardingRequired(db, estateId),
+  ]);
+
+  const { hasAccess: hasEstateAccess, estate: userEstate } = accessResult;
 
   if (!hasEstateAccess || !userEstate) {
     const headers = new Headers();
@@ -43,6 +45,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
       statusText: "Forbidden",
       headers,
     });
+  }
+
+  if (needsOnboarding) {
+    throw redirect(`/${organizationId}/${estateId}/onboarding`);
   }
 
   // Set estate cookie
