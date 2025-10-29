@@ -228,6 +228,7 @@ export function renderHomePage(origin: string): string {
 
     <div class="section">
       <h2>about</h2>
+      <p>Building your own MCP client? Use our mock MCP for testing.</p>
       <p>Mock MCP server for end-to-end testing. Provides predictable, deterministic tools for testing MCP client implementations and integration workflows.</p>
     </div>
 

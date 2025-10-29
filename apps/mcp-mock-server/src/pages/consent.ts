@@ -225,11 +225,6 @@ export function renderConsentPage(
       opacity: 0.6;
     }
     
-    .github-button-container {
-      text-align: center;
-      margin-bottom: 2rem;
-    }
-    
     @media (max-width: 640px) {
       body {
         padding: 2rem 1rem;
@@ -303,10 +298,6 @@ export function renderConsentPage(
     <h1>iterate | mock oauth authorization</h1>
     <div class="subtitle">authorize application access</div>
 
-    <div class="github-button-container">
-      <a class="github-button" href="https://github.com/iterate/iterate" data-color-scheme="no-preference: light; light: light; dark: dark;" data-size="large" data-show-count="true" aria-label="Star iterate/iterate on GitHub">Star</a>
-    </div>
-
     <div class="client-info">
       <div class="label">client requesting access</div>
       <div class="client-id">${clientId}</div>
@@ -348,7 +339,6 @@ export function renderConsentPage(
       <a href="/guide">learn about oauth flow</a>
     </div>
   </div>
-  <script async defer src="https://buttons.github.io/buttons.js"></script>
 </body>
 </html>`;
 }
