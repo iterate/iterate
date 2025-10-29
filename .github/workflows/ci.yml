@@ -15,9 +15,6 @@ on:
         description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
         required: true
         type: string
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: false
 jobs:
   variables:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}

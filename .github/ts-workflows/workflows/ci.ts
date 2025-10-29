@@ -26,10 +26,11 @@ export default {
       },
     },
   },
-  concurrency: {
-    group: "ci-${{ github.ref }}",
-    "cancel-in-progress": false,
-  },
+  // todo: uncomment this once depot has unshat the bed
+  //   concurrency: {
+  //     group: "ci-${{ github.ref }}",
+  //     "cancel-in-progress": false,
+  //   },
   jobs: {
     /**
      * ${{ env.* }} limitations with reusable workflows:
