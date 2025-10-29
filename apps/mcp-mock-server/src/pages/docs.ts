@@ -512,7 +512,7 @@ export function renderDocsPage(requestUrl: string): string {
       <h2>step 5: you're done!</h2>
       <div class="endpoint"><span class="method get">GET/POST</span>${origin}/oauth/mcp</div>
       <p>That's the complete OAuth flow. MCP clients do all of this automatically—you just experienced what happens behind the scenes.</p>
-      <p>Building your own MCP client? Now you know how the OAuth integration works.</p>
+      <p>Building your own MCP client? Use our mock MCP for testing.</p>
       <div class="result-box success" id="completion-message" style="display: none;">
         Guide complete. You now understand how OAuth works with MCP.
       </div>
