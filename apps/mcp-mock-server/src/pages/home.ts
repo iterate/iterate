@@ -145,6 +145,7 @@ export function renderHomePage(origin: string): string {
       transition: opacity 0.2s;
       text-decoration: none;
       display: inline-block;
+      white-space: nowrap;
     }
     
     .guide-btn:hover {
@@ -153,6 +154,62 @@ export function renderHomePage(origin: string): string {
     
     .guide-btn:active {
       opacity: 0.6;
+    }
+    
+    .header-right {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    
+    @media (max-width: 640px) {
+      body {
+        padding: 2rem 1rem;
+        font-size: 12px;
+      }
+      
+      .container {
+        max-width: 100%;
+      }
+      
+      h1 {
+        font-size: 14px;
+      }
+      
+      .subtitle {
+        font-size: 12px;
+      }
+      
+      .header {
+        flex-direction: column;
+        gap: 1rem;
+        margin-bottom: 2rem;
+      }
+      
+      .header-right {
+        flex-direction: column;
+        width: 100%;
+      }
+      
+      .guide-btn {
+        width: 100%;
+        text-align: center;
+      }
+      
+      .section {
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+      }
+      
+      .url {
+        font-size: 11px;
+        padding: 0.75rem;
+        word-break: break-all;
+      }
+      
+      li {
+        font-size: 12px;
+      }
     }
   </style>
 </head>
@@ -163,60 +220,62 @@ export function renderHomePage(origin: string): string {
         <h1>iterate | mock-mcp-server</h1>
         <div class="subtitle">model context protocol testing server</div>
       </div>
-      <a href="/docs" class="guide-btn">try guide</a>
+      <div class="header-right">
+        <a class="github-button" href="https://github.com/iterate/iterate" data-color-scheme="no-preference: light; light: light; dark: dark;" data-size="large" data-show-count="true" aria-label="Star iterate/iterate on GitHub">Star</a>
+        <a href="/guide" class="guide-btn">try guide</a>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>about</h2>
+      <p>Mock MCP server for end-to-end testing. Provides predictable, deterministic tools for testing MCP client implementations and integration workflows.</p>
     </div>
 
     <div class="section">
       <h2>no-auth mode</h2>
-      <p>Direct MCP connection without authentication. Provides tools for testing deterministic operations, async behavior, error handling, and stateful CRUD operations.</p>
+      <p>Simple MCP connection. No authentication required.</p>
       
       <div class="label">endpoint</div>
       <div class="url">${origin}/mcp</div>
       
-      <div class="label">available tool categories</div>
+      <div class="label">available tools</div>
       <ul>
-        <li>deterministic tools: echo, arithmetic operations, JSON echo</li>
-        <li>async tools: delay, counter with timestamps</li>
-        <li>error simulation: validation, runtime, not found, permission errors</li>
-        <li>stateful CRUD: complete note management (create, read, update, delete, list)</li>
+        <li>deterministic: echo, arithmetic, JSON</li>
+        <li>async: delays and timestamps</li>
+        <li>error simulation: various error types</li>
+        <li>stateful CRUD: note management</li>
       </ul>
     </div>
 
     <div class="section">
       <h2>oauth mode</h2>
-      <p>Full OAuth 2.1 with PKCE flow. Includes all base tools plus user-specific capabilities. Supports multiple authorization methods for different testing scenarios.</p>
+      <p>Full OAuth 2.1 flow with user authentication. Includes all no-auth tools plus user-specific tools.</p>
       
       <div class="label">endpoint</div>
       <div class="url">${origin}/oauth/mcp</div>
       
-      <div class="label">authorization methods</div>
+      <div class="label">how to authorize</div>
       <ul>
-        <li>interactive consent page with auto-generate or email/password login</li>
-        <li>auto-approve mode: <code>?auto_approve=true</code> generates ephemeral user</li>
-        <li>programmatic auth: <code>?auto_approve_email=...&auto_approve_password=...</code> for persistent users</li>
-        <li>expiring tokens: <code>?expires_in=3600</code> for time-limited access</li>
+        <li>interactive: click through consent page (use for learning)</li>
+        <li>auto-generated: <code>?auto_approve=true</code> (quick testing, user not saved)</li>
+        <li>email/password: <code>?auto_approve_email=...&auto_approve_password=...</code> (user saved for reuse)</li>
+        <li>expiring tokens: add <code>?expires_in=3600</code> to test token expiration</li>
       </ul>
       
-      <div class="label">oauth-specific tools</div>
+      <div class="label">additional tools</div>
       <ul>
-        <li>userInfo: retrieve authenticated user details</li>
-        <li>greet: personalized greeting with formal/informal modes</li>
-      </ul>
-      
-      <div class="label">user persistence</div>
-      <ul>
-        <li>programmatic auth users persist in KV storage across sessions</li>
-        <li>same credentials authenticate as same user with consistent data</li>
-        <li>auto-generated users are ephemeral and not stored</li>
+        <li>userInfo: get authenticated user details</li>
+        <li>greet: personalized greeting</li>
       </ul>
     </div>
 
     <div class="footer">
       <a href="/health">health check</a> | 
-      <a href="/docs">interactive guide</a> | 
+      <a href="/guide">interactive guide</a> | 
       <a href="https://modelcontextprotocol.io" target="_blank">mcp spec</a>
     </div>
   </div>
+  <script async defer src="https://buttons.github.io/buttons.js"></script>
 </body>
 </html>`;
 }

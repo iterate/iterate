@@ -14,7 +14,7 @@ interface MockOAuthSession {
 
 const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>();
 
-app.get("/docs", async (c) => {
+app.get("/guide", async (c) => {
   return c.html(renderDocsPage(c.req.url));
 });
 

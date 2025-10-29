@@ -224,12 +224,88 @@ export function renderConsentPage(
     a:hover {
       opacity: 0.6;
     }
+    
+    .github-button-container {
+      text-align: center;
+      margin-bottom: 2rem;
+    }
+    
+    @media (max-width: 640px) {
+      body {
+        padding: 2rem 1rem;
+        font-size: 12px;
+      }
+      
+      .container {
+        max-width: 100%;
+      }
+      
+      h1 {
+        font-size: 14px;
+      }
+      
+      .subtitle {
+        font-size: 12px;
+        margin-bottom: 2rem;
+      }
+      
+      .client-info {
+        padding: 1rem;
+      }
+      
+      .client-id {
+        font-size: 11px;
+        word-break: break-all;
+      }
+      
+      .section {
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+      }
+      
+      .section p {
+        font-size: 12px;
+      }
+      
+      .form-group {
+        margin-bottom: 1rem;
+      }
+      
+      input[type="email"],
+      input[type="password"] {
+        font-size: 11px;
+        padding: 0.75rem;
+      }
+      
+      button {
+        font-size: 10px;
+        padding: 0.75rem 1rem;
+      }
+      
+      .error {
+        padding: 1rem;
+      }
+      
+      .footer {
+        font-size: 11px;
+        margin-top: 2rem;
+        padding-top: 1.5rem;
+      }
+      
+      code {
+        font-size: 10px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <h1>iterate | mock oauth authorization</h1>
     <div class="subtitle">authorize application access</div>
+
+    <div class="github-button-container">
+      <a class="github-button" href="https://github.com/iterate/iterate" data-color-scheme="no-preference: light; light: light; dark: dark;" data-size="large" data-show-count="true" aria-label="Star iterate/iterate on GitHub">Star</a>
+    </div>
 
     <div class="client-info">
       <div class="label">client requesting access</div>
@@ -240,7 +316,7 @@ export function renderConsentPage(
 
     <div class="section">
       <h2>quick start</h2>
-      <p>auto-generate a new mock user and authorize immediately</p>
+      <p>Generate a temporary test user and authorize immediately.</p>
       <form method="POST" action="${actionUrl}">
         <input type="hidden" name="action" value="auto">
         <button type="submit" class="btn-secondary">authorize with auto-generated user</button>
@@ -251,7 +327,7 @@ export function renderConsentPage(
 
     <div class="section">
       <h2>sign in</h2>
-      <p>use email/password to sign in as an existing user or create a new one</p>
+      <p>Use email and password. Creates a new user if email doesn't exist yet.</p>
       <form method="POST" action="${actionUrl}">
         <input type="hidden" name="action" value="login">
         <div class="form-group">
@@ -267,11 +343,12 @@ export function renderConsentPage(
     </div>
 
     <div class="footer">
-      automated testing: <code>?auto_approve=true</code> or <code>?auto_approve_email=...&amp;auto_approve_password=...</code><br>
-      expiring tokens: <code>?expires_in=3600</code> (seconds)<br>
-      <a href="/docs">api documentation</a>
+      for automated tests: <code>?auto_approve=true</code> or <code>?auto_approve_email=...&amp;auto_approve_password=...</code><br>
+      for expiring tokens: <code>?expires_in=3600</code><br>
+      <a href="/guide">learn about oauth flow</a>
     </div>
   </div>
+  <script async defer src="https://buttons.github.io/buttons.js"></script>
 </body>
 </html>`;
 }

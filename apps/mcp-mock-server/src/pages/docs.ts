@@ -292,6 +292,12 @@ export function renderDocsPage(requestUrl: string): string {
       display: none;
     }
     
+    .header-right {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+    
     .disclaimer {
       background: #fafafa;
       border: 1px solid #e5e5e5;
@@ -300,6 +306,92 @@ export function renderDocsPage(requestUrl: string): string {
       font-size: 12px;
       color: #666;
       line-height: 1.6;
+    }
+    
+    @media (max-width: 640px) {
+      body {
+        padding: 2rem 1rem;
+        font-size: 12px;
+      }
+      
+      .container {
+        max-width: 100%;
+      }
+      
+      h1 {
+        font-size: 14px;
+      }
+      
+      .subtitle {
+        font-size: 12px;
+      }
+      
+      .header {
+        flex-direction: column;
+        gap: 1rem;
+        margin-bottom: 2rem;
+      }
+      
+      .header-right {
+        flex-direction: column;
+        width: 100%;
+      }
+      
+      .reset-btn {
+        width: 100%;
+        text-align: center;
+      }
+      
+      .section {
+        padding: 1.5rem;
+        margin-bottom: 1rem;
+      }
+      
+      .disclaimer {
+        padding: 1rem;
+        margin-bottom: 2rem;
+        font-size: 11px;
+      }
+      
+      .endpoint {
+        font-size: 11px;
+        padding: 0.75rem;
+        word-break: break-all;
+      }
+      
+      .method {
+        display: block;
+        margin-bottom: 0.5rem;
+        margin-right: 0;
+      }
+      
+      table {
+        font-size: 11px;
+      }
+      
+      th, td {
+        padding: 0.5rem;
+      }
+      
+      input {
+        font-size: 11px;
+        padding: 0.75rem;
+      }
+      
+      input#redirect-uri {
+        width: 100% !important;
+        margin-bottom: 0.5rem;
+      }
+      
+      button {
+        width: 100%;
+        padding: 0.75rem 1rem;
+      }
+      
+      .result-box {
+        font-size: 11px;
+        padding: 1rem;
+      }
     }
   </style>
 </head>
@@ -310,32 +402,30 @@ export function renderDocsPage(requestUrl: string): string {
         <h1>iterate | mock oauth server</h1>
         <div class="subtitle">interactive oauth 2.1 guide</div>
       </div>
-      <button class="reset-btn" onclick="resetProgress()">reset guide</button>
+      <div class="header-right">
+        <a class="github-button" href="https://github.com/iterate/iterate" data-color-scheme="no-preference: light; light: light; dark: dark;" data-size="large" data-show-count="true" aria-label="Star iterate/iterate on GitHub">Star</a>
+        <button class="reset-btn" onclick="resetProgress()">reset guide</button>
+      </div>
     </div>
 
     <div class="disclaimer">
-      This interactive guide walks you through the OAuth 2.1 authorization flow step-by-step, mirroring what an MCP client does when connecting to an OAuth-protected server. Each section explains how the mock server responds and what authentication mechanisms are being simulated. Progress through each step to understand the complete flow from client registration to authenticated API access.
-    </div>
-
-    <div class="section">
-      <h2>oauth 2.1 flow guide</h2>
-      <p>Follow these steps to complete the OAuth flow. Each step will unlock after completing the previous one.</p>
+      Walk through the OAuth 2.1 flow step by step. This is what happens behind the scenes when an MCP client connects to an OAuth server. Each step unlocks after you complete it.
     </div>
 
     <div class="section" id="step-1">
-      <h2>step 1: oauth server discovery</h2>
+      <h2>step 1: server discovery</h2>
       <div class="endpoint"><span class="method get">GET</span>${origin}/.well-known/oauth-authorization-server</div>
-      <p>OAuth 2.1 server metadata endpoint (standard discovery). Returns server configuration including available endpoints, supported grant types, and PKCE requirements.</p>
+      <p>First, the client discovers what the server supports.</p>
       <button class="action-btn" onclick="window.open('${origin}/.well-known/oauth-authorization-server', '_blank')">View Server Metadata</button>
     </div>
 
     <div class="section" id="step-2">
       <h2>step 2: client registration<span class="step-status" id="status-2"></span></h2>
       <div class="endpoint"><span class="method post">POST</span>${origin}/oauth/register</div>
-      <p>Register a new OAuth client. Click below to register a client for this interactive session.</p>
+      <p>Register your client to get a unique client ID.</p>
       
-      <div class="label">redirect uri (callback to this page)</div>
-      <input type="text" id="redirect-uri" class="inline-input" value="${origin}/docs" style="width: 300px;" readonly>
+      <div class="label">redirect uri</div>
+      <input type="text" id="redirect-uri" class="inline-input" value="${origin}/guide" style="width: 300px;" readonly>
       <button class="action-btn" id="register-btn" onclick="registerClient()">Register Client</button>
       <div id="registration-result"></div>
     </div>
@@ -344,82 +434,68 @@ export function renderDocsPage(requestUrl: string): string {
       <h2>step 3: authorization<span class="step-status" id="status-3"></span></h2>
       <div class="endpoint"><span class="method get">GET</span>${origin}/oauth/authorize</div>
       <div class="endpoint"><span class="method post">POST</span>${origin}/oauth/authorize</div>
-      <p>Initiate OAuth 2.1 authorization flow. Supports interactive consent page, auto-approval, and programmatic authentication.</p>
+      <p>Request authorization from a user. You'll see a consent page where users can approve access.</p>
 
       <div class="label">query parameters (GET)</div>
       <table>
         <tr>
           <th>parameter</th>
-          <th>type</th>
           <th>description</th>
         </tr>
         <tr>
-          <td><code>auto_approve</code></td>
-          <td>boolean</td>
-          <td>Set to <code>true</code> to auto-approve with a generated mock user. No consent page shown.</td>
-        </tr>
-        <tr>
-          <td><code>auto_approve_email</code></td>
-          <td>string</td>
-          <td>Email address for programmatic authentication. Requires <code>auto_approve_password</code>. Creates user if new, validates if existing.</td>
-        </tr>
-        <tr>
-          <td><code>auto_approve_password</code></td>
-          <td>string</td>
-          <td>Password for programmatic authentication. Requires <code>auto_approve_email</code>.</td>
-        </tr>
-        <tr>
-          <td><code>expires_in</code></td>
-          <td>number</td>
-          <td>Token expiration time in seconds. Default: no expiration. Example: <code>3600</code> (1 hour)</td>
-        </tr>
-        <tr>
           <td><code>client_id</code></td>
-          <td>string</td>
-          <td>OAuth client ID (standard OAuth parameter)</td>
+          <td>OAuth client ID (required)</td>
         </tr>
         <tr>
           <td><code>redirect_uri</code></td>
-          <td>string</td>
-          <td>Redirect URI after authorization (standard OAuth parameter)</td>
+          <td>Callback URL (required)</td>
         </tr>
         <tr>
           <td><code>state</code></td>
-          <td>string</td>
-          <td>State parameter for CSRF protection (standard OAuth parameter)</td>
+          <td>CSRF protection token (required)</td>
         </tr>
         <tr>
           <td><code>code_challenge</code></td>
-          <td>string</td>
-          <td>PKCE code challenge (standard OAuth parameter)</td>
+          <td>PKCE challenge (required)</td>
+        </tr>
+        <tr>
+          <td><code>auto_approve</code></td>
+          <td>Set to <code>true</code> to skip consent and auto-generate user</td>
+        </tr>
+        <tr>
+          <td><code>auto_approve_email</code></td>
+          <td>Email for programmatic auth (requires password)</td>
+        </tr>
+        <tr>
+          <td><code>auto_approve_password</code></td>
+          <td>Password for programmatic auth (requires email)</td>
+        </tr>
+        <tr>
+          <td><code>expires_in</code></td>
+          <td>Token expiration in seconds (optional, default: no expiration)</td>
         </tr>
       </table>
 
-      <div class="label">form fields (POST)</div>
+      <div class="label">form fields (POST - consent page)</div>
       <table>
         <tr>
           <th>field</th>
-          <th>type</th>
           <th>description</th>
         </tr>
         <tr>
           <td><code>action</code></td>
-          <td>string</td>
-          <td>Either <code>auto</code> (generate user) or <code>login</code> (use email/password). Required.</td>
+          <td><code>auto</code> (generate user) or <code>login</code> (email/password)</td>
         </tr>
         <tr>
           <td><code>email</code></td>
-          <td>string</td>
-          <td>Email address (required when <code>action=login</code>)</td>
+          <td>Email (required when <code>action=login</code>)</td>
         </tr>
         <tr>
           <td><code>password</code></td>
-          <td>string</td>
           <td>Password (required when <code>action=login</code>)</td>
         </tr>
       </table>
 
-      <p>Initiate the authorization flow. You'll be redirected to the consent page.</p>
       <button class="action-btn" id="authorize-btn" onclick="authorize()">Start Authorization</button>
       <div id="authorization-result"></div>
     </div>
@@ -433,45 +509,30 @@ export function renderDocsPage(requestUrl: string): string {
     </div>
 
     <div class="section locked" id="step-5">
-      <h2>step 5: understanding mcp client integration<span class="step-status" id="status-5"></span></h2>
+      <h2>step 5: you're done!</h2>
       <div class="endpoint"><span class="method get">GET/POST</span>${origin}/oauth/mcp</div>
-      <div class="endpoint"><span class="method get">GET</span>${origin}/oauth/sse</div>
-      <p>You've completed the full OAuth 2.1 flow: server discovery, client registration, PKCE authorization, and token exchange.</p>
-      <p>Standard MCP clients (Claude Desktop, Cline) handle this automatically. Custom client builders now understand the complete integration process. Both can connect to <code>${origin}/oauth/mcp</code> with OAuth authentication.</p>
+      <p>That's the complete OAuth flow. MCP clients do all of this automatically—you just experienced what happens behind the scenes.</p>
+      <p>Building your own MCP client? Now you know how the OAuth integration works.</p>
       <div class="result-box success" id="completion-message" style="display: none;">
-        Guide complete. You now understand what happens when MCP clients authenticate with OAuth servers.
+        Guide complete. You now understand how OAuth works with MCP.
       </div>
     </div>
 
     <div class="section">
-      <h2>alternative: mcp without oauth</h2>
+      <h2>reference</h2>
+      
+      <div class="label">no-auth endpoint</div>
       <div class="endpoint"><span class="method get">GET/POST</span>${origin}/mcp</div>
-      <div class="endpoint"><span class="method get">GET</span>${origin}/sse</div>
-      <p>MCP endpoints without authentication. The <code>/mcp</code> endpoint uses Streamable-HTTP transport (recommended). The <code>/sse</code> endpoint uses Server-Sent Events (deprecated).</p>
-      <p>Provides deterministic tools, error simulation, async tools, and stateful CRUD operations for testing. Use this for simple testing scenarios that don't require user authentication.</p>
-    </div>
+      <p>Simple endpoint with no authentication.</p>
 
-    <div class="section">
-      <h2>other endpoints</h2>
+      <div class="label">other endpoints</div>
       <div class="endpoint"><span class="method get">GET</span>${origin}/</div>
-      <p>Landing page with server information</p>
-
+      <p>Server information</p>
       <div class="endpoint"><span class="method get">GET</span>${origin}/health</div>
-      <p>Health check endpoint with JSON response showing available modes and endpoints</p>
-
-      <div class="endpoint"><span class="method get">GET</span>${origin}/docs</div>
-      <p>This documentation page</p>
-    </div>
-
-    <div class="section">
-      <h2>user persistence</h2>
-      <p>Users created via auto_approve_email/auto_approve_password are stored in KV and persist across connections:</p>
-      <ul>
-        <li>First login with <code>auto_approve_email=test@example.com&auto_approve_password=secret</code> creates a new user</li>
-        <li>Subsequent logins with same credentials authenticate as the same user</li>
-        <li>Wrong password returns 401 error</li>
-        <li>Auto-generated users (<code>auto_approve=true</code>) are not persisted</li>
-      </ul>
+      <p>JSON health check</p>
+      
+      <div class="label">user persistence</div>
+      <p>Users created with email/password are saved. Auto-generated users are temporary.</p>
     </div>
 
     <div class="footer">
@@ -655,7 +716,7 @@ export function renderDocsPage(requestUrl: string): string {
       
       const session = getSession();
       if (session.client_id) {
-        document.getElementById('redirect-uri').value = session.redirect_uri || '${origin}/docs';
+        document.getElementById('redirect-uri').value = session.redirect_uri || '${origin}/guide';
         showResult('registration-result', \`Client registered!\\n\\nClient ID: \${session.client_id}\`);
         document.getElementById('register-btn').classList.add('hidden');
         unlockStep(3);
@@ -674,6 +735,7 @@ export function renderDocsPage(requestUrl: string): string {
       }
     });
   </script>
+  <script async defer src="https://buttons.github.io/buttons.js"></script>
 </body>
 </html>`;
 }

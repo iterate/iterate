@@ -39,13 +39,14 @@ Returns information about available endpoints and modes.
 
 ### Interactive OAuth Guide
 
-Visit `/docs` for an interactive step-by-step OAuth 2.1 walkthrough:
+Visit `/guide` for an interactive step-by-step OAuth 2.1 walkthrough:
 
 ```
-http://localhost:8789/docs
+http://localhost:8789/guide
 ```
 
 The guide lets you:
+
 - Discover OAuth server metadata
 - Register a client and see the response
 - Complete the authorization flow

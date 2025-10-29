@@ -16,7 +16,7 @@ export default {
       });
     }
 
-    if (url.pathname === "/docs") {
+    if (url.pathname === "/guide") {
       return MockOAuthHandler.fetch(request, env, ctx);
     }
 
@@ -26,7 +26,7 @@ export default {
           name: "Mock MCP Server for E2E Testing",
           version: "1.0.0",
           status: "healthy",
-          documentation: "/docs",
+          documentation: "/guide",
           modes: {
             "no-auth": {
               endpoints: {
