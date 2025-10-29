@@ -336,7 +336,7 @@ async function deployWorker() {
     crons: ["0 0 * * *"],
     adopt: true,
     build: {
-      command: "pnpm build && pnpm posthog:sourcemaps:inject",
+      command: "pnpm build",
     },
     dev: {
       command: "pnpm iterate dev start",
@@ -354,6 +354,5 @@ if (process.env.GITHUB_OUTPUT) {
 
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
-await uploadSourcemaps();
-// disabling cos deployments were hanging after doing everything successfully
-// await app.finalize();
+// await uploadSourcemaps();
+await app.finalize();
