@@ -1,5 +1,6 @@
 import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Claude Assistant",
@@ -21,7 +22,7 @@ export default workflow({
         (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
         (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
       `,
-      "runs-on": "ubuntu-latest",
+      ...utils.runsOn,
       permissions: {
         contents: "write",
         "pull-requests": "write",

@@ -1,7 +1,5 @@
-import * as path from "node:path";
+import { join } from "node:path";
 import { defineConfig } from "tsdown";
-
-const sdkDir = path.join(import.meta.dirname, "../../packages/sdk");
 
 export default defineConfig({
   entry: ["./sdk/index.ts"],
@@ -13,23 +11,12 @@ export default defineConfig({
   clean: true,
   sourcemap: false,
   nodeProtocol: true,
+  // @ts-expect-error - treeshake types are not complete, waiting on https://github.com/rolldown/tsdown/pull/573
+  treeshake: { moduleSideEffects: false } as import("tsdown").Options["treeshake"],
   copy: [
     {
       from: "dist/sdk",
-      to: path.join(sdkDir, "dist"),
-    },
-  ],
-  plugins: [
-    {
-      name: "iterate:remove-jsonata-side-effects",
-      renderChunk(source, id) {
-        const importStatement = `import "@mmkal/jsonata/sync";\n`;
-        if (!source.includes(importStatement)) return;
-        this.info(`Removing \`${importStatement}\` from ${id.fileName}`);
-        return {
-          code: source.replace(importStatement, ""),
-        };
-      },
+      to: join(import.meta.dirname, "../../packages/sdk/dist"),
     },
   ],
 });

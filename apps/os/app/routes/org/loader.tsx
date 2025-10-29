@@ -37,7 +37,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   const db = getDb();
   const auth = getAuth(db);
 
-  // Step 1: Check for session, redirect to login if no session
+  // Check for session, redirect to login if no session
   const session = await auth.api.getSession({
     headers: request.headers,
   });
@@ -46,16 +46,15 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  // Step 3: Load all organizations and check onboarding status in parallel
-  // This is more efficient than separate queries since we need all orgs anyway
-  const requestUrl = new URL(request.url);
-  const onboardingPath = `/${organizationId}/onboarding`;
-  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
-
-  const [userOrganizations, isOnboarded] = await Promise.all([
-    getUserOrganizations(db, session.user.id),
-    isOnboardingRoute ? Promise.resolve(true) : isOrganizationOnboarded(db, organizationId),
-  ]);
+  const firstEstate = await db.query.estate.findFirst({
+    where: eq(schema.estate.organizationId, organizationId),
+    orderBy: (t, { asc }) => [asc(t.createdAt)],
+  });
+  if (!firstEstate) {
+    // No estate for this org; redirect to home
+    throw redirect("/");
+  }
+  const userOrganizations = await getUserOrganizations(db, session.user.id);
 
   // Check if user has access to the requested organization
   // Note: External users are already filtered out at query level
@@ -89,10 +88,6 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     updatedAt: organization.updatedAt.toISOString(),
   };
 
-  if (!isOnboardingRoute && !isOnboarded) {
-    throw redirect(onboardingPath);
-  }
-
   const responseHeaders = new Headers({ "Content-Type": "application/json" });
 
   return data(
@@ -117,7 +112,6 @@ export default function OrganizationLayout({ loaderData }: Route.ComponentProps)
   );
 }
 
-// Error boundary to display access errors nicely
 // Error boundary to display access errors nicely
 export function ErrorBoundary() {
   const error = useRouteError();
@@ -192,34 +186,4 @@ export function ErrorBoundary() {
       </div>
     </DashboardLayout>
   );
-}
-
-async function isOrganizationOnboarded(db: ReturnType<typeof getDb>, organizationId: string) {
-  const organization = await db.query.organization.findFirst({
-    where: eq(schema.organization.id, organizationId),
-    with: {
-      estates: {
-        with: {
-          estateAccountsPermissions: {
-            with: {
-              account: true,
-            },
-          },
-          slackChannelEstateOverrides: true,
-        },
-      },
-    },
-  });
-
-  const hasSlackConnected = organization?.estates.some((estate) => {
-    const hasSlackBotAccount = estate.estateAccountsPermissions.some(
-      (permission) => permission.account.providerId === "slack-bot",
-    );
-
-    const hasSlackConnectTrial = estate.slackChannelEstateOverrides.length > 0;
-
-    return hasSlackBotAccount || hasSlackConnectTrial;
-  });
-
-  return hasSlackConnected ?? false;
 }

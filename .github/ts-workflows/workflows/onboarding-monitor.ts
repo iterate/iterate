@@ -1,6 +1,6 @@
 import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
-import deployWorkflow from "./deploy.ts";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "Onboarding Monitor",
@@ -13,13 +13,11 @@ export default workflow({
         cron: "0 9 * * *",
       },
     ],
-    workflow_dispatch: deployWorkflow.on.workflow_dispatch,
+    workflow_dispatch: {},
   },
   jobs: {
     "test-onboarding": {
-      "runs-on":
-        // "ubuntu-24.04" ||
-        "${{ (github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4') || 'ubuntu-24.04' }}",
+      ...utils.runsOn,
       steps: [
         {
           id: "get_stage",

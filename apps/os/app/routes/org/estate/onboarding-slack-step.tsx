@@ -3,20 +3,26 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
-import { authClient } from "../../lib/auth-client.ts";
-import { useTRPC } from "../../lib/trpc.ts";
-import { Button } from "../../components/ui/button.tsx";
-import { Card, CardContent } from "../../components/ui/card.tsx";
-import { Spinner } from "../../components/ui/spinner.tsx";
+import { authClient } from "../../../lib/auth-client.ts";
+import { useTRPC } from "../../../lib/trpc.ts";
+import { Button } from "../../../components/ui/button.tsx";
+import { Card, CardContent } from "../../../components/ui/card.tsx";
+import { Spinner } from "../../../components/ui/spinner.tsx";
+import { OnboardingStepLayout } from "./onboarding-step-layout.tsx";
 
 type SlackStepView = "choose-method" | "confirm-email" | "processing-trial" | "trial-success";
 
 type SlackStepProps = {
   organizationId: string;
   estateId: string;
+  /**
+   * Called when the Slack step has successfully completed (e.g. trial channel created).
+   * Parent can use this to mark onboarding as completed on the backend.
+   */
+  onComplete?: () => void;
 };
 
-export function OnboardingSlackStep({ organizationId, estateId }: SlackStepProps) {
+export function OnboardingSlackStep({ organizationId, estateId, onComplete }: SlackStepProps) {
   const navigate = useNavigate();
   const trpc = useTRPC();
   const [view, setView] = useState<SlackStepView>("choose-method");
@@ -31,7 +37,7 @@ export function OnboardingSlackStep({ organizationId, estateId }: SlackStepProps
 
   const directSlackLogin = async () => {
     const result = await authClient.integrations.link.slackBot({
-      callbackURL: `/${organizationId}`,
+      callbackURL: `/${organizationId}/${estateId}/onboarding?step=slack_complete`,
       estateId: estateId,
     });
 
@@ -53,6 +59,12 @@ export function OnboardingSlackStep({ organizationId, estateId }: SlackStepProps
         channelId: "channelId" in data ? data.channelId : "",
       });
       setView("trial-success");
+      // Notify parent that Slack onboarding is complete so it can mark overall onboarding complete
+      try {
+        onComplete?.();
+      } catch (_err) {
+        // no-op: parent handles any errors internally
+      }
     },
     onError: (error) => {
       toast.error(`Failed to set up trial: ${error.message}`);
@@ -153,59 +165,49 @@ export function OnboardingSlackStep({ organizationId, estateId }: SlackStepProps
 
   if (view === "confirm-email") {
     return (
-      <div className="flex justify-center">
-        <div className="w-full max-w-md space-y-6">
-          <div className="space-y-3">
-            <p className="text-muted-foreground">Step 2 of 2</p>
-            <h2 className="text-2xl font-semibold">Confirm your email</h2>
-            <p className="text-muted-foreground">
-              We'll send a Slack Connect invitation to this email
-            </p>
+      <OnboardingStepLayout
+        stepText="Step 2 of 2"
+        title="Confirm your email"
+        description="We'll send a Slack Connect invitation to this email"
+        maxWidthClass="max-w-md"
+      >
+        <div className="space-y-4">
+          <div className="text-center p-4 bg-muted/50 rounded-lg">
+            <div className="text-sm font-medium">{user.name}</div>
+            <div className="text-sm text-muted-foreground">{user.email}</div>
           </div>
 
-          <div className="space-y-4">
-            <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <div className="text-sm font-medium">{user.name}</div>
-              <div className="text-sm text-muted-foreground">{user.email}</div>
-            </div>
-
-            <div className="flex gap-2">
-              <Button variant="outline" onClick={() => setView("choose-method")} className="flex-1">
-                Back
-              </Button>
-              <Button
-                onClick={handleContinueWithEmail}
-                disabled={setupTrialMutation.isPending}
-                className="flex-1"
-              >
-                {setupTrialMutation.isPending ? (
-                  <>
-                    <Spinner className="mr-2 h-4 w-4" />
-                    Setting up...
-                  </>
-                ) : (
-                  <>Continue</>
-                )}
-              </Button>
-            </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setView("choose-method")} className="flex-1">
+              Back
+            </Button>
+            <Button
+              onClick={handleContinueWithEmail}
+              disabled={setupTrialMutation.isPending}
+              className="flex-1"
+            >
+              {setupTrialMutation.isPending ? (
+                <>
+                  <Spinner className="mr-2 h-4 w-4" />
+                  Setting up...
+                </>
+              ) : (
+                <>Continue</>
+              )}
+            </Button>
           </div>
         </div>
-      </div>
+      </OnboardingStepLayout>
     );
   }
 
   // Default: choose-method view
   return (
-    <div className="space-y-8">
-      <div className="space-y-3">
-        <p className="text-muted-foreground">Step 2 of 2</p>
-        <h2 className="text-2xl font-semibold">Connect Slack</h2>
-        <p className="text-sm text-muted-foreground">
-          Choose how you want to connect iterate to Slack. If you're not a workspace admin, use
-          Slack Connect.
-        </p>
-      </div>
-
+    <OnboardingStepLayout
+      stepText="Step 2 of 2"
+      title="Connect Slack"
+      description="Choose how you want to connect iterate to Slack. If you're not a workspace admin, use Slack Connect."
+    >
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
         {/* Option 1: Slack Connect (Default/Recommended) */}
         <Card className="hover:border-primary transition-colors group flex flex-col shadow-none border-2 border-primary/50">
@@ -291,6 +293,6 @@ export function OnboardingSlackStep({ organizationId, estateId }: SlackStepProps
           </CardContent>
         </Card>
       </div>
-    </div>
+    </OnboardingStepLayout>
   );
 }

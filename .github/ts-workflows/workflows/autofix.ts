@@ -1,18 +1,18 @@
 import dedent from "dedent";
 import { workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
 
 export default workflow({
   name: "autofix.ci",
   on: {
-    pull_request: null,
+    pull_request: {},
     push: {
       branches: ["main", "**/*autofix*", "*autofix*"],
     },
   },
   jobs: {
     autofix: {
-      "runs-on":
-        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      ...utils.runsOn,
       steps: [
         {
           name: "Checkout code",

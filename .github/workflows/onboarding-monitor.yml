@@ -8,11 +8,7 @@ on:
       - mmkal/25/10/28/runonboardingagainststaging
   schedule:
     - cron: 0 9 * * *
-  workflow_dispatch:
-    inputs:
-      stage:
-        description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
-        required: true
+  workflow_dispatch: {}
 jobs:
   test-onboarding:
     runs-on: ${{ (github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4') || 'ubuntu-24.04' }}
