@@ -1,7 +1,6 @@
 import { join } from "node:path";
 import { defineConfig } from "tsdown";
 
-// @ts-expect-error - treeshake types are not complete, waiting on https://github.com/rolldown/tsdown/pull/573
 export default defineConfig({
   entry: ["./sdk/index.ts"],
   outDir: "dist/sdk",
@@ -12,9 +11,8 @@ export default defineConfig({
   clean: true,
   sourcemap: false,
   nodeProtocol: true,
-  treeshake: {
-    moduleSideEffects: false,
-  },
+  // @ts-expect-error - treeshake types are not complete, waiting on https://github.com/rolldown/tsdown/pull/573
+  treeshake: { moduleSideEffects: false } as import("tsdown").Options["treeshake"],
   copy: [
     {
       from: "dist/sdk",
