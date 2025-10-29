@@ -204,6 +204,30 @@ export function renderDocsPage(requestUrl: string): string {
       cursor: not-allowed;
     }
     
+    button.secondary {
+      background: #fff;
+      color: #000;
+      border: 1px solid #000;
+      margin-left: 0.5rem;
+    }
+    
+    button.secondary:hover {
+      background: #f5f5f5;
+      opacity: 1;
+    }
+    
+    .button-group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      margin-top: 1.5rem;
+    }
+    
+    .button-group button {
+      margin-top: 0;
+      margin-left: 0;
+    }
+    
     .result-box {
       background: #fafafa;
       border: 1px solid #e5e5e5;
@@ -388,6 +412,14 @@ export function renderDocsPage(requestUrl: string): string {
         padding: 0.75rem 1rem;
       }
       
+      .button-group {
+        flex-direction: column;
+      }
+      
+      .button-group button {
+        width: 100%;
+      }
+      
       .result-box {
         font-size: 11px;
         padding: 1rem;
@@ -496,7 +528,10 @@ export function renderDocsPage(requestUrl: string): string {
         </tr>
       </table>
 
-      <button class="action-btn" id="authorize-btn" onclick="authorize()">Start Authorization</button>
+      <div class="button-group">
+        <button class="action-btn" id="authorize-btn" onclick="authorize()">Start Authorization</button>
+        <button class="action-btn secondary" id="authorize-auto-btn" onclick="authorizeAuto()">Start Authorization (Auto-Approve)</button>
+      </div>
       <div id="authorization-result"></div>
     </div>
 
@@ -647,6 +682,39 @@ export function renderDocsPage(requestUrl: string): string {
       }
     }
 
+    async function authorizeAuto() {
+      const session = getSession();
+      if (!session.client_id) {
+        showResult('authorization-result', 'Error: Please register a client first', true);
+        return;
+      }
+
+      try {
+        const pkce = await generatePKCE();
+        const state = btoa(Math.random().toString()).substring(0, 16);
+        
+        saveSession({
+          code_verifier: pkce.verifier,
+          state: state,
+        });
+
+        const params = new URLSearchParams({
+          client_id: session.client_id,
+          redirect_uri: session.redirect_uri,
+          response_type: 'code',
+          state: state,
+          code_challenge: pkce.challenge,
+          code_challenge_method: 'S256',
+          auto_approve: 'true',
+        });
+
+        const authUrl = \`\${ORIGIN}/oauth/authorize?\${params}\`;
+        window.location.href = authUrl;
+      } catch (error) {
+        showResult('authorization-result', \`Error: \${error.message}\`, true);
+      }
+    }
+
     function handleOAuthCallback() {
       const urlParams = new URLSearchParams(window.location.search);
       const code = urlParams.get('code');
@@ -663,6 +731,7 @@ export function renderDocsPage(requestUrl: string): string {
         saveSession({ authorization_code: code });
         showResult('authorization-result', \`Authorization successful!\\n\\nAuthorization Code: \${code}\`);
         document.getElementById('authorize-btn').classList.add('hidden');
+        document.getElementById('authorize-auto-btn').classList.add('hidden');
         unlockStep(4);
 
         const cleanUrl = window.location.pathname;
@@ -726,6 +795,7 @@ export function renderDocsPage(requestUrl: string): string {
         unlockStep(4);
         showResult('authorization-result', \`Authorization successful!\\n\\nAuthorization Code: \${session.authorization_code}\`);
         document.getElementById('authorize-btn').classList.add('hidden');
+        document.getElementById('authorize-auto-btn').classList.add('hidden');
       }
       if (session.access_token) {
         unlockStep(5);
