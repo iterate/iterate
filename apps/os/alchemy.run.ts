@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import * as fs from "node:fs";
 import alchemy, { type Scope } from "alchemy";
 import {
   Hyperdrive,
@@ -12,6 +13,7 @@ import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import z from "zod";
+import { addSuperAdminUser } from "./sdk/cli/commands/admin.ts";
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -134,6 +136,9 @@ async function setupDatabase() {
     if (res.exitCode !== 0) {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
+
+    // "Production already has it" -- @Rahul
+    await addSuperAdminUser(origin);
   };
 
   if (isDevelopment) {
@@ -310,6 +315,12 @@ async function setupStorage() {
   }
 }
 
+const domain = isProduction
+  ? ["os.iterate.com", "os.iterateproxy.com"]
+  : isStaging
+    ? ["os-staging.iterate.com", "os-staging.iterateproxy.com"]
+    : [];
+
 async function deployWorker() {
   const worker = await ReactRouter("os", {
     bindings: {
@@ -319,11 +330,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    domains: isProduction
-      ? ["os.iterate.com", "os.iterateproxy.com"]
-      : isStaging
-        ? ["os-staging.iterate.com", "os-staging.iterateproxy.com"]
-        : [],
+    domains: domain,
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
     crons: ["0 0 * * *"],
@@ -339,7 +346,17 @@ async function deployWorker() {
   return worker;
 }
 
+if (process.env.GITHUB_OUTPUT) {
+  const workerUrl = `https://${domain[0]}`;
+  console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
+  fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
+}
+
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
 await uploadSourcemaps();
+
 await app.finalize();
+console.log("Deployment complete");
+
+if (!app.local) process.exit(0);

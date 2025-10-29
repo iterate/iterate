@@ -79,6 +79,9 @@ async function runConfigInSandboxInternal(
       id: sessionId,
       cwd: sessionDir,
       isolation: true,
+      env: {
+        PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+      },
     });
   } catch {
     // If the session creation fails, get existing session
