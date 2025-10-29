@@ -336,7 +336,7 @@ async function deployWorker() {
     crons: ["0 0 * * *"],
     adopt: true,
     build: {
-      command: "pnpm build",
+      command: "pnpm build && pnpm posthog:sourcemaps:inject",
     },
     dev: {
       command: "pnpm iterate dev start",
@@ -354,8 +354,8 @@ if (process.env.GITHUB_OUTPUT) {
 
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
-// await uploadSourcemaps();
+await uploadSourcemaps();
 
-console.log("Finalizing app");
 await app.finalize();
 console.log("Deployment complete");
+process.exit(0);
