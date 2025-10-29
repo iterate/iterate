@@ -30,7 +30,8 @@ const workflowsProcedure = t.procedure
 
     const tsWorkflowsList = await Promise.all(
       tsWorkflowFileNames.map(async (filename) => {
-        const workflowModule = await import(path.join(tsWorkflowsDir, filename)).catch(() => {
+        const workflowModule = await import(path.join(tsWorkflowsDir, filename)).catch((e) => {
+          console.error(`Error importing ${filename}:`, e);
           return { default: {} };
         });
 
@@ -55,7 +56,7 @@ const workflowsProcedure = t.procedure
     );
 
     const updatesNeeded = Object.values({ ...tsWorkflows, ...yamlWorkflows }).flatMap((w) => {
-      const trimStrings = (obj: {}) =>
+      const trimStrings = <T>(obj: T): T =>
         obj &&
         JSON.parse(JSON.stringify(obj), (_key, value) =>
           typeof value === "string" ? value.trim() : value,
@@ -100,7 +101,6 @@ const router = t.router({
     .meta({ description: "Generate YAML workflows from TS workflows" })
     .mutation(async ({ ctx, input }) => {
       for (const { ts: tsWorkflow } of ctx.updatesNeeded) {
-        if (!tsWorkflow) continue;
         const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
         if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
       }

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - mmkal/25/10/28/runonboardingagainststaging
   workflow_dispatch:
     inputs:
       stage:
