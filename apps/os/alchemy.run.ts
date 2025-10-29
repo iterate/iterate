@@ -355,4 +355,5 @@ if (process.env.GITHUB_OUTPUT) {
 await verifyDopplerEnvironment();
 export const worker = await deployWorker();
 await uploadSourcemaps();
-await app.finalize();
+// disabling cos deployments were hanging after doing everything successfully
+// await app.finalize();
