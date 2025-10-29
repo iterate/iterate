@@ -28,6 +28,7 @@ export default {
   },
   jobs: {
     "deploy-os": {
+      "timeout-minutes": 15,
       ...utils.runsOn,
       outputs: {
         worker_url: "${{ steps.alchemy_deploy.outputs.worker_url }}",

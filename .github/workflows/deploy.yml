@@ -17,6 +17,7 @@ permissions:
   deployments: write
 jobs:
   deploy-os:
+    timeout-minutes: 15
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     outputs:
       worker_url: ${{ steps.alchemy_deploy.outputs.worker_url }}
