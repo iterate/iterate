@@ -5,7 +5,10 @@ import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
+import {
+  _getDeployedURI,
+  makeVitestTrpcClient,
+} from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 /**
@@ -31,7 +34,6 @@ import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 // Environment variables schema
 const TestEnv = z.object({
-  VITE_PUBLIC_URL: z.string().url().default("http://localhost:5173"),
   SERVICE_AUTH_TOKEN: z.string().optional(),
   ONBOARDING_E2E_TEST_SETUP_PARAMS: z
     .string()
@@ -40,11 +42,6 @@ const TestEnv = z.object({
 });
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
-
-// Helper to generate unique test repository name
-function generateRepoName() {
-  return `estate-test-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-}
 
 test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
   "end-to-end onboarding flow",
@@ -55,10 +52,11 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
     const trpcLogs: unknown[][] = [];
     // Parse and validate environment
     const env = TestEnv.parse({
-      VITE_PUBLIC_URL: process.env.VITE_PUBLIC_URL,
       SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
       ONBOARDING_E2E_TEST_SETUP_PARAMS: process.env.ONBOARDING_E2E_TEST_SETUP_PARAMS,
-    });
+    } satisfies Partial<z.input<typeof TestEnv>>);
+
+    const workerUrl = _getDeployedURI();
 
     const testSeedData = env.ONBOARDING_E2E_TEST_SETUP_PARAMS;
     let createdRepoFullName: string | null = null;
@@ -73,18 +71,11 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       }
 
       // Use service auth to get session for super user
-      const serviceAuthResponse = await fetch(
-        `${env.VITE_PUBLIC_URL}/api/auth/service-auth/create-session`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            serviceAuthToken: env.SERVICE_AUTH_TOKEN,
-          }),
-        },
-      );
+      const serviceAuthResponse = await fetch(`${workerUrl}/api/auth/service-auth/create-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceAuthToken: env.SERVICE_AUTH_TOKEN }),
+      });
 
       if (!serviceAuthResponse.ok) {
         const error = await serviceAuthResponse.text();
@@ -109,10 +100,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("Step 2: Setting up test user with organization and estate...");
 
       adminTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: sessionCookies,
-        },
+        headers: { cookie: sessionCookies },
         log: (...args) => trpcLogs.push(["adminTrpc", ...args]),
       });
 
@@ -131,20 +119,16 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("Step 3: Impersonating test user...");
 
       const authClient = createAuthClient({
-        baseURL: env.VITE_PUBLIC_URL,
+        baseURL: workerUrl,
         plugins: [adminClient()],
       });
 
       let impersonationCookies = "";
 
       const impersonationResult = await authClient.admin.impersonateUser(
+        { userId: user.id },
         {
-          userId: user.id,
-        },
-        {
-          headers: {
-            cookie: sessionCookies,
-          },
+          headers: { cookie: sessionCookies },
           onResponse(context: { response: Response }) {
             const cookies = context.response.headers.getSetCookie();
             const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
@@ -158,33 +142,26 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       );
 
       if (!impersonationResult?.data) {
-        throw new Error("Failed to impersonate user");
+        throw new Error("Failed to impersonate user", { cause: impersonationResult });
       }
 
       if (!impersonationCookies) {
-        throw new Error("Failed to get impersonation cookies");
+        throw new Error("Failed to get impersonation cookies", { cause: impersonationResult });
       }
 
       console.log("Successfully impersonated test user");
-
-      // Note: GitHub installation linking would normally happen through the OAuth callback
 
       // Step 4: Clone estate-template and push to new repository
       console.log("Step 5: Cloning estate-template repository...");
 
       // Create TRPC client with impersonated user session
       const userTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: impersonationCookies,
-        },
+        headers: { cookie: impersonationCookies },
         log: (...args) => trpcLogs.push(["userTrpc", ...args]),
       });
 
       // Step 5: List available GitHub repos and verify our new repo is there
-      console.log(
-        `Step 6: Listing available GitHub repositories using ${env.VITE_PUBLIC_URL}/api/trpc endpoint`,
-      );
+      console.log(`Step 6: Listing available GitHub repositories using ${userTrpc.url} endpoint`);
 
       const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,

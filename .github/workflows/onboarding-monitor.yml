@@ -2,6 +2,11 @@
 
 name: Onboarding Monitor
 on:
+  workflow_call:
+    inputs:
+      stage:
+        description: The stage to run the onboarding tests against. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
+        required: true
   push:
     branches:
       - main

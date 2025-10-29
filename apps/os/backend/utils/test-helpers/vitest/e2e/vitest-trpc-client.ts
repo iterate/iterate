@@ -1,10 +1,10 @@
 // Creates a TRPC client that can be used in vitest tests running in Node.js
 
-import { createTRPCClient, httpBatchLink, loggerLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import type { AppRouter } from "../../../../trpc/root";
 
-// TODO this needs a better place and obvs depends on which app we want to hit etc
-function _getDeployedURI() {
+// TODO this needs a better place and obvs depends on which app we want to hit etc. Also needs a better env var name like `WORKER_URL` because it doesn't have to be "deployed"
+export function _getDeployedURI() {
   return process.env.DEPLOYED_WORKER_URL || "http://localhost:6004";
 }
 
@@ -145,7 +145,7 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
   };
 
   // Create and return the TRPC client
-  return createTRPCClient<AppRouter>({
+  const client = createTRPCClient<AppRouter>({
     links: [
       httpBatchLink({
         url,
@@ -154,6 +154,7 @@ export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}) {
       }),
     ],
   });
+  return Object.assign(client, { url });
 }
 
 /**
