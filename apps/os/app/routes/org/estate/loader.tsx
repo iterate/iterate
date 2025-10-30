@@ -25,10 +25,16 @@ export async function loader({ request, params }: Route.LoaderArgs) {
   }
 
   // Determine onboarding redirect and access in parallel to reduce latency
-  const isOnboardingPath = new URL(request.url).pathname.endsWith("/onboarding");
+  const requestUrl = new URL(request.url);
+  const isOnboardingPath = requestUrl.pathname.endsWith("/onboarding");
+  const isIntegrationsRoute =
+    requestUrl.pathname.includes("/integrations/redirect") ||
+    requestUrl.pathname.includes("/integrations/callback");
   const [accessResult, needsOnboarding] = await Promise.all([
     getUserEstateAccess(db, session.user.id, estateId, organizationId),
-    isOnboardingPath ? Promise.resolve(false) : isEstateOnboardingRequired(db, estateId),
+    isOnboardingPath || isIntegrationsRoute
+      ? Promise.resolve(false)
+      : isEstateOnboardingRequired(db, estateId),
   ]);
 
   const { hasAccess: hasEstateAccess, estate: userEstate } = accessResult;
