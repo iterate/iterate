@@ -34,7 +34,7 @@ export default workflow({
         {
           id: "get_stage",
           name: "Get stage",
-          run: 'echo "stage=${{ inputs.stage || \'stg\' }}" >> $GITHUB_OUTPUT',
+          run: "echo \"stage=${{ inputs.stage || 'stg' }}\" >> $GITHUB_OUTPUT",
         },
         {
           name: "Checkout code",
@@ -80,4 +80,3 @@ export default workflow({
     },
   },
 });
-
