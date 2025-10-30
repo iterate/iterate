@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { redirect, useLoaderData, useNavigate, useNavigation, useSearchParams } from "react-router";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -55,7 +55,7 @@ export default function EstateOnboarding() {
   const navigate = useNavigate();
   const { state } = useNavigation();
 
-  const { data, isFetching } = useQuery(
+  const { isFetching } = useQuery(
     trpc.integrations.list.queryOptions(
       {
         estateId: estateId,
