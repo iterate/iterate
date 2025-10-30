@@ -194,6 +194,9 @@ async function setupDatabase() {
     const hyperdrive = await Hyperdrive("iterate-postgres", {
       origin: role.connectionUrl,
       adopt: true,
+      caching: {
+        disabled: true,
+      },
     });
 
     await migrate(role.connectionUrl.unencrypted);
@@ -223,6 +226,9 @@ async function setupDatabase() {
     const hyperdrive = await Hyperdrive("iterate-postgres", {
       origin: role.connectionUrl,
       adopt: true,
+      caching: {
+        disabled: true,
+      },
     });
 
     await migrate(role.connectionUrl.unencrypted);
@@ -237,6 +243,9 @@ async function setupDatabase() {
     const hyperdrive = await Hyperdrive("iterate-postgres", {
       origin: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
       adopt: true,
+      caching: {
+        disabled: true,
+      },
     });
 
     await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
