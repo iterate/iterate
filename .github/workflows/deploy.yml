@@ -2,24 +2,26 @@
 
 name: Deploy to Cloudflare
 on:
-  push:
-    branches:
-      - main
-  workflow_dispatch:
+  workflow_call:
     inputs:
       stage:
         description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
         required: true
+        type: string
+    outputs:
+      worker_url:
+        description: The URL of the deployed worker.
+        value: ${{ jobs.deploy-os.outputs.worker_url }}
 permissions:
   contents: read
   deployments: write
 jobs:
   deploy-os:
+    timeout-minutes: 15
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    outputs:
+      worker_url: ${{ steps.alchemy_deploy.outputs.worker_url }}
     steps:
-      - id: get_stage
-        name: Get stage
-        run: echo "stage=${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup pnpm
@@ -33,26 +35,24 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os
+        run: doppler setup --config ${{ inputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Enable QEMU
         uses: docker/setup-qemu-action@v3
         with:
           platforms: all
-      - name: Deploy OS
+      - id: alchemy_deploy
+        name: Deploy using Alchemy
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
-          STAGE: ${{ steps.get_stage.outputs.stage }}
+          STAGE: ${{ inputs.stage }}
         run: pnpm run deploy
         working-directory: apps/os
   deploy-website:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     if: inputs.stage == 'prd'
     steps:
-      - id: get_stage
-        name: Get stage
-        run: echo "stage=${{ inputs.stage || 'stg' }}" >> $GITHUB_OUTPUT
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup pnpm
@@ -66,7 +66,7 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config ${{ steps.get_stage.outputs.stage }} --project os
+        run: doppler setup --config ${{ inputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: Deploy Website
