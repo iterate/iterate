@@ -457,7 +457,7 @@ test.skipIf(!process.env.VITEST_RUN_MOCK_MCP_TEST)(
 test.skipIf(!process.env.VITEST_RUN_MOCK_MCP_TEST)(
   "MCP OAuth token refresh after expiration",
   {
-    timeout: 15 * 60 * 1000, // 15 minutes to account for 3 minute wait
+    timeout: 2 * 60 * 1000, // 2 minutes
   },
   async () => {
     const env = TestEnv.parse({
@@ -512,12 +512,10 @@ test.skipIf(!process.env.VITEST_RUN_MOCK_MCP_TEST)(
 
       console.log("✅ Initial connection established with 1-second token expiration");
 
-      // Step 9: Wait for 3 minutes to ensure token has expired
-      console.log("Step 9: Waiting 3 minutes for token to expire and refresh...");
-      console.log("⏳ This will take a while - waiting for automatic token refresh");
+      // Step 9: Wait for 3 seconds to ensure token has expired and been refreshed
+      console.log("Step 9: Waiting 3 seconds for token to expire and refresh...");
 
-      // Use vi.useFakeTimers to speed up the test if needed, or wait real time
-      await new Promise((resolve) => setTimeout(resolve, 3 * 60 * 1000)); // 3 minutes
+      await new Promise((resolve) => setTimeout(resolve, 3 * 1000)); // 3 seconds
 
       console.log("✅ Wait complete - token should have been refreshed");
 
