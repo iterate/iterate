@@ -66,7 +66,7 @@ export default workflow({
           uses: "nick-fields/retry@v3",
           with: {
             timeout_minutes: 15,
-            max_attempts: 1, // todo: back to 3 before merge
+            max_attempts: 3,
             retry_wait_seconds: 30,
             command: dedent`
               cd apps/os
