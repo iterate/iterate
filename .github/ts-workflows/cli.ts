@@ -100,6 +100,7 @@ const router = t.router({
     .meta({ description: "Generate YAML workflows from TS workflows" })
     .mutation(async ({ ctx, input }) => {
       for (const { ts: tsWorkflow } of ctx.updatesNeeded) {
+        if (!tsWorkflow) continue; // Skip YAML-only workflows
         const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
         if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
       }

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: "node",
+    passWithNoTests: true,
     alias: {
       "cloudflare:workers": "agents/mock-cloudflare-workers",
     },
