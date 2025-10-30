@@ -47,7 +47,7 @@ export default function EstateOnboarding() {
   const [step, setStep] = useState<"confirm_org" | "slack" | "slack_complete">(
     initialStep || "confirm_org",
   );
-  const completeOnboarding = useMutation(
+  const completeOnboardingStep = useMutation(
     trpc.estate.completeUserOnboardingStep.mutationOptions({
       onError: (error) => toast.error(error.message),
     }),
@@ -80,7 +80,7 @@ export default function EstateOnboarding() {
           <>
             <Button
               onClick={() => {
-                completeOnboarding.mutate(
+                completeOnboardingStep.mutate(
                   { estateId, step: "slack" },
                   { onSuccess: () => navigate(`/${organizationId}/${estateId}`) },
                 );
@@ -101,7 +101,7 @@ export default function EstateOnboarding() {
           <OnboardingSlackStep
             organizationId={organizationId}
             estateId={estateId}
-            onComplete={() => completeOnboarding.mutate({ estateId, step: "slack" })}
+            onComplete={() => setStep("slack_complete")}
           />
         ))}
     </>

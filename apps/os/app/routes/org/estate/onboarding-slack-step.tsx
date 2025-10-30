@@ -19,7 +19,7 @@ type SlackStepProps = {
    * Called when the Slack step has successfully completed (e.g. trial channel created).
    * Parent can use this to mark onboarding as completed on the backend.
    */
-  onComplete?: () => void;
+  onComplete: () => void;
 };
 
 export function OnboardingSlackStep({ organizationId, estateId, onComplete }: SlackStepProps) {
@@ -60,13 +60,13 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
       });
       setView("trial-success");
       // Notify parent that Slack onboarding is complete so it can mark overall onboarding complete
-      try {
-        onComplete?.();
-      } catch (_err) {
-        // no-op: parent handles any errors internally
-      }
+      onComplete();
     },
     onError: (error) => {
+      if (String(error).includes("name_taken")) {
+        onComplete();
+        return;
+      }
       toast.error(`Failed to set up trial: ${error.message}`);
       setView("choose-method");
     },
