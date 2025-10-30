@@ -32,7 +32,6 @@ import { mergeDeep } from "remeda";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import type { TagLogger } from "../tag-logger.ts";
-import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
   type ApprovalKey,
@@ -682,18 +681,13 @@ export class AgentCore<
     currentState: MergedStateForSlices<Slices>,
     event: MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string },
   ) {
-    // First run built-in core reducer
-    let newState = this.reduceCore(currentState, event) as MergedStateForSlices<Slices>;
-
-    // Then every slice reducer
-    for (const slice of this.slices) {
-      const update = slice.reduce(newState, { ...this.deps, agentCore: this }, event);
-      if (update) {
-        newState = { ...newState, ...update };
-      }
-    }
-
-    return deepCloneWithFunctionRefs(newState);
+    return this.slices.reduce(
+      (state, nextSlice) => ({
+        ...state,
+        ...nextSlice.reduce(state, { ...this.deps, agentCore: this }, event),
+      }),
+      this.reduceCore(currentState, event) as MergedStateForSlices<Slices>,
+    );
   }
 
   private reduceCore(
