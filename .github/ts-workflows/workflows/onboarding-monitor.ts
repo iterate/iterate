@@ -5,19 +5,29 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "Onboarding Monitor",
   on: {
-    push: {
-      branches: ["main"],
-    },
-    schedule: [
-      {
-        cron: "0 9 * * *",
+    workflow_call: {
+      inputs: {
+        stage: {
+          description:
+            "The stage to get doppler secrets from. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
+          required: true,
+          type: "string",
+        },
+        worker_url: {
+          description: "The deployed url to run the onboarding tests against.",
+          required: true,
+          type: "string",
+        },
       },
-    ],
-    workflow_dispatch: {},
+    },
+    schedule: [{ cron: "0 9 * * *" }],
   },
   jobs: {
     "test-onboarding": {
       ...utils.runsOn,
+      env: {
+        WORKER_URL: "${{ inputs.worker_url }}",
+      },
       steps: [
         {
           name: "Checkout code",
@@ -45,7 +55,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config 'prd' --project os",
+          run: "doppler setup --config ${{ inputs.stage }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
@@ -58,10 +68,15 @@ export default workflow({
             timeout_minutes: 15,
             max_attempts: 3,
             retry_wait_seconds: 30,
-            command: "doppler run -- pnpm test:onboarding:production",
+            command: dedent`
+              cd apps/os
+              doppler run --config \${{ inputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
+            `,
           },
           env: {
+            WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            VITEST_RUN_ONBOARDING_TEST: "true",
           },
         },
         {

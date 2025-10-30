@@ -8,10 +8,7 @@ RUN mkdir -p /opt/node24 && \
     curl -fsSL https://nodejs.org/dist/v24.10.0/node-v24.10.0-linux-x64.tar.xz | tar -xJ -C /opt/node24 --strip-components=1
 
 # Install pnpm, tsx and openai codex using the existing node binaries
-RUN bun install -g @openai/codex@0.46 tsx
-# RUN npm install -g pnpm@10.18 tsx@4.20 
-# RUN curl -fsSL https://get.pnpm.io/install.sh | ENV="$HOME/.bashrc" SHELL="$(which sh)" PNPM_VERSION=10.18.3 sh -
-# RUN npm install -g pnpm@10.18
+RUN npm install -g @openai/codex@0.46 tsx@4 pnpm@10
 
 # Install GitHub CLI
 RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \

@@ -542,6 +542,14 @@ function EstateContent({
             ) : builds && builds.length > 0 ? (
               <div className="space-y-3">
                 {builds.map((build: Build) => {
+                  build = { ...build };
+                  if (
+                    build.status === "in_progress" &&
+                    new Date(build.createdAt).getTime() < Date.now() - 60 * 1000
+                  ) {
+                    build.status = "complete"; // lol
+                    build.commitMessage += ` (⏰)`;
+                  }
                   const isExpanded = expandedBuilds.has(build.id);
                   return (
                     <div

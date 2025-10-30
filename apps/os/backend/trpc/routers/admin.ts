@@ -142,7 +142,7 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
     try {
       const seedData = E2ETestParams.parse(JSON.parse(ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS));
 
-      const [_userAccount, botAccount, githubAccount] = await ctx.db
+      const [_userAccount, botAccount] = await ctx.db
         .insert(schema.account)
         .values([
           {
@@ -156,12 +156,6 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
             userId: user.id,
             accountId: seedData.slack.bot.id,
             accessToken: seedData.slack.bot.accessToken,
-          },
-          {
-            providerId: "github-app",
-            userId: user.id,
-            accountId: seedData.github.installationId.toString(),
-            accessToken: seedData.github.accessToken,
           },
         ])
         .onConflictDoNothing()
@@ -186,10 +180,6 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
         .values([
           {
             accountId: botAccount.id,
-            estateId: estate.id,
-          },
-          {
-            accountId: githubAccount.id,
             estateId: estate.id,
           },
         ])

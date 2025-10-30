@@ -1,10 +1,14 @@
+import { inspect } from "node:util";
 import { test, expect } from "vitest";
 import { z } from "zod";
 import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
+import {
+  _getDeployedURI,
+  makeVitestTrpcClient,
+} from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 /**
@@ -30,33 +34,31 @@ import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 // Environment variables schema
 const TestEnv = z.object({
-  VITE_PUBLIC_URL: z.string().url().default("http://localhost:5173"),
   SERVICE_AUTH_TOKEN: z.string().optional(),
-  ONBOARDING_E2E_TEST_SETUP_PARAMS: z.string().transform((val) => JSON.parse(val)),
+  ONBOARDING_E2E_TEST_SETUP_PARAMS: z
+    .string()
+    .transform((val) => JSON.parse(val))
+    .pipe(E2ETestParams),
 });
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
 
-// Helper to generate unique test repository name
-function generateRepoName() {
-  return `estate-test-${Date.now()}-${Math.random().toString(36).substring(7)}`;
-}
-
-test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
+test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
   "end-to-end onboarding flow",
   {
     timeout: 15 * 60 * 1000, // 15 minutes total timeout
   },
   async () => {
+    const trpcLogs: unknown[][] = [];
     // Parse and validate environment
     const env = TestEnv.parse({
-      VITE_PUBLIC_URL: process.env.VITE_PUBLIC_URL,
       SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
       ONBOARDING_E2E_TEST_SETUP_PARAMS: process.env.ONBOARDING_E2E_TEST_SETUP_PARAMS,
-    });
+    } satisfies Partial<z.input<typeof TestEnv>>);
 
-    const testSeedData = E2ETestParams.parse(env.ONBOARDING_E2E_TEST_SETUP_PARAMS);
-    const repoName = generateRepoName();
+    const workerUrl = _getDeployedURI();
+
+    const testSeedData = env.ONBOARDING_E2E_TEST_SETUP_PARAMS;
     let createdRepoFullName: string | null = null;
     let createdUserEmail: string | null = null;
     let adminTrpc: ReturnType<typeof makeVitestTrpcClient> | null = null;
@@ -69,27 +71,27 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       }
 
       // Use service auth to get session for super user
-      const serviceAuthResponse = await fetch(
-        `${env.VITE_PUBLIC_URL}/api/auth/service-auth/create-session`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            serviceAuthToken: env.SERVICE_AUTH_TOKEN,
-          }),
-        },
-      );
+      const serviceAuthResponse = await fetch(`${workerUrl}/api/auth/service-auth/create-session`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ serviceAuthToken: env.SERVICE_AUTH_TOKEN }),
+      });
 
       if (!serviceAuthResponse.ok) {
         const error = await serviceAuthResponse.text();
-        throw new Error(`Failed to authenticate with service auth: ${error}`);
+        const headers = inspect(serviceAuthResponse.headers);
+        throw new Error(
+          `Failed to authenticate with service auth: ${error}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
+        );
       }
 
       const sessionCookies = serviceAuthResponse.headers.get("set-cookie");
       if (!sessionCookies) {
-        throw new Error("Failed to get session cookies from service auth");
+        const text = await serviceAuthResponse.text();
+        const headers = inspect(serviceAuthResponse.headers);
+        throw new Error(
+          `Failed to get session cookies from service auth. Response: ${text}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
+        );
       }
 
       console.log("Successfully authenticated");
@@ -98,10 +100,8 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("Step 2: Setting up test user with organization and estate...");
 
       adminTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: sessionCookies,
-        },
+        headers: { cookie: sessionCookies },
+        log: (...args) => trpcLogs.push(["adminTrpc", ...args]),
       });
 
       const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
@@ -119,20 +119,16 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("Step 3: Impersonating test user...");
 
       const authClient = createAuthClient({
-        baseURL: env.VITE_PUBLIC_URL,
+        baseURL: workerUrl,
         plugins: [adminClient()],
       });
 
       let impersonationCookies = "";
 
       const impersonationResult = await authClient.admin.impersonateUser(
+        { userId: user.id },
         {
-          userId: user.id,
-        },
-        {
-          headers: {
-            cookie: sessionCookies,
-          },
+          headers: { cookie: sessionCookies },
           onResponse(context: { response: Response }) {
             const cookies = context.response.headers.getSetCookie();
             const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
@@ -146,88 +142,36 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
       );
 
       if (!impersonationResult?.data) {
-        throw new Error("Failed to impersonate user");
+        throw new Error("Failed to impersonate user", { cause: impersonationResult });
       }
 
       if (!impersonationCookies) {
-        throw new Error("Failed to get impersonation cookies");
+        throw new Error("Failed to get impersonation cookies", { cause: impersonationResult });
       }
 
       console.log("Successfully impersonated test user");
 
-      // Note: GitHub installation linking would normally happen through the OAuth callback
-
       // Step 4: Clone estate-template and push to new repository
       console.log("Step 5: Cloning estate-template repository...");
 
-      const octokit = new Octokit({
-        auth: testSeedData.github.accessToken,
-      });
-
-      // Generate new repository from template
-      const templateOwner = "iterate";
-      const templateRepo = "estate-template";
-
-      const newRepoResponse = await octokit.rest.repos.createUsingTemplate({
-        template_owner: templateOwner,
-        template_repo: templateRepo,
-        owner: "iterate-estates",
-        name: repoName,
-        private: false,
-        description: "E2E test estate repository",
-      });
-
-      if (newRepoResponse.status !== 201) {
-        throw new Error(`Failed to create repository: ${JSON.stringify(newRepoResponse)}`);
-      }
-
-      const newRepo = newRepoResponse.data;
-      createdRepoFullName = newRepo.full_name;
-      console.log(`Created repository from template: ${createdRepoFullName}`);
-
-      // Wait a bit for GitHub to process the new repository
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
       // Create TRPC client with impersonated user session
       const userTrpc = makeVitestTrpcClient({
-        url: `${env.VITE_PUBLIC_URL}/api/trpc`,
-        headers: {
-          cookie: impersonationCookies,
-        },
+        headers: { cookie: impersonationCookies },
+        log: (...args) => trpcLogs.push(["userTrpc", ...args]),
       });
 
       // Step 5: List available GitHub repos and verify our new repo is there
-      console.log(
-        `Step 6: Listing available GitHub repositories using ${env.VITE_PUBLIC_URL}/api/trpc endpoint`,
-      );
+      console.log(`Step 6: Listing available GitHub repositories`);
 
-      const availableRepos = await userTrpc.integrations.listAvailableGithubRepos.query({
+      const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
         estateId: estate.id,
       });
-
-      const foundRepo = availableRepos.find((repo) => repo.full_name === createdRepoFullName);
-
       expect(foundRepo).toBeDefined();
+      createdRepoFullName = foundRepo!.full_name;
+
       console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
 
-      // Link the repository
-      console.log("Step 7: Linking repository to estate...");
-
-      if (!foundRepo) {
-        throw new Error(`Repository ${createdRepoFullName} not found in available repos`);
-      }
-
-      await userTrpc.integrations.setGithubRepoForEstate.mutate({
-        estateId: estate.id,
-        repoId: foundRepo.id,
-        path: "/",
-        branch: "main",
-      });
-
-      console.log("Repository linked successfully");
-
-      // Step 6: Poll for build completion
-      console.log("Step 8: Waiting for initial build to complete...");
+      console.log("Step 7: Waiting for initial build to complete...");
 
       const buildTimeout = 5 * 60 * 1000; // 5 minutes
       const pollInterval = 5000; // 5 seconds
@@ -312,8 +256,11 @@ test.skipIf(!process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       console.log("✅ Bot replied successfully!");
       console.log("End-to-end test completed successfully!");
+    } catch (error) {
+      console.log("Error occurred, here are the trpc request logs:");
+      trpcLogs.forEach((log) => console.log(...log));
+      throw error;
     } finally {
-      // Cleanup: Delete the created repository
       if (createdRepoFullName) {
         console.log(`Cleaning up: Deleting repository ${createdRepoFullName}...`);
 

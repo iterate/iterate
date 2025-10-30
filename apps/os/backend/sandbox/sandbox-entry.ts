@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/opt/node24/bin/node
 /* eslint-disable no-console -- Console statements are required for script output to stdout/stderr */
 /**
  * Build script that clones a GitHub repository, installs dependencies,

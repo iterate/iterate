@@ -1940,6 +1940,8 @@ export class IterateAgent<
       // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
       // TODO: switch to using branch names instead of session ids
       const sessionDir = `/tmp/session-${hashSessionId(sessionId)}`;
+      const nodePath = "/opt/node24/bin/node";
+
       try {
         await sandbox.mkdir(sessionDir, { recursive: true });
       } catch (err) {
@@ -1991,7 +1993,7 @@ export class IterateAgent<
         // Escape the JSON string for shell
         const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
         // Init the sandbox (ignore any errors)
-        const commandInit = `pwd && bun /tmp/sandbox-entry.ts init '${initJsonArgs}' && bun /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
+        const commandInit = `pwd && ${nodePath} /tmp/sandbox-entry.ts init '${initJsonArgs}' && ${nodePath} /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
         using resultInit = await sandboxSession.exec(commandInit, {
           timeout: 360 * 1000, // 360 seconds total timeout
         });
