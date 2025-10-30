@@ -202,10 +202,10 @@ async function setupDatabase() {
     };
   }
 
-  if (isProduction || isStaging) {
+  if (isStaging) {
     // In production, we use the existing production planetscale db without any branching
     const planetscaleDb = await Database("planetscale-db", {
-      name: isStaging ? "staging" : "production",
+      name: "staging",
       clusterSize: "PS_10",
       adopt: true,
       arch: "x86",
@@ -224,7 +224,21 @@ async function setupDatabase() {
       adopt: true,
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+
+    return {
+      ITERATE_POSTGRES: hyperdrive,
+    };
+  }
+
+  if (isProduction) {
+    // Use predefined connection strings for production
+    const hyperdrive = await Hyperdrive("iterate-postgres", {
+      origin: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
+      adopt: true,
+    });
+
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
