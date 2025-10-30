@@ -3,10 +3,12 @@ import { redirect, useLoaderData, useNavigate, useNavigation, useSearchParams } 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { eq } from "drizzle-orm";
+import { match } from "ts-pattern";
 import { getDb } from "../../../../backend/db/client.ts";
 import * as schema from "../../../../backend/db/schema.ts";
 import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import { useTRPC } from "../../../lib/trpc.ts";
+import { Button } from "../../../components/ui/button.tsx";
 import { OnboardingSlackStep } from "./onboarding-slack-step.tsx";
 import { OnboardingConfirmOrgStep } from "./onboarding-confirm-org-step.tsx";
 
@@ -64,51 +66,44 @@ export default function EstateOnboarding() {
     ),
   );
 
-  // Filter out Slack connector for trial estates since they're using Slack Connect
-  const isSlackConnected =
-    data?.oauthIntegrations?.some(
-      (integration) => integration.id === "slack-bot" && integration.isConnected,
-    ) ?? false;
-
-  useEffect(() => {
-    if (isFetching || state === "loading") return;
-    if (!isSlackConnected) {
-      navigate(`/${organizationId}/${estateId}/onboarding?step=slack`);
-      return;
-    }
-    if (step === "slack_complete") {
-      completeOnboarding.mutate(
-        { estateId, step: "slack" },
-        { onSuccess: () => navigate(`/${organizationId}/${estateId}`) },
-      );
-    }
-  }, [
-    initialStep,
-    isFetching,
-    isSlackConnected,
-    estateId,
-    organizationId,
-    navigate,
-    completeOnboarding,
-    step,
-    state,
-  ]);
+  if (isFetching || state === "loading") return <div>Loading...</div>;
 
   return (
     <>
-      {step === "confirm_org" ? (
-        <OnboardingConfirmOrgStep
-          organizationId={organizationId}
-          organizationName={organization.name}
-          onComplete={() => setStep("slack")}
-        />
-      ) : (
-        <OnboardingSlackStep
-          organizationId={organizationId}
-          estateId={estateId}
-          onComplete={() => completeOnboarding.mutate({ estateId, step: "slack" })}
-        />
-      )}
+      {/* {!isSlackConnected && (
+        <Button asChild>
+          <a href={`/${organizationId}/${estateId}/onboarding?step=slack`}>Connect bot to slack</a>
+        </Button>
+      )} */}
+      {match(step)
+        .with("slack_complete", () => (
+          <>
+            <Button
+              onClick={() => {
+                completeOnboarding.mutate(
+                  { estateId, step: "slack" },
+                  { onSuccess: () => navigate(`/${organizationId}/${estateId}`) },
+                );
+              }}
+            >
+              Complete onboarding! 🤗
+            </Button>
+          </>
+        ))
+        .with("confirm_org", () => (
+          <OnboardingConfirmOrgStep
+            organizationId={organizationId}
+            organizationName={organization.name}
+            onComplete={() => setStep("slack")}
+          />
+        ))
+        .otherwise(() => (
+          <OnboardingSlackStep
+            organizationId={organizationId}
+            estateId={estateId}
+            onComplete={() => completeOnboarding.mutate({ estateId, step: "slack" })}
+          />
+        ))}
     </>
   );
 }
