@@ -21,6 +21,7 @@ const stateStore = (scope: Scope) =>
 const app = await alchemy("iterate", {
   password: process.env.ALCHEMY_PASSWORD,
   stateStore,
+  destroyOrphans: false,
 });
 
 const isProduction = app.stage === "prd";
@@ -224,7 +225,7 @@ async function setupDatabase() {
       adopt: true,
     });
 
-    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+    await migrate(role.connectionUrl.unencrypted);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
@@ -251,6 +252,7 @@ async function setupDatabase() {
 async function setupDurableObjects() {
   const SANDBOX = await Container<import("./backend/worker.ts").Sandbox>("sandbox", {
     className: "Sandbox",
+    name: isProduction ? "os-sandbox" : undefined,
     build: {
       dockerfile: "Dockerfile",
       context: "./backend/sandbox",
@@ -371,6 +373,6 @@ export const worker = await deployWorker();
 await uploadSourcemaps();
 
 await app.finalize();
-console.log("Deployment complete");
 
+console.log("Deployment complete");
 if (!app.local) process.exit(0);
