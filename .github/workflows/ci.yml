@@ -8,7 +8,7 @@ on:
   push:
     branches:
       - main
-      - "**/*e2eworkflow"
+      - mmkal/25/10/29/slackclientinworkflows
   workflow_dispatch:
     inputs:
       stage:
@@ -42,3 +42,104 @@ jobs:
     with:
       worker_url: ${{ needs.deploy.outputs.worker_url || 'some_garbage' }}
       stage: ${{ needs.variables.outputs.stage }}
+  slack_failure:
+    needs:
+      - variables
+      - deploy
+      - e2e
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    env:
+      NEEDS: ${{ toJson(needs) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: notify_slack_on_failure
+        id: notify_slack_on_failure
+        uses: actions/github-script@v7
+        with:
+          script: |-
+            github.log = {
+              ...console,
+              debug: () => {},
+            };
+
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              "module.exports.load = () => require(\"tsx/esm/api\").tsImport(\"../utils/slack.ts\", __filename);",
+            );
+
+            const vars = {
+              github,
+              context,
+              core,
+              glob,
+              io,
+              require,
+            };
+
+            const __handler = async function notify_slack_on_failure() {
+              const {
+                getSlackClient,
+                slackChannelIds,
+              } = await require(
+                ".github/ts-workflows/workflows/ci.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
+              ).load();
+
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const needs = JSON.parse(process.env.NEEDS);
+
+              const failedJobs = Object.entries(needs).filter((
+                [_, {
+                  result,
+                }],
+              ) => result === "failure").map(([name]) => name);
+
+              await slack.chat.postMessage({
+                channel: slackChannelIds["#error-pulse"],
+
+                blocks: [{
+                  type: "header",
+
+                  text: {
+                    type: "plain_text",
+                    text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                  },
+                }, {
+                  type: "section",
+
+                  fields: [{
+                    type: "mrkdwn",
+                    text: "*Repository:* ${{ github.repository }}",
+                  }, {
+                    type: "mrkdwn",
+                    text: "*Branch:* ${{ github.ref_name }}",
+                  }, {
+                    type: "mrkdwn",
+                    text: "*Workflow:* ${{ github.workflow }}",
+                  }, {
+                    type: "mrkdwn",
+                    text: "*Run Number:* ${{ github.run_number }}",
+                  }],
+                }, {
+                  type: "section",
+
+                  text: {
+                    type: "mrkdwn",
+                    text: "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
+                  },
+                }],
+              });
+            };
+
+            return __handler(vars);
