@@ -84,17 +84,23 @@ export default {
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       steps: [
-        { run: "echo $needs", env: { needs: "${{ toJson(needs) }}" } },
         ...utils.setupRepo,
         utils.githubScript(import.meta, async function notify_slack_on_failure() {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+          const needs = JSON.parse("${{ toJson(needs) }}");
+          const failedJobs = Object.entries(needs)
+            .filter(([_, { result }]: [string, any]) => result === "failure")
+            .map(([name]) => name);
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
             blocks: [
               {
                 type: "header",
-                text: { type: "plain_text", text: "🚨 CI Failed" },
+                text: {
+                  type: "plain_text",
+                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                },
               },
               {
                 type: "section",
