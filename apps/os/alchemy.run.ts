@@ -21,6 +21,7 @@ const stateStore = (scope: Scope) =>
 const app = await alchemy("iterate", {
   password: process.env.ALCHEMY_PASSWORD,
   stateStore,
+  destroyOrphans: false,
 });
 
 if (!/^[\w-]+$/.test(app.stage)) {
@@ -131,12 +132,14 @@ async function setupEnvironmentVariables() {
 
 async function setupDatabase() {
   const migrate = async (origin: string) => {
+    if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
       env: {
         PSCALE_DATABASE_URL: origin,
       },
       command: "pnpm db:migrate",
     });
+
     if (res.exitCode !== 0) {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
@@ -197,6 +200,9 @@ async function setupDatabase() {
     const hyperdrive = await Hyperdrive("iterate-postgres", {
       origin: role.connectionUrl,
       adopt: true,
+      caching: {
+        disabled: true,
+      },
     });
 
     await migrate(role.connectionUrl.unencrypted);
@@ -206,10 +212,9 @@ async function setupDatabase() {
     };
   }
 
-  if (isProduction || isStaging) {
-    // In production, we use the existing production planetscale db without any branching
+  if (isStaging) {
     const planetscaleDb = await Database("planetscale-db", {
-      name: isStaging ? "staging" : "production",
+      name: "staging",
       clusterSize: "PS_10",
       adopt: true,
       arch: "x86",
@@ -226,9 +231,30 @@ async function setupDatabase() {
     const hyperdrive = await Hyperdrive("iterate-postgres", {
       origin: role.connectionUrl,
       adopt: true,
+      caching: {
+        disabled: true,
+      },
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    // Use the preset admin connection string to run migrations
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+
+    return {
+      ITERATE_POSTGRES: hyperdrive,
+    };
+  }
+
+  if (isProduction) {
+    // Use predefined connection strings for production
+    const hyperdrive = await Hyperdrive("iterate-postgres", {
+      origin: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
+      adopt: true,
+      caching: {
+        disabled: true,
+      },
+    });
+
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
@@ -241,6 +267,7 @@ async function setupDatabase() {
 async function setupDurableObjects() {
   const SANDBOX = await Container<import("./backend/worker.ts").Sandbox>("sandbox", {
     className: "Sandbox",
+    name: isProduction ? "os-sandbox" : undefined,
     build: {
       dockerfile: "Dockerfile",
       context: "./backend/sandbox",
@@ -364,6 +391,6 @@ export const worker = await deployWorker();
 await uploadSourcemaps();
 
 await app.finalize();
-console.log("Deployment complete");
 
+console.log("Deployment complete");
 if (!app.local) process.exit(0);

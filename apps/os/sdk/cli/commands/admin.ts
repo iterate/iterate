@@ -25,6 +25,7 @@ export async function addSuperAdminUser(connectionString: string) {
   });
 
   console.log("Super admin user created");
+  await db.$client.end();
 }
 
 const addSuperAdminUserToDb = t.procedure

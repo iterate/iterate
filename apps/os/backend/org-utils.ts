@@ -7,7 +7,7 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { processOutboxEvents } from "./onboarding-outbox.ts";
+import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
@@ -112,10 +112,10 @@ export async function createOrganizationAndEstate(
   await db.transaction(async (tx) => {
     result = await createOrganizationAndEstateInTransaction(tx, params);
   });
-  // Kick outbox processing in background; cron also processes
+  // Kick task processing in background; cron also processes
   waitUntil(
     (async () => {
-      await processOutboxEvents(db);
+      await processSystemTasks(db);
     })(),
   );
   return result;
