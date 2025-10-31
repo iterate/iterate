@@ -63,11 +63,6 @@ export default {
         stage: "${{ needs.variables.outputs.stage }}",
       },
     },
-    need_test: {
-      "runs-on": "ubuntu-latest",
-      needs: ["variables"],
-      steps: [{ run: "echo $needs", env: { needs: "${{ toJson(needs) }}" } }],
-    },
     e2e: {
       if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
       uses: "./.github/workflows/e2e.yml",
