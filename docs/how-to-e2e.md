@@ -31,6 +31,24 @@ Same as how you got your user id, mention your bot, find the user id, put it in 
 
 Once all of the above is setup, you can run the e2e tests locally by running `pnpm test:e2e`
 
+### Github PR Workflow
+
+Use the GitHub CLI to open PRs after you push your branch.
+
+```bash
+gh pr create --head <branch> --fill
+```
+
+Labels can differ across repositories, so the example intentionally skips `--label` arguments.
+
+Once the PR is created, verify it exists and capture the URL:
+
+```bash
+gh pr view --json url
+```
+
+If the command reports that no PR was found, rerun it with `--head <branch>` and confirm the branch was pushed to the remote.
+
 ## How E2E tests work in CI (prod & preview)
 
 In CI, the setup is mostly same, but done on a separate Slack Dev Workspace as we are using the production bot.
