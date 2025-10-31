@@ -15,7 +15,6 @@ import * as schema from "../db/schema.ts";
 import { env, type CloudflareEnv } from "../../env.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
 import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
@@ -490,15 +489,6 @@ export const integrationsPlugin = () =>
               }
 
               const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
-              waitUntil(
-                createStripeCustomerAndSubscriptionForOrganization(
-                  db,
-                  newOrgAndEstate.organization,
-                  user,
-                ).catch(() => {
-                  // Error is already logged in the helper function
-                }),
-              );
 
               if (!newOrgAndEstate.estate) {
                 return ctx.json({ error: "Failed to create an estate for the user" });
