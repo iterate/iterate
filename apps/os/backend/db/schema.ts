@@ -584,7 +584,6 @@ export const estateOnboardingEvent = pgTable(
   ],
 );
 
-// Outbox events for async onboarding tasks
 export const systemTasks = pgTable(
   "system_tasks",
   (t) => ({

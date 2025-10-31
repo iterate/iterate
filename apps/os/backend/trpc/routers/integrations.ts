@@ -1053,109 +1053,18 @@ export const integrationsRouter = router({
    * User sync: External Slack Connect users are synced just-in-time when they send messages,
    * handled automatically by slack-agent.ts JIT sync logic.
    */
-  setupSlackConnectTrial: protectedProcedure
+  setupSlackConnectTrial: estateProtectedProcedure
     .use(({ ctx, path, next }) => next({ ctx: { advisoryLockKey: `${path}:${ctx.user.email}` } }))
     .concat(AdvisoryLocker.trpcPlugin())
     .mutation(async ({ ctx }) => {
       const userEmail = ctx.user.email;
       const userName = ctx.user.name;
-      const userId = ctx.user.id;
 
-      logger.info(`Setting up Slack Connect trial for ${userEmail}`);
+      logger.info(`Setting up Slack Connect trial for ${userEmail} on estate ${ctx.estate.id}`);
 
       const iterateTeamId = ctx.env.SLACK_ITERATE_TEAM_ID;
 
-      // Look up user by email and check if they have a trial estate
-      // This follows the proper schema relationships: user → org → estate → override
-      const existingUserWithTrial = await ctx.db.query.user.findFirst({
-        where: eq(schemas.user.email, userEmail),
-        with: {
-          organizationUserMembership: {
-            with: {
-              organization: {
-                with: {
-                  estates: {
-                    with: {
-                      slackChannelEstateOverrides: {
-                        where: eq(schemas.slackChannelEstateOverride.slackTeamId, iterateTeamId),
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          },
-        },
-      });
-
-      // Find the first estate that has a trial override
-      const existingTrial = existingUserWithTrial?.organizationUserMembership
-        .flatMap((m) => {
-          const overridenEstate = m.organization.estates.find(
-            (e) => e.slackChannelEstateOverrides.length > 0,
-          );
-          if (overridenEstate) {
-            return { estate: { ...overridenEstate, organization: m.organization } };
-          }
-          return [];
-        })
-        .find(Boolean);
-
-      let estate;
-      let organization;
-
-      if (existingTrial) {
-        estate = existingTrial.estate;
-        organization = estate.organization;
-        logger.info(
-          `Reusing existing trial estate ${estate.id} for ${userEmail} (organization ${organization.id})`,
-        );
-
-        const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
-          where: and(
-            eq(schemas.organizationUserMembership.organizationId, organization.id),
-            eq(schemas.organizationUserMembership.userId, userId),
-          ),
-        });
-
-        if (!existingMembership) {
-          await ctx.db.insert(schemas.organizationUserMembership).values({
-            organizationId: organization.id,
-            userId: userId,
-            role: "owner",
-          });
-          logger.info(`Added user ${userId} as owner of existing organization ${organization.id}`);
-        }
-      } else {
-        [organization] = await ctx.db
-          .insert(schemas.organization)
-          .values({
-            name: `${userName || userEmail}'s Organization`,
-          })
-          .returning();
-
-        logger.info(`Created organization ${organization.id} for ${userName}`);
-
-        [estate] = await ctx.db
-          .insert(schemas.estate)
-          .values({
-            name: `${userName}'s Estate`,
-            organizationId: organization.id,
-          })
-          .returning();
-
-        logger.info(`Created estate ${estate.id} for ${userName}`);
-
-        await ctx.db.insert(schemas.organizationUserMembership).values({
-          organizationId: organization.id,
-          userId: userId,
-          role: "owner",
-        });
-
-        logger.info(`Added user ${userId} as owner of organization ${organization.id}`);
-      }
-
-      // 3. Get iterate's Slack workspace estate
+      // 1. Get iterate's Slack workspace estate
       const { getIterateSlackEstateId } = await import("../../utils/trial-channel-setup.ts");
       const iterateEstateId = await getIterateSlackEstateId(ctx.db);
       if (!iterateEstateId) {
@@ -1165,29 +1074,28 @@ export const integrationsRouter = router({
         });
       }
 
-      // 4. Get iterate's bot account and token
+      // 2. Get iterate's bot account and token
       const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
       if (!iterateBotAccount) {
         throw new Error("Iterate Slack bot account not found");
       }
 
-      // 5. Link trial user's estate to iterate's bot account
-      // This gives the trial estate permission to use iterate's bot token for API calls
+      // 3. Link current estate to iterate's bot account
       await ctx.db
         .insert(schemas.estateAccountsPermissions)
         .values({
           accountId: iterateBotAccount.accountId,
-          estateId: estate.id,
+          estateId: ctx.estate.id,
         })
         .onConflictDoNothing();
 
-      logger.info(`Linked trial estate ${estate.id} to iterate's bot account`);
+      logger.info(`Linked estate ${ctx.estate.id} to iterate's bot account`);
 
-      // 6. Create provider estate mapping to link trial estate to iterate's Slack workspace
+      // 4. Create provider estate mapping to link current estate to iterate's Slack workspace
       await ctx.db
         .insert(schemas.providerEstateMapping)
         .values({
-          internalEstateId: estate.id,
+          internalEstateId: ctx.estate.id,
           externalId: iterateTeamId,
           providerId: "slack-bot",
           providerMetadata: {
@@ -1197,14 +1105,13 @@ export const integrationsRouter = router({
         })
         .onConflictDoNothing();
 
-      logger.info(`Created provider estate mapping for trial estate ${estate.id}`);
+      logger.info(`Created provider estate mapping for estate ${ctx.estate.id}`);
 
-      // 7. Create trial channel and send invite
-      // Note: User sync happens just-in-time when external users send messages
+      // 5. Create trial channel and send invite
       const { createTrialSlackConnectChannel } = await import("../../utils/trial-channel-setup.ts");
       const result = await createTrialSlackConnectChannel({
         db: ctx.db,
-        userEstateId: estate.id,
+        userEstateId: ctx.estate.id,
         userEmail,
         userName,
         iterateTeamId,
@@ -1212,13 +1119,13 @@ export const integrationsRouter = router({
       });
 
       logger.info(
-        `Set up trial for ${userEmail}: channel ${result.channelName} → estate ${estate.id}`,
+        `Set up trial for ${userEmail}: channel ${result.channelName} → estate ${ctx.estate.id}`,
       );
 
       return {
         success: true,
-        estateId: estate.id,
-        organizationId: organization.id,
+        estateId: ctx.estate.id,
+        organizationId: ctx.estate.organizationId,
         channelId: result.channelId,
         channelName: result.channelName,
       };

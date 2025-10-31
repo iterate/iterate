@@ -11,7 +11,6 @@ import {
   createGithubRepoInEstatePool,
   createUserOrganizationAndEstate,
 } from "../../backend/org-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../../backend/integrations/stripe/stripe.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { Route } from "./+types/redirect";
@@ -33,15 +32,6 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
       throw new Error(`User ${userId} not found - this should never happen.`);
     }
     const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
-    waitUntil(
-      createStripeCustomerAndSubscriptionForOrganization(
-        db,
-        newOrgAndEstate.organization,
-        user,
-      ).catch(() => {
-        // Error is already logged in the helper function
-      }),
-    );
 
     // If the user has a Slack bot account, automatically connect it to the new estate
     // and sync Slack users to the organization

@@ -24,6 +24,10 @@ const app = await alchemy("iterate", {
   destroyOrphans: false,
 });
 
+if (!/^[\w-]+$/.test(app.stage)) {
+  throw new Error(`Invalid stage: ${app.stage}`);
+}
+
 const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
@@ -128,12 +132,14 @@ async function setupEnvironmentVariables() {
 
 async function setupDatabase() {
   const migrate = async (origin: string) => {
+    if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
       env: {
         PSCALE_DATABASE_URL: origin,
       },
       command: "pnpm db:migrate",
     });
+
     if (res.exitCode !== 0) {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
@@ -207,7 +213,6 @@ async function setupDatabase() {
   }
 
   if (isStaging) {
-    // In production, we use the existing production planetscale db without any branching
     const planetscaleDb = await Database("planetscale-db", {
       name: "staging",
       clusterSize: "PS_10",
@@ -231,7 +236,8 @@ async function setupDatabase() {
       },
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    // Use the preset admin connection string to run migrations
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
@@ -340,11 +346,14 @@ async function setupStorage() {
   }
 }
 
-const domain = isProduction
-  ? ["os.iterate.com", "os.iterateproxy.com"]
-  : isStaging
-    ? ["os-staging.iterate.com", "os-staging.iterateproxy.com"]
-    : [];
+const subdomain = `os-${app.stage}`
+  .replace(/^os-prd$/, "os") // production domain is just "os"
+  .replace(/^os-stg$/, "os-staging"); // staging domain is "os-staging" for historical reasons
+
+const domains = [
+  `${subdomain}.iterate.com`, // main domain
+  `${subdomain}.iterateproxy.com`, // proxy, used for callback urls to ourselves, sometimes
+];
 
 async function deployWorker() {
   const worker = await ReactRouter("os", {
@@ -355,7 +364,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
-    domains: domain,
+    domains,
     compatibilityFlags: ["enable_ctx_exports"],
     main: "./backend/worker.ts",
     crons: ["0 0 * * *"],
@@ -372,7 +381,7 @@ async function deployWorker() {
 }
 
 if (process.env.GITHUB_OUTPUT) {
-  const workerUrl = `https://${domain[0]}`;
+  const workerUrl = `https://${domains[0]}`;
   console.log(`Writing worker URL to GitHub output: ${workerUrl}`);
   fs.appendFileSync(process.env.GITHUB_OUTPUT, `worker_url=${workerUrl}\n`);
 }
