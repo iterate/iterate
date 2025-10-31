@@ -38,11 +38,11 @@
   "devDependencies": {
     "@eslint/js": "^9.38.0",
     "@iterate-com/vibe-rules": "workspace:*",
-    "@types/node": "^24.7.2",
+    "@types/node": "^24.9.2",
     "@typescript-eslint/eslint-plugin": "^8.46.2",
     "@typescript-eslint/parser": "^8.46.2",
     "eslint": "^9.38.0",
-    "eslint-plugin-codegen": "0.34.0",
+    "eslint-plugin-codegen": "0.34.1",
     "eslint-plugin-eslint-comments": "^3.2.0",
     "eslint-plugin-import": "^2.32.0",
     "eslint-plugin-jsx-a11y": "^6.10.2",
