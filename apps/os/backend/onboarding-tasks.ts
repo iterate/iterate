@@ -73,49 +73,49 @@ async function handleOnboardingAgentWarmup(db: DB, event: typeof schema.systemTa
   });
 }
 
-export async function processOutboxEvents(db: DB): Promise<{
+export async function processSystemTasks(db: DB): Promise<{
   processed: number;
   successful: number;
   failed: number;
 }> {
-  const events = await db
+  const systemTasks = await db
     .select()
     .from(schema.systemTasks)
     .where(isNull(schema.systemTasks.processedAt))
     .orderBy(asc(schema.systemTasks.createdAt))
     .limit(50);
 
-  if (events.length === 0) return { processed: 0, successful: 0, failed: 0 };
+  if (systemTasks.length === 0) return { processed: 0, successful: 0, failed: 0 };
 
   let successful = 0;
   let failed = 0;
 
-  for (const ev of events) {
+  for (const task of systemTasks) {
     try {
-      switch (ev.taskType) {
+      switch (task.taskType) {
         case "CreateStripeCustomer":
-          await handleStripeCustomerCreation(db, ev);
+          await handleStripeCustomerCreation(db, task);
           break;
         case "WarmOnboardingAgent":
-          await handleOnboardingAgentWarmup(db, ev);
+          await handleOnboardingAgentWarmup(db, task);
           break;
         default:
-          logger.warn(`Unknown outbox event type: ${ev.taskType} (id=${ev.id})`);
+          logger.warn(`Unknown system task type: ${task.taskType} (id=${task.id})`);
       }
       await db
         .update(schema.systemTasks)
         .set({ processedAt: new Date(), error: null, updatedAt: new Date() })
-        .where(eq(schema.systemTasks.id, ev.id as number));
+        .where(eq(schema.systemTasks.id, task.id as number));
       successful++;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       await db
         .update(schema.systemTasks)
-        .set({ attempts: (ev.attempts ?? 0) + 1, error: message, updatedAt: new Date() })
-        .where(eq(schema.systemTasks.id, ev.id as number));
+        .set({ attempts: (task.attempts ?? 0) + 1, error: message, updatedAt: new Date() })
+        .where(eq(schema.systemTasks.id, task.id as number));
       failed++;
     }
   }
 
-  return { processed: events.length, successful, failed };
+  return { processed: systemTasks.length, successful, failed };
 }

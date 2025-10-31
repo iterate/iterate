@@ -31,7 +31,7 @@ import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
-import { processOutboxEvents } from "./onboarding-outbox.ts";
+import { processSystemTasks } from "./onboarding-tasks.ts";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -270,11 +270,11 @@ export default class extends WorkerEntrypoint {
         const db = getDb();
 
         try {
-          logger.info("Running scheduled onboarding outbox");
-          const result = await processOutboxEvents(db);
-          logger.info("Onboarding outbox completed", result);
+          logger.info("Running scheduled onboarding tasks");
+          const result = await processSystemTasks(db);
+          logger.info("Onboarding tasks completed", result);
         } catch (error) {
-          logger.error("Onboarding outbox failed:", error);
+          logger.error("Onboarding tasks failed:", error);
         }
         break;
       }
