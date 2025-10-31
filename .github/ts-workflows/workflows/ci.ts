@@ -84,7 +84,7 @@ export default {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
           await slack.chat.postMessage({
-            channel: slackChannelIds["#misha-test"],
+            channel: slackChannelIds["#error-pulse"],
             blocks: [
               {
                 type: "header",
