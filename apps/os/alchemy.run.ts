@@ -128,12 +128,14 @@ async function setupEnvironmentVariables() {
 
 async function setupDatabase() {
   const migrate = async (origin: string) => {
+    if (!origin) throw new Error("Database connection string is not set");
     const res = await Exec("db-migrate", {
       env: {
         PSCALE_DATABASE_URL: origin,
       },
       command: "pnpm db:migrate",
     });
+
     if (res.exitCode !== 0) {
       throw new Error(`Failed to run migrations: ${res.stderr}`);
     }
@@ -207,7 +209,6 @@ async function setupDatabase() {
   }
 
   if (isStaging) {
-    // In production, we use the existing production planetscale db without any branching
     const planetscaleDb = await Database("planetscale-db", {
       name: "staging",
       clusterSize: "PS_10",
@@ -231,7 +232,8 @@ async function setupDatabase() {
       },
     });
 
-    await migrate(role.connectionUrl.unencrypted);
+    // Use the preset admin connection string to run migrations
+    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
       ITERATE_POSTGRES: hyperdrive,
