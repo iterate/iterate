@@ -86,57 +86,6 @@ export default workflow({
             path: "apps/os/ignoreme/e2e-logs",
           }),
         },
-        {
-          name: "Notify Slack on Failure",
-          if: "failure()",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-          run: dedent`
-            WEBHOOK_URL=$(doppler secrets get GITHUB_E2E_TEST_FAIL_SLACK_WEBHOOK --plain)
-
-            curl -X POST "$WEBHOOK_URL" -H 'Content-Type: application/json' -d '{
-                "text": "🚨 Production Onboarding Tests Failed",
-                "blocks": [
-                  {
-                    "type": "header",
-                    "text": {
-                      "type": "plain_text",
-                      "text": "🚨 Production Onboarding Tests Failed"
-                    }
-                  },
-                  {
-                    "type": "section",
-                    "fields": [
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Repository:* \${{ github.repository }}"
-                      },
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Branch:* \${{ github.ref_name }}"
-                      },
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Workflow:* \${{ github.workflow }}"
-                      },
-                      {
-                        "type": "mrkdwn",
-                        "text": "*Run Number:* \${{ github.run_number }}"
-                      }
-                    ]
-                  },
-                  {
-                    "type": "section",
-                    "text": {
-                      "type": "mrkdwn",
-                      "text": "<\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}|View Workflow Run>"
-                    }
-                  }
-                ]
-              }'
-          `,
-        },
       ],
     },
   },

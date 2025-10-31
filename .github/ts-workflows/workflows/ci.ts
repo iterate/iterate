@@ -10,7 +10,7 @@ export default {
   },
   on: {
     push: {
-      branches: ["main", "**/*e2eworkflow"],
+      branches: ["main", "mmkal/25/10/29/slackclientinworkflows"],
     },
     workflow_dispatch: {
       inputs: {
@@ -74,15 +74,50 @@ export default {
         stage: "${{ needs.variables.outputs.stage }}",
       },
     },
-    // slack_failure: {
-    //   needs: ["variables", "build", "content", "api"],
-    //   if: `always() && needs.variables.outputs.branch == 'production' && contains(needs.*.result, 'failure')`,
-    //   "runs-on": "ubuntu-latest",
-    //   steps: helpers.withSlackMessage({
-    //     channel: helpers.slackChannels.tech,
-    //     messages: { initial: `:birdfall: Production CI failed!` },
-    //     steps: [],
-    //   }),
-    // },
+    slack_failure: {
+      needs: ["variables", "deploy", "e2e"],
+      if: `always() && contains(needs.*.result, 'failure')`,
+      "runs-on": "ubuntu-latest",
+      env: { NEEDS: "${{ toJson(needs) }}" },
+      steps: [
+        ...utils.setupRepo,
+        utils.githubScript(import.meta, async function notify_slack_on_failure() {
+          const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+          const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+          const needs = JSON.parse(process.env.NEEDS!);
+          const failedJobs = Object.entries(needs)
+            .filter(([_, { result }]: [string, any]) => result === "failure")
+            .map(([name]) => name);
+          await slack.chat.postMessage({
+            channel: slackChannelIds["#error-pulse"],
+            blocks: [
+              {
+                type: "header",
+                text: {
+                  type: "plain_text",
+                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                },
+              },
+              {
+                type: "section",
+                fields: [
+                  { type: "mrkdwn", text: "*Repository:* ${{ github.repository }}" },
+                  { type: "mrkdwn", text: "*Branch:* ${{ github.ref_name }}" },
+                  { type: "mrkdwn", text: "*Workflow:* ${{ github.workflow }}" },
+                  { type: "mrkdwn", text: "*Run Number:* ${{ github.run_number }}" },
+                ],
+              },
+              {
+                type: "section",
+                text: {
+                  type: "mrkdwn",
+                  text: "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
+                },
+              },
+            ],
+          });
+        }),
+      ],
+    },
   },
 } satisfies Workflow;
