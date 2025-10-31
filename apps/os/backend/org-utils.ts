@@ -38,7 +38,7 @@ export const createGithubRepoInEstatePool = async (metadata: {
   return repo.data;
 };
 
-export async function createOrganizationAndEstateInTransaction(
+async function createOrganizationAndEstateInTransaction(
   tx: DBLike,
   params: {
     organizationName: string;
@@ -135,7 +135,6 @@ export const createUserOrganizationAndEstate = async (
 }> => {
   // Check if user already has a non-external organization
   const existingMemberships = await getUserOrganizations(db, user.id);
-
   // Only create organization and estate for new users
   // External users should get a new organization created
   if (existingMemberships.length > 0) {
