@@ -78,12 +78,13 @@ export default {
       needs: ["variables", "deploy", "e2e"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
+      env: { NEEDS: "${{ toJson(needs) }}" },
       steps: [
         ...utils.setupRepo,
         utils.githubScript(import.meta, async function notify_slack_on_failure() {
           const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-          const needs = eval("${{ toJson(needs) }}");
+          const needs = JSON.parse(process.env.NEEDS!);
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")
             .map(([name]) => name);
