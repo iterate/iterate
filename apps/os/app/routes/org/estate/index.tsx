@@ -1,3 +1,4 @@
+import { useSessionStorageValue } from "@react-hookz/web";
 import { useState, useMemo, Suspense } from "react";
 import { useNavigate } from "react-router";
 import {
@@ -14,6 +15,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery, useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { ur } from "zod/v4/locales";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
 import {
@@ -174,6 +176,24 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
   );
 }
 
+function slackUrlTheadTs(filter: string): string | undefined {
+  if (filter.startsWith("https://")) {
+    const url = new URL(filter);
+    if (url.hostname.endsWith(".slack.com") && url.pathname.startsWith("/archives/")) {
+      if (url.searchParams.has("thread_ts")) {
+        return url.searchParams.get("thread_ts")!;
+      }
+      // no thread_ts, looks like a top-level message, parse thusly: https://stackoverflow.com/q/46355373
+      // "So, what I've found is that the p1234567898000159 value in the link above is almost the message's ts value, but not quite (the Slack API won't accept it): the leading p needs to be removed, also there has to be a . inserted after the 10th digit: 1234567898.000159"
+      const lastPart = url.pathname.split("/").filter(Boolean).pop();
+      if (lastPart?.match(/^p\d+$/)) {
+        return `${lastPart.slice(1, 11)}.${lastPart.slice(11)}`;
+      }
+    }
+  }
+  return undefined;
+}
+
 export default function Home() {
   const navigate = useNavigate();
   const estateId = useEstateId();
@@ -181,7 +201,7 @@ export default function Home() {
   const trpc = useTRPC();
   const { openSlackApp } = useSlackConnection();
 
-  const [filter, setFilter] = useState("");
+  const sessionFilter = useSessionStorageValue<string>("agent-name-filter");
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [agentName, setAgentName] = useState("");
@@ -191,7 +211,13 @@ export default function Home() {
   const [firstMessage, setFirstMessage] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const { data: agents } = useSuspenseQuery(trpc.agents.list.queryOptions({ estateId }));
+  const nameSubstring = slackUrlTheadTs(sessionFilter.value || "") || sessionFilter.value;
+  const { data: agents } = useSuspenseQuery(
+    trpc.agents.list.queryOptions({
+      estateId,
+      agentNameLike: nameSubstring ? `%${nameSubstring}%` : undefined,
+    }),
+  );
   const { data: estateInfo } = useSuspenseQuery(trpc.estate.get.queryOptions({ estateId }));
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
@@ -258,12 +284,8 @@ export default function Home() {
     });
   };
 
-  const sortedAndFilteredAgents = useMemo(() => {
-    const filtered = agents.filter((agent) =>
-      agent.durableObjectName.toLowerCase().includes(filter.toLowerCase()),
-    );
-
-    filtered.sort((a, b) => {
+  const sortedAgents = useMemo(() => {
+    return agents.toSorted((a, b) => {
       let aValue: string | Date;
       let bValue: string | Date;
 
@@ -292,9 +314,7 @@ export default function Home() {
       }
       return 0;
     });
-
-    return filtered;
-  }, [agents, filter, sortField, sortDirection]);
+  }, [agents, sortField, sortDirection]);
 
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) {
@@ -554,8 +574,8 @@ export default function Home() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Active Agents</h2>
             <Badge variant="secondary">
-              {sortedAndFilteredAgents.length} of {agents.length} agent
-              {sortedAndFilteredAgents.length !== 1 ? "s" : ""}
+              {sortedAgents.length} of {agents.length} agent
+              {sortedAgents.length !== 1 ? "s" : ""}
             </Badge>
           </div>
 
@@ -563,9 +583,11 @@ export default function Home() {
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Filter agents by name..."
-              value={filter}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilter(e.target.value)}
+              placeholder="Filter agents by name or Slack message link..."
+              value={sessionFilter.value}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                sessionFilter.set(e.target.value)
+              }
               className="pl-10"
             />
           </div>
@@ -619,7 +641,7 @@ export default function Home() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredAgents.map((agent) => (
+                  {sortedAgents.map((agent) => (
                     <TableRow key={agent.id} className="hover:bg-muted/50">
                       <TableCell className="px-4 py-3">
                         <AgentNameCell
