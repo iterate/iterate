@@ -4,7 +4,7 @@
   "version": "0.0.1",
   "description": "Mock MCP server for e2e testing",
   "scripts": {
-    "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
+    "dev:mock-server": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
     "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${USER}}\"",
     "test": "vitest",
     "typecheck": "tsc -b"

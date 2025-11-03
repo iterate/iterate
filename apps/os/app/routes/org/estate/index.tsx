@@ -13,7 +13,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
-import { useSuspenseQuery, useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
@@ -215,14 +215,14 @@ export default function Home() {
   const [searchTerm, setSearchTerm] = useState("");
 
   const nameSubstring = slackUrlTheadTs(agentNameFilter || "") || agentNameFilter;
-  const { data: agents } = useSuspenseQuery(
+  const { data: agents } = useQuery(
     trpc.agents.list.queryOptions({
       estateId,
       agentNameLike: nameSubstring ? `%${nameSubstring}%` : undefined,
     }),
   );
-  const { data: estateInfo } = useSuspenseQuery(trpc.estate.get.queryOptions({ estateId }));
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const { data: estateInfo } = useQuery(trpc.estate.get.queryOptions({ estateId }));
+  const { data: user } = useQuery(trpc.user.me.queryOptions());
 
   // Fetch Slack channels for the dialog
   const {
@@ -288,6 +288,7 @@ export default function Home() {
   };
 
   const sortedAgents = useMemo(() => {
+    if (!agents) return [];
     return agents.toSorted((a, b) => {
       let aValue: string | Date;
       let bValue: string | Date;
@@ -330,8 +331,6 @@ export default function Home() {
     );
   };
 
-  const isTrialEstate = estateInfo.isTrialEstate;
-
   return (
     <>
       {/* Welcome Section */}
@@ -349,10 +348,10 @@ export default function Home() {
                 <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
                 Message @iterate on Slack
               </Button>
-              {isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
+              {estateInfo?.isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
             </div>
 
-            {estateInfo.onboardingAgentName && user.debugMode ? (
+            {estateInfo?.onboardingAgentName && user?.debugMode ? (
               <div className="pt-4">
                 <Suspense fallback={<Skeleton className="h-[120px] w-full" />}>
                   <OnboardingHero estateId={estateId} />
@@ -364,7 +363,7 @@ export default function Home() {
       </Card>
 
       {/* Debug Features */}
-      {user.debugMode && (
+      {user?.debugMode && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card variant="muted">
             <CardContent>
@@ -577,7 +576,7 @@ export default function Home() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Active Agents</h2>
             <Badge variant="secondary">
-              {sortedAgents.length} of {agents.length} agent
+              {sortedAgents.length} of {agents?.length || 0} agent
               {sortedAgents.length !== 1 ? "s" : ""}
             </Badge>
           </div>
@@ -595,7 +594,7 @@ export default function Home() {
             />
           </div>
 
-          {agents.length === 0 ? (
+          {agents?.length === 0 ? (
             <Empty>
               <EmptyMedia variant="icon">
                 <Bot className="h-12 w-12" />
@@ -694,7 +693,7 @@ export default function Home() {
 
 function OnboardingHero({ estateId }: { estateId: string }) {
   const trpc = useTRPC();
-  const { data } = useSuspenseQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
+  const { data } = useQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
 
   const results = data?.results ?? {};
 
@@ -703,7 +702,7 @@ function OnboardingHero({ estateId }: { estateId: string }) {
       <Alert>
         <AlertCircle className="h-4 w-4" />
         <AlertDescription>
-          We’re gathering onboarding insights. Check back in a moment.
+          We're gathering onboarding insights. Check back in a moment.
         </AlertDescription>
       </Alert>
     );

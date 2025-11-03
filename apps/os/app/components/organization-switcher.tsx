@@ -1,5 +1,5 @@
 import { ChevronsUpDown, Plus } from "lucide-react";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useRouteLoaderData } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
@@ -18,14 +18,15 @@ export function OrganizationSwitcher() {
   const navigate = useNavigate();
   const currentOrganizationId = useOrganizationId();
   const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
-  const { data: allOrganizations } = useSuspenseQuery({
-    ...trpc.organization.list.queryOptions(),
-    initialData: loaderData?.organizations,
-  });
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const organizationsQuery = useQuery(
+    trpc.organization.list.queryOptions(void 0, {
+      initialData: loaderData?.organizations ?? [],
+    }),
+  );
+  const userQuery = useQuery(trpc.user.me.queryOptions());
 
   // Only show organizations where user is owner or member
-  const organizations = allOrganizations.filter(
+  const organizations = organizationsQuery.data.filter(
     (org) => org.role === "owner" || org.role === "member",
   );
 
@@ -97,7 +98,7 @@ export function OrganizationSwitcher() {
                 </div>
               </DropdownMenuItem>
             ))}
-            {user.debugMode && (
+            {userQuery.data?.debugMode && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

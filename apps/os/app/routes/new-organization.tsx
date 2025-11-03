@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
@@ -26,7 +26,7 @@ export function meta(_args: Route.MetaArgs) {
 export default function NewOrganization() {
   const navigate = useNavigate();
   const trpc = useTRPC();
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const userQuery = useQuery(trpc.user.me.queryOptions());
   const [organizationName, setOrganizationName] = useState("");
 
   const createOrganization = useMutation(
@@ -52,8 +52,17 @@ export default function NewOrganization() {
     createOrganization.mutate({ name: organizationName });
   };
 
+  // Show loading spinner while checking permissions
+  if (userQuery.isPending) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Spinner />
+      </div>
+    );
+  }
+
   // Only allow debugMode users to create organizations
-  if (!user.debugMode) {
+  if (!userQuery.data?.debugMode) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-md">
