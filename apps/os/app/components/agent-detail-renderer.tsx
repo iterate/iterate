@@ -963,7 +963,7 @@ function CoreEventRenderer({
                   {payload.event && "channel" in payload.event
                     ? typeof payload.event.channel === "string"
                       ? payload.event.channel.slice(-8)
-                      : payload.event.channel.id?.slice(-8)
+                      : payload.event.channel?.id?.slice(-8)
                     : "Unknown"}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
