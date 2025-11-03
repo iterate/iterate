@@ -553,45 +553,34 @@ async function processWebhookForEstate({
     threadTs: messageMetadata.threadTs,
   });
 
-  const [agentRoute, ...rest] = await db
-    .select()
-    .from(schema.agentInstanceRoute)
-    .innerJoin(
-      schema.agentInstance,
-      eq(schema.agentInstanceRoute.agentInstanceId, schema.agentInstance.id),
-    )
-    .innerJoin(schema.estate, eq(schema.agentInstance.estateId, schema.estate.id))
-    .innerJoin(schema.organization, eq(schema.estate.organizationId, schema.organization.id))
-    .leftJoin(
-      schema.iterateConfig,
-      and(
-        eq(schema.iterateConfig.estateId, schema.estate.id),
-        // note: there is a unique constraint on estate_id at time of writing, but in theory it could be removed, so we need to use a subquery to get the latest iterate config
-        sql`${schema.iterateConfig.id} = ${db
-          .select({ id: schema.iterateConfig.id })
-          .from(schema.iterateConfig)
-          .where(eq(schema.iterateConfig.estateId, schema.estate.id))
-          .orderBy(desc(schema.iterateConfig.updatedAt))
-          .limit(1)}`,
-      ),
-    )
-    .orderBy(desc(schema.iterateConfig.updatedAt), desc(schema.agentInstance.updatedAt))
-    .where(eq(schema.agentInstanceRoute.routingKey, routingKey));
+  const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
+    where: eq(schema.agentInstanceRoute.routingKey, routingKey),
+    orderBy: desc(schema.agentInstance.updatedAt),
+    with: {
+      agentInstance: {
+        with: {
+          estate: {
+            with: {
+              organization: true,
+              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
+            },
+          },
+        },
+      },
+    },
+  });
 
   if (rest.length > 0) {
-    logger.error(`Multiple agents (${rest.length + 1}) found for routing key ${routingKey}`, [
-      agentRoute,
-      ...rest,
-    ]);
+    logger.error(`Multiple agents found for routing key ${routingKey}`);
   }
 
-  const agentStub = agentRoute
+  const agentStub = agentRoute?.agentInstance?.estate
     ? await getAgentStub("SlackAgent", {
         agentInitParams: {
-          record: agentRoute.agent_instance,
-          estate: agentRoute.estate,
-          organization: agentRoute.organization,
-          iterateConfig: agentRoute.iterate_config?.config ?? {},
+          record: agentRoute.agentInstance,
+          estate: agentRoute.agentInstance.estate,
+          organization: agentRoute.agentInstance.estate.organization!,
+          iterateConfig: agentRoute.agentInstance.estate.iterateConfigs?.[0]?.config ?? {},
         },
       })
     : await getOrCreateAgentStubByRoute("SlackAgent", {
