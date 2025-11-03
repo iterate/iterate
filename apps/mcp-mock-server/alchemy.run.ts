@@ -33,6 +33,7 @@ const worker = await Worker("mcp-mock-server", {
   bindings: {
     MCP_OBJECT,
     MCP_OAUTH_OBJECT,
+    // env.OAUTH_PROVIDER comes by magic from https://github.com/cloudflare/workers-oauth-provider
     OAUTH_KV,
   },
   domains: isProduction ? ["mock.iterate.com"] : isStaging ? ["mock-staging.iterate.com"] : [],
