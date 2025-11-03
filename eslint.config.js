@@ -81,6 +81,7 @@ export default defineConfig([
       // Core JavaScript rules
       "no-unused-vars": "off",
       "no-console": "off",
+      "no-empty": "off", // `try {url = new URL(...)} catch {}` is fine
       "no-debugger": "error",
       "prefer-const": "off", // we're going to override this to be less annoying in IDEs
       "no-var": "error",

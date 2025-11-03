@@ -15,7 +15,6 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { useSuspenseQuery, useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ur } from "zod/v4/locales";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
 import {
@@ -177,20 +176,22 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
 }
 
 function slackUrlTheadTs(filter: string): string | undefined {
-  if (filter.startsWith("https://")) {
-    const url = new URL(filter);
-    if (url.hostname.endsWith(".slack.com") && url.pathname.startsWith("/archives/")) {
-      if (url.searchParams.has("thread_ts")) {
-        return url.searchParams.get("thread_ts")!;
-      }
-      // no thread_ts, looks like a top-level message, parse thusly: https://stackoverflow.com/q/46355373
-      // "So, what I've found is that the p1234567898000159 value in the link above is almost the message's ts value, but not quite (the Slack API won't accept it): the leading p needs to be removed, also there has to be a . inserted after the 10th digit: 1234567898.000159"
-      const lastPart = url.pathname.split("/").filter(Boolean).pop();
-      if (lastPart?.match(/^p\d+$/)) {
-        return `${lastPart.slice(1, 11)}.${lastPart.slice(11)}`;
-      }
+  let url: URL | undefined;
+  try {
+    url = filter.match(/^https?:\/\//) ? new URL(filter) : undefined;
+  } catch {}
+  if (url?.hostname.endsWith(".slack.com") && url.pathname.startsWith("/archives/")) {
+    const threadTsParam = url.searchParams.get("thread_ts");
+    if (threadTsParam) return threadTsParam;
+
+    // no thread_ts, looks like a top-level message, parse thusly: https://stackoverflow.com/q/46355373
+    // Quoth the user: "So, what I've found is that the p1234567898000159 value in [https://myworkspace.slack.com/archives/CqwertGU/p1234567898000159] is almost the message's ts value, but not quite (the Slack API won't accept it): the leading p needs to be removed, also there has to be a . inserted after the 10th digit: 1234567898.000159"
+    const lastPart = url.pathname.split("/").filter(Boolean).at(-1);
+    if (lastPart?.match(/^p\d+$/)) {
+      return `${lastPart.slice(1, 11)}.${lastPart.slice(11)}`;
     }
   }
+
   return undefined;
 }
 
