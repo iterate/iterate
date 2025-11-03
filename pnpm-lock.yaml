@@ -243,8 +243,8 @@ importers:
         specifier: ^5.0.76
         version: 5.0.76(zod@4.1.12)
       alchemy:
-        specifier: https://pkg.pr.new/alchemy-run/alchemy@b8a05f1
-        version: https://pkg.pr.new/alchemy-run/alchemy@b8a05f1(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(stripe@19.2.0(@types/node@24.9.2))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+        specifier: 0.77.0
+        version: 0.77.0(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(stripe@19.2.0(@types/node@24.9.2))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       async-mutex:
         specifier: ^0.5.0
         version: 0.5.0
@@ -5428,9 +5428,8 @@ packages:
       vite:
         optional: true
 
-  alchemy@https://pkg.pr.new/alchemy-run/alchemy@b8a05f1:
-    resolution: {tarball: https://pkg.pr.new/alchemy-run/alchemy@b8a05f1}
-    version: 0.76.1
+  alchemy@0.77.0:
+    resolution: {integrity: sha512-mt6HBFlLkdxDsRrVFx/Lbgl0Pxf431gwgDy1pKco4d8Zjb2GcuCK6it46OPi4xE2OopLIjexIqoI8gY6QTXKqQ==}
     hasBin: true
     peerDependencies:
       '@astrojs/cloudflare': ^12.6.4
@@ -17666,7 +17665,7 @@ snapshots:
       - utf-8-validate
       - workerd
 
-  alchemy@https://pkg.pr.new/alchemy-run/alchemy@b8a05f1(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(stripe@19.2.0(@types/node@24.9.2))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
+  alchemy@0.77.0(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(stripe@19.2.0(@types/node@24.9.2))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
     dependencies:
       '@aws-sdk/credential-providers': 3.908.0
       '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.21)(workerd@1.20251011.0)
@@ -17685,7 +17684,7 @@ snapshots:
       glob: 10.4.5
       jszip: 3.10.1
       libsodium-wrappers: 0.7.15
-      miniflare: 4.20251008.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      miniflare: 4.20251011.1(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       neverthrow: 8.2.0
       open: 10.2.0
       openapi-types: 12.1.3
