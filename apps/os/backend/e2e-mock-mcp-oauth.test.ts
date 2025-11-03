@@ -1,4 +1,4 @@
-import { test, expect, vi } from "vitest";
+import { test, expect } from "vitest";
 import { z } from "zod/v4";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
@@ -416,7 +416,7 @@ test.skipIf(!process.env.VITEST_RUN_MOCK_MCP_TEST)(
 
       // Step 2: Setup test user
       console.log("Step 2: Setting up test user with organization and estate...");
-      const { user, organization, estate } = await setupTestUser(adminTrpc);
+      const { user, estate } = await setupTestUser(adminTrpc);
       createdUserEmail = user.email;
 
       // Step 3: Impersonate user
@@ -477,7 +477,7 @@ test.skipIf(!process.env.VITEST_RUN_MOCK_MCP_TEST)(
 
       // Step 2: Setup test user
       console.log("Step 2: Setting up test user with organization and estate...");
-      const { user, organization, estate } = await setupTestUser(adminTrpc);
+      const { user, estate } = await setupTestUser(adminTrpc);
       createdUserEmail = user.email;
 
       // Step 3: Impersonate user
