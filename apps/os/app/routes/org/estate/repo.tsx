@@ -12,6 +12,7 @@ import {
   GitBranch,
   Github,
   FileText,
+  BadgeQuestionMarkIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
@@ -83,7 +84,9 @@ import type { Route } from "./+types/repo.ts";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
-type Build = RouterOutputs["estate"]["getBuilds"][0];
+type _Build = RouterOutputs["estate"]["getBuilds"][0];
+type BuildStatus = _Build["status"] | "timed_out";
+type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
 export function meta() {
   return [
@@ -262,7 +265,7 @@ function EstateContent({
     });
   };
 
-  const getBuildStatusIcon = (status: string) => {
+  const getBuildStatusIcon = (status: BuildStatus) => {
     switch (status) {
       case "complete":
         return <CheckCircle className="h-5 w-5 text-green-600" />;
@@ -270,12 +273,15 @@ function EstateContent({
         return <XCircle className="h-5 w-5 text-red-600" />;
       case "in_progress":
         return <RefreshCw className="h-5 w-5 text-blue-600 animate-spin" />;
-      default:
+      case "timed_out":
         return <Clock className="h-5 w-5 text-gray-600" />;
+      default:
+        status satisfies never;
+        return <BadgeQuestionMarkIcon className="h-5 w-5 text-gray-600" />;
     }
   };
 
-  const getBuildStatusColor = (status: string) => {
+  const getBuildStatusColor = (status: BuildStatus) => {
     switch (status) {
       case "complete":
         return "text-green-700 bg-green-50 dark:text-green-400 dark:bg-green-900/20";
@@ -283,7 +289,10 @@ function EstateContent({
         return "text-red-700 bg-red-50 dark:text-red-400 dark:bg-red-900/20";
       case "in_progress":
         return "text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20";
+      case "timed_out":
+        return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
       default:
+        status satisfies never;
         return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
     }
   };
@@ -542,13 +551,11 @@ function EstateContent({
             ) : builds && builds.length > 0 ? (
               <div className="space-y-3">
                 {builds.map((build: Build) => {
-                  build = { ...build };
                   if (
                     build.status === "in_progress" &&
-                    new Date(build.createdAt).getTime() < Date.now() - 60 * 1000
+                    new Date(build.createdAt).getTime() < Date.now() - 2 * 60_000
                   ) {
-                    build.status = "complete"; // lol
-                    build.commitMessage += ` (⏰)`;
+                    build = { ...build, status: "timed_out" };
                   }
                   const isExpanded = expandedBuilds.has(build.id);
                   return (
