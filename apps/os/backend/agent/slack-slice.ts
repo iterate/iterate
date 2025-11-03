@@ -580,6 +580,7 @@ export function slackWebhookEventToPromptFragment(params: {
     case "workflow_step_deleted":
     case "workflow_step_execute":
     case "workflow_unpublished":
+    case "entity_details_requested":
       return { promptFragment: null, shouldTriggerLLM: false, role: "developer" };
 
     default:
