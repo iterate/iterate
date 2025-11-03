@@ -13,6 +13,7 @@ import { getDb, schema } from "../../../backend/db/client.ts";
 import { getAuth } from "../../../backend/auth/auth.ts";
 import { getUserOrganizations } from "../../../backend/trpc/trpc.ts";
 import { type UserRole } from "../../../backend/db/schema.ts";
+import { isEstateOnboardingRequired } from "../../../backend/onboarding-utils.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "../../components/ui/card.tsx";
 import { authClient } from "../../lib/auth-client.ts";
@@ -46,6 +47,7 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
+  // Check if organization has an estate
   const firstEstate = await db.query.estate.findFirst({
     where: eq(schema.estate.organizationId, organizationId),
     orderBy: (t, { asc }) => [asc(t.createdAt)],
@@ -54,7 +56,20 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     // No estate for this org; redirect to home
     throw redirect("/");
   }
-  const userOrganizations = await getUserOrganizations(db, session.user.id);
+
+  // Load all organizations and check onboarding status in parallel
+  // This is more efficient than separate queries since we need all orgs anyway
+  const requestUrl = new URL(request.url);
+  const onboardingPath = `/${organizationId}/onboarding`;
+  const isOnboardingRoute = requestUrl.pathname.startsWith(onboardingPath);
+  const isIntegrationsRoute =
+    requestUrl.pathname.includes("/integrations/redirect") ||
+    requestUrl.pathname.includes("/integrations/callback");
+
+  const [userOrganizations, onboardingRequired] = await Promise.all([
+    getUserOrganizations(db, session.user.id),
+    isOnboardingRoute ? Promise.resolve(false) : isEstateOnboardingRequired(db, firstEstate.id),
+  ]);
 
   // Check if user has access to the requested organization
   // Note: External users are already filtered out at query level
@@ -87,6 +102,10 @@ export async function loader({ request, params }: Route.LoaderArgs) {
     createdAt: organization.createdAt.toISOString(),
     updatedAt: organization.updatedAt.toISOString(),
   };
+
+  if (!isOnboardingRoute && !isIntegrationsRoute && onboardingRequired) {
+    throw redirect(onboardingPath);
+  }
 
   const responseHeaders = new Headers({ "Content-Type": "application/json" });
 

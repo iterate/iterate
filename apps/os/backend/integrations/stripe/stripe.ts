@@ -6,7 +6,7 @@ import { env } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 
 export const stripeClient = new Stripe(env.STRIPE_SECRET_KEY, {
-  apiVersion: "2025-09-30.clover",
+  apiVersion: "2025-10-29.clover",
 });
 
 const V2_STRIPE_VERSION = "2025-09-30.preview";
