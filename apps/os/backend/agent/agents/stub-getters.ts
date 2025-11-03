@@ -1,8 +1,8 @@
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import type { AgentInitParams, IterateAgent } from "../iterate-agent.ts";
 import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
-import type { DB } from "../../db/client.ts";
+import { schema, type DB } from "../../db/client.ts";
 import type { IterateConfig } from "../../../sdk/iterate-config.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
 
@@ -293,14 +293,15 @@ export async function getOrCreateAgentStubByRoute(
   const { db, estateId, route, reason } = params;
 
   const existingRoutes = await db.query.agentInstanceRoute.findMany({
-    where: eq(agentInstanceRoute.routingKey, route),
+    where: eq(schema.agentInstanceRoute.routingKey, route),
+    orderBy: desc(schema.agentInstance.updatedAt),
     with: {
       agentInstance: {
         with: {
           estate: {
             with: {
               organization: true,
-              iterateConfigs: true,
+              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
             },
           },
         },
