@@ -12,7 +12,7 @@ import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
-import { env, type CloudflareEnv } from "../../env.ts";
+import type { CloudflareEnv } from "../../env.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
