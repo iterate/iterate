@@ -11,8 +11,7 @@ export default defineConfig({
   clean: true,
   sourcemap: false,
   nodeProtocol: true,
-  // @ts-expect-error - treeshake types are not complete, waiting on https://github.com/rolldown/tsdown/pull/573
-  treeshake: { moduleSideEffects: false } as import("tsdown").Options["treeshake"],
+  treeshake: { moduleSideEffects: false },
   copy: [
     {
       from: "dist/sdk",
