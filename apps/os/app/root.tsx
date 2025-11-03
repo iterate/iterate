@@ -11,6 +11,7 @@ import { ThemeProvider } from "next-themes";
 import { Suspense, type PropsWithChildren } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { PostHogProvider as _PostHogProvider, PostHogErrorBoundary } from "posthog-js/react";
+import { NuqsAdapter } from "nuqs/adapters/react-router/v7";
 import type { Route } from "./+types/root";
 import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
@@ -66,7 +67,9 @@ export default function App() {
             >
               <AuthGuard>
                 <Suspense fallback={<GlobalLoading />}>
-                  <Outlet />
+                  <NuqsAdapter>
+                    <Outlet />
+                  </NuqsAdapter>
                 </Suspense>
               </AuthGuard>
               <Toaster />
