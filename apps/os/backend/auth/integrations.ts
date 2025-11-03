@@ -177,54 +177,6 @@ export const integrationsPlugin = () =>
         },
       ),
 
-      directLoginWithSlack: createAuthEndpoint(
-        "/integrations/direct-login-with-slack",
-        {
-          method: "GET",
-          query: z.object({
-            callbackURL: z.string().default("/"),
-            mode: z.enum(["redirect", "json"]).default("json"),
-          }),
-        },
-        async (ctx) => {
-          const state = generateRandomString(32);
-          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-          const data = JSON.stringify({
-            callbackURL: ctx.query.callbackURL,
-          });
-
-          await ctx.context.internalAdapter.createVerificationValue({
-            expiresAt,
-            identifier: state,
-            value: data,
-          });
-
-          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
-          const url = await createAuthorizationURL({
-            id: "slack-bot",
-            options: {
-              clientId: env.SLACK_CLIENT_ID,
-              clientSecret: env.SLACK_CLIENT_SECRET,
-              redirectURI,
-            },
-            redirectURI,
-            authorizationEndpoint: "https://slack.com/oauth/v2/authorize",
-            scopes: SLACK_BOT_SCOPES,
-            state,
-            additionalParams: {
-              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
-            },
-          });
-
-          // If mode is redirect, redirect directly to OAuth URL
-          if (ctx.query.mode === "redirect") {
-            return ctx.redirect(url.toString());
-          }
-
-          return ctx.json({ url });
-        },
-      ),
       linkSlackBot: createAuthEndpoint(
         "/integrations/link/slack-bot",
         {
