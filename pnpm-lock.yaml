@@ -11775,15 +11775,15 @@ snapshots:
     dependencies:
       '@cloudflare/containers': 0.0.28
 
-  '@cloudflare/unenv-preset@2.7.7(unenv@2.0.0-rc.19)(workerd@1.20251011.0)':
-    dependencies:
-      unenv: 2.0.0-rc.19
-    optionalDependencies:
-      workerd: 1.20251011.0
-
   '@cloudflare/unenv-preset@2.7.7(unenv@2.0.0-rc.21)(workerd@1.20251011.0)':
     dependencies:
       unenv: 2.0.0-rc.21
+    optionalDependencies:
+      workerd: 1.20251011.0
+
+  '@cloudflare/unenv-preset@2.7.8(unenv@2.0.0-rc.19)(workerd@1.20251011.0)':
+    dependencies:
+      unenv: 2.0.0-rc.19
     optionalDependencies:
       workerd: 1.20251011.0
 
@@ -17506,7 +17506,7 @@ snapshots:
   alchemy@0.74.1(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
     dependencies:
       '@aws-sdk/credential-providers': 3.908.0
-      '@cloudflare/unenv-preset': 2.7.7(unenv@2.0.0-rc.19)(workerd@1.20251011.0)
+      '@cloudflare/unenv-preset': 2.7.8(unenv@2.0.0-rc.19)(workerd@1.20251011.0)
       '@cloudflare/workers-types': 4.20251014.0
       '@iarna/toml': 2.2.5
       '@octokit/rest': 21.1.1
@@ -17522,7 +17522,7 @@ snapshots:
       glob: 10.4.5
       jszip: 3.10.1
       libsodium-wrappers: 0.7.15
-      miniflare: 4.20251008.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      miniflare: 4.20251011.1(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       neverthrow: 8.2.0
       open: 10.2.0
       openapi-types: 12.1.3
