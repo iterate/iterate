@@ -3,11 +3,6 @@
 import { createTRPCClient, httpBatchLink, type TRPCClient } from "@trpc/client";
 import type { AppRouter } from "../../../../trpc/root";
 
-// TODO this needs a better place and obvs depends on which app we want to hit etc.
-export function _getDeployedURI() {
-  return process.env.WORKER_URL || process.env.VITE_PUBLIC_URL!.toString();
-}
-
 /**
  * Configuration for creating a vitest TRPC client
  */
@@ -15,7 +10,7 @@ export interface VitestTrpcClientConfig {
   /**
    * The TRPC endpoint URL
    */
-  url?: string;
+  url: string;
 
   /**
    * Optional authentication headers to include in all requests
@@ -38,25 +33,9 @@ export interface VitestTrpcClientConfig {
   fetchOptions?: RequestInit;
 }
 
-/**
- * Creates a TRPC client for use in vitest tests
- *
- * @example
- * ```typescript
- * import { makeVitestTrpcClient } from "./vitest-trpc-client";
- *
- * const client = makeVitestTrpcClient({
- *   url: "http://localhost:6004/api/trpc",
- *   debug: true
- * });
- *
- * // Make TRPC calls
- * const result = await client.agents.list.query();
- * ```
- */
-export function makeVitestTrpcClient(config: VitestTrpcClientConfig = {}): TRPCClient<AppRouter> {
+export function makeVitestTrpcClient(config: VitestTrpcClientConfig): TRPCClient<AppRouter> {
   const {
-    url = _getDeployedURI() + "/api/trpc",
+    url,
     authHeaders = {},
     log = () => {},
     headers: additionalHeaders = {},

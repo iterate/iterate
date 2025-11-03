@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import { inspect } from "node:util";
 import { test, expect } from "vitest";
 import { z } from "zod";
@@ -5,10 +6,7 @@ import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import {
-  _getDeployedURI,
-  makeVitestTrpcClient,
-} from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
+import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 /**
@@ -34,6 +32,7 @@ import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
 // Environment variables schema
 const TestEnv = z.object({
+  WORKER_URL: z.url(),
   SERVICE_AUTH_TOKEN: z.string().optional(),
   ONBOARDING_E2E_TEST_SETUP_PARAMS: z
     .string()
@@ -43,20 +42,18 @@ const TestEnv = z.object({
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
 
-test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
+test(
   "end-to-end onboarding flow",
-  {
-    timeout: 15 * 60 * 1000, // 15 minutes total timeout
-  },
+  { timeout: 15 * 60 * 1000 }, //
   async () => {
     const trpcLogs: unknown[][] = [];
     // Parse and validate environment
     const env = TestEnv.parse({
+      WORKER_URL: process.env.WORKER_URL,
       SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
       ONBOARDING_E2E_TEST_SETUP_PARAMS: process.env.ONBOARDING_E2E_TEST_SETUP_PARAMS,
     } satisfies Partial<z.input<typeof TestEnv>>);
-
-    const workerUrl = _getDeployedURI();
+    const workerUrl = env.WORKER_URL;
 
     const testSeedData = env.ONBOARDING_E2E_TEST_SETUP_PARAMS;
     let createdRepoFullName: string | null = null;
@@ -100,6 +97,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("Step 2: Setting up test user with organization and estate...");
 
       adminTrpc = makeVitestTrpcClient({
+        url: `${workerUrl}/api/trpc`,
         headers: { cookie: sessionCookies },
         log: (...args) => trpcLogs.push(["adminTrpc", ...args]),
       });
@@ -156,6 +154,7 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
 
       // Create TRPC client with impersonated user session
       const userTrpc = makeVitestTrpcClient({
+        url: `${workerUrl}/api/trpc`,
         headers: { cookie: impersonationCookies },
         log: (...args) => trpcLogs.push(["userTrpc", ...args]),
       });
@@ -257,8 +256,11 @@ test.runIf(process.env.VITEST_RUN_ONBOARDING_TEST)(
       console.log("✅ Bot replied successfully!");
       console.log("End-to-end test completed successfully!");
     } catch (error) {
-      console.log("Error occurred, here are the trpc request logs:");
-      trpcLogs.forEach((log) => console.log(...log));
+      const slugify = (s: string) => s.toLowerCase().replace(/[^a-z0-9\-.]+/g, "-");
+      const file = `ignoreme/e2e-logs/${slugify(expect.getState().currentTestName!)}.json`;
+      await fs.promises.mkdir("ignoreme/e2e-logs", { recursive: true });
+      console.log(`Error occurred, writing trpc logs to file: ${file}`);
+      await fs.promises.writeFile(file, JSON.stringify(trpcLogs, null, 2));
       throw error;
     } finally {
       if (createdRepoFullName) {
