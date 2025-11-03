@@ -78,7 +78,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
 
   const handleContinueWithEmail = () => {
     setView("processing-trial");
-    setupTrialMutation.mutate();
+    setupTrialMutation.mutate({ estateId });
   };
 
   const handleGoToDashboard = () => {

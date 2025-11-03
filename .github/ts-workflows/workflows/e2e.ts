@@ -1,9 +1,9 @@
 import dedent from "dedent";
-import { workflow } from "@jlarky/gha-ts/workflow-types";
+import { uses, workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
 export default workflow({
-  name: "Onboarding Monitor",
+  name: "e2e tests",
   on: {
     workflow_call: {
       inputs: {
@@ -14,7 +14,7 @@ export default workflow({
           type: "string",
         },
         worker_url: {
-          description: "The deployed url to run the onboarding tests against.",
+          description: "The deployed url to run the e2e tests against.",
           required: true,
           type: "string",
         },
@@ -23,7 +23,7 @@ export default workflow({
     schedule: [{ cron: "0 9 * * *" }],
   },
   jobs: {
-    "test-onboarding": {
+    run: {
       ...utils.runsOn,
       env: {
         WORKER_URL: "${{ inputs.worker_url }}",
@@ -61,7 +61,7 @@ export default workflow({
           },
         },
         {
-          name: "Run Onboarding Tests",
+          name: "Run E2E Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",
           with: {
@@ -70,14 +70,21 @@ export default workflow({
             retry_wait_seconds: 30,
             command: dedent`
               cd apps/os
-              doppler run --config \${{ inputs.stage }} -- pnpm vitest run ./backend/e2e-onboarding.test.ts
+              doppler run --config \${{ inputs.stage }} -- pnpm vitest --config vitest.e2e.config.ts
             `,
           },
           env: {
             WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-            VITEST_RUN_ONBOARDING_TEST: "true",
           },
+        },
+        {
+          name: "upload e2e logs",
+          if: "failure()",
+          ...uses("actions/upload-artifact@v4", {
+            name: "e2e-logs",
+            path: "apps/os/ignoreme/e2e-logs",
+          }),
         },
         {
           name: "Notify Slack on Failure",

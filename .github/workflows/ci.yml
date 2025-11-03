@@ -8,7 +8,7 @@ on:
   push:
     branches:
       - main
-      - mmkal/25/10/28/runonboardingagainststaging
+      - "**/*e2eworkflow"
   workflow_dispatch:
     inputs:
       stage:
@@ -32,9 +32,9 @@ jobs:
     secrets: inherit
     with:
       stage: ${{ needs.variables.outputs.stage }}
-  onboarding_monitor:
+  e2e:
     if: needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'
-    uses: ./.github/workflows/onboarding-monitor.yml
+    uses: ./.github/workflows/e2e.yml
     secrets: inherit
     needs:
       - variables

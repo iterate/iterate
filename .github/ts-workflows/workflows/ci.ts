@@ -10,7 +10,7 @@ export default {
   },
   on: {
     push: {
-      branches: ["main", "mmkal/25/10/28/runonboardingagainststaging"],
+      branches: ["main", "**/*e2eworkflow"],
     },
     workflow_dispatch: {
       inputs: {
@@ -63,9 +63,9 @@ export default {
         stage: "${{ needs.variables.outputs.stage }}",
       },
     },
-    onboarding_monitor: {
+    e2e: {
       if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
-      uses: "./.github/workflows/onboarding-monitor.yml",
+      uses: "./.github/workflows/e2e.yml",
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
       needs: ["variables", "deploy"],

@@ -21,7 +21,7 @@ const getBuiltinRule = (name) => {
   return rule;
 };
 
-/** @type {(typeof import("./vibe-rules/llms.ts"))} */
+/** @type {{default: Array<Exclude<typeof import("./vibe-rules/llms.ts")['default'][number], string> & {eslint?: import('eslint').Linter.Config}>}} */
 const { default: vibeRules } = await tsImport("./vibe-rules/llms.ts", import.meta.url);
 
 export default defineConfig([
@@ -74,12 +74,14 @@ export default defineConfig([
       "jsx-a11y": jsxA11y,
       import: importPlugin,
       "eslint-comments": eslintComments,
+      // @ts-expect-error codegen is a plugin i swear
       codegen,
     },
     rules: {
       // Core JavaScript rules
       "no-unused-vars": "off",
       "no-console": "off",
+      "no-empty": "off", // `try {url = new URL(...)} catch {}` is fine
       "no-debugger": "error",
       "prefer-const": "off", // we're going to override this to be less annoying in IDEs
       "no-var": "error",
@@ -152,6 +154,7 @@ export default defineConfig([
       "startups/**",
       "**/test/**",
       "**/*.test.ts",
+      "**/*.e2e.ts",
       "**/*.test.tsx",
       "**/test-setup.ts",
       "**/test-utils.ts",
@@ -354,7 +357,8 @@ export default defineConfig([
   },
   ...vibeRules.flatMap((rule) => {
     if (!rule.eslint) return [];
-    const { eslint, globs: files, name } = rule;
+    const { eslint, globs, name } = rule;
+    const files = typeof globs === "string" ? [globs] : globs;
     return [{ name: `vibe-rules/${name}`, files, ...eslint }];
   }),
 ]);

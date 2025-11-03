@@ -1,7 +1,7 @@
 import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod";
 
-import { and, eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
@@ -96,11 +96,16 @@ export const agentsRouter = router({
     .input(
       z.object({
         estateId: z.string(),
+        agentNameLike: z.string().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
+      const conditions = [eq(agentInstance.estateId, input.estateId)];
+      if (input.agentNameLike) {
+        conditions.push(like(agentInstance.durableObjectName, input.agentNameLike));
+      }
       return await ctx.db.query.agentInstance.findMany({
-        where: and(eq(agentInstance.estateId, input.estateId)),
+        where: and(...conditions),
       });
     }),
 
