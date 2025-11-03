@@ -50,6 +50,11 @@ export default workflow({
               echo "No changes to commit."
               exit 0
             fi
+            # if latest commit message contains "chore: automated fixes", skip commit
+            if git log -1 --pretty=%B | grep -q "chore: automated fixes"; then
+              echo "Latest commit message contains 'chore: automated fixes'. Failing to prevent infinite loop."
+              exit 1
+            fi
             git config --global user.name "\${{ github.actor }}"
             git config --global user.email "\${{ github.actor }}@users.noreply.github.com"
 
