@@ -144,7 +144,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           refresh_token: newTokens.refreshToken || account.refreshToken,
         };
       } catch (error) {
-        logger.error(`Failed to refresh MCP access token for ${this.providerId}: ${error}`);
+        logger.error(`Failed to refresh MCP access token for ${this.providerId}`, error);
         // Fall through to return existing (expired) token
         // The connection will likely fail and trigger re-authentication
       }
