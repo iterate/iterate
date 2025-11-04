@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import * as R from "remeda";
 import { waitUntil, type CloudflareEnv } from "../../../env.ts";
@@ -19,7 +19,7 @@ import {
 import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
-import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];

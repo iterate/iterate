@@ -3,10 +3,7 @@ import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
-import {
-  getOrCreateAgentStubByName,
-  getOrCreateAgentStubByRoute,
-} from "./agent/agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "./agent/agents/stub-getters.ts";
 
 // Append-only event helper
 async function insertEstateOnboardingEvent(

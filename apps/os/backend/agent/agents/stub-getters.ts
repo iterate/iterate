@@ -1,4 +1,4 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import type { AgentInitParams, IterateAgent } from "../iterate-agent.ts";
 import { agentInstance } from "../../db/schema.ts";
