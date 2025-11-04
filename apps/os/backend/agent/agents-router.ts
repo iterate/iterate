@@ -17,11 +17,7 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import type { MergedEventForSlices } from "./agent-core.ts";
 import { MCPEvent } from "./mcp/mcp-slice.ts";
 import { SlackSliceEvent } from "./slack-slice.ts";
-import {
-  getOrCreateAgentStubByName,
-  toAgentClassName,
-  type GetOrCreateStubByNameParams,
-} from "./agents/stub-getters.ts";
+import { AGENT_CLASS_NAMES, getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 
 const agentStubProcedure = protectedProcedure
   .input(
@@ -29,28 +25,24 @@ const agentStubProcedure = protectedProcedure
       estateId: z.string().describe("The estate this agent belongs to"),
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent", "SlackAgent", "OnboardingAgent"])
+        .enum(AGENT_CLASS_NAMES)
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
     }),
   )
-  .use(async ({ input, ctx, next }) => {
+  .use(async ({ input, ctx, next, path }) => {
     const estateId = input.estateId;
 
-    const getOrCreateStubParams: GetOrCreateStubByNameParams = {
+    // agents are created on demand just by using this procedure
+    const agent = await getOrCreateAgentStubByRoute(input.agentClassName, {
       db: ctx.db,
       estateId,
-      agentInstanceName: input.agentInstanceName,
-      reason: input.reason || "Created via agents router",
-    };
-    // Always use getOrCreateStubByName - agents are created on demand
-    const agent = await getOrCreateAgentStubByName(
-      toAgentClassName(input.agentClassName),
-      getOrCreateStubParams,
-    );
+      route: input.agentInstanceName,
+      reason: input.reason || `Created via agents router at ${path}`,
+    });
 
-    // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
+    // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
 
     return next({
       ctx: {

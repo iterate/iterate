@@ -335,6 +335,20 @@ export default defineConfig([
               };
             },
           },
+          "drizzle-conventions": {
+            create: (context) => {
+              return {
+                "CallExpression[callee.property.name='insert']": (node) => {
+                  if (node.arguments[0]?.object?.name !== "schema") {
+                    context.report({
+                      node,
+                      message: `use \`db.insert(schema.tableName)\` instead of \`db.insert(tableName)\` - it makes it easier to find insert expressions in the codebase`,
+                    });
+                  }
+                },
+              };
+            },
+          },
         },
       },
     },
@@ -346,6 +360,8 @@ export default defineConfig([
       "iterate/prefer-const": "error",
       "iterate/side-effect-imports-first": "warn",
       "iterate/zod-schema-naming": "error",
+      // todo: enable this in CI too
+      ...(process.env.VSCODE_CWD && { "iterate/drizzle-conventions": "error" }),
     },
   },
   {

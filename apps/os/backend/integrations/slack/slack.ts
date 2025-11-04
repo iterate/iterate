@@ -402,19 +402,12 @@ async function determineEstateIdsToProcess({
   }
 
   if (messageMetadata.threadTs) {
-    const existingRoutes = await db.query.agentInstanceRoute.findMany({
-      where: sql`${schema.agentInstanceRoute.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstanceRoute.routingKey} LIKE ${"%-slack-%"}`,
-      with: {
-        agentInstance: {
-          columns: {
-            estateId: true,
-          },
-        },
-      },
+    const existingRoutes = await db.query.agentInstance.findMany({
+      where: sql`${schema.agentInstance.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstance.routingKey} LIKE ${"%-slack-%"}`,
     });
 
     if (existingRoutes.length > 0) {
-      const estateIds = [...new Set(existingRoutes.map((r) => r.agentInstance.estateId))];
+      const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
       return estateIds;
     }
   }
@@ -481,6 +474,16 @@ async function determineEstateIdsToProcess({
 
   return [];
 }
+
+const tick = { y: Date.now() + 10_000 };
+const wait = async (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const waitUntilTicky = async () => {
+  if (Date.now() > tick.y) {
+    tick.y = Date.now() + 10_000;
+  }
+  console.log(new Date().toTimeString(), "waiting for ticky", tick.y - Date.now());
+  await wait(tick.y - Date.now());
+};
 
 async function processWebhookForEstate({
   db,
@@ -553,42 +556,14 @@ async function processWebhookForEstate({
     threadTs: messageMetadata.threadTs,
   });
 
-  const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
-    where: eq(schema.agentInstanceRoute.routingKey, routingKey),
-    orderBy: desc(schema.agentInstance.updatedAt),
-    with: {
-      agentInstance: {
-        with: {
-          estate: {
-            with: {
-              organization: true,
-              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
-            },
-          },
-        },
-      },
-    },
+  const details = { type: body.event.type, ...messageMetadata };
+  await waitUntilTicky();
+  const agentStub = await getOrCreateAgentStubByRoute("SlackAgent", {
+    db,
+    estateId,
+    route: routingKey,
+    reason: `Slack webhook received: ${new URLSearchParams(details)}`,
   });
-
-  if (rest.length > 0) {
-    logger.error(`Multiple agents found for routing key ${routingKey}`);
-  }
-
-  const agentStub = agentRoute?.agentInstance?.estate
-    ? await getAgentStub("SlackAgent", {
-        agentInitParams: {
-          record: agentRoute.agentInstance,
-          estate: agentRoute.agentInstance.estate,
-          organization: agentRoute.agentInstance.estate.organization!,
-          iterateConfig: agentRoute.agentInstance.estate.iterateConfigs?.[0]?.config ?? {},
-        },
-      })
-    : await getOrCreateAgentStubByRoute("SlackAgent", {
-        db,
-        estateId,
-        route: routingKey,
-        reason: "Slack webhook received",
-      });
 
   waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 }

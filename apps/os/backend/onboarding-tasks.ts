@@ -3,7 +3,10 @@ import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
+import {
+  getOrCreateAgentStubByName,
+  getOrCreateAgentStubByRoute,
+} from "./agent/agents/stub-getters.ts";
 
 // Append-only event helper
 async function insertEstateOnboardingEvent(
@@ -58,10 +61,10 @@ async function handleOnboardingAgentWarmup(db: DB, event: typeof schema.systemTa
   const est = await db.query.estate.findFirst({ where: eq(schema.estate.id, estateId) });
   if (!est) throw new Error(`Estate ${estateId} not found`);
 
-  const agent = await getOrCreateAgentStubByName("OnboardingAgent", {
+  const agent = await getOrCreateAgentStubByRoute("OnboardingAgent", {
     db,
     estateId: est.id,
-    agentInstanceName: onboardingAgentName ?? est.onboardingAgentName!,
+    route: onboardingAgentName ?? est.onboardingAgentName!,
     reason: "Provisioned via estate onboarding outbox",
   });
   await agent.doNothing();

@@ -43,7 +43,7 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
-import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
 // Inherit generic static helpers from IterateAgent
 
@@ -188,10 +188,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (this.estate.onboardingAgentName) {
       try {
         // Get a stub for the onboarding agent
-        const onboardingAgentStub = await getOrCreateAgentStubByName("OnboardingAgent", {
+        const onboardingAgentStub = await getOrCreateAgentStubByRoute("OnboardingAgent", {
           db: this.db,
           estateId: this.estate.id,
-          agentInstanceName: this.estate.onboardingAgentName,
+          route: "OnboardingAgent",
+          reason: `Getting onboarding agent for context rules - not expected to create a new one here`,
         });
 
         // Call onboardingPromptFragment on the stub

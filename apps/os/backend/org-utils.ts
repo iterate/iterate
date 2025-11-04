@@ -44,14 +44,13 @@ async function createOrganizationAndEstateInTransaction(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    onboardingAgentName?: string | null;
     connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  const { organizationName, ownerUserId, estateName, onboardingAgentName, connectedRepo } = params;
+  const { organizationName, ownerUserId, estateName, connectedRepo } = params;
 
   const [organization] = await tx
     .insert(schema.organization)
@@ -77,16 +76,16 @@ async function createOrganizationAndEstateInTransaction(
     .returning();
   if (!estate) throw new Error("Failed to create estate");
 
-  const agentName = `${estate.id}-Onboarding`;
+  const onboardingAgentName = `${estate.id}-Onboarding`;
   await tx
     .update(schema.estate)
-    .set({ onboardingAgentName: onboardingAgentName ?? agentName })
+    .set({ onboardingAgentName })
     .where(eq(schema.estate.id, estate.id));
 
   await initializeOnboardingForEstateInTransaction(tx, {
     estateId: estate.id,
     organizationId: organization.id,
-    onboardingAgentName: onboardingAgentName ?? agentName,
+    onboardingAgentName,
   });
 
   return { organization, estate };
@@ -98,7 +97,6 @@ export async function createOrganizationAndEstate(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    onboardingAgentName?: string | null;
     connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
@@ -181,11 +179,7 @@ type DBLike = Pick<DB, "insert" | "update" | "query">;
 
 export async function initializeOnboardingForEstateInTransaction(
   tx: DBLike,
-  params: {
-    estateId: string;
-    organizationId: string;
-    onboardingAgentName?: string | null;
-  },
+  params: { estateId: string; organizationId: string; onboardingAgentName: string },
 ) {
   const { estateId, organizationId, onboardingAgentName } = params;
 
@@ -196,7 +190,7 @@ export async function initializeOnboardingForEstateInTransaction(
       organizationId,
       eventType: "EstateCreated",
       category: "system",
-      detail: onboardingAgentName ? `Onboarding agent: ${onboardingAgentName}` : null,
+      detail: `Onboarding agent: ${onboardingAgentName}`,
     })
     .onConflictDoNothing();
 
