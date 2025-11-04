@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Users, Search } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
@@ -16,6 +16,7 @@ import {
   AccordionTrigger,
 } from "../../components/ui/accordion.tsx";
 import { Separator } from "../../components/ui/separator.tsx";
+import { GlobalLoading } from "../../components/global-loading.tsx";
 import type { Route } from "./+types/team.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -48,8 +49,10 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  const { data: currentUser } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const { data: members } = useSuspenseQuery(
+  const { data: currentUser, isLoading: isCurrentUserLoading } = useQuery(
+    trpc.user.me.queryOptions(),
+  );
+  const { data: members, isLoading: isMembersLoading } = useQuery(
     trpc.organization.listMembers.queryOptions({ organizationId }),
   );
 
@@ -76,8 +79,12 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
     });
   };
 
+  if (isCurrentUserLoading || isMembersLoading || !currentUser || !members) {
+    return <GlobalLoading />;
+  }
+
   // Filter function for search
-  const filterMember = (member: (typeof members)[number]) => {
+  const filterMember = (member: NonNullable<typeof members>[number]) => {
     if (!searchQuery.trim()) return true;
 
     const query = searchQuery.toLowerCase();

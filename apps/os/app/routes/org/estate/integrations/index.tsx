@@ -1,6 +1,6 @@
 import { ArrowRight, Github, ChevronDown, X, Puzzle } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Badge } from "../../../../components/ui/badge.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
@@ -128,23 +128,21 @@ type MCPConnection = {
 export default function Integrations() {
   const estateId = useEstateId();
   const trpc = useTRPC();
-  const { data, refetch } = useSuspenseQuery(
+  const { data, refetch } = useQuery(
     trpc.integrations.list.queryOptions({
       estateId: estateId,
     }),
   );
 
-  const { data: estateInfo } = useSuspenseQuery(
+  const { data: estateInfo } = useQuery(
     trpc.estate.get.queryOptions({
       estateId: estateId,
     }),
   );
 
-  const isTrialEstate = estateInfo.isTrialEstate;
-
   // Filter out Slack connector for trial estates since they're using Slack Connect
   const integrations = (data?.oauthIntegrations || []).filter(
-    (integration) => !(isTrialEstate && integration.id === "slack-bot"),
+    (integration) => !(estateInfo?.isTrialEstate && integration.id === "slack-bot"),
   );
   const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
 

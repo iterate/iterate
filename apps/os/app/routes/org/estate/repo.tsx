@@ -15,7 +15,7 @@ import {
   BadgeQuestionMarkIcon,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useMutation, useQuery, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import { data, redirect, useLoaderData } from "react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
@@ -146,18 +146,18 @@ function EstateContent({
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const { data: connectedRepo } = useSuspenseQuery(
+  const { data: connectedRepo } = useQuery(
     trpc.integrations.getGithubRepoForEstate.queryOptions({
       estateId: estateId,
     }),
   );
-  const { data: repos } = useSuspenseQuery(
+  const { data: repos } = useQuery(
     trpc.integrations.listAvailableGithubRepos.queryOptions({
       estateId: estateId,
     }),
   );
 
-  const { data: builds, isLoading: buildsLoading } = useSuspenseQuery(
+  const { data: builds, isLoading: buildsLoading } = useQuery(
     trpc.estate.getBuilds.queryOptions({
       estateId: estateId,
       limit: 10,
