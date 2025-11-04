@@ -475,16 +475,6 @@ async function determineEstateIdsToProcess({
   return [];
 }
 
-const tick = { y: Date.now() + 10_000 };
-const wait = async (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-const waitUntilTicky = async () => {
-  if (Date.now() > tick.y) {
-    tick.y = Date.now() + 10_000;
-  }
-  console.log(new Date().toTimeString(), "waiting for ticky", tick.y - Date.now());
-  await wait(tick.y - Date.now());
-};
-
 async function processWebhookForEstate({
   db,
   body,
@@ -557,7 +547,6 @@ async function processWebhookForEstate({
   });
 
   const details = { type: body.event.type, ...messageMetadata };
-  await waitUntilTicky();
   const agentStub = await getOrCreateAgentStubByRoute("SlackAgent", {
     db,
     estateId,

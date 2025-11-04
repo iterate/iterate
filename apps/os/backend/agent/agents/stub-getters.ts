@@ -105,19 +105,10 @@ export async function getAgentStubByName(
       eq(agentInstance.durableObjectName, agentInstanceName),
       eq(agentInstance.className, className),
     ),
-    with: {
-      estate: {
-        with: {
-          organization: true,
-          iterateConfigs: true,
-        },
-      },
-    },
+    with: { estate: { with: { organization: true, iterateConfigs: true } } },
   });
 
-  if (!row) {
-    throw new Error(`Agent instance ${agentInstanceName} not found`);
-  }
+  if (!row) throw new Error(`Agent instance ${agentInstanceName} not found`);
 
   const { estate: estateJoined, ...record } = row;
 
@@ -147,6 +138,7 @@ export async function getOrCreateAgentStubByRoute(
   const durableObjectName = `${className}-${route}-${typeid().toString()}`;
   const durableObjectId = namespace.idFromName(durableObjectName);
 
+  // insert if the routing key doesn't yet exist
   await db
     .insert(schema.agentInstance)
     .values({
@@ -157,15 +149,14 @@ export async function getOrCreateAgentStubByRoute(
       metadata: { reason },
       routingKey: route,
     })
-    .onConflictDoNothing();
+    .onConflictDoNothing({ target: schema.agentInstance.routingKey });
 
   const existingAgent = await db.query.agentInstance.findFirst({
     where: eq(agentInstance.routingKey, route),
     with: { estate: { with: { organization: true, iterateConfigs: true } } },
   });
-  if (!existingAgent) {
-    throw new Error(`Failed to create agent instance ${durableObjectName}`);
-  }
+
+  if (!existingAgent) throw new Error(`No agent at ${route} - we should have just inserted it!`);
 
   const { estate: estateJoined, ...record } = existingAgent;
   const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
