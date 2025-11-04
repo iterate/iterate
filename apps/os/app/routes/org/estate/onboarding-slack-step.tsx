@@ -174,8 +174,8 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
         <div className="space-y-4">
           {user ? (
             <div className="text-center p-4 bg-muted/50 rounded-lg">
-              <div className="text-sm font-medium">{user?.name || ""}</div>
-              <div className="text-sm text-muted-foreground">{user?.email || ""}</div>
+              <div className="text-sm font-medium">{user.name}</div>
+              <div className="text-sm text-muted-foreground">{user.email}</div>
             </div>
           ) : (
             <Spinner />
