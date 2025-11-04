@@ -33,10 +33,7 @@ export default function Home() {
 
   const handleAddToSlack = () => {
     // Redirect to the OS app endpoint which will handle the OAuth flow
-    // window.location.href =
-    //   "http://localhost:5173/api/auth/integrations/direct-login-with-slack?callbackURL=/&mode=redirect";
-    window.location.href =
-      "https://os.iterate.com/api/auth/integrations/direct-login-with-slack?callbackURL=/&mode=redirect";
+    window.location.href = "https://os.iterate.com/login?autoSignin=slack";
   };
 
   return (
