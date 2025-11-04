@@ -128,5 +128,22 @@ export default {
         },
       ],
     },
+    "deploy-mcp-mock-server": {
+      "runs-on":
+        "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler,
+        {
+          name: "Deploy Mock MCP Server",
+          "working-directory": "apps/mcp-mock-server",
+          run: "pnpm run deploy",
+          env: {
+            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+            STAGE: "${{ inputs.stage }}",
+          },
+        },
+      ],
+    },
   },
 } satisfies Workflow;
