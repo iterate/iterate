@@ -1135,12 +1135,8 @@ export const integrationsRouter = router({
    * Upgrades a trial estate to a full Slack installation
    * This removes all trial-specific configuration so the user can connect their own Slack workspace
    */
-  upgradeTrialToFullInstallation: protectedProcedure
-    .input(
-      z.object({
-        estateId: z.string(),
-      }),
-    )
+  upgradeTrialToFullInstallation: estateProtectedProcedure
+    .meta({ description: "Upgrades a trial estate to a full Slack installation" })
     .mutation(async ({ ctx, input }) => {
       const { estateId } = input;
 
@@ -1283,6 +1279,21 @@ export const integrationsRouter = router({
       });
 
       logger.info(`Successfully upgraded trial estate ${estateId} to full installation`);
+
+      const { getIterateSlackEstateId } = await import("../../utils/trial-channel-setup.ts");
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
+      if (!iterateEstateId) throw new Error("Iterate Slack workspace estate not found");
+
+      // 2. Get iterate's bot account and token
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
+
+      const slackAPI = new WebClient(iterateBotAccount.accessToken);
+
+      await slackAPI.chat.postMessage({
+        channel: trialChannelId,
+        text: `You've now installed me in your own workspace - please chat to me there, I won't respond here anymore.`,
+      });
 
       return {
         success: true,
