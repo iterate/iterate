@@ -593,9 +593,11 @@ export function IDE() {
             className="w-full h-7 text-xs gap-1.5"
           >
             <Upload className="h-3 w-3" />
-            {saveFileMutation.isPending || getRepoFileSystemQuery.isPending
+            {saveFileMutation.isPending
               ? "Pushing..."
-              : `Push to ${getRepoFileSystemQuery.data?.branch || "GitHub"}`}
+              : getRepoFileSystemQuery.isPending
+                ? "Loading..."
+                : `Push to ${getRepoFileSystemQuery.data?.branch || "GitHub"}`}
           </Button>
         </div>
         <div className="p-2 border-b">
