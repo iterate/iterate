@@ -126,9 +126,8 @@ const router = t.router({
         "Generate TS workflows from YAML workflows. Will attempt to convert multiline strings to dedent expressions - make sure you check the output.",
     })
     .mutation(async ({ ctx, input }) => {
-      console.log("ctx.updatesNeeded", ctx.updatesNeeded);
-      for (const { yaml } of ctx.updatesNeeded) {
-        const tsPath = path.join(ctx.tsWorkflowsDir, `${yaml.name}.ts`);
+      for (const { name, yaml } of ctx.updatesNeeded) {
+        const tsPath = path.join(ctx.tsWorkflowsDir, `${name}.ts`);
         const multilineStrings: string[] = [];
         let pojo = JSON.stringify(
           yaml.workflow,
