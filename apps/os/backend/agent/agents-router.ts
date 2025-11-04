@@ -12,12 +12,15 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import { IterateAgent } from "./iterate-agent.ts";
-import { type SlackAgentSlices } from "./slack-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
-import type { MergedEventForSlices } from "./agent-core.ts";
 import { MCPEvent } from "./mcp/mcp-slice.ts";
 import { SlackSliceEvent } from "./slack-slice.ts";
 import { AGENT_CLASS_NAMES, getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
+
+export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
+  eventIndex: number;
+  createdAt: string;
+};
 
 const agentStubProcedure = protectedProcedure
   .input(
@@ -140,7 +143,7 @@ export const agentsRouter = router({
   getEvents: agentStubProcedure
     .meta({ description: "Get the events of an agent instance" })
     .query(async ({ ctx }) => {
-      return (await ctx.agent.getEvents()) as MergedEventForSlices<SlackAgentSlices>[];
+      return (await ctx.agent.getEvents()) as AgentEvent[];
     }),
 
   getAgentDebugURL: agentStubProcedure.query(async ({ ctx }) => {

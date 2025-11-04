@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
@@ -33,7 +33,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
     channelId: string;
   } | null>(null);
 
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const { data: user } = useQuery(trpc.user.me.queryOptions());
 
   const directSlackLogin = async () => {
     const result = await authClient.integrations.link.slackBot({
@@ -172,10 +172,14 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
         maxWidthClass="max-w-md"
       >
         <div className="space-y-4">
-          <div className="text-center p-4 bg-muted/50 rounded-lg">
-            <div className="text-sm font-medium">{user.name}</div>
-            <div className="text-sm text-muted-foreground">{user.email}</div>
-          </div>
+          {user ? (
+            <div className="text-center p-4 bg-muted/50 rounded-lg">
+              <div className="text-sm font-medium">{user.name}</div>
+              <div className="text-sm text-muted-foreground">{user.email}</div>
+            </div>
+          ) : (
+            <Spinner />
+          )}
 
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setView("choose-method")} className="flex-1">

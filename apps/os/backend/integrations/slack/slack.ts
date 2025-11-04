@@ -1050,10 +1050,7 @@ export async function syncSlackForEstateInBackground(
       errors: externalUsersResult.errors,
     };
   } catch (error) {
-    logger.error(
-      "Error in syncSlackForEstateInBackground:",
-      error instanceof Error ? error.message : error,
-    );
+    logger.error("Error in syncSlackForEstateInBackground:", error);
     throw error;
   }
 }

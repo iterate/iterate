@@ -1,6 +1,6 @@
 import { useState, Suspense } from "react";
 import { Save, Info } from "lucide-react";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRouteLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Spinner } from "../../components/ui/spinner.tsx";
@@ -30,12 +30,16 @@ export function meta(_args: Route.MetaArgs) {
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
   const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
-  const { data: organization } = useSuspenseQuery({
-    ...trpc.organization.get.queryOptions({ organizationId }),
-    initialData: loaderData?.organization,
-  });
+  const { data: organization } = useQuery(
+    trpc.organization.get.queryOptions(
+      { organizationId },
+      {
+        initialData: loaderData?.organization,
+      },
+    ),
+  );
 
-  const [organizationName, setOrganizationName] = useState(organization.name);
+  const [organizationName, setOrganizationName] = useState(organization?.name ?? "");
 
   const updateOrganization = useMutation(
     trpc.organization.updateName.mutationOptions({
@@ -57,7 +61,7 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
       return;
     }
 
-    if (organizationName === organization.name) {
+    if (organizationName === organization?.name) {
       toast.error("No changes to save");
       return;
     }
@@ -68,7 +72,7 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
     });
   };
 
-  const hasChanges = organizationName !== organization.name;
+  const hasChanges = organizationName !== organization?.name;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-5xl">

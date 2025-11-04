@@ -116,6 +116,12 @@ export const getAuth = (db: DB) =>
         redirectURI: `${env.VITE_PUBLIC_URL}/api/auth/callback/slack`,
       },
     },
+    session: {
+      cookieCache: {
+        enabled: true,
+        maxAge: 10 * 60, // seconds - see https://www.better-auth.com/docs/reference/options#session
+      },
+    },
     advanced: {
       database: {
         generateId: (opts) => {

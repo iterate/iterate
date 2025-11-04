@@ -17,7 +17,7 @@ import {
   Bug,
   Puzzle,
 } from "lucide-react";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { useMemo, useState } from "react";
 import { fromString } from "typeid-js";
@@ -54,6 +54,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip.tsx";
 import { useDebounce } from "../hooks/use-debounced.ts";
 import { cn } from "../lib/utils.ts";
+import { Spinner } from "./ui/spinner.tsx";
 import { OrganizationSwitcher } from "./organization-switcher.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { Input } from "./ui/input.tsx";
@@ -286,8 +287,12 @@ async function resolveImpersonation(type: "email" | "user_id" | "estate_id", val
 function UserSwitcher() {
   const [impersonationDialogOpen, setImpersonationDialogOpen] = useState(false);
   const trpc = useTRPC();
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
+  const userQuery = useQuery(trpc.user.me.queryOptions());
+  const impersonationInfoQuery = useQuery(
+    trpc.admin.impersonationInfo.queryOptions(void 0, {
+      initialData: {},
+    }),
+  );
 
   const startImpersonation = useMutation({
     mutationFn: async (params: { type: "email" | "user_id" | "estate_id"; value: string }) => {
@@ -349,8 +354,8 @@ function UserSwitcher() {
       .slice(0, 2);
   };
 
-  const tooltipContent = impersonationInfo.impersonatedBy
-    ? `Impersonating ${user.email}`
+  const tooltipContent = impersonationInfoQuery.data?.impersonatedBy
+    ? `Impersonating ${userQuery.data?.email ?? ""}`
     : undefined;
 
   return (
@@ -363,17 +368,35 @@ function UserSwitcher() {
                 <SidebarMenuButton
                   size="lg"
                   className={`data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground ${
-                    impersonationInfo.impersonatedBy ? "border-2 border-destructive" : ""
+                    impersonationInfoQuery.data?.impersonatedBy ? "border-2 border-destructive" : ""
                   }`}
                 >
-                  <Avatar className="h-8 w-8 rounded-lg">
-                    <AvatarImage src={user.image || ""} alt={user.name} />
-                    <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
-                  </Avatar>
-                  <div className="grid flex-1 text-left text-sm leading-tight">
-                    <span className="truncate font-medium">{user.name}</span>
-                    <span className="truncate text-xs">{user.email}</span>
-                  </div>
+                  {userQuery.isPending ? (
+                    <>
+                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
+                        <Spinner className="size-4" />
+                      </div>
+                      <div className="grid flex-1 text-left text-sm leading-tight">
+                        <span className="truncate font-medium">Loading...</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <Avatar className="h-8 w-8 rounded-lg">
+                        <AvatarImage
+                          src={userQuery.data?.image || ""}
+                          alt={userQuery.data?.name ?? "User"}
+                        />
+                        <AvatarFallback className="rounded-lg">
+                          {getInitials(userQuery.data?.name ?? "User")}
+                        </AvatarFallback>
+                      </Avatar>
+                      <div className="grid flex-1 text-left text-sm leading-tight">
+                        <span className="truncate font-medium">{userQuery.data?.name}</span>
+                        <span className="truncate text-xs">{userQuery.data?.email}</span>
+                      </div>
+                    </>
+                  )}
                   <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
@@ -381,12 +404,12 @@ function UserSwitcher() {
             {tooltipContent && <TooltipContent side="right">{tooltipContent}</TooltipContent>}
           </Tooltip>
           <DropdownMenuContent className="w-56" side="top" align="start">
-            {impersonationInfo.isAdmin && (
+            {impersonationInfoQuery.data?.isAdmin && (
               <DropdownMenuItem onClick={() => setImpersonationDialogOpen(true)}>
                 Impersonate another user
               </DropdownMenuItem>
             )}
-            {impersonationInfo.impersonatedBy && (
+            {impersonationInfoQuery.data?.impersonatedBy && (
               <DropdownMenuItem
                 onClick={() => stopImpersonation.mutate()}
                 disabled={stopImpersonation.isPending}
@@ -394,9 +417,8 @@ function UserSwitcher() {
                 {stopImpersonation.isPending ? "Stopping..." : "Stop impersonating"}
               </DropdownMenuItem>
             )}
-            {(impersonationInfo.isAdmin || impersonationInfo.impersonatedBy) && (
-              <DropdownMenuSeparator />
-            )}
+            {(impersonationInfoQuery.data?.isAdmin ||
+              impersonationInfoQuery.data?.impersonatedBy) && <DropdownMenuSeparator />}
             <DropdownMenuItem asChild>
               <Link to="/user-settings">
                 <User className="mr-2 h-4 w-4" />
@@ -412,7 +434,7 @@ function UserSwitcher() {
       </SidebarMenuItem>
 
       {/* Impersonation Dialog */}
-      {impersonationInfo.isAdmin && (
+      {impersonationInfoQuery.data?.isAdmin && (
         <ImpersonationDialog
           open={impersonationDialogOpen}
           onOpenChange={setImpersonationDialogOpen}
@@ -477,9 +499,20 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const organizationId = useOrganizationId();
   const currentEstateId = params.estateId;
   const trpc = useTRPC();
-  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions({ organizationId }));
-  const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const estatesQuery = useQuery(
+    trpc.estates.list.queryOptions(
+      { organizationId },
+      {
+        initialData: [],
+      },
+    ),
+  );
+  const impersonationInfoQuery = useQuery(
+    trpc.admin.impersonationInfo.queryOptions(void 0, {
+      initialData: {},
+    }),
+  );
+  const userQuery = useQuery(trpc.user.me.queryOptions());
 
   // Only connect websocket if we're in an estate context
   const _ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
@@ -511,10 +544,10 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
           </SidebarHeader>
           <SidebarContent>
             {/* Estate Navigation - One section per estate */}
-            {estates?.map((estate: Estate) => (
+            {estatesQuery.data?.map((estate: Estate) => (
               <SidebarGroup key={estate.id}>
                 {/* Only show estate label if there are multiple estates */}
-                {estates.length > 1 && (
+                {estatesQuery.data.length > 1 && (
                   <SidebarGroupLabel className="flex items-center gap-2">
                     <Building2 className="size-3" />
                     {estate.name}
@@ -564,7 +597,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             </SidebarGroup>
 
             {/* Admin Navigation */}
-            {impersonationInfo?.isAdmin && (
+            {impersonationInfoQuery.data?.isAdmin && (
               <SidebarGroup>
                 <SidebarGroupLabel>Admin</SidebarGroupLabel>
                 <SidebarGroupContent>
@@ -593,7 +626,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
              *   </div>
              * )}
              */}
-            {user.debugMode && (
+            {userQuery.data?.debugMode && (
               <Badge
                 variant="secondary"
                 className="text-xs bg-muted text-muted-foreground border-muted-foreground/20"
