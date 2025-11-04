@@ -2,8 +2,8 @@ import { ChevronsUpDown, Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useRouteLoaderData } from "react-router";
 import { useTRPC } from "../lib/trpc.ts";
-import { useOrganizationId } from "../hooks/use-estate.ts";
-import type { loader as orgLoader } from "../routes/org/loader.tsx";
+import type { loader as orgLoader } from "../routes/org/layout.tsx";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,21 +16,25 @@ import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.ts
 export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
-  const currentOrganizationId = useOrganizationId();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
   const organizationsQuery = useQuery(
     trpc.organization.list.queryOptions(void 0, {
-      initialData: loaderData?.organizations ?? [],
+      initialData: () => loaderData?.organizations ?? [],
+      // Organizations are not likely to change frequently, cache for 5 minutes
+      staleTime: 1000 * 60 * 5,
     }),
   );
-  const userQuery = useQuery(trpc.user.me.queryOptions());
+
+  const user = useSessionUser();
 
   // Only show organizations where user is owner or member
-  const organizations = organizationsQuery.data.filter(
-    (org) => org.role === "owner" || org.role === "member",
-  );
-
-  const currentOrganization = organizations.find((org) => org.id === currentOrganizationId);
+  const organizations =
+    // TODO: SSR shenanigans, I will find a better solution later
+    (
+      organizationsQuery.data.length > 0
+        ? organizationsQuery.data
+        : (loaderData?.organizations ?? [])
+    ).filter((org) => org.role === "owner" || org.role === "member");
 
   // If there are no organizations, show a prompt to create one
   if (organizations.length === 0) {
@@ -71,14 +75,14 @@ export function OrganizationSwitcher() {
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">iterate</span>
                 <span className="truncate text-xs">
-                  {currentOrganization?.name || "Select Organization"}
+                  {loaderData?.organization.name || "Select Organization"}
                 </span>
               </div>
               <ChevronsUpDown className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
             align="start"
             side="bottom"
             sideOffset={4}
@@ -98,7 +102,7 @@ export function OrganizationSwitcher() {
                 </div>
               </DropdownMenuItem>
             ))}
-            {userQuery.data?.debugMode && (
+            {user.debugMode && (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem

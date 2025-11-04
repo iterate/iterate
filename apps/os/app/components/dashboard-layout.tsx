@@ -5,11 +5,7 @@ import {
   Github,
   LogOut,
   Building2,
-  Check,
   ChevronsUpDown,
-  Sun,
-  Moon,
-  Monitor,
   Shield,
   UserCog,
   CreditCard,
@@ -18,7 +14,6 @@ import {
   Puzzle,
 } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useTheme } from "next-themes";
 import { useMemo, useState } from "react";
 import { fromString } from "typeid-js";
 import { toast } from "sonner";
@@ -47,14 +42,13 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "../components/ui/dropdown-menu.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip.tsx";
 import { useDebounce } from "../hooks/use-debounced.ts";
 import { cn } from "../lib/utils.ts";
-import { Spinner } from "./ui/spinner.tsx";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 import { OrganizationSwitcher } from "./organization-switcher.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { Input } from "./ui/input.tsx";
@@ -67,6 +61,7 @@ import {
   DialogTitle,
 } from "./ui/dialog.tsx";
 import { AutoComplete } from "./autocomplete.tsx";
+import ThemeSwitcher from "./theme-switcher.tsx";
 
 const estateNavigation: NavigationItem[] = [
   { title: "Home", icon: HomeIcon, path: "" },
@@ -287,7 +282,7 @@ async function resolveImpersonation(type: "email" | "user_id" | "estate_id", val
 function UserSwitcher() {
   const [impersonationDialogOpen, setImpersonationDialogOpen] = useState(false);
   const trpc = useTRPC();
-  const userQuery = useQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
   const impersonationInfoQuery = useQuery(
     trpc.admin.impersonationInfo.queryOptions(void 0, {
       initialData: {},
@@ -355,7 +350,7 @@ function UserSwitcher() {
   };
 
   const tooltipContent = impersonationInfoQuery.data?.impersonatedBy
-    ? `Impersonating ${userQuery.data?.email ?? ""}`
+    ? `Impersonating ${user.email ?? ""}`
     : undefined;
 
   return (
@@ -371,32 +366,15 @@ function UserSwitcher() {
                     impersonationInfoQuery.data?.impersonatedBy ? "border-2 border-destructive" : ""
                   }`}
                 >
-                  {userQuery.isPending ? (
-                    <>
-                      <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-muted">
-                        <Spinner className="size-4" />
-                      </div>
-                      <div className="grid flex-1 text-left text-sm leading-tight">
-                        <span className="truncate font-medium">Loading...</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <Avatar className="h-8 w-8 rounded-lg">
-                        <AvatarImage
-                          src={userQuery.data?.image || ""}
-                          alt={userQuery.data?.name ?? "User"}
-                        />
-                        <AvatarFallback className="rounded-lg">
-                          {getInitials(userQuery.data?.name ?? "User")}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="grid flex-1 text-left text-sm leading-tight">
-                        <span className="truncate font-medium">{userQuery.data?.name}</span>
-                        <span className="truncate text-xs">{userQuery.data?.email}</span>
-                      </div>
-                    </>
-                  )}
+                  <Avatar className="h-8 w-8 rounded-lg">
+                    <AvatarImage src={user.image ?? undefined} alt={user.name} />
+                    <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-medium">{user.name}</span>
+                    <span className="truncate text-xs">{user.email}</span>
+                  </div>
+
                   <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
@@ -446,49 +424,6 @@ function UserSwitcher() {
   );
 }
 
-function ThemeSwitcher() {
-  const { theme, setTheme } = useTheme();
-
-  const themes = [
-    { value: "light", label: "Light", icon: Sun },
-    { value: "dark", label: "Dark", icon: Moon },
-    { value: "system", label: "System", icon: Monitor },
-  ];
-
-  const currentTheme = themes.find((t) => t.value === theme) || themes[2];
-
-  return (
-    <SidebarMenu>
-      <SidebarMenuItem>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
-              <currentTheme.icon className="size-4" />
-              <span className="truncate">Theme</span>
-            </SidebarMenuButton>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-48" side="top" align="start">
-            <DropdownMenuLabel>Choose theme</DropdownMenuLabel>
-            {themes.map((themeOption) => (
-              <DropdownMenuItem
-                key={themeOption.value}
-                onClick={() => setTheme(themeOption.value)}
-                className="flex items-center justify-between"
-              >
-                <div className="flex items-center gap-2">
-                  <themeOption.icon className="size-4" />
-                  <span>{themeOption.label}</span>
-                </div>
-                {theme === themeOption.value && <Check className="size-4" />}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </SidebarMenuItem>
-    </SidebarMenu>
-  );
-}
-
 interface DashboardLayoutProps {
   children: React.ReactNode;
 }
@@ -512,7 +447,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
       initialData: {},
     }),
   );
-  const userQuery = useQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
 
   // Only connect websocket if we're in an estate context
   const _ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
@@ -626,7 +561,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
              *   </div>
              * )}
              */}
-            {userQuery.data?.debugMode && (
+            {user.debugMode && (
               <Badge
                 variant="secondary"
                 className="text-xs bg-muted text-muted-foreground border-muted-foreground/20"

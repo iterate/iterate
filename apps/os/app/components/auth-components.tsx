@@ -1,9 +1,10 @@
 import { useSearchParams } from "react-router";
-import { Loader2, MailIcon } from "lucide-react";
+import { MailIcon } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
+import { Spinner } from "./ui/spinner.tsx";
 
 export function LoginProviders() {
   const [searchParams] = useSearchParams();
@@ -67,9 +68,9 @@ export function LoginProviders() {
 
   if (autoSignin === "slack") {
     return (
-      <>
-        <Loader2 className="animate-spin" /> Redirecting to Slack...
-      </>
+      <div className="flex items-center justify-center gap-2">
+        <Spinner /> <span className="font-medium">Redirecting to Slack...</span>
+      </div>
     );
   }
 

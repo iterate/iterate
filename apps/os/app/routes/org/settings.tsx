@@ -4,7 +4,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRouteLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Spinner } from "../../components/ui/spinner.tsx";
-import { useTRPC } from "../../lib/trpc.ts";
+import { queryClient, useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Card, CardContent } from "../../components/ui/card.tsx";
@@ -18,7 +18,7 @@ import {
   FieldSet,
 } from "../../components/ui/field.tsx";
 import type { Route } from "./+types/settings.ts";
-import type { loader as orgLoader } from "./loader.tsx";
+import type { loader as orgLoader } from "./layout.tsx";
 
 export function meta(_args: Route.MetaArgs) {
   return [
@@ -29,7 +29,7 @@ export function meta(_args: Route.MetaArgs) {
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
   const { data: organization } = useQuery(
     trpc.organization.get.queryOptions(
       { organizationId },
@@ -45,6 +45,12 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
     trpc.organization.updateName.mutationOptions({
       onSuccess: (data) => {
         toast.success("Organization name updated successfully");
+        queryClient.invalidateQueries({
+          queryKey: [
+            trpc.organization.get.queryKey({ organizationId }),
+            trpc.organization.list.queryKey(),
+          ],
+        });
         setOrganizationName(data.name);
       },
       onError: (error) => {

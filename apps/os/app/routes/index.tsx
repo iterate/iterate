@@ -2,9 +2,6 @@ import { redirect } from "react-router";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import { waitUntil } from "../../env.ts";
-import { GlobalLoading } from "../components/global-loading.tsx";
-import { getDb } from "../../backend/db/client.ts";
-import { getAuth } from "../../backend/auth/auth.ts";
 import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
 import {
@@ -13,13 +10,21 @@ import {
 } from "../../backend/org-utils.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
-import type { Route } from "./+types/redirect";
+import type { DB } from "../../backend/db/client.ts";
+import { ReactRouterServerContext } from "../context.ts";
 import { appendEstatePath } from "./append-estate-path.ts";
+import type { Route } from "./+types/index.ts";
 
 // Server-side business logic for determining where to redirect
-async function determineRedirectPath(userId: string, cookieHeader: string | null) {
-  const db = getDb();
-
+async function determineRedirectPath({
+  userId,
+  cookieHeader,
+  db,
+}: {
+  userId: string;
+  cookieHeader: string | null;
+  db: DB;
+}) {
   // Get user's estates from the database (excluding external orgs)
   const userOrganizations = await getUserOrganizationsWithEstates(db, userId);
 
@@ -240,22 +245,19 @@ async function determineRedirectPath(userId: string, cookieHeader: string | null
 }
 
 // Server-side loader that handles all the redirect logic
-export async function loader({ request }: Route.LoaderArgs) {
-  // Get the database and auth instances
-  const db = getDb();
-  const auth = getAuth(db);
-
-  // Get session using Better Auth's getSession with the request headers
-  const session = await auth.api.getSession({
-    headers: request.headers,
-  });
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const { session, db } = context.get(ReactRouterServerContext).variables;
 
   if (!session?.user?.id) {
     throw redirect("/login");
   }
 
   // Determine where to redirect based on user's estates
-  let redirectPath = await determineRedirectPath(session.user.id, request.headers.get("Cookie"));
+  let redirectPath = await determineRedirectPath({
+    userId: session.user.id,
+    cookieHeader: request.headers.get("Cookie"),
+    db,
+  });
 
   if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
     const estatePath = new URL(request.url).searchParams.get("estate_path");
@@ -265,10 +267,4 @@ export async function loader({ request }: Route.LoaderArgs) {
   }
 
   throw redirect(redirectPath);
-}
-
-// The component is minimal since all logic is in the loader
-export default function RootRedirect() {
-  // This should never render as the loader always redirects
-  return <GlobalLoading />;
 }

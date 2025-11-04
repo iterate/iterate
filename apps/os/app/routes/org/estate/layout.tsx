@@ -1,25 +1,14 @@
 import { Outlet, redirect, data } from "react-router";
-import { getDb } from "../../../../backend/db/client.ts";
-import { getAuth } from "../../../../backend/auth/auth.ts";
 import { getUserEstateAccess } from "../../../../backend/trpc/trpc.ts";
 import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
-import type { Route } from "./+types/loader.ts";
+import { ReactRouterServerContext } from "../../../context.ts";
+import type { Route } from "./+types/layout.ts";
 
-export async function loader({ request, params }: Route.LoaderArgs) {
+export async function loader({ request, params, context }: Route.LoaderArgs) {
   const { organizationId, estateId } = params;
-
-  if (!organizationId || !estateId) {
-    throw new Error("Organization ID and Estate ID are required");
-  }
-
-  const db = getDb();
-  const auth = getAuth(db);
+  const { db, session } = context.get(ReactRouterServerContext).variables;
 
   // Get session
-  const session = await auth.api.getSession({
-    headers: request.headers,
-  });
-
   if (!session?.user?.id) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }

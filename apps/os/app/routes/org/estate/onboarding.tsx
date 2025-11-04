@@ -4,23 +4,21 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { eq } from "drizzle-orm";
 import { match } from "ts-pattern";
-import { getDb } from "../../../../backend/db/client.ts";
 import * as schema from "../../../../backend/db/schema.ts";
 import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import { useTRPC } from "../../../lib/trpc.ts";
 import { Button } from "../../../components/ui/button.tsx";
+import { ReactRouterServerContext } from "../../../context.ts";
+import type { Route } from "./+types/onboarding.ts";
 import { OnboardingSlackStep } from "./onboarding-slack-step.tsx";
 import { OnboardingConfirmOrgStep } from "./onboarding-confirm-org-step.tsx";
 
-export async function loader({
-  params,
-}: {
-  params: { organizationId?: string; estateId?: string };
-}) {
+export async function loader({ params, context }: Route.LoaderArgs) {
+  const { db } = context.get(ReactRouterServerContext).variables;
+
   const { estateId, organizationId } = params;
   if (!estateId || !organizationId) throw redirect("/");
 
-  const db = getDb();
   const required = await isEstateOnboardingRequired(db, estateId);
   if (!required) throw redirect(`/${organizationId}/${estateId}`);
 
