@@ -115,9 +115,7 @@ const router = t.router({
           continue;
         }
 
-        if (input.dryRun) continue;
-        if (tsWorkflow.yaml.trim()) await fs.writeFile(yamlPath, tsWorkflow.yaml);
-        else await fs.rm(yamlPath, { force: true });
+        if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
       }
       if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
       return ctx.updateMessage;
