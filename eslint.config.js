@@ -336,6 +336,10 @@ export default defineConfig([
             },
           },
           "drizzle-conventions": {
+            meta: {
+              hasSuggestions: true,
+              fixable: "code",
+            },
             create: (context) => {
               return {
                 "CallExpression[callee.property.name='insert']": (node) => {
@@ -344,6 +348,36 @@ export default defineConfig([
                       node,
                       message: `use \`db.insert(schema.tableName)\` instead of \`db.insert(tableName)\` - it makes it easier to find insert expressions in the codebase`,
                     });
+                  }
+                },
+                "CallExpression[callee.property.name='update']": (node) => {
+                  if (node.arguments[0]?.object?.name !== "schema") {
+                    context.report({
+                      node,
+                      message: `use \`db.update(schema.tableName)\` instead of \`db.update(tableName)\` - it makes it easier to find update expressions in the codebase`,
+                    });
+                  }
+                },
+                "CallExpression[callee.property.name='transaction']": (node) => {
+                  // @ts-expect-error getScope exists I swear
+                  const nodeScope = context.sourceCode.getScope(node.arguments[0]);
+                  // `through`: "The array of references which could not be resolved in this scope" https://eslint.org/docs/latest/extend/scope-manager-interface#scope-interface
+                  for (const reference of nodeScope.through) {
+                    const { identifier } = reference;
+                    if (identifier.name === node.callee.object?.name) {
+                      const used = identifier.name;
+                      const shouldUse = node.arguments[0].params[0]?.name;
+                      context.report({
+                        node: identifier,
+                        message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
+                        suggest: [
+                          {
+                            desc: `Change \`${used}\` to \`${shouldUse}\``,
+                            fix: (fixer) => fixer.replaceText(identifier, shouldUse),
+                          },
+                        ],
+                      });
+                    }
                   }
                 },
               };
