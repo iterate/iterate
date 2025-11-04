@@ -14,7 +14,7 @@ export default workflow({
       ...utils.runsOn,
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler,
+        ...utils.setupDoppler({ config: "dev" }),
         {
           name: "Run Tests",
           env: {

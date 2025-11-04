@@ -34,36 +34,8 @@ export default {
         worker_url: "${{ steps.alchemy_deploy.outputs.worker_url }}",
       },
       steps: [
-        {
-          name: "Checkout code",
-          uses: "actions/checkout@v4",
-        },
-        {
-          name: "Setup pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "Install dependencies",
-          run: "pnpm install",
-        },
-        {
-          name: "Install Doppler CLI",
-          uses: "dopplerhq/cli-action@v2",
-        },
-        {
-          name: "Setup Doppler",
-          run: "doppler setup --config ${{ inputs.stage }} --project os",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-        },
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
           name: "Enable QEMU",
           uses: "docker/setup-qemu-action@v3",
@@ -88,36 +60,8 @@ export default {
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       if: "inputs.stage == 'prd'",
       steps: [
-        {
-          name: "Checkout code",
-          uses: "actions/checkout@v4",
-        },
-        {
-          name: "Setup pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "Install dependencies",
-          run: "pnpm install",
-        },
-        {
-          name: "Install Doppler CLI",
-          uses: "dopplerhq/cli-action@v2",
-        },
-        {
-          name: "Setup Doppler",
-          run: "doppler setup --config ${{ inputs.stage }} --project os",
-          env: {
-            DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
-          },
-        },
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
           name: "Deploy Website",
           env: {
@@ -133,7 +77,7 @@ export default {
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
       steps: [
         ...utils.setupRepo,
-        ...utils.setupDoppler,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         {
           name: "Deploy Mock MCP Server",
           "working-directory": "apps/mcp-mock-server",
