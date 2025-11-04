@@ -1,6 +1,6 @@
-import { useSessionStorageValue } from "@react-hookz/web";
 import { useState, useMemo, Suspense } from "react";
 import { useNavigate } from "react-router";
+import { useQueryState } from "nuqs";
 import {
   Bot,
   Search,
@@ -202,7 +202,9 @@ export default function Home() {
   const trpc = useTRPC();
   const { openSlackApp } = useSlackConnection();
 
-  const sessionFilter = useSessionStorageValue<string>("agent-name-filter");
+  const [agentNameFilter, setAgentNameFilter] = useQueryState("agent-name-filter", {
+    defaultValue: "",
+  });
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [agentName, setAgentName] = useState("");
@@ -212,7 +214,7 @@ export default function Home() {
   const [firstMessage, setFirstMessage] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const nameSubstring = slackUrlTheadTs(sessionFilter.value || "") || sessionFilter.value;
+  const nameSubstring = slackUrlTheadTs(agentNameFilter || "") || agentNameFilter;
   const { data: agents } = useSuspenseQuery(
     trpc.agents.list.queryOptions({
       estateId,
@@ -585,9 +587,9 @@ export default function Home() {
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               placeholder="Filter agents by name or Slack message link..."
-              value={sessionFilter.value}
+              value={agentNameFilter}
               onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                sessionFilter.set(e.target.value)
+                setAgentNameFilter(e.target.value)
               }
               className="pl-10"
             />

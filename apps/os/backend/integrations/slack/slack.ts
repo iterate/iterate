@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import * as R from "remeda";
 import { waitUntil, type CloudflareEnv } from "../../../env.ts";
@@ -555,13 +555,14 @@ async function processWebhookForEstate({
 
   const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
     where: eq(schema.agentInstanceRoute.routingKey, routingKey),
+    orderBy: desc(schema.agentInstance.updatedAt),
     with: {
       agentInstance: {
         with: {
           estate: {
             with: {
               organization: true,
-              iterateConfigs: true,
+              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
             },
           },
         },
@@ -571,7 +572,6 @@ async function processWebhookForEstate({
 
   if (rest.length > 0) {
     logger.error(`Multiple agents found for routing key ${routingKey}`);
-    return;
   }
 
   const agentStub = agentRoute?.agentInstance?.estate

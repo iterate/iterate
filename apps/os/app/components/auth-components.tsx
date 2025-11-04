@@ -1,5 +1,6 @@
 import { useSearchParams } from "react-router";
-import { MailIcon } from "lucide-react";
+import { Loader2, MailIcon } from "lucide-react";
+import { useCallback, useEffect } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
@@ -7,6 +8,7 @@ import { Button } from "./ui/button.tsx";
 export function LoginProviders() {
   const [searchParams] = useSearchParams();
   const redirectUrl = searchParams.get("redirectUrl");
+  const autoSignin = searchParams.get("autoSignin");
 
   const handleGoogleSignIn = async () => {
     try {
@@ -21,7 +23,7 @@ export function LoginProviders() {
     }
   };
 
-  const handleSlackSignIn = async () => {
+  const handleSlackSignIn = useCallback(async () => {
     try {
       console.log("🚀 Attempting Slack sign-in...");
       await authClient.signIn.social({
@@ -31,7 +33,7 @@ export function LoginProviders() {
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }
-  };
+  }, [redirectUrl]);
 
   const handleTestAdminUserSignIn = async () => {
     const credentials = prompt(
@@ -56,6 +58,20 @@ export function LoginProviders() {
     await authClient.signIn.emailOtp({ email, otp });
     window.location.href = "/";
   };
+
+  useEffect(() => {
+    if (autoSignin === "slack") {
+      handleSlackSignIn();
+    }
+  }, [autoSignin, handleSlackSignIn]);
+
+  if (autoSignin === "slack") {
+    return (
+      <>
+        <Loader2 className="animate-spin" /> Redirecting to Slack...
+      </>
+    );
+  }
 
   return (
     <div className="w-full space-y-4">
