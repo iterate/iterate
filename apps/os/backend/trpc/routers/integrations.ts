@@ -1135,7 +1135,7 @@ export const integrationsRouter = router({
    * Upgrades a trial estate to a full Slack installation
    * This removes all trial-specific configuration so the user can connect their own Slack workspace
    */
-  upgradeTrialToFullInstallation: protectedProcedure
+  upgradeTrialToFullInstallation: estateProtectedProcedure
     .input(
       z.object({
         estateId: z.string(),

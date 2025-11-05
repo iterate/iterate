@@ -3,7 +3,7 @@ import { and, eq, desc, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import { protectedProcedure, router } from "../trpc.ts";
+import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
@@ -21,7 +21,8 @@ import {
 import { env } from "../../../env.ts";
 import { deleteUserAccount } from "./user.ts";
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+// don't use `protectedProcedure` because that prevents the use of `estateId`. instead create an equivalent without that restriction
+const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
       code: "FORBIDDEN",
