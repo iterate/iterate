@@ -5,7 +5,7 @@
     "types": ["@cloudflare/workers-types", "node", "vite/client"],
     "sourceMap": false,
     "lib": ["ESNext", "DOM"],
-    "declaration": true,
+    "declaration": false,
     "declarationMap": false,
     "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,
@@ -29,5 +29,6 @@
     "noEmit": true,
     "allowImportingTsExtensions": true
   },
-  "exclude": ["backend/legacy-agent/**/*"]
+  "include": ["./**/*", "./.react-router/types/**/*"],
+  "exclude": ["node_modules", "dist", "build"]
 }

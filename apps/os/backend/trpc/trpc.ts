@@ -79,7 +79,7 @@ type AuthenticatedContext = Context & {
 };
 
 // Middleware to automatically invalidate queries after mutations
-const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
+export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
   const authCtx = ctx as AuthenticatedContext;
   const result = await next({ ctx: authCtx });
 
@@ -109,7 +109,7 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
 });
 
 // Protected procedure that requires authentication
-export const protectedProcedure = t.procedure
+export const protectedProcedureWithNoEstateRestrictions = t.procedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -123,6 +123,10 @@ export const protectedProcedure = t.procedure
     });
   })
   .use(autoInvalidateMiddleware); // Add auto-invalidation to all protected procedures
+
+export const protectedProcedure = protectedProcedureWithNoEstateRestrictions.input(
+  z.object({ estateId: z.never().optional() }).optional(),
+);
 
 // Create a version of protectedProcedure without auto-invalidation for special cases
 export const protectedProcedureNoAutoInvalidate = t.procedure.use(({ ctx, next }) => {
@@ -329,7 +333,8 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
 });
 
 // Estate protected procedure that requires both authentication and estate access
-export const estateProtectedProcedure = protectedProcedure
+export const estateProtectedProcedure = protectedProcedureWithNoEstateRestrictions
+  .use(autoInvalidateMiddleware) // Add auto-invalidation to all protected procedures
   .input(z.object({ estateId: z.string() }))
   .use(async ({ ctx, input, next, path }) => {
     const { hasAccess, estate: userEstate } = await getUserEstateAccess(

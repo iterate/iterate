@@ -126,7 +126,10 @@ test(
       const impersonationResult = await authClient.admin.impersonateUser(
         { userId: user.id },
         {
-          headers: { cookie: sessionCookies },
+          // Something changed in better-auth, so now we need to manually set the Origin header
+          // most likely because we are calling this api from server-side which doesn't add the header
+          // but better-auth expects it to be set
+          headers: { cookie: sessionCookies, origin: env.WORKER_URL },
           onResponse(context: { response: Response }) {
             const cookies = context.response.headers.getSetCookie();
             const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
@@ -180,7 +183,9 @@ test(
           estateId: estate.id,
           limit: 1,
         });
-        console.log(`Latest build status: ${builds[0]?.status} (${builds[0]?.id})`);
+        console.log(
+          `Latest build status: ${builds[0]?.status ?? "none"} (${builds[0]?.id ?? "<no-id>"})`,
+        );
         return builds[0];
       };
 

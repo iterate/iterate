@@ -14,6 +14,7 @@ import {
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
+  protectedProcedureWithNoEstateRestrictions,
 } from "../trpc.ts";
 import {
   estate,
@@ -159,7 +160,7 @@ export async function triggerEstateRebuild(params: {
 
 export const estateRouter = router({
   // Check if user has access to a specific estate (non-throwing version)
-  checkAccess: protectedProcedure
+  checkAccess: protectedProcedureWithNoEstateRestrictions // we're going to carefully make sure we only give info to authorized users
     .input(
       z.object({
         estateId: z.string(),
