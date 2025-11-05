@@ -73,7 +73,7 @@ app.post("/oauth/authorize", async (c) => {
   const formData = await c.req.formData();
   const action = formData.get("action") as string;
   const url = new URL(c.req.url);
-  const expiresIn = url.searchParams.get("expires_in");
+  const expiresIn = formData.get("expires_in") ?? url.searchParams.get("expires_in");
 
   let session: MockOAuthSession;
 
@@ -119,7 +119,7 @@ async function completeAuthorizationFlow(
   session: MockOAuthSession,
   expiresIn: string | null,
 ) {
-  const expiresInSeconds = Number(expiresIn);
+  const expiresInSeconds = expiresIn ? Number(expiresIn) : null;
   const authOptions = {
     request: oauthReqInfo,
     userId: session.userId,
@@ -130,11 +130,11 @@ async function completeAuthorizationFlow(
       email: session.email,
       sessionId: session.sessionId,
       accessToken: `mock-token-${session.userId}`,
+      expiresIn: expiresInSeconds,
     },
     metadata: {
       label: session.userName,
     },
-    ...(expiresInSeconds && { expiresIn: expiresInSeconds }),
   };
 
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization(authOptions);
