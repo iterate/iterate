@@ -1,6 +1,6 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
-import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import * as R from "remeda";
 import { waitUntil, type CloudflareEnv } from "../../../env.ts";
@@ -19,7 +19,7 @@ import {
 import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
-import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import type { Variables } from "../../worker.ts";
 // Type alias for Slack message elements from ConversationsRepliesResponse
@@ -403,19 +403,12 @@ async function determineEstateIdsToProcess({
   }
 
   if (messageMetadata.threadTs) {
-    const existingRoutes = await db.query.agentInstanceRoute.findMany({
-      where: sql`${schema.agentInstanceRoute.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstanceRoute.routingKey} LIKE ${"%-slack-%"}`,
-      with: {
-        agentInstance: {
-          columns: {
-            estateId: true,
-          },
-        },
-      },
+    const existingRoutes = await db.query.agentInstance.findMany({
+      where: sql`${schema.agentInstance.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstance.routingKey} LIKE ${"%-slack-%"}`,
     });
 
     if (existingRoutes.length > 0) {
-      const estateIds = [...new Set(existingRoutes.map((r) => r.agentInstance.estateId))];
+      const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
       return estateIds;
     }
   }
@@ -554,42 +547,13 @@ async function processWebhookForEstate({
     threadTs: messageMetadata.threadTs,
   });
 
-  const [agentRoute, ...rest] = await db.query.agentInstanceRoute.findMany({
-    where: eq(schema.agentInstanceRoute.routingKey, routingKey),
-    orderBy: desc(schema.agentInstance.updatedAt),
-    with: {
-      agentInstance: {
-        with: {
-          estate: {
-            with: {
-              organization: true,
-              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
-            },
-          },
-        },
-      },
-    },
+  const details = { type: body.event.type, ...messageMetadata };
+  const agentStub = await getOrCreateAgentStubByRoute("SlackAgent", {
+    db,
+    estateId,
+    route: routingKey,
+    reason: `Slack webhook received: ${new URLSearchParams(details)}`,
   });
-
-  if (rest.length > 0) {
-    logger.error(`Multiple agents found for routing key ${routingKey}`);
-  }
-
-  const agentStub = agentRoute?.agentInstance?.estate
-    ? await getAgentStub("SlackAgent", {
-        agentInitParams: {
-          record: agentRoute.agentInstance,
-          estate: agentRoute.agentInstance.estate,
-          organization: agentRoute.agentInstance.estate.organization!,
-          iterateConfig: agentRoute.agentInstance.estate.iterateConfigs?.[0]?.config ?? {},
-        },
-      })
-    : await getOrCreateAgentStubByRoute("SlackAgent", {
-        db,
-        estateId,
-        route: routingKey,
-        reason: "Slack webhook received",
-      });
 
   waitUntil((agentStub as unknown as SlackAgent).onSlackWebhookEventReceived(body));
 }
