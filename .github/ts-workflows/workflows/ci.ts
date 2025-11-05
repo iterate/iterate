@@ -163,7 +163,7 @@ export default {
       },
     },
     slack_failure: {
-      needs: ["variables", "deploy", "e2e"],
+      needs: ["variables", "deploy", "e2e", "release"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       env: { NEEDS: "${{ toJson(needs) }}" },
