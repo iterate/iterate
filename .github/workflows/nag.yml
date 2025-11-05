@@ -122,7 +122,8 @@ jobs:
                   };
 
                   const format = (unit) => {
-                    return `${props[unit]} ${unit}${props[unit] === 1 ? "" : "s"} ago`;
+                    const int = Math.floor(props[unit]);
+                    return `${int} ${unit}${int === 1 ? "" : "s"} ago`;
                   };
 
                   const mostUseful = Object.entries(props).findLast(([_, value]) => value >= 1);
