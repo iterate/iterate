@@ -25,8 +25,6 @@ export function ensureString(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
 export function getBaseURL(
   params: { replaceLocalhostWithNgrok: boolean } = { replaceLocalhostWithNgrok: false },
 ) {
