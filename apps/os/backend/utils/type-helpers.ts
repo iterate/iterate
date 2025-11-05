@@ -3,8 +3,8 @@ import { z } from "zod";
 export type Branded<Brand extends string, Value = string> = Value & z.$brand<Brand>;
 
 // Don't create a proper recursive schema for JSONSerializable, it's horrible for performance and doesn't really help us much.
-export const JSONSerializable = z.unknown() as z.ZodType<{} | null | undefined>;
-export type JSONSerializable = {};
+export type JSONSerializable = {} | null | undefined;
+export const JSONSerializable = z.unknown() as z.ZodType<JSONSerializable>;
 
 // Create a Zod schema constrained to infer type T, failing at compile-time if mismatch
 export function createZodSchemaThatSatisfies<T>() {
