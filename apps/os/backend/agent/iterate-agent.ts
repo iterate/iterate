@@ -476,7 +476,13 @@ export class IterateAgent<
 
       // Wrap the default console so every call is also sent to connected websocket clients
       console: (() => {
-        return logger.withTags({ agentDOName: this.databaseRecord.durableObjectName });
+        const _this = this;
+        return logger.withTags({
+          // lazily get because we have to initialise asynchronously
+          get durableObjectName() {
+            return _this._databaseRecord?.durableObjectName || "";
+          },
+        });
       })(),
 
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {

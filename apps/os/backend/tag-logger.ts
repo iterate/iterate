@@ -50,18 +50,24 @@ export class TagLogger {
     };
   }
 
+  // todo: mess around with `this` less - need an unbound log fn so we don't get "stuck" with the wrong `this` and can return a new instance in methods like `withTags`
+  private _unboundLogFn: TagLogger.LogFn;
   private _logFn: TagLogger.LogFn;
   private _initialTags: Record<string, string>;
   constructor(
     logFn: TagLogger.LogFn = TagLogger.consoleLogFn(console),
     initialTags: Record<string, string> = {},
   ) {
+    this._unboundLogFn = logFn;
     this._logFn = logFn.bind(this);
     this._initialTags = initialTags;
   }
 
   withTags(tags: Record<string, string>) {
-    return new TagLogger(this._logFn, { ...this._initialTags, ...tags });
+    const oldLogFn = this._unboundLogFn;
+    return new TagLogger(function (this: TagLogger, ...args) {
+      oldLogFn.call(this, ...args);
+    }, tags);
   }
 
   get context(): TagLogger.Context {
