@@ -327,22 +327,20 @@ export interface WithCallMethod {
   ): Promise<unknown>;
 }
 
-export const stubStub = <T extends WithCallMethod>(
-  stub: T,
-): {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (...args: [...A, context: Record<string, string>]) => Promise<R>
-    : never;
-} => {
-  return new Proxy(
-    {},
-    {
-      get: (_target, prop) => {
-        return (...args: any[]) => {
-          const context = args.pop() as Record<string, string>;
-          return stub.callMethod(prop as string, args, context);
-        };
-      },
+export type StubStub<T extends WithCallMethod> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R> : never;
+};
+
+export const stubStub = <Stub extends WithCallMethod>(
+  stub: Stub,
+  context: Record<string, string>,
+): StubStub<Stub> & { stub: Stub } => {
+  return new Proxy({} as StubStub<Stub> & { stub: Stub }, {
+    get: (_target, prop) => {
+      if (prop === "stub") return stub;
+      // @ts-expect-error trust me bro
+      if (prop === "fetch" || prop === "then") return stub[prop];
+      return (...args: any[]) => stub.callMethod(prop as string, args, context);
     },
-  ) as never;
+  });
 };

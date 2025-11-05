@@ -31,7 +31,7 @@ import { z } from "zod";
 import { mergeDeep } from "remeda";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
-import type { TagLogger } from "../tag-logger.ts";
+import { logger, type TagLogger } from "../tag-logger.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
@@ -402,7 +402,7 @@ export class AgentCore<
         );
       }
 
-      this.deps.console.debug(`[AgentCore] Initializing with ${existing.length} existing events`);
+      logger.debug(`[AgentCore] Initializing with ${existing.length} existing events`);
 
       // Clear current state
       this._events = [];
@@ -475,7 +475,7 @@ export class AgentCore<
     if (this.llmRequestInProgress()) {
       const requestIndex = this._state.llmRequestStartedAtIndex;
       if (requestIndex !== null) {
-        this.deps.console.warn(
+        logger.warn(
           `[AgentCore] Resuming interrupted LLM request at index ${requestIndex} - indicates DO crash during request`,
         );
         this.runLLMRequestInBackground(requestIndex, this.getResponsesAPIParams());
@@ -532,7 +532,7 @@ export class AgentCore<
         for (const ev of events) {
           // Check for idempotency key deduplication
           if (ev.idempotencyKey && this._seenIdempotencyKeys.has(ev.idempotencyKey)) {
-            this.deps.console.warn(
+            logger.warn(
               `[AgentCore] Skipping duplicate event with idempotencyKey: ${ev.idempotencyKey}`,
             );
             continue; // Skip this event
@@ -608,7 +608,7 @@ export class AgentCore<
       if (this._state.triggerLLMRequest) {
         // Check if paused before starting
         if (this._state.paused) {
-          this.deps.console.warn("[AgentCore] LLM request trigger ignored - requests are paused");
+          logger.warn("[AgentCore] LLM request trigger ignored - requests are paused");
         } else {
           // Check if we need to cancel an in-flight request
           // This happens after processing all events in the batch, so if a batch contains
@@ -618,9 +618,7 @@ export class AgentCore<
           // makeLLMRequest adds all events for that request as one batch (output event,
           // tool call input/output, and LLM request end), so we don't want to cancel.
           if (this.llmRequestInProgress()) {
-            this.deps.console.warn(
-              "[AgentCore] Cancelling in-flight request – new trigger received",
-            );
+            logger.warn("[AgentCore] Cancelling in-flight request – new trigger received");
             // Add a cancel event
             const cancelEvent = {
               type: "CORE:LLM_REQUEST_CANCEL",
@@ -933,7 +931,7 @@ export class AgentCore<
           next.inputItems = [...next.inputItems, developerMessage];
         } else {
           // Handle other file types - add developer message only
-          this.deps.console.warn(
+          logger.warn(
             `[AgentCore] File ${iterateFileId} (${originalFilename}) cannot be shown to LLM - only images and PDFs are currently supported`,
           );
 
@@ -1130,9 +1128,7 @@ export class AgentCore<
       default:
         event satisfies never;
         // Unknown event types are ignored (could be slice events)
-        this.deps.console.warn(
-          `[AgentCore] Unknown core event type: ${(event as AgentCoreEvent).type}`,
-        );
+        logger.warn(`[AgentCore] Unknown core event type: ${(event as AgentCoreEvent).type}`);
         break;
     }
 
@@ -1149,12 +1145,13 @@ export class AgentCore<
   private runLLMRequestInBackground(requestIndex: number, params: ResponsesAPIParams): void {
     this.deps.background(async () => {
       try {
+        logger.info("runLLMRequestInBackground", { requestIndex });
         await this.makeLLMRequest(requestIndex, params);
       } catch (err: any) {
-        this.deps.console.error(err);
+        logger.error(err);
         // Only add error events if this request is still the active one
         if (this.llmRequestInProgress() && this._state.llmRequestStartedAtIndex === requestIndex) {
-          await this.addEvents([
+          this.addEvents([
             {
               type: "CORE:INTERNAL_ERROR",
               data: { error: String(err.message ?? err), stack: String(err.stack ?? "") },
@@ -1338,7 +1335,7 @@ export class AgentCore<
                 openAIOutputItemWithoutResult: imageCallOutputItemWithoutResult,
               },
             });
-            this.deps.console.log("iterateFile", iterateFile);
+            logger.info("iterateFile", iterateFile);
             // Yield file shared event
             return {
               type: "CORE:FILE_SHARED",
@@ -1430,7 +1427,7 @@ export class AgentCore<
     const tools = this.state.runtimeTools;
     let tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
-      this.deps.console.error("Tool not found or not local:", {
+      logger.error("Tool not found or not local:", {
         tool,
         runtimeTools: tools,
         toolString: JSON.stringify(tool, null, 2),

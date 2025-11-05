@@ -5,7 +5,7 @@ import { agentInstance } from "../../db/schema.ts";
 import { schema, type DB } from "../../db/client.ts";
 import type { IterateConfig } from "../../../sdk/iterate-config.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
-import { stubStub } from "../../tag-logger.ts";
+import { logger, stubStub } from "../../tag-logger.ts";
 
 // NOTE: This indirection is intentionally string-based. It's admittedly hacky,
 // but acceptable until we can collapse all IterateAgent subclasses into a
@@ -72,8 +72,12 @@ export async function getAgentStub(
 
   await stub.initIterateAgent(agentInitParams);
 
-  const doStub = stub as {} as DurableObjectStub<IterateAgent>;
-  return stubStub(doStub);
+  return stubStub(stub as {} as IterateAgent, {
+    className,
+    durableObjectName: agentInitParams.record.durableObjectName,
+    estateId: agentInitParams.record.estateId,
+    ...logger.tags,
+  });
 }
 
 export async function getAgentStubByName(
