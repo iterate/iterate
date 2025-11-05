@@ -1,7 +1,6 @@
 import { eq } from "drizzle-orm";
 import dedent from "dedent";
 import { typeid } from "typeid-js";
-import type { PgInsertValue } from "drizzle-orm/pg-core";
 import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";

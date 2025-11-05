@@ -19,6 +19,7 @@ import {
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import { ensureUserSynced } from "../integrations/slack/slack.ts";
 import { slackChannelOverrideExists } from "../utils/trial-channel-setup.ts";
+import { getDefaultOnboardingAgentName } from "../org-utils.ts";
 import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -45,6 +46,9 @@ import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
 import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
+import type { AgentInitParams } from "./iterate-agent.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
+
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -53,10 +57,6 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
-import type { AgentInitParams } from "./iterate-agent.ts";
-import { getConnectionKey } from "./mcp/mcp-slice.ts";
-import { getDefaultOnboardingAgentName } from "../org-utils.ts";
-
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
   private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
