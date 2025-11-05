@@ -2,38 +2,9 @@ import { z } from "zod";
 
 export type Branded<Brand extends string, Value = string> = Value & z.$brand<Brand>;
 
-// Create a proper recursive schema for JSONSerializable
-export const JSONSerializable: z.ZodType<JSONSerializable> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number(),
-    z.boolean(),
-    z.null(),
-    z.undefined(),
-    z.array(JSONSerializable),
-    z.record(z.string(), JSONSerializable),
-  ]),
-);
-
-export interface JSONSerializableArray extends ReadonlyArray<JSONSerializable> {}
-export interface JSONSerializableObject {
-  readonly [key: string]: JSONSerializable;
-}
-
-type JSONPrimitive = string | number | boolean | null | undefined;
-
-export type JSONSerializable = JSONPrimitive | JSONSerializableArray | JSONSerializableObject;
-
-// For stricter typing, you can add a validator type:
-export type DeepJSONSerializable<T> = T extends JSONPrimitive
-  ? T
-  : T extends Array<infer U>
-    ? Array<DeepJSONSerializable<U>>
-    : T extends object
-      ? { [K in keyof T]: DeepJSONSerializable<T[K]> }
-      : never;
-
-export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
+// Don't create a proper recursive schema for JSONSerializable, it's horrible for performance and doesn't really help us much.
+export type JSONSerializable = {} | null | undefined;
+export const JSONSerializable = z.unknown() as z.ZodType<JSONSerializable>;
 
 // Create a Zod schema constrained to infer type T, failing at compile-time if mismatch
 export function createZodSchemaThatSatisfies<T>() {

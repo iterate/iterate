@@ -1,5 +1,6 @@
 import "./app.css";
 import {
+  data,
   isRouteErrorResponse,
   Links,
   Meta,
@@ -14,16 +15,30 @@ import { PostHogProvider as _PostHogProvider, PostHogErrorBoundary } from "posth
 import { NuqsAdapter } from "nuqs/adapters/react-router/v7";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import type { Route } from "./+types/root";
-import { AuthGuard } from "./components/auth-guard.tsx";
 import { GlobalLoading } from "./components/global-loading.tsx";
 import { Toaster } from "./components/ui/sonner.tsx";
-import { queryClient, trpcClient, TrpcContext } from "./lib/trpc.ts";
+import { getQueryClient, trpcClient, TrpcContext } from "./lib/trpc.ts";
+import { ReactRouterServerContext } from "./context.ts";
+import { ErrorRenderer } from "./components/error-renderer.tsx";
 
 export const links: Route.LinksFunction = () => [
   { rel: "icon", href: "/favicon.ico", type: "image/x-icon" },
 ];
 
-export function Layout({ children }: { children: React.ReactNode }) {
+// by passing in the session data to the root layout,
+// we can avoid fetching the session data in every client route
+export async function loader({ context }: Route.LoaderArgs) {
+  const { session } = context.get(ReactRouterServerContext).variables;
+  return data({ session });
+}
+
+// No need to revalidate session data, its most likely to stay same
+// session data is used mostly for the `useSessionUser` hook, which encapsulates all logic
+export function shouldRevalidate() {
+  return false;
+}
+
+export function Layout({ children }: PropsWithChildren) {
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
@@ -33,7 +48,16 @@ export function Layout({ children }: { children: React.ReactNode }) {
         <Links />
       </head>
       <body>
-        {children}
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          enableColorScheme
+          storageKey="theme"
+          disableTransitionOnChange
+        >
+          {children}
+        </ThemeProvider>
         <ScrollRestoration />
         <Scripts />
       </body>
@@ -48,6 +72,8 @@ const PostHogProvider =
     : ({ children }: PropsWithChildren) => <>{children}</>;
 
 export default function App() {
+  const queryClient = getQueryClient();
+
   return (
     <PostHogProvider
       apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}
@@ -55,27 +81,24 @@ export default function App() {
         api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
       }}
     >
-      <PostHogErrorBoundary fallback={<PostHogErrorFallback />}>
+      <PostHogErrorBoundary
+        fallback={({ error, componentStack }) => (
+          <ErrorRenderer
+            message="An unexpected error occurred"
+            details={error instanceof Error ? error.message : String(error)}
+            stack={componentStack}
+          />
+        )}
+      >
         <QueryClientProvider client={queryClient}>
           <TrpcContext.TRPCProvider trpcClient={trpcClient} queryClient={queryClient}>
-            <ThemeProvider
-              attribute="class"
-              defaultTheme="system"
-              enableSystem
-              enableColorScheme
-              storageKey="theme"
-              disableTransitionOnChange
-            >
-              <AuthGuard>
-                <Suspense fallback={<GlobalLoading />}>
-                  <NuqsAdapter>
-                    <Outlet />
-                    <ReactQueryDevtools initialIsOpen={false} />
-                  </NuqsAdapter>
-                </Suspense>
-              </AuthGuard>
-              <Toaster />
-            </ThemeProvider>
+            <Suspense fallback={<GlobalLoading />}>
+              <NuqsAdapter>
+                <Outlet />
+                <Toaster />
+                <ReactQueryDevtools initialIsOpen={false} />
+              </NuqsAdapter>
+            </Suspense>
           </TrpcContext.TRPCProvider>
         </QueryClientProvider>
       </PostHogErrorBoundary>
@@ -89,32 +112,16 @@ export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
   let stack: string | undefined;
 
   if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404" : "Error";
-    details =
-      error.status === 404 ? "The requested page could not be found." : error.statusText || details;
+    message = "Error";
+    details = error.data || error.statusText || details;
   } else if (import.meta.env.DEV && error && error instanceof Error) {
     details = error.message;
     stack = error.stack;
   }
 
-  return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
-      {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
-          <code>{stack}</code>
-        </pre>
-      )}
-    </main>
-  );
+  return <ErrorRenderer message={message} details={details} stack={stack} />;
 }
 
-function PostHogErrorFallback() {
-  return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>Something went wrong</h1>
-      <p>An unexpected error occurred. Please try again later.</p>
-    </main>
-  );
+export function HydrateFallback() {
+  return <GlobalLoading />;
 }

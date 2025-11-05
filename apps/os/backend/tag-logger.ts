@@ -213,6 +213,9 @@ export class TagLogger {
   error(error: Error): void;
   error(message: string, cause?: unknown): void;
   error(...args: unknown[]) {
+    if (String(args[0]).includes("There is a new version of the pre-bundle")) {
+      return;
+    }
     this._log({ level: "error", args, memories: this.memories() });
   }
 

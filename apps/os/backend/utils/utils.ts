@@ -1,3 +1,5 @@
+import { TypeID } from "typeid-js";
+
 /**
  * Try to parse a value as JSON, returning the original value if parsing fails.
  */
@@ -23,8 +25,6 @@ export function ensureString(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
-
 export function getBaseURL(
   params: { replaceLocalhostWithNgrok: boolean } = { replaceLocalhostWithNgrok: false },
 ) {
@@ -47,4 +47,13 @@ export function replaceLocalhostWithNgrok(url: string): string {
       .replace("http://", "https://");
   }
   return url;
+}
+
+export function isValidTypeID(id: string, prefix?: string): boolean {
+  try {
+    TypeID.fromString(id, prefix);
+    return true;
+  } catch {
+    return false;
+  }
 }

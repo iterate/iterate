@@ -51,6 +51,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { useSlackConnection } from "../../../hooks/use-slack-connection.ts";
+import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import type { Route } from "./+types/index.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -222,7 +223,7 @@ export default function Home() {
     }),
   );
   const { data: estateInfo } = useQuery(trpc.estate.get.queryOptions({ estateId }));
-  const { data: user } = useQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
 
   // Fetch Slack channels for the dialog
   const {

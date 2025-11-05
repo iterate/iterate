@@ -3,7 +3,8 @@ import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
-import { getOrCreateAgentStubByName } from "./agent/agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "./agent/agents/stub-getters.ts";
+import type { EstateOnboardingEventShape } from "./org-utils.ts";
 
 // Append-only event helper
 async function insertEstateOnboardingEvent(
@@ -50,23 +51,24 @@ async function handleStripeCustomerCreation(db: DB, event: typeof schema.systemT
   });
 }
 
-async function handleOnboardingAgentWarmup(db: DB, event: typeof schema.systemTasks.$inferSelect) {
-  const payload = (event.payload as any) ?? {};
-  const estateId: string = (payload.estateId as string) ?? (event.aggregateId as string);
-  const onboardingAgentName: string | undefined = payload.onboardingAgentName;
+async function handleOnboardingAgentWarmup(
+  db: DB,
+  event: Extract<EstateOnboardingEventShape, { taskType: "WarmOnboardingAgent" }>,
+) {
+  const { estateId, onboardingAgentName } = event.payload;
 
   const est = await db.query.estate.findFirst({ where: eq(schema.estate.id, estateId) });
   if (!est) throw new Error(`Estate ${estateId} not found`);
 
-  const agent = await getOrCreateAgentStubByName("OnboardingAgent", {
+  const agent = await getOrCreateAgentStubByRoute("OnboardingAgent", {
     db,
-    estateId: est.id,
-    agentInstanceName: onboardingAgentName ?? est.onboardingAgentName!,
-    reason: "Provisioned via estate onboarding outbox",
+    estateId,
+    route: onboardingAgentName,
+    reason: `Provisioned via estate onboarding outbox for estate named ${est.name}`,
   });
   await agent.doNothing();
   await insertEstateOnboardingEvent(db, {
-    estateId: est.id,
+    estateId,
     organizationId: est.organizationId,
     eventType: "OnboardingAgentWarmed",
     category: "system",
@@ -97,7 +99,10 @@ export async function processSystemTasks(db: DB): Promise<{
           await handleStripeCustomerCreation(db, task);
           break;
         case "WarmOnboardingAgent":
-          await handleOnboardingAgentWarmup(db, task);
+          await handleOnboardingAgentWarmup(
+            db,
+            task as Extract<EstateOnboardingEventShape, { taskType: "WarmOnboardingAgent" }>,
+          );
           break;
         default:
           logger.warn(`Unknown system task type: ${task.taskType} (id=${task.id})`);

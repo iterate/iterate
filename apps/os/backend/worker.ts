@@ -1,5 +1,5 @@
 import { Hono } from "hono";
-import { createRequestHandler } from "react-router";
+import { createRequestHandler, RouterContextProvider } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { zValidator } from "@hono/zod-validator";
@@ -8,7 +8,8 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { type CloudflareEnv } from "../env.ts";
+import type { CloudflareEnv } from "../env.ts";
+import { ReactRouterServerContext } from "../app/context.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -33,33 +34,26 @@ import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getter
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 import { processSystemTasks } from "./onboarding-tasks.ts";
 
-declare module "react-router" {
-  export interface AppLoadContext {
-    cloudflare: {
-      env: CloudflareEnv;
-      ctx: ExecutionContext;
-    };
-  }
-}
-
+type TrpcCaller = ReturnType<typeof appRouter.createCaller>;
 export type Variables = {
   auth: Auth;
   session: AuthSession;
   db: DB;
-  workerEntrypoint?: WorkerEntrypoint;
+  trpcCaller: TrpcCaller;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const session = await auth.api.getSession({
-    headers: c.req.raw.headers,
-  });
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
+  const trpcCaller = appRouter.createCaller(createContext(c));
+  c.set("trpcCaller", trpcCaller);
   return next();
 });
 
@@ -128,7 +122,7 @@ app.all("/api/trpc/*", (c) => {
     req: c.req.raw,
     router: appRouter,
     allowMethodOverride: true,
-    createContext: (opts) => createContext(c, opts),
+    createContext: () => createContext(c),
     onError: ({ error, path }) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
@@ -243,15 +237,17 @@ app.post(
 );
 
 const requestHandler = createRequestHandler(
-  // @ts-ignore - this is a virtual module
   () => import("virtual:react-router/server-build"),
   import.meta.env.MODE,
 );
 
 app.all("*", (c) => {
-  return requestHandler(c.req.raw, {
+  const contextProvider = new RouterContextProvider();
+  contextProvider.set(ReactRouterServerContext, {
     cloudflare: { env: c.env, ctx: c.executionCtx },
+    variables: c.var,
   });
+  return requestHandler(c.req.raw, contextProvider);
 });
 
 // In order to use cloudflare's fancy RPC system, we need to export a WorkerEntrypoint subclass.
@@ -265,10 +261,9 @@ export default class extends WorkerEntrypoint {
   }
 
   async scheduled(controller: ScheduledController) {
+    const db = getDb();
     switch (controller.cron) {
       case "*/1 * * * *": {
-        const db = getDb();
-
         try {
           logger.info("Running scheduled onboarding tasks");
           const result = await processSystemTasks(db);
@@ -279,8 +274,6 @@ export default class extends WorkerEntrypoint {
         break;
       }
       case "0 0 * * *": {
-        const db = getDb();
-
         try {
           logger.info("Running scheduled Slack sync for all estates");
           const result = await syncSlackForAllEstatesHelper(db);

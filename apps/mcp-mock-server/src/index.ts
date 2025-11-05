@@ -1,3 +1,4 @@
+import { inspect } from "util";
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import type { ExecutionContext } from "@cloudflare/workers-types";
 import { MockMCPAgent } from "./mock-mcp-agent.ts";
@@ -78,6 +79,14 @@ const oauthProvider = new OAuthProvider({
   tokenEndpoint: "/oauth/token",
   clientRegistrationEndpoint: "/oauth/register",
   defaultHandler: MockOAuthHandler as any,
+  tokenExchangeCallback(options) {
+    console.log("Token exchange callback:", inspect(options, { depth: null, colors: true }));
+    if ("expiresIn" in options.props && typeof options.props.expiresIn === "number") {
+      return {
+        accessTokenTTL: options.props.expiresIn,
+      };
+    }
+  },
 });
 
 export { MockMCPAgent, MockOAuthMCPAgent };

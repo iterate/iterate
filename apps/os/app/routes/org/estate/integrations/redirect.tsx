@@ -1,17 +1,19 @@
 import { redirect } from "react-router";
 import { eq } from "drizzle-orm";
-import { getDb, schema } from "../../../../../backend/db/client.ts";
+import { schema } from "../../../../../backend/db/client.ts";
 import { BaseOAuthState } from "../../../../../backend/auth/oauth-state-schemas.ts";
+import { ReactRouterServerContext } from "../../../../context.ts";
 import type { Route } from "./+types/redirect.ts";
 
-export async function loader({ request }: Route.LoaderArgs) {
+export async function loader({ request, context }: Route.LoaderArgs) {
+  const { db } = context.get(ReactRouterServerContext).variables;
   const url = new URL(request.url);
   const key = url.searchParams.get("key");
 
   if (!key) {
     return redirect("/");
   }
-  const state = await getDb().query.verification.findFirst({
+  const state = await db.query.verification.findFirst({
     where: eq(schema.verification.identifier, key),
   });
   if (!state || state.expiresAt < new Date()) {
