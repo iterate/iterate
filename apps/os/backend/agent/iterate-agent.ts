@@ -301,6 +301,17 @@ export class IterateAgent<
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
   }
 
+  callMethod(
+    methodName: string,
+    args: unknown[],
+    context: Record<string, string>,
+  ): Promise<unknown> {
+    return logger.run(context, async () => {
+      // @ts-expect-error trust me bro
+      return this[methodName](...args);
+    });
+  }
+
   /**
    * Get all slices for this agent. This method must be overridden by subclasses
    * to return the correct statically-typed slice array.

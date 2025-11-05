@@ -318,3 +318,31 @@ function getLogger() {
 // #endregion: utils
 
 export const logger = getLogger();
+
+export interface WithCallMethod {
+  callMethod(
+    methodName: string,
+    args: unknown[],
+    context: Record<string, string>,
+  ): Promise<unknown>;
+}
+
+export const stubStub = <T extends WithCallMethod>(
+  stub: T,
+): {
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (...args: [...A, context: Record<string, string>]) => Promise<R>
+    : never;
+} => {
+  return new Proxy(
+    {},
+    {
+      get: (_target, prop) => {
+        return (...args: any[]) => {
+          const context = args.pop() as Record<string, string>;
+          return stub.callMethod(prop as string, args, context);
+        };
+      },
+    },
+  ) as never;
+};

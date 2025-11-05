@@ -5,6 +5,7 @@ import { agentInstance } from "../../db/schema.ts";
 import { schema, type DB } from "../../db/client.ts";
 import type { IterateConfig } from "../../../sdk/iterate-config.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
+import { stubStub } from "../../tag-logger.ts";
 
 // NOTE: This indirection is intentionally string-based. It's admittedly hacky,
 // but acceptable until we can collapse all IterateAgent subclasses into a
@@ -24,12 +25,6 @@ export function toAgentClassName(value: string): AgentClassName {
     `Unknown IterateAgent subclass "${value}". Known classes: ${AGENT_CLASS_NAMES.join(", ")}`,
   );
 }
-
-export type GetStubParams = {
-  agentInitParams: AgentInitParams;
-  jurisdiction?: DurableObjectJurisdiction;
-  locationHint?: DurableObjectLocationHint;
-};
 
 export type GetOrCreateStubByNameParams = {
   db: DB;
@@ -68,31 +63,23 @@ function getNamespaceForClassName(className: AgentClassName): AgentNamespace {
 
 export async function getAgentStub(
   className: AgentClassName,
-  params: GetStubParams,
-): Promise<DurableObjectStub<IterateAgent>> {
-  const { agentInitParams, jurisdiction, locationHint } = params;
-  let namespace = getNamespaceForClassName(className);
+  params: { agentInitParams: AgentInitParams },
+) {
+  const { agentInitParams } = params;
+  const namespace = getNamespaceForClassName(className);
 
-  if (jurisdiction) {
-    namespace = namespace.jurisdiction(jurisdiction);
-  }
-
-  const options = {
-    ...(locationHint && { locationHint }),
-  };
-
-  const stub = namespace.getByName(agentInitParams.record.durableObjectName, options);
+  const stub = namespace.getByName(agentInitParams.record.durableObjectName);
 
   await stub.initIterateAgent(agentInitParams);
 
-  // @ts-expect-error, fix this infinite type error
-  return stub;
+  const doStub = stub as {} as DurableObjectStub<IterateAgent>;
+  return stubStub(doStub);
 }
 
 export async function getAgentStubByName(
   className: AgentClassName,
   params: { db: DB; agentInstanceName: string; estateId?: string },
-): Promise<DurableObjectStub<IterateAgent>> {
+) {
   const { db, agentInstanceName } = params;
 
   const row = await db.query.agentInstance.findFirst({
@@ -127,7 +114,7 @@ export async function getAgentStubByName(
 export async function getOrCreateAgentStubByRoute(
   className: AgentClassName,
   params: { db: DB; estateId: string; route: string; reason?: string },
-): Promise<DurableObjectStub<IterateAgent>> {
+) {
   const { db, estateId, route, reason } = params;
 
   const namespace = getNamespaceForClassName(className);
