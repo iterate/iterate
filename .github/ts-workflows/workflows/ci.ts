@@ -93,7 +93,7 @@ export default {
               add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
             fi
 
-            add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..$RELEASE_NAME))"
+            add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..\${{ needs.variables.outputs.release_name }}))"
 
             write_git_changes() {
               glob=$1
@@ -112,7 +112,7 @@ export default {
 
             add_to_changelog "Triggered by: @\${{ github.actor }}"
 
-            add_to_changelog "[Comparison with current main](\${{ github.event.repository.html_url }}/compare/\${{ env.RELEASE_NAME }}...main)"
+            add_to_changelog "[Comparison with current main](\${{ github.event.repository.html_url }}/compare/\${{ needs.variables.outputs.release_name }}...main)"
 
             echo "echoing changes for debugging (notes are not published unless deploying to production):"
             cat changelog.md
@@ -120,7 +120,7 @@ export default {
         },
         {
           if: "needs.variables.outputs.stage == 'prd'",
-          ...utils.githubScript(import.meta, async function create_release({ github, context }) {
+          ...utils.githubScript(import.meta, async function prd_release({ github, context }) {
             const { promises: fs } = await import("fs");
             await github.rest.repos.createRelease({
               ...context.repo,
@@ -136,7 +136,7 @@ export default {
         },
         {
           if: "needs.variables.outputs.stage == 'stg'",
-          ...utils.githubScript(import.meta, async function create_release({ github, context }) {
+          ...utils.githubScript(import.meta, async function stg_release({ github, context }) {
             const { promises: fs } = await import("fs");
             await github.rest.repos.createCommitComment({
               ...context.repo,

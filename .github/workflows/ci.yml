@@ -59,7 +59,7 @@ jobs:
             add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
           fi
 
-          add_to_changelog "Last tagged release: [$LAST_RELEASE](${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..$RELEASE_NAME))"
+          add_to_changelog "Last tagged release: [$LAST_RELEASE](${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..${{ needs.variables.outputs.release_name }}))"
 
           write_git_changes() {
             glob=$1
@@ -78,13 +78,13 @@ jobs:
 
           add_to_changelog "Triggered by: @${{ github.actor }}"
 
-          add_to_changelog "[Comparison with current main](${{ github.event.repository.html_url }}/compare/${{ env.RELEASE_NAME }}...main)"
+          add_to_changelog "[Comparison with current main](${{ github.event.repository.html_url }}/compare/${{ needs.variables.outputs.release_name }}...main)"
 
           echo "echoing changes for debugging (notes are not published unless deploying to production):"
           cat changelog.md
       - if: needs.variables.outputs.stage == 'prd'
-        name: create_release
-        id: create_release
+        name: prd_release
+        id: prd_release
         uses: actions/github-script@v7
         with:
           script: |-
@@ -108,7 +108,7 @@ jobs:
               require,
             };
 
-            const __handler = async function create_release(
+            const __handler = async function prd_release(
               {
                 github,
                 context,
@@ -132,8 +132,8 @@ jobs:
 
             return __handler(vars);
       - if: needs.variables.outputs.stage == 'stg'
-        name: create_release
-        id: create_release
+        name: stg_release
+        id: stg_release
         uses: actions/github-script@v7
         with:
           script: |-
@@ -157,7 +157,7 @@ jobs:
               require,
             };
 
-            const __handler = async function create_release(
+            const __handler = async function stg_release(
               {
                 github,
                 context,
