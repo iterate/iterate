@@ -62,13 +62,13 @@ async function handleOnboardingAgentWarmup(
 
   const agent = await getOrCreateAgentStubByRoute("OnboardingAgent", {
     db,
-    estateId: est.id,
-    route: onboardingAgentName ?? est.onboardingAgentName!,
+    estateId,
+    route: onboardingAgentName,
     reason: "Provisioned via estate onboarding outbox",
   });
   await agent.doNothing();
   await insertEstateOnboardingEvent(db, {
-    estateId: est.id,
+    estateId,
     organizationId: est.organizationId,
     eventType: "OnboardingAgentWarmed",
     category: "system",

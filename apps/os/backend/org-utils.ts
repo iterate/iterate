@@ -39,6 +39,11 @@ export const createGithubRepoInEstatePool = async (metadata: {
   return repo.data;
 };
 
+// not great thing 1: the onboarding agent "name" is now actually a routing key, but passed around as a name for backwards compatibility
+// not great thing 2: we are sometimes summoning the onboarding agent by its name/route, but relying on a naming convention rather than getting it from the db
+// not great thing 3: onboardingAgentName shouldn't really be a column on the estate table.
+export const getDefaultOnboardingAgentName = (estateId: string) => `${estateId}-Onboarding`;
+
 async function createOrganizationAndEstateInTransaction(
   tx: DBLike,
   params: {
@@ -77,7 +82,7 @@ async function createOrganizationAndEstateInTransaction(
     .returning();
   if (!estate) throw new Error("Failed to create estate");
 
-  const onboardingAgentName = `${estate.id}-Onboarding`;
+  const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
   await tx
     .update(schema.estate)
     .set({ onboardingAgentName })

@@ -55,6 +55,7 @@ type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
 import type { AgentInitParams } from "./iterate-agent.ts";
 import { getConnectionKey } from "./mcp/mcp-slice.ts";
+import { getDefaultOnboardingAgentName } from "../org-utils.ts";
 
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
@@ -191,7 +192,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         const onboardingAgentStub = await getOrCreateAgentStubByRoute("OnboardingAgent", {
           db: this.db,
           estateId: this.estate.id,
-          route: "OnboardingAgent",
+          route: getDefaultOnboardingAgentName(this.estate.id),
           reason: `Getting onboarding agent for context rules - not expected to create a new one here`,
         });
 
