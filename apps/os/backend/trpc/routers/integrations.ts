@@ -19,6 +19,7 @@ import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-ge
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
 import { logger } from "../../tag-logger.ts";
+import { waitUntil } from "../../../env.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
