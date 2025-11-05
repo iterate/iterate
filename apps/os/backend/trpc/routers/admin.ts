@@ -21,7 +21,7 @@ import {
 import { env } from "../../../env.ts";
 import { deleteUserAccount } from "./user.ts";
 
-// don't use `protectedProcedure` because that prevents the use of `estateId`. instead create an equivalent without that restriction
+// don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
 const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
