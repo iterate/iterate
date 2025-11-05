@@ -47,11 +47,13 @@ export default {
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
           run: dedent`
             echo stage=\${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+            echo release_name="v$(TS=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
           `,
         },
       ],
       outputs: {
         stage: "${{ steps.get_env.outputs.stage }}",
+        release_name: "${{ steps.get_env.outputs.release_name }}",
       },
     },
     deploy: {
@@ -62,6 +64,92 @@ export default {
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
       },
+    },
+    release: {
+      needs: ["variables", "deploy"],
+      ...utils.runsOnUbuntuLatest,
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@v4",
+          with: {
+            "fetch-depth": 0,
+          },
+        },
+        {
+          name: "Write last release",
+          run: `echo "LAST_RELEASE=$(git describe --tags --abbrev=0 || echo '')" >> $GITHUB_ENV`,
+        },
+        {
+          name: "Write changelog",
+          run: dedent`
+            add_to_changelog() {
+              echo "$1" >> changelog.md
+              echo "" >> changelog.md
+            }
+
+            if [ "$LAST_RELEASE" = "" ]; then
+              LAST_RELEASE=$(git rev-parse HEAD~1)
+              add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
+            fi
+
+            add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..$RELEASE_NAME))"
+
+            write_git_changes() {
+              glob=$1
+              description=\${2:-$glob}
+
+              changes=$(git log $(git describe --tags --abbrev=0)..HEAD --oneline -- $glob | sed 's/^/- /g')
+
+              if [ "$changes" != "" ]; then
+                add_to_changelog "## $description"
+                add_to_changelog "$changes"
+              fi
+            }
+
+            write_git_changes apps/os 'apps/os changes'
+            write_git_changes ':!apps/os' 'other changes'
+
+            add_to_changelog "Triggered by: @\${{ github.actor }}"
+
+            add_to_changelog "[Comparison with current main](\${{ github.event.repository.html_url }}/compare/\${{ env.RELEASE_NAME }}...main)"
+
+            echo "echoing changes for debugging (notes are not published unless deploying to production):"
+            cat changelog.md
+          `,
+        },
+        {
+          if: "needs.variables.outputs.stage == 'prd'",
+          ...utils.githubScript(import.meta, async function create_release({ github, context }) {
+            const { promises: fs } = await import("fs");
+            await github.rest.repos.createRelease({
+              ...context.repo,
+              tag_name: "${{ needs.variables.outputs.release_name }}",
+              name: "${{ needs.variables.outputs.release_name }}",
+              body: [
+                `stage: \${{ needs.variables.outputs.stage }}`,
+                "", //
+                await fs.readFile("changelog.md", "utf8"),
+              ].join("\n"),
+            });
+          }),
+        },
+        {
+          if: "needs.variables.outputs.stage == 'stg'",
+          ...utils.githubScript(import.meta, async function create_release({ github, context }) {
+            const { promises: fs } = await import("fs");
+            await github.rest.repos.createCommitComment({
+              ...context.repo,
+              commit_sha: "${{ github.sha }}",
+              body: [
+                `stage: \${{ needs.variables.outputs.stage }}`,
+                "", //
+                await fs.readFile("changelog.md", "utf8"),
+              ].join("\n"),
+            });
+          }),
+        },
+      ],
     },
     e2e: {
       if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
