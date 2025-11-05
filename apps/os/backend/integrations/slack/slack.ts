@@ -5,7 +5,7 @@ import { WebClient, type ConversationsRepliesResponse } from "@slack/web-api";
 import * as R from "remeda";
 import { waitUntil, type CloudflareEnv } from "../../../env.ts";
 import type { SlackWebhookPayload } from "../../agent/slack.types.ts";
-import { getDb, type DB } from "../../db/client.ts";
+import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { SlackAgent } from "../../agent/slack-agent.ts";
 import { logger } from "../../tag-logger.ts";
@@ -21,10 +21,11 @@ import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getAgentStub, getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
+import type { Variables } from "../../worker.ts";
 // Type alias for Slack message elements from ConversationsRepliesResponse
 type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number];
 
-export const slackApp = new Hono<{ Bindings: CloudflareEnv }>();
+export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
 /**
  * Looks up which estate owns a specific Slack bot user ID.
@@ -319,7 +320,7 @@ export async function ensureUserSynced(params: {
 }
 
 slackApp.post("/webhook", async (c) => {
-  const db = getDb();
+  const { db } = c.var;
 
   // Get raw request body for signature verification
   const rawBody = await c.req.text();

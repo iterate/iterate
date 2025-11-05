@@ -17,6 +17,7 @@ import {
 } from "../../components/ui/accordion.tsx";
 import { Separator } from "../../components/ui/separator.tsx";
 import { GlobalLoading } from "../../components/global-loading.tsx";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
 import type { Route } from "./+types/team.ts";
 
 export function meta(_args: Route.MetaArgs) {
@@ -49,9 +50,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  const { data: currentUser, isLoading: isCurrentUserLoading } = useQuery(
-    trpc.user.me.queryOptions(),
-  );
+  const currentUser = useSessionUser();
   const { data: members, isLoading: isMembersLoading } = useQuery(
     trpc.organization.listMembers.queryOptions({ organizationId }),
   );
@@ -79,7 +78,7 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
     });
   };
 
-  if (isCurrentUserLoading || isMembersLoading || !currentUser || !members) {
+  if (isMembersLoading || !currentUser || !members) {
     return <GlobalLoading />;
   }
 

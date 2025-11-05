@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
@@ -8,6 +8,7 @@ import { useTRPC } from "../../../lib/trpc.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
+import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { OnboardingStepLayout } from "./onboarding-step-layout.tsx";
 
 type SlackStepView = "choose-method" | "confirm-email" | "processing-trial" | "trial-success";
@@ -32,8 +33,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
     channelName: string;
     channelId: string;
   } | null>(null);
-
-  const { data: user } = useQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
 
   const directSlackLogin = async () => {
     const result = await authClient.integrations.link.slackBot({

@@ -60,8 +60,15 @@ export function useOrganizationWebSocket(organizationId: string, estateId: strin
   const queryClient = useQueryClient();
   const [isConnected, setIsConnected] = useState(false);
 
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = `${protocol}//${window.location.host}/api/ws/${organizationId}?estateId=${estateId}&organizationId=${organizationId}`;
+  const wsUrl = useMemo(() => {
+    const url = new URL(
+      import.meta.env.SSR ? import.meta.env.VITE_PUBLIC_URL : window.location.origin,
+    );
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `/api/ws/${organizationId}`;
+    url.searchParams.set("estateId", estateId);
+    return url.toString();
+  }, [organizationId, estateId]);
 
   const handleWebSocketMessage = useCallback(
     (event: MessageEvent) => {

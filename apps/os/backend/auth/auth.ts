@@ -13,9 +13,15 @@ import { stripeClient } from "../integrations/stripe/stripe.ts";
 import { integrationsPlugin, SLACK_USER_AUTH_SCOPES } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
 
-export const getAuth = (db: DB) =>
-  betterAuth({
+// better-auth has an internal type that is not portable
+// turning on declaration causes it to give you a portable type error
+// so declaration is turned off, sdk builds work fine as tsdown handles it internally and doesn't rely on this type
+// Possibly related https://github.com/better-auth/better-auth/issues/5122
+export const getAuth = (db: DB) => {
+  return betterAuth({
     baseURL: env.VITE_PUBLIC_URL,
+    telemetry: { enabled: false },
+    secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [
       env.VITE_PUBLIC_URL,
       // This is needed for the stripe webhook to work in dev mode
@@ -137,6 +143,8 @@ export const getAuth = (db: DB) =>
       },
     },
   });
+};
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;
+export type AuthUser = NonNullable<AuthSession>["user"];

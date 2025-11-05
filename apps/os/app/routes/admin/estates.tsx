@@ -302,7 +302,7 @@ export default function AdminEstatesPage() {
                             "Synced successfully"
                           )
                         ) : (
-                          <span className="text-red-600 break-words">
+                          <span className="text-red-600 warp-break-words">
                             {"error" in result ? result.error : "Unknown error"}
                           </span>
                         )}
