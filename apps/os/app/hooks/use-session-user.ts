@@ -1,7 +1,7 @@
 import { useRouteLoaderData } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import type { loader as rootLoader } from "../root.tsx";
-import { serializeIntoTrpcCompatible, useTRPC } from "../lib/trpc.ts";
+import { useTRPC } from "../lib/trpc.ts";
 
 export function useSessionUser() {
   const initialSessionData = useRouteLoaderData<typeof rootLoader>("root");
@@ -12,7 +12,12 @@ export function useSessionUser() {
   const trpc = useTRPC();
   const userQuery = useQuery(
     trpc.user.me.queryOptions(void 0, {
-      initialData: serializeIntoTrpcCompatible(initialSessionData.session.user),
+      initialData: {
+        ...initialSessionData.session.user,
+        createdAt: initialSessionData.session.user.createdAt.toISOString(),
+        updatedAt: initialSessionData.session.user.updatedAt.toISOString(),
+        banExpires: initialSessionData.session.user.banExpires?.toISOString(),
+      },
       // Cookie session cache is valid for 10 minutes, so we can cache it on client for 10 minutes too
       // When user updates their profile, we can invalidate this query
       staleTime: 1000 * 60 * 10,

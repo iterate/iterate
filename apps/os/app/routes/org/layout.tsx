@@ -2,7 +2,6 @@ import { Outlet, redirect, data } from "react-router";
 import { eq } from "drizzle-orm";
 import { schema } from "../../../backend/db/client.ts";
 import { getUserOrganizations } from "../../../backend/trpc/trpc.ts";
-import { serializeIntoTrpcCompatible } from "../../lib/trpc.ts";
 import { DashboardLayout } from "../../components/dashboard-layout.tsx";
 import { ReactRouterServerContext } from "../../context.ts";
 import { isValidTypeID } from "../../../backend/utils/utils.ts";
@@ -50,17 +49,25 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
 
   // Serialize dates to match TRPC output format
   // External orgs already filtered at query level
-  const organizations = userOrganizations.map(({ organization: org, role }) =>
-    serializeIntoTrpcCompatible({
-      ...org,
-      role,
-    }),
-  );
+  const organizations = userOrganizations.map(({ organization: org, role }) => ({
+    ...org,
+    createdAt: org.createdAt.toISOString(),
+    updatedAt: org.updatedAt.toISOString(),
+    role,
+  }));
 
-  const serializedOrganization = serializeIntoTrpcCompatible(organization);
-  const serializedEstates = estates.map(({ organization, ...rest }) =>
-    serializeIntoTrpcCompatible({ ...rest, organizationName: organization.name }),
-  );
+  const serializedOrganization = {
+    ...organization,
+    createdAt: organization.createdAt.toISOString(),
+    updatedAt: organization.updatedAt.toISOString(),
+  };
+
+  const serializedEstates = estates.map(({ organization, ...rest }) => ({
+    ...rest,
+    createdAt: rest.createdAt.toISOString(),
+    updatedAt: rest.updatedAt.toISOString(),
+    organizationName: organization.name,
+  }));
 
   return data({
     organization: serializedOrganization,

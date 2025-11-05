@@ -54,13 +54,3 @@ export const trpcClient = createTRPCClient<AppRouter>({
     }),
   ],
 });
-
-export type TrpcCompatible<T> = T extends Date
-  ? string
-  : T extends object
-    ? { [K in keyof T]: TrpcCompatible<T[K]> }
-    : T;
-
-export function serializeIntoTrpcCompatible<T>(obj: T): TrpcCompatible<T> {
-  return JSON.parse(JSON.stringify(obj)) as TrpcCompatible<T>;
-}
