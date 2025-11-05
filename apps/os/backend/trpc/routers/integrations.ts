@@ -1290,10 +1290,10 @@ export const integrationsRouter = router({
 
       const slackAPI = new WebClient(iterateBotAccount.accessToken);
 
-      await slackAPI.chat.postMessage({
+      waitUntil(slackAPI.chat.postMessage({
         channel: trialChannelId,
         text: `You've now installed me in your own workspace - please chat to me there, I won't respond here anymore.`,
-      });
+      }))
 
       return {
         success: true,
