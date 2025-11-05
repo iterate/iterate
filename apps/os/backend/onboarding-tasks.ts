@@ -64,7 +64,7 @@ async function handleOnboardingAgentWarmup(
     db,
     estateId,
     route: onboardingAgentName,
-    reason: "Provisioned via estate onboarding outbox",
+    reason: `Provisioned via estate onboarding outbox for estate named ${est.name}`,
   });
   await agent.doNothing();
   await insertEstateOnboardingEvent(db, {
