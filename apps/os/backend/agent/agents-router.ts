@@ -15,7 +15,11 @@ import { IterateAgent } from "./iterate-agent.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { MCPEvent } from "./mcp/mcp-slice.ts";
 import { SlackSliceEvent } from "./slack-slice.ts";
-import { AGENT_CLASS_NAMES, getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
+import {
+  AGENT_CLASS_NAMES,
+  getAgentStubByName,
+  getOrCreateAgentStubByRoute,
+} from "./agents/stub-getters.ts";
 
 export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
   eventIndex: number;
@@ -34,15 +38,13 @@ const agentStubProcedure = protectedProcedure
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
     }),
   )
-  .use(async ({ input, ctx, next, path }) => {
+  .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    // agents are created on demand just by using this procedure
-    const agent = await getOrCreateAgentStubByRoute(input.agentClassName, {
+    const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
+      agentInstanceName: input.agentInstanceName,
       estateId,
-      route: input.agentInstanceName,
-      reason: input.reason || `Created via agents router at ${path}`,
     });
 
     // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
@@ -125,6 +127,24 @@ export const agentsRouter = router({
         return true;
       });
       return dedupedRules;
+    }),
+
+  getOrCreateAgent: protectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        route: z.string(),
+        agentClassName: z.enum(AGENT_CLASS_NAMES),
+        reason: z.string(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { agentClassName, ...createParams } = input;
+      const agentStub = await getOrCreateAgentStubByRoute(agentClassName, {
+        db: ctx.db,
+        ...createParams,
+      });
+      return { info: await agentStub.getHydrationInfo() };
     }),
 
   getState: agentStubProcedure

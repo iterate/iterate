@@ -31,11 +31,6 @@ export type GetStubParams = {
   locationHint?: DurableObjectLocationHint;
 };
 
-export type GetStubByNameParams = {
-  db: DB;
-  agentInstanceName: string;
-};
-
 export type GetOrCreateStubByNameParams = {
   db: DB;
   estateId: string;
@@ -96,7 +91,7 @@ export async function getAgentStub(
 
 export async function getAgentStubByName(
   className: AgentClassName,
-  params: GetStubByNameParams,
+  params: { db: DB; agentInstanceName: string; estateId?: string },
 ): Promise<DurableObjectStub<IterateAgent>> {
   const { db, agentInstanceName } = params;
 
@@ -104,6 +99,7 @@ export async function getAgentStubByName(
     where: and(
       eq(agentInstance.durableObjectName, agentInstanceName),
       eq(agentInstance.className, className),
+      eq(agentInstance.estateId, params.estateId || agentInstance.estateId), // todo: make estateId required? seems safer. but we have lots of calls of this already, so will do separately
     ),
     with: { estate: { with: { organization: true, iterateConfigs: true } } },
   });
