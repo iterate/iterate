@@ -19,7 +19,7 @@ export function OrganizationSwitcher() {
   const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
   const organizationsQuery = useQuery(
     trpc.organization.list.queryOptions(void 0, {
-      initialData: () => loaderData?.organizations ?? [],
+      initialData: loaderData?.organizations ?? [],
       // Organizations are not likely to change frequently, cache for 5 minutes
       staleTime: 1000 * 60 * 5,
     }),
@@ -28,13 +28,9 @@ export function OrganizationSwitcher() {
   const user = useSessionUser();
 
   // Only show organizations where user is owner or member
-  const organizations =
-    // TODO: SSR shenanigans, I will find a better solution later
-    (
-      organizationsQuery.data.length > 0
-        ? organizationsQuery.data
-        : (loaderData?.organizations ?? [])
-    ).filter((org) => org.role === "owner" || org.role === "member");
+  const organizations = organizationsQuery.data.filter(
+    (org) => org.role === "owner" || org.role === "member",
+  );
 
   // If there are no organizations, show a prompt to create one
   if (organizations.length === 0) {

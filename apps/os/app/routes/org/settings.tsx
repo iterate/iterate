@@ -1,10 +1,10 @@
 import { useState, Suspense } from "react";
 import { Save, Info } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouteLoaderData } from "react-router";
 import { toast } from "sonner";
 import { Spinner } from "../../components/ui/spinner.tsx";
-import { queryClient, useTRPC } from "../../lib/trpc.ts";
+import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Card, CardContent } from "../../components/ui/card.tsx";
@@ -39,6 +39,7 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
     ),
   );
 
+  const queryClient = useQueryClient();
   const [organizationName, setOrganizationName] = useState(organization?.name ?? "");
 
   const updateOrganization = useMutation(

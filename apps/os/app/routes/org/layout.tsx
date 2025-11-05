@@ -29,12 +29,17 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
 
-  const firstEstate = await db.query.estate.findFirst({
+  const estates = await db.query.estate.findMany({
     where: eq(schema.estate.organizationId, organizationId),
     orderBy: (t, { asc }) => [asc(t.createdAt)],
+    with: {
+      organization: {
+        columns: { name: true },
+      },
+    },
   });
 
-  if (!firstEstate) {
+  if (!estates.length) {
     // No estate for this org; redirect to home
     throw redirect("/");
   }
@@ -64,10 +69,14 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
   );
 
   const serializedOrganization = serializeIntoTrpcCompatible(organization);
+  const serializedEstates = estates.map(({ organization, ...rest }) =>
+    serializeIntoTrpcCompatible({ ...rest, organizationName: organization.name }),
+  );
 
   return data({
     organization: serializedOrganization,
     organizations,
+    estates: serializedEstates,
   });
 }
 

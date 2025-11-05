@@ -1,4 +1,4 @@
-import { Link, useLocation, useParams } from "react-router";
+import { Link, useLocation, useParams, useRouteLoaderData } from "react-router";
 import {
   Home as HomeIcon,
   Settings,
@@ -49,6 +49,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { useDebounce } from "../hooks/use-debounced.ts";
 import { cn } from "../lib/utils.ts";
 import { useSessionUser } from "../hooks/use-session-user.ts";
+import type { loader as orgLoader } from "../routes/org/layout.tsx";
 import { OrganizationSwitcher } from "./organization-switcher.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { Input } from "./ui/input.tsx";
@@ -434,23 +435,25 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const organizationId = useOrganizationId();
   const currentEstateId = params.estateId;
   const trpc = useTRPC();
+  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
+
   const estatesQuery = useQuery(
     trpc.estates.list.queryOptions(
       { organizationId },
       {
-        initialData: [],
+        initialData: () => loaderData?.estates ?? [],
+        staleTime: 1000 * 60 * 5,
       },
     ),
   );
-  const impersonationInfoQuery = useQuery(
-    trpc.admin.impersonationInfo.queryOptions(void 0, {
-      initialData: {},
-    }),
-  );
+
   const user = useSessionUser();
 
   // Only connect websocket if we're in an estate context
-  const _ws = useOrganizationWebSocket(organizationId, currentEstateId || "");
+  const _ws = useOrganizationWebSocket(
+    organizationId,
+    currentEstateId ?? loaderData?.estates[0]?.id ?? "",
+  );
 
   const getEstateUrl = (estateId: string, path: string) => {
     return `/${organizationId}/${estateId}${path ? `/${path}` : ""}`;
@@ -532,7 +535,7 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             </SidebarGroup>
 
             {/* Admin Navigation */}
-            {impersonationInfoQuery.data?.isAdmin && (
+            {user.role === "admin" && (
               <SidebarGroup>
                 <SidebarGroupLabel>Admin</SidebarGroupLabel>
                 <SidebarGroupContent>

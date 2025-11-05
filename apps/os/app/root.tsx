@@ -22,7 +22,7 @@ import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
 import type { Route } from "./+types/root";
 import { GlobalLoading } from "./components/global-loading.tsx";
 import { Toaster } from "./components/ui/sonner.tsx";
-import { queryClient, trpcClient, TrpcContext } from "./lib/trpc.ts";
+import { getQueryClient, trpcClient, TrpcContext } from "./lib/trpc.ts";
 import { ReactRouterServerContext } from "./context.ts";
 
 export const links: Route.LinksFunction = () => [
@@ -67,6 +67,8 @@ const PostHogProvider =
     : ({ children }: PropsWithChildren) => <>{children}</>;
 
 export default function App() {
+  const queryClient = getQueryClient();
+
   return (
     <PostHogProvider
       apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}

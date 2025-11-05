@@ -20,6 +20,7 @@ export default function ThemeSwitcher() {
   ];
 
   // This is a workaround to avoid hydration errors
+  // Classic SSR hack for things that makes out life harder
   const [isLoaded, setIsLoaded] = useState(false);
   useEffect(() => {
     setIsLoaded(true);
@@ -27,7 +28,9 @@ export default function ThemeSwitcher() {
 
   const currentTheme = themes.find((t) => t.value === theme) || themes[2];
 
-  return isLoaded ? (
+  if (!isLoaded) return null;
+
+  return (
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
@@ -56,5 +59,5 @@ export default function ThemeSwitcher() {
         </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
-  ) : null;
+  );
 }
