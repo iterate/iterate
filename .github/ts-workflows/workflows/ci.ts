@@ -91,15 +91,15 @@ export default {
             if [ "$LAST_RELEASE" = "" ]; then
               LAST_RELEASE=$(git rev-parse HEAD~1)
               add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
+            else
+              add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..\${{ needs.variables.outputs.release_name }}))"
             fi
-
-            add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..\${{ needs.variables.outputs.release_name }}))"
 
             write_git_changes() {
               glob=$1
               description=\${2:-$glob}
 
-              changes=$(git log $(git describe --tags --abbrev=0)..HEAD --oneline -- $glob | sed 's/^/- /g')
+              changes=$(git log $LAST_RELEASE..HEAD --oneline -- $glob | sed 's/^/- /g')
 
               if [ "$changes" != "" ]; then
                 add_to_changelog "## $description"
