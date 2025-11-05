@@ -1,12 +1,8 @@
-import type { FetchCreateContextFnOptions } from "@trpc/server/adapters/fetch";
 import type { Context as HonoContext } from "hono";
 import type { Variables } from "../worker";
 import type { CloudflareEnv } from "../../env";
 
-export async function createContext(
-  c: HonoContext<{ Variables: Variables; Bindings: CloudflareEnv }>,
-  _opts: FetchCreateContextFnOptions,
-) {
+export function createContext(c: HonoContext<{ Variables: Variables; Bindings: CloudflareEnv }>) {
   const { db, session } = c.var;
   return {
     db,
@@ -16,4 +12,4 @@ export async function createContext(
   };
 }
 
-export type Context = Awaited<ReturnType<typeof createContext>>;
+export type Context = ReturnType<typeof createContext>;

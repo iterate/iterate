@@ -32,7 +32,7 @@ export const authClient = createAuthClient({
 });
 
 /** Gets an agent name based on the currently running test name and some (text) input */
-export function testAgentName(input: string) {
+export function testAgentRoutingKey(input: string) {
   const testName = expect.getState().currentTestName!.split(" > ").slice(0, -1).join(" > "); // evalite duplicates the test name, so remove the last breadcrumb thing
   const suffix = `${input.split(" ")[0].replaceAll(/\W/g, "").slice(0, 6)}-${createHash("md5").update(input).digest("hex").slice(0, 6)}`;
   return `mock_slack ${testName} | ${suffix} | ${Date.now()}`;
@@ -75,11 +75,24 @@ export async function createTestHelper({
   braintrustSpanExportedId: string;
   logger?: Pick<Console, "info" | "error">;
 }) {
-  const agentName = testAgentName(inputSlug);
+  const agentRoutingKey = testAgentRoutingKey(inputSlug);
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();
-  expect(agentName).toBeTruthy();
+  expect(agentRoutingKey).toBeTruthy();
+
+  const { info } = await trpcClient.agents.getOrCreateAgent.mutate({
+    estateId,
+    agentClassName: "SlackAgent",
+    route: agentRoutingKey,
+    reason: `Agent created for test ${expect.getState().currentTestName}`,
+  });
+  const agentName = info.durableObjectName;
+  const agentProcedureProps = {
+    agentInstanceName: agentName,
+    agentClassName: "SlackAgent",
+    estateId,
+  } as const;
 
   const channel = "C0123456789";
   const threadTs = Date.now().toString();
@@ -90,9 +103,7 @@ export async function createTestHelper({
 
   // set the braintrust span exported id into the state
   await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
-    estateId,
-    agentInstanceName: agentName,
-    agentClassName: "SlackAgent",
+    ...agentProcedureProps,
     braintrustParentSpanExportedId: braintrustSpanExportedId,
   });
 
@@ -110,9 +121,7 @@ export async function createTestHelper({
     events: Omit<AgentEvent, "createdAt" | "eventIndex" | "metadata" | "eventIndex">[],
   ) {
     return trpcClient.agents.addEvents.mutate({
-      agentInstanceName: agentName,
-      agentClassName: "SlackAgent",
-      estateId,
+      ...agentProcedureProps,
       events: events as unknown as Parameters<
         typeof trpcClient.agents.addEvents.mutate
       >[0]["events"],
@@ -131,11 +140,7 @@ export async function createTestHelper({
   }
 
   const getEvents = async () => {
-    const events = await trpcClient.agents.getEvents.query({
-      estateId,
-      agentInstanceName: agentName,
-      agentClassName: "SlackAgent",
-    });
+    const events = await trpcClient.agents.getEvents.query(agentProcedureProps);
     // @ts-ignore - excessively deep type
     return events as AgentEvent[]; // cast because the inferred type is so complex it frequently hits "type instantiation is excessively deep and possibly infinite"
   };
@@ -243,11 +248,7 @@ export async function createTestHelper({
   };
 
   const getAgentDebugURL = async () => {
-    const result = await trpcClient.agents.getAgentDebugURL.query({
-      estateId,
-      agentInstanceName: agentName,
-      agentClassName: "SlackAgent",
-    });
+    const result = await trpcClient.agents.getAgentDebugURL.query(agentProcedureProps);
     return result.debugURL;
   };
 

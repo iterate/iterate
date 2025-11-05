@@ -16,9 +16,9 @@ import { defaultContextRules } from "./default-context-rules.ts";
 import { MCPEvent } from "./mcp/mcp-slice.ts";
 import { SlackSliceEvent } from "./slack-slice.ts";
 import {
-  getOrCreateAgentStubByName,
-  toAgentClassName,
-  type GetOrCreateStubByNameParams,
+  AGENT_CLASS_NAMES,
+  getAgentStubByName,
+  getOrCreateAgentStubByRoute,
 } from "./agents/stub-getters.ts";
 
 export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
@@ -32,7 +32,7 @@ const agentStubProcedure = protectedProcedure
       estateId: z.string().describe("The estate this agent belongs to"),
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent", "SlackAgent", "OnboardingAgent"])
+        .enum(AGENT_CLASS_NAMES)
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
@@ -41,19 +41,13 @@ const agentStubProcedure = protectedProcedure
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    const getOrCreateStubParams: GetOrCreateStubByNameParams = {
+    const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
-      estateId,
       agentInstanceName: input.agentInstanceName,
-      reason: input.reason || "Created via agents router",
-    };
-    // Always use getOrCreateStubByName - agents are created on demand
-    const agent = await getOrCreateAgentStubByName(
-      toAgentClassName(input.agentClassName),
-      getOrCreateStubParams,
-    );
+      estateId,
+    });
 
-    // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
+    // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
 
     return next({
       ctx: {
@@ -133,6 +127,24 @@ export const agentsRouter = router({
         return true;
       });
       return dedupedRules;
+    }),
+
+  getOrCreateAgent: protectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        route: z.string(),
+        agentClassName: z.enum(AGENT_CLASS_NAMES),
+        reason: z.string(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { agentClassName, ...createParams } = input;
+      const agentStub = await getOrCreateAgentStubByRoute(agentClassName, {
+        db: ctx.db,
+        ...createParams,
+      });
+      return { info: await agentStub.getHydrationInfo() };
     }),
 
   getState: agentStubProcedure
