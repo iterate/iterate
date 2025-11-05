@@ -2,6 +2,7 @@ import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod";
 
 import { and, eq, like } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { estateProtectedProcedure, protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
@@ -25,6 +26,7 @@ export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
   createdAt: string;
 };
 
+/** operate on an existing agent - throws  */
 const agentStubProcedure = estateProtectedProcedure
   .input(
     z.object({
@@ -43,6 +45,12 @@ const agentStubProcedure = estateProtectedProcedure
       db: ctx.db,
       agentInstanceName: input.agentInstanceName,
       estateId,
+    }).catch((err) => {
+      // todo: effect!
+      if (String(err).includes("not found")) {
+        throw new TRPCError({ code: "NOT_FOUND", message: String(err), cause: err });
+      }
+      throw err;
     });
 
     // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
@@ -96,24 +104,6 @@ export const agentsRouter = router({
   getOrCreateAgent: estateProtectedProcedure
     .input(
       z.object({
-        route: z.string(),
-        agentClassName: z.enum(AGENT_CLASS_NAMES),
-        reason: z.string(),
-      }),
-    )
-    .mutation(async ({ input, ctx }) => {
-      const { agentClassName, ...createParams } = input;
-      const agentStub = await getOrCreateAgentStubByRoute(agentClassName, {
-        db: ctx.db,
-        ...createParams,
-      });
-      return { info: await agentStub.getHydrationInfo() };
-    }),
-
-  getOrCreateAgent: protectedProcedure
-    .input(
-      z.object({
-        estateId: z.string(),
         route: z.string(),
         agentClassName: z.enum(AGENT_CLASS_NAMES),
         reason: z.string(),
