@@ -51,13 +51,21 @@ export class TagLogger {
   }
 
   private _logFn: TagLogger.LogFn;
-
-  constructor(logFn: TagLogger.LogFn = TagLogger.consoleLogFn(console)) {
+  private _initialTags: Record<string, string>;
+  constructor(
+    logFn: TagLogger.LogFn = TagLogger.consoleLogFn(console),
+    initialTags: Record<string, string> = {},
+  ) {
     this._logFn = logFn.bind(this);
+    this._initialTags = initialTags;
+  }
+
+  withTags(tags: Record<string, string>) {
+    return new TagLogger(this._logFn, { ...this._initialTags, ...tags });
   }
 
   get context(): TagLogger.Context {
-    return this._storage.getStore() || { level: "info", tags: {}, logs: [] };
+    return this._storage.getStore() || { level: "info", tags: { ...this._initialTags }, logs: [] };
   }
 
   get level() {

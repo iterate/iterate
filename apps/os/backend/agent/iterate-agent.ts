@@ -480,6 +480,7 @@ export class IterateAgent<
       })(),
 
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
+        baseDeps.console.info("hello onEventAdded", _event.type);
         const event = _event as MergedEventForSlices<Slices>;
         if (event.type === "CORE:INTERNAL_ERROR") {
           const reconstructed = new Error(event.data.error);
