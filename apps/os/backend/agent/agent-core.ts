@@ -188,8 +188,6 @@ export interface AgentCoreDeps {
     state: ToolCallApprovalState;
     replayToolCall: () => Promise<void>;
   }) => Promise<void>;
-  /** Provided console instance */
-  console: Console | TagLogger;
 }
 
 export type AgentCoreState = CoreReducedState;
