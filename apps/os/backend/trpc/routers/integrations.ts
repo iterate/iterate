@@ -3,7 +3,7 @@ import { eq, and, inArray, sql } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
-import { estateProtectedProcedure, protectedProcedure, router } from "../trpc.ts";
+import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
 import * as schemas from "../../db/schema.ts";
 import {
@@ -1135,7 +1135,7 @@ export const integrationsRouter = router({
    * Upgrades a trial estate to a full Slack installation
    * This removes all trial-specific configuration so the user can connect their own Slack workspace
    */
-  upgradeTrialToFullInstallation: protectedProcedure
+  upgradeTrialToFullInstallation: estateProtectedProcedure
     .input(
       z.object({
         estateId: z.string(),
