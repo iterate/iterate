@@ -194,6 +194,7 @@ jobs:
       - variables
       - deploy
       - e2e
+      - release
     if: always() && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     env:
