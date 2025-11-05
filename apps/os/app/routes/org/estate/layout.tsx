@@ -2,13 +2,17 @@ import { Outlet, redirect, data } from "react-router";
 import { getUserEstateAccess } from "../../../../backend/trpc/trpc.ts";
 import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import { ReactRouterServerContext } from "../../../context.ts";
+import { isValidTypeID } from "../../../../backend/utils/utils.ts";
 import type { Route } from "./+types/layout.ts";
 
 export async function loader({ request, params, context }: Route.LoaderArgs) {
   const { organizationId, estateId } = params;
   const { db, session } = context.get(ReactRouterServerContext).variables;
 
-  // Get session
+  if (!isValidTypeID(organizationId, "org") || !isValidTypeID(estateId, "est")) {
+    throw new Response("Not found", { status: 404 });
+  }
+
   if (!session?.user?.id) {
     throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
   }
@@ -29,10 +33,8 @@ export async function loader({ request, params, context }: Route.LoaderArgs) {
       "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
     );
 
-    throw new Response("You don't have access to this estate", {
-      status: 403,
-      statusText: "Forbidden",
-      headers,
+    throw new Response("Not found", {
+      status: 404,
     });
   }
 

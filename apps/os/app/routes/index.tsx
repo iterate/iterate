@@ -194,9 +194,11 @@ async function determineRedirectPath({
       }),
   );
 
-  // If user has no estates, redirect to no-access page
+  // If user has no estates, throw a 403 response
   if (userEstates.length === 0) {
-    return "/no-access";
+    throw new Response("You don't have access to any estates, this should never happen.", {
+      status: 403,
+    });
   }
 
   // Try to parse saved estate from cookie header
@@ -241,7 +243,10 @@ async function determineRedirectPath({
   }
 
   // Fallback (shouldn't happen)
-  return "/no-access";
+  throw new Response(
+    "Failed to determine redirect path, please contact support if this persists.",
+    { status: 500 },
+  );
 }
 
 // Server-side loader that handles all the redirect logic
@@ -267,4 +272,8 @@ export async function loader({ request, context }: Route.LoaderArgs) {
   }
 
   throw redirect(redirectPath);
+}
+
+export default function RootIndex() {
+  return null;
 }

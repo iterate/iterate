@@ -1,3 +1,5 @@
+import { TypeID } from "typeid-js";
+
 /**
  * Try to parse a value as JSON, returning the original value if parsing fails.
  */
@@ -47,4 +49,13 @@ export function replaceLocalhostWithNgrok(url: string): string {
       .replace("http://", "https://");
   }
   return url;
+}
+
+export function isValidTypeID(id: string, prefix?: string): boolean {
+  try {
+    TypeID.fromString(id, prefix);
+    return true;
+  } catch {
+    return false;
+  }
 }
