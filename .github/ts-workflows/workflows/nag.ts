@@ -99,7 +99,8 @@ export default {
                   years: ms / (365.25 * 24 * 60 * 60 * 1000),
                 };
                 const format = <Unit extends keyof typeof props>(unit: Unit) => {
-                  return `${props[unit]} ${unit}${props[unit] === 1 ? "" : "s"} ago`;
+                  const int = Math.floor(props[unit]);
+                  return `${int} ${unit}${int === 1 ? "" : "s"} ago`;
                 };
                 const mostUseful = Object.entries(props).findLast(([_, value]) => value >= 1);
                 return { ...props, format, pretty: format(mostUseful?.[0] as keyof typeof props) };
