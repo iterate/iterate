@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import dedent from "dedent";
 import { typeid } from "typeid-js";
+import type { PgInsertValue } from "drizzle-orm/pg-core";
 import { waitUntil, env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
@@ -177,6 +178,21 @@ export const createUserOrganizationAndEstate = async (
 
 type DBLike = Pick<DB, "insert" | "update" | "query">;
 
+export type EstateOnboardingEventShape<Op extends "Select" | "Insert" = "Select"> = Omit<
+  (typeof schema.systemTasks)[`$infer${Op}`],
+  "taskType" | "payload"
+> &
+  (
+    | {
+        taskType: "CreateStripeCustomer";
+        payload: { organizationId: string; estateId: string };
+      }
+    | {
+        taskType: "WarmOnboardingAgent";
+        payload: { estateId: string; onboardingAgentName: string };
+      }
+  );
+
 export async function initializeOnboardingForEstateInTransaction(
   tx: DBLike,
   params: { estateId: string; organizationId: string; onboardingAgentName: string },
@@ -207,7 +223,7 @@ export async function initializeOnboardingForEstateInTransaction(
       taskType: "WarmOnboardingAgent",
       payload: { estateId, onboardingAgentName },
     },
-  ]);
+  ] satisfies EstateOnboardingEventShape<"Insert">[]);
 }
 
 async function sendEstateCreatedNotificationToSlack(
