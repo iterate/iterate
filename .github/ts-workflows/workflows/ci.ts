@@ -134,21 +134,6 @@ export default {
             });
           }),
         },
-        {
-          if: "needs.variables.outputs.stage == 'stg'",
-          ...utils.githubScript(import.meta, async function stg_release({ github, context }) {
-            const { promises: fs } = await import("fs");
-            await github.rest.repos.createCommitComment({
-              ...context.repo,
-              commit_sha: "${{ github.sha }}",
-              body: [
-                `stage: \${{ needs.variables.outputs.stage }}`,
-                "", //
-                await fs.readFile("changelog.md", "utf8"),
-              ].join("\n"),
-            });
-          }),
-        },
       ],
     },
     e2e: {
