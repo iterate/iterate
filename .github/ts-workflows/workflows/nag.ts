@@ -9,7 +9,7 @@ export default {
       { cron: "*/15 * * * *" },
     ],
     push: {
-      branches: ["**/*nag*"],
+      paths: [".github/workflows/nag.yml"],
     },
   },
   jobs: {
@@ -48,16 +48,16 @@ export default {
 
               const approval = reviews.find((review) => review.state === "APPROVED");
 
-              const lastNagTime = pr.body
+              const oldNagInfo = pr.body
                 ?.split("\n")
                 .flatMap((line) => {
                   const maybeParams = new URLSearchParams(
                     line.split(" ").find((p) => p.includes("=")),
                   );
                   const found = maybeParams.get("last_nag_time");
-                  return found ? [new Date(found)] : [];
+                  return found ? [maybeParams] : [];
                 })
-                .findLast(Boolean); // find last time with nag info, since we append every couple of days
+                .findLast(Boolean); // find nag info, since we append every couple of days
 
               const nodeIds = comments.map((c) => c.node_id).filter(Boolean);
 
@@ -106,7 +106,7 @@ export default {
                 return { ...props, format, pretty: format(mostUseful?.[0] as keyof typeof props) };
               };
 
-              const when = (d: Date | null | undefined) => {
+              const when = (d: Date | null | undefined | string) => {
                 if (!d) return "never";
                 return timeAgo(d).pretty;
               };
@@ -116,13 +116,17 @@ export default {
                 approval: approval ? `false: approved already` : `true: not approved yet`,
                 unresolvedComments: `${unresolvedComments?.length === 0}: ${unresolvedComments?.length} unresolved comments`,
                 noActivityForAWhile: `${timeAgo(lastActive).minutes > 60}: last active ${when(lastActive)}`,
+                noNagForAWhile: `${timeAgo(oldNagInfo?.get("last_nag_time") || 0).hours > 2}: last nag ${when(oldNagInfo?.get("last_nag_time"))}`,
               } as Record<string, `${boolean}: ${string}`>;
 
               const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
 
               console.log(`PR #${pr.number}`, pr.title, pr.html_url, { reasonsToNag, shouldNag });
 
-              if (shouldNag) {
+              const nagOrGiveUp = async () => {
+                const newNagInfo: Record<string, string> = {
+                  last_nag_time: new Date().toISOString(),
+                };
                 const { getSlackClient, slackChannelIds, slackUsers } = await import(
                   "../utils/slack.ts"
                 );
@@ -130,26 +134,51 @@ export default {
                 const slackUser = slackUsers.find(
                   (u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase(),
                 );
-                const atMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
-                const message = await slack.chat.postMessage({
-                  channel: slackChannelIds["#building"],
-                  text: `PR ${pr.number} <${pr.html_url}|${pr.title}> by ${atMention} is set to auto-merge, but needs review.`,
-                });
+                const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
+                const threadTs = oldNagInfo?.get("nag_message_ts");
+                const followupTs = oldNagInfo?.get("followup_message_ts");
 
-                const nagInfo = {
-                  last_nag_time: new Date().toISOString(),
-                  ...(message.ts && { nag_message_ts: message.ts }),
-                };
+                if (threadTs) {
+                  if (followupTs) {
+                    console.log(`Followup message already exists, giving up.`);
+                    return;
+                  }
+                  const othersMentions = slackUsers
+                    .filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase())
+                    .filter((u) => timeAgo(u.oooUntil || 0).days < 0)
+                    .map((u) => `<@${u.id}>`)
+                    .join(" ");
+
+                  const followup = await slack.chat.postMessage({
+                    channel: slackChannelIds["#building"],
+                    thread_ts: threadTs,
+                    text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <#${pr.number} ${pr.html_url}|${pr.title}>`,
+                  });
+                  if (followup.ts) {
+                    newNagInfo.followup_message_ts = followup.ts;
+                  }
+                } else {
+                  const message = await slack.chat.postMessage({
+                    channel: slackChannelIds["#building"],
+                    text: `<#${pr.number} ${pr.html_url}|${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
+                  });
+                  if (message.ts) {
+                    newNagInfo.nag_message_ts = message.ts;
+                  }
+                }
 
                 await github.rest.pulls.update({
                   ...context.repo,
                   pull_number: pr.number,
                   body: [
                     pr.body, //
-                    "\n",
-                    `${new URLSearchParams(nagInfo)}`,
+                    `${new URLSearchParams(newNagInfo)}`,
                   ].join("\n"),
                 });
+              };
+
+              if (shouldNag) {
+                await nagOrGiveUp();
               }
 
               // annoyingly "all comments must be resolved" in a ruleset doesn't let automerge happen for hidden comments, and cursor bugbot loves to hide comments
