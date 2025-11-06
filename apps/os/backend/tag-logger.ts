@@ -35,7 +35,7 @@ export class TagLogger {
     "enterWith" // cloudflare workers doesn't support enterWith: https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/#caveats
   >;
 
-  /** set this if you want to store logs/context *globally* */
+  /** set this if you want to store logs/context *globally*. Otherwise, logs will only be stored when an async context is entered. */
   defaultStore: TagLogger.Context | undefined;
 
   /**
@@ -294,9 +294,7 @@ class PosthogTagLogger extends TagLogger {
 function getLogger() {
   const mode = import.meta.env?.MODE;
   if (mode === "test") {
-    const logger = new TagLogger(() => {}); // don't log in test. note that logs will still be tracked
-    logger.defaultStore = { level: "info", tags: {}, logs: [] };
-    return logger;
+    return new TagLogger(() => {}); // don't log in test. note that logs can still be tracked even at the top level by setting the `defaultStore`
   }
   if (mode === "development") {
     // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
