@@ -26,8 +26,26 @@ export const slackChannelIds = {
 };
 
 export const slackUsers = [
-  { id: "U092YE019D5", handle: "nickblow", github: "nickblow" },
-  { id: "U08V1A83Y2W", handle: "Rahul", github: "BlankParticle" },
-  { id: "U099JH9TAF2", handle: "misha", github: "mmkal" },
-  { id: "U067G4QRFK2", handle: "jonas", github: "jonastemplestein" },
+  {
+    id: "U092YE019D5",
+    handle: "nickblow",
+    github: "nickblow",
+  },
+  {
+    id: "U08V1A83Y2W",
+    handle: "Rahul",
+    github: "BlankParticle",
+    oooUntil: new Date("2025-11-07T08:00:00Z"),
+  },
+  {
+    id: "U099JH9TAF2",
+    handle: "misha",
+    github: "mmkal",
+  },
+  {
+    id: "U067G4QRFK2",
+    handle: "jonas",
+    github: "jonastemplestein",
+    oooUntil: new Date("2026-01-01"),
+  },
 ];
