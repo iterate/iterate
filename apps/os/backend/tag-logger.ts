@@ -35,6 +35,9 @@ export class TagLogger {
     "enterWith" // cloudflare workers doesn't support enterWith: https://developers.cloudflare.com/workers/runtime-apis/nodejs/asynclocalstorage/#caveats
   >;
 
+  /** set this if you want to store logs/context *globally* */
+  defaultStore: TagLogger.Context | undefined;
+
   /**
    * A helper/reference implementation for if you want to use `console` and its various methods to print your logs.
    * It appends the tags string to the beginning of the log message. It's useful for dev/test etc. where you want to
@@ -57,7 +60,7 @@ export class TagLogger {
   }
 
   get context(): TagLogger.Context {
-    return this._storage.getStore() || { level: "info", tags: {}, logs: [] };
+    return this._storage.getStore() || this.defaultStore || { level: "info", tags: {}, logs: [] };
   }
 
   get level() {
@@ -291,7 +294,9 @@ class PosthogTagLogger extends TagLogger {
 function getLogger() {
   const mode = import.meta.env?.MODE;
   if (mode === "test") {
-    return new TagLogger(TagLogger.consoleLogFn(console));
+    const logger = new TagLogger(() => {}); // don't log in test. note that logs will still be tracked
+    logger.defaultStore = { level: "info", tags: {}, logs: [] };
+    return logger;
   }
   if (mode === "development") {
     // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
