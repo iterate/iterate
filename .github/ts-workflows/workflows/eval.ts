@@ -74,6 +74,9 @@ export default workflow({
         },
         {
           name: "run server and test",
+          env: {
+            PROJECT_NAME: "gh-evals-${{ github.head_ref || github.ref_name }}",
+          },
           run: dedent`
             # for some reason \`doppler run -- ...\` doesn't inject env vars into the server process, so write to .env
             doppler run -- printenv > apps/os/.env
@@ -102,7 +105,6 @@ export default workflow({
             node wait.mjs
 
             # finally, run the tests
-            export PROJECT_NAME=gh-evals-\${{ github.head_ref || github.ref_name }}
             doppler run -- pnpm evalite run-once
           `,
         },

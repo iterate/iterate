@@ -12,14 +12,14 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
-      - name: Setup Pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - name: install
+      - name: Install dependencies
         run: pnpm install
       - name: generate workflows
         working-directory: .github/ts-workflows
@@ -27,7 +27,7 @@ jobs:
       - name: commit changes
         if: always()
         run: |-
-          status=$(git status --porcelain)
+          status="$(git status --porcelain)"
           if [ -z "$status" ]; then
             echo "No changes to commit."
             exit 0

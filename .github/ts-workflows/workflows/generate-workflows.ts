@@ -11,31 +11,18 @@ export default workflow({
     generate: {
       ...utils.runsOn,
       steps: [
-        {
-          name: "Checkout code",
-          uses: "actions/checkout@v4",
-          with: {
-            "fetch-depth": 0,
-            token: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}",
-            // ref: "${{ github.head_ref }}", // might want this if triggering for PRs
-          },
-        },
-        {
-          name: "Setup Pnpm",
-          uses: "pnpm/action-setup@v4",
-        },
-        {
-          name: "Setup Node",
-          uses: "actions/setup-node@v4",
-          with: {
-            "node-version": 24,
-            cache: "pnpm",
-          },
-        },
-        {
-          name: "install",
-          run: "pnpm install",
-        },
+        ...utils.setupRepo.map((step) => {
+          if (step.name === "Checkout code") {
+            return {
+              ...step,
+              with: {
+                "fetch-depth": 0,
+                token: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}",
+              },
+            };
+          }
+          return step;
+        }),
         {
           name: "generate workflows",
           "working-directory": ".github/ts-workflows",
@@ -45,7 +32,7 @@ export default workflow({
           name: "commit changes",
           if: "always()",
           run: dedent`
-            status=$(git status --porcelain)
+            status="$(git status --porcelain)"
             if [ -z "$status" ]; then
               echo "No changes to commit."
               exit 0

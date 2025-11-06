@@ -3,7 +3,7 @@ import * as utils from "../utils/index.ts";
 
 export default {
   name: "Actionlint",
-  on: { push: {} },
+  on: { pull_request: {} },
   jobs: {
     run: {
       ...utils.runsOnUbuntuLatest,

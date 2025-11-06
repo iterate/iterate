@@ -45,6 +45,8 @@ jobs:
           EXPOSE 3000
           ' > apps/os/backend/sandbox/Dockerfile
       - name: run server and test
+        env:
+          PROJECT_NAME: gh-evals-${{ github.head_ref || github.ref_name }}
         run: |-
           # for some reason `doppler run -- ...` doesn't inject env vars into the server process, so write to .env
           doppler run -- printenv > apps/os/.env
@@ -73,7 +75,6 @@ jobs:
           node wait.mjs
 
           # finally, run the tests
-          export PROJECT_NAME=gh-evals-${{ github.head_ref || github.ref_name }}
           doppler run -- pnpm evalite run-once
       - name: export ui
         if: always()

@@ -13,10 +13,12 @@ export const runsOnUbuntuLatest = {
   "runs-on": "ubuntu-latest",
 };
 
+export type NamedStep = Step & { name: string };
+
 export const checkoutStep = {
   name: "Checkout code",
   uses: "actions/checkout@v4",
-};
+} as const satisfies NamedStep;
 
 /** checkout, setup pnpm, setup node, install dependencies */
 export const setupRepo = [
@@ -37,7 +39,7 @@ export const setupRepo = [
     name: "Install dependencies",
     run: "pnpm install",
   },
-] as const satisfies Step[];
+] as const satisfies NamedStep[];
 
 export const setupDoppler = [
   {
@@ -51,4 +53,4 @@ export const setupDoppler = [
       DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
     },
   },
-] as const satisfies Step[];
+] as const satisfies NamedStep[];
