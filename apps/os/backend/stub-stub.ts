@@ -44,7 +44,7 @@ export const stubStub = <Stub extends WithCallMethod>(
     get: (_target, prop) => {
       if (prop === "raw") return stub;
       // @ts-expect-error trust me bro
-      if (prop === "fetch" || prop === "then") return stub[prop];
+      if (prop === "fetch" || prop === "then") return stub[prop].bind(stub);
       return (...args: any[]) => stub.callMethod(prop as string, args, context);
     },
   });
