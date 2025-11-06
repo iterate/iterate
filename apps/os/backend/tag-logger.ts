@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "async_hooks";
+import { createHash } from "crypto";
 import { waitUntil } from "../env.ts";
+import emojis from "./emojis.json";
 
 export namespace TagLogger {
   export type Level = keyof typeof TagLogger.levels;
@@ -294,8 +296,30 @@ function getLogger() {
     return new TagLogger(TagLogger.consoleLogFn(console));
   }
   if (mode === "development") {
+    const unicodeEmojis = emojis.filter((emoji) => emoji.unicode);
+    const emojiHash = (tags: {}) => {
+      const hash = createHash("md5").update(JSON.stringify(tags)).digest("hex");
+      const numbers = [parseInt(hash.slice(0, 4), 16), parseInt(hash.slice(4), 16)];
+      return numbers.map((n) => unicodeEmojis[n % unicodeEmojis.length].unicode).join("");
+    };
+    const logFn: TagLogger.LogFn = function consoleLogWithEmojis({ level, args }) {
+      const thisLogEmoji = emojiHash(this.tags);
+      const previousLogEmoji =
+        this.context.logs.length > 1
+          ? emojiHash(this.context.logs[this.context.logs.length - 2].tags)
+          : null;
+      const newArgs = [...args];
+      if (Object.keys(this.tags).length) {
+        if (!thisLogEmoji || thisLogEmoji !== previousLogEmoji) {
+          newArgs.unshift(this.tagsString());
+        }
+        newArgs.unshift(thisLogEmoji);
+      }
+
+      console[level](...newArgs);
+    };
     // we don't currently have import.meta.env?.MODE for dev 🤷 - but we only want to use the vanilla console logger if we're definitely in a dev environment
-    return new PosthogTagLogger(TagLogger.consoleLogFn(console));
+    return new PosthogTagLogger(logFn);
   }
 
   return new PosthogTagLogger(function prodLog({ level, args }) {
