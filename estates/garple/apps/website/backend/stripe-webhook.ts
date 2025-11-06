@@ -4,7 +4,7 @@ import type Stripe from "stripe";
 import { env } from "../env.ts";
 import { stripe } from "./stripe.ts";
 import { db } from "./db/client.ts";
-import { domains, purchases } from "./db/schema.ts";
+import * as schema from "./db/schema.ts";
 import { sendDomainPurchaseEmail } from "./email.ts";
 
 export async function handleStripeWebhook(c: Context) {
@@ -42,7 +42,11 @@ export async function handleStripeWebhook(c: Context) {
 
     try {
       // Check if domain exists and is still available
-      const domain = await db.select().from(domains).where(eq(domains.id, domainId)).limit(1);
+      const domain = await db
+        .select()
+        .from(schema.domains)
+        .where(eq(schema.domains.id, domainId))
+        .limit(1);
 
       if (!domain[0]) {
         console.error("Domain not found:", domainId);
@@ -56,15 +60,15 @@ export async function handleStripeWebhook(c: Context) {
 
       // Mark domain as purchased
       await db
-        .update(domains)
+        .update(schema.domains)
         .set({
           purchased: true,
           purchasedAt: new Date(),
         })
-        .where(eq(domains.id, domainId));
+        .where(eq(schema.domains.id, domainId));
 
       // Create purchase record
-      await db.insert(purchases).values({
+      await db.insert(schema.purchases).values({
         domainId,
         stripeCheckoutSessionId: session.id,
         customerEmail,

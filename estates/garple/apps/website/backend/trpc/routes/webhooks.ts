@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { publicProcedure, createRouter } from "../trpc.ts";
 import { db } from "../../db/client.ts";
-import { domains, purchases } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import { stripe } from "../../stripe.ts";
 import { sendDomainPurchaseEmail } from "../../email.ts";
 import { env } from "../../../env.ts";
@@ -34,7 +34,11 @@ export const webhooksRouter = createRouter({
           }
 
           // Get domain details
-          const domain = await db.select().from(domains).where(eq(domains.id, domainId)).limit(1);
+          const domain = await db
+            .select()
+            .from(schema.domains)
+            .where(eq(schema.domains.id, domainId))
+            .limit(1);
 
           if (!domain[0]) {
             throw new Error("Domain not found");
@@ -47,16 +51,16 @@ export const webhooksRouter = createRouter({
 
           // Mark domain as purchased
           await db
-            .update(domains)
+            .update(schema.domains)
             .set({
               purchased: true,
               purchasedAt: new Date(),
             })
-            .where(eq(domains.id, domainId));
+            .where(eq(schema.domains.id, domainId));
 
           // Create purchase record
           const customerEmail = session.customer_details!.email || "sales@garple.com";
-          await db.insert(purchases).values({
+          await db.insert(schema.purchases).values({
             domainId,
             stripeCheckoutSessionId: session.id,
             customerEmail,
