@@ -318,10 +318,10 @@ async function setupDurableObjects() {
     },
   );
 
-  const ESTATE_BUILDS = DurableObjectNamespace<import("./backend/worker.ts").EstateBuilds>(
-    "estate-builds",
+  const ESTATE_BUILDS = DurableObjectNamespace<import("./backend/worker.ts").EstateBuildTracker>(
+    "estate-build-tracker",
     {
-      className: "EstateBuilds",
+      className: "EstateBuildTracker",
       sqlite: true,
     },
   );

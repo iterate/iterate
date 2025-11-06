@@ -1,9 +1,9 @@
 import { DurableObject } from "cloudflare:workers";
 import { sql } from "drizzle-orm/sql/sql";
+import { z } from "zod/v4";
 import type { CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getDb, schema } from "../db/client.ts";
-import { z } from "zod/v4";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
 
 // Messages sent to admin/watch clients
@@ -12,7 +12,7 @@ type BroadcastMessage =
   | { type: "LOG"; buildId: string; stream: "stdout" | "stderr"; message: string; ts: number }
   | { type: "STATUS"; buildId: string; status: "in_progress" | "complete" | "failed"; ts: number };
 
-export class EstateBuilds extends DurableObject {
+export class EstateBuildTracker extends DurableObject {
   declare env: CloudflareEnv;
 
   // In-memory maps (non-authoritative; persisted state lives in storage/sql)
@@ -21,14 +21,12 @@ export class EstateBuilds extends DurableObject {
   constructor(ctx: any, env: CloudflareEnv) {
     super(ctx, env);
 
-    // Rehydrate any hibernated WebSockets into our in-memory maps
+    // Rehydrate any hibernated WebSockets into our in-memory maps (tags required)
     this.ctx.getWebSockets().forEach((ws) => {
-      const attachment = ws.deserializeAttachment() as {
-        estateId?: string;
-        buildId?: string;
-      } | null;
-      const buildId = attachment?.buildId;
-      if (!buildId) return;
+      const tags: string[] = (this.ctx as any).getTags(ws);
+      const buildTag = tags.find((t) => t.startsWith("build:"));
+      if (!buildTag) return;
+      const buildId = buildTag.slice("build:".length);
       const watchers = this.watchersByBuildId.get(buildId) || new Set<WebSocket>();
       watchers.add(ws);
       this.watchersByBuildId.set(buildId, watchers);
@@ -128,7 +126,7 @@ export class EstateBuilds extends DurableObject {
         await this.broadcast({ type: "LOG", buildId, stream, message, ts });
         // Handle typed config output event immediately
         if (entry.event === "CONFIG_OUTPUT") {
-          await this._upsertIterateConfigFromEvent(estateId, buildId, message);
+          await this._upsertIterateConfigFromEvent(estateId, message);
         }
         newLast = entry.seq;
         processedAny = true;
@@ -174,7 +172,8 @@ export class EstateBuilds extends DurableObject {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    this.ctx.acceptWebSocket(server);
+    // Attach tags for easier retrieval and observability (runtime supports second param)
+    (this.ctx as any).acceptWebSocket(server, [`estate:${estateId}`, `build:${buildId}`]);
     // Persist metadata across hibernations
     server.serializeAttachment({ estateId, buildId });
 
@@ -195,12 +194,11 @@ export class EstateBuilds extends DurableObject {
       ? (ws as any).deserializeAttachment()
       : null;
     const buildId: string | undefined = attachment?.buildId ?? (ws as any).__buildId;
-    if (buildId) {
-      const watchers = this.watchersByBuildId.get(buildId);
-      if (watchers) {
-        watchers.delete(ws);
-        if (watchers.size === 0) this.watchersByBuildId.delete(buildId);
-      }
+    if (!buildId) return;
+    const watchers = this.watchersByBuildId.get(buildId);
+    if (watchers) {
+      watchers.delete(ws);
+      if (watchers.size === 0) this.watchersByBuildId.delete(buildId);
     }
   }
 
@@ -328,7 +326,7 @@ export class EstateBuilds extends DurableObject {
 
   private async replayLogsToWatcher(ws: WebSocket, buildId: string) {
     const rows = await this.ctx.storage.sql.exec<{ ts: string; stream: string; message: string }>(
-      "SELECT ts, stream, message FROM logs WHERE build_id = ? ORDER BY ts ASC",
+      "SELECT ts, stream, message FROM logs WHERE build_id = ? ORDER BY ts ASC LIMIT 5000",
       buildId,
     );
     for (const r of rows) {
@@ -371,6 +369,8 @@ export class EstateBuilds extends DurableObject {
         });
       }
     }
+    // Broadcast status change to connected clients
+    this.broadcast({ type: "STATUS", buildId, status, ts: Date.now() });
   }
 
   private async _markBuildTimedOut(estateId: string, buildId: string): Promise<void> {
@@ -393,6 +393,8 @@ export class EstateBuilds extends DurableObject {
         invalidateInfo: { type: "TRPC_QUERY", paths: ["estate.getBuilds"] },
       });
     }
+    // Broadcast status change (failed due to timeout)
+    this.broadcast({ type: "STATUS", buildId, status: "failed", ts: Date.now() });
   }
 
   private async _upsertIterateConfigFromLogs(estateId: string, buildId: string): Promise<void> {
@@ -418,11 +420,7 @@ export class EstateBuilds extends DurableObject {
       });
   }
 
-  private async _upsertIterateConfigFromEvent(
-    estateId: string,
-    buildId: string,
-    jsonString: string,
-  ): Promise<void> {
+  private async _upsertIterateConfigFromEvent(estateId: string, jsonString: string): Promise<void> {
     // Validate with zod, but accept any object shape
     const IterateConfigSchema = z.object({}).passthrough();
     let parsedJson: unknown;

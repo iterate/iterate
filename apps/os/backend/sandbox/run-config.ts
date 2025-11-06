@@ -10,7 +10,7 @@ export interface RunConfigOptions {
   branch?: string;
   connectedRepoPath?: string;
   buildId: string;
-  estateId?: string;
+  estateId: string;
 }
 
 export interface RunConfigResult {
@@ -53,6 +53,13 @@ async function runConfigInSandboxInternal(
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
   const { githubRepoUrl, githubToken, commitHash, branch, connectedRepoPath, estateId } = options;
+  if (!estateId) {
+    return {
+      error: "Missing required estateId",
+      details: "RunConfigOptions.estateId is required",
+      commitHash,
+    };
+  }
 
   // Retrieve the sandbox
   const sandboxId = `agent-sandbox-${estateId}`;

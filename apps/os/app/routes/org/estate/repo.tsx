@@ -301,6 +301,10 @@ function EstateContent({
   };
 
   const getDerivedBuildStatus = (build: _Build): BuildStatus => {
+    // Persistent timeout from DB
+    const failureReason = (build as any).failureReason as string | undefined;
+    if (build.status === "failed" && failureReason === "timeout") return "timed_out";
+    // Ephemeral timeout while still in progress
     const createdAtMs = new Date(build.createdAt).getTime();
     const hasTimedOut = build.status === "in_progress" && createdAtMs < Date.now() - 2 * 60_000;
     return hasTimedOut ? "timed_out" : (build.status as BuildStatus);
@@ -1047,12 +1051,16 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
   const [follow, setFollow] = useState(true);
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
-  const protocol =
-    typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsUrl = useMemo(
-    () => `${protocol}//${window.location.host}/api/estate/${estateId}/builds/${build.id}/ws`,
-    [protocol, estateId, build.id],
-  );
+  const wsUrl = useMemo(() => {
+    const base = import.meta.env.SSR
+      ? import.meta.env.VITE_PUBLIC_URL
+      : globalThis.location?.origin;
+    if (!base) return "";
+    const url = new URL(base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `/api/estate/${estateId}/builds/${build.id}/ws`;
+    return url.toString();
+  }, [estateId, build.id]);
 
   const onMessage = (event: MessageEvent) => {
     if (typeof event.data !== "string") return;
@@ -1070,6 +1078,16 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
         const next = [...prev, { ts: parsed.ts, stream: parsed.stream, message: parsed.message }];
         return next.length > 5000 ? next.slice(-5000) : next;
       });
+    }
+    if (parsed.type === "STATUS" && parsed.buildId === build.id) {
+      const label =
+        parsed.status === "complete"
+          ? "Build completed"
+          : parsed.status === "failed"
+            ? "Build failed"
+            : "Build in progress";
+      if (parsed.status === "complete") toast.success(label);
+      else if (parsed.status === "failed") toast.error(label);
     }
   };
 
