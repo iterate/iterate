@@ -13,12 +13,14 @@ export const runsOnUbuntuLatest = {
   "runs-on": "ubuntu-latest",
 };
 
+export const checkoutStep = {
+  name: "Checkout code",
+  uses: "actions/checkout@v4",
+};
+
 /** checkout, setup pnpm, setup node, install dependencies */
 export const setupRepo = [
-  {
-    name: "Checkout code",
-    uses: "actions/checkout@v4",
-  },
+  checkoutStep,
   {
     name: "Setup pnpm",
     uses: "pnpm/action-setup@v4",
