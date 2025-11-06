@@ -6,6 +6,7 @@
 
 import type { OpenAI } from "openai";
 import { test as base, vi } from "vitest";
+import { logger } from "../tag-logger.ts";
 import type { AgentCoreEvent } from "./agent-core-schemas.ts";
 import {
   AgentCore,
@@ -417,7 +418,8 @@ export function createAgentCoreTest<Slices extends ReadonlyArray<AgentCoreSlice>
   },
 ) {
   return base.extend<{ h: CoreTestHarness<Slices> }>({
-    h: async ({ task: _task }, playwrightUse) => {
+    h: async ({ task }, playwrightUse) => {
+      logger.defaultStore = { level: "info", tags: {}, logs: [] };
       // Reset ID counters for deterministic tests
       resetIdCounters();
 
@@ -434,6 +436,14 @@ export function createAgentCoreTest<Slices extends ReadonlyArray<AgentCoreSlice>
         // Run the test
         await playwrightUse(harness);
       } finally {
+        // Check if test failed and print logs
+        if (task.result?.state === "fail") {
+          if (logger.context.logs.length) {
+            console.log("\n--- Captured Console Output ---");
+            logger.context.logs.forEach((log) => console[log.level](...log.args));
+            console.log("--- End Console Output ---\n");
+          }
+        }
         // Cleanup
         harness.end();
       }
