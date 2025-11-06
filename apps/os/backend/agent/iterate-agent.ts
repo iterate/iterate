@@ -57,6 +57,7 @@ import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
+import type { WithCallMethod } from "../stub-stub.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
@@ -177,7 +178,7 @@ export class IterateAgent<
     State extends IterateAgentState = IterateAgentState,
   >
   extends CloudflareAgent<{}, State>
-  implements ToolsInterface
+  implements ToolsInterface, WithCallMethod
 {
   declare env: CloudflareEnv;
   override observability = undefined;
@@ -301,12 +302,8 @@ export class IterateAgent<
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
   }
 
-  callMethod(
-    methodName: string,
-    args: unknown[],
-    context: Record<string, string>,
-  ): Promise<unknown> {
-    return logger.run(context, async () => {
+  callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
+    return logger.run(context, () => {
       // @ts-expect-error trust me bro
       return this[methodName](...args);
     });
