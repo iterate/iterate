@@ -3,6 +3,7 @@ import * as crypto from "node:crypto";
 import * as recast from "recast";
 import tsParser from "recast/parsers/typescript.js";
 import { findUpSync } from "find-up";
+import type { Step } from "@jlarky/gha-ts/workflow-types";
 
 export type GitHubScriptVariables = {
   context: typeof import("@actions/github").context;
@@ -24,6 +25,14 @@ type GithubScriptOptions = {
   "result-encoding"?: "string";
 };
 
+export type GithubScriptHandler = (variables: GitHubScriptVariables) => unknown;
+
+export function githubScript(meta: GithubScriptMeta, handler: GithubScriptHandler): Step;
+export function githubScript(
+  meta: GithubScriptMeta,
+  options: GithubScriptOptions,
+  handler: GithubScriptHandler,
+): Step;
 /**
  * Allows defining a strongly-typed function using the various helpers provided by
  * [github-script](https://github.com/actions/github-script). The function will be serialized
@@ -37,12 +46,14 @@ type GithubScriptOptions = {
  * github.log = {...console, debug: (message, value) => console.log(message, value.headers)}
  * ```
  */
-export const githubScript = (
+export function githubScript(
   /** pass `import.meta` here so we know where the original file is, and can ensure any relative imports work */
   meta: GithubScriptMeta,
-  handler: (variables: GitHubScriptVariables) => unknown,
-  { params = {}, ...options }: GithubScriptOptions = {},
-): import("@jlarky/gha-ts/workflow-types").Step => {
+  ...args: [GithubScriptHandler] | [GithubScriptOptions, GithubScriptHandler]
+): Step {
+  const [handler, options]: [GithubScriptHandler, GithubScriptOptions] =
+    typeof args[0] === "function" ? [args[0], {}] : [args[1]!, args[0]];
+
   const sourceFilepath = typeof meta === "string" ? meta : meta.filename;
   const githubDir = findUpSync(".github", { cwd: path.dirname(sourceFilepath), type: "directory" });
   if (!githubDir) throw new Error(`Could not find .github directory from ${sourceFilepath}`);
@@ -50,7 +61,8 @@ export const githubScript = (
   const relativeSourceFilepath = path.relative(repoRoot, sourceFilepath);
 
   const importShims: Record<string, string> = {};
-  const fnString = handler.toString().replace(/await import\(['"](.+)['"]\)/g, (_, filepath) => {
+  const importExpressionRegex = /await import\(\n?\s*['"](.+)['"],?\n?\s*\)/g;
+  const fnString = handler.toString().replace(importExpressionRegex, (_, filepath) => {
     const hash = crypto.createHash("md5").update(filepath).digest("hex");
     const slug = `${filepath.replaceAll(/\W/g, "")}-${hash}`;
 
@@ -71,14 +83,14 @@ export const githubScript = (
     ...Object.values(importShims),
     "const vars = {github, context, core, glob, io, require}",
 
-    ...Object.entries(params).map(([name, param]) => {
+    ...Object.entries(options.params || {}).map(([name, param]) => {
       return `const ${name} = ${JSON.stringify(param)}`;
     }),
     "const __handler = " + fnString, // create a temp function that contextual vars will be passed into
     "return __handler(vars)", // call the temp function
   ].filter(Boolean);
   const script = prettyPrint(uglyScript.join(";\n"));
-  return {
+  const step = {
     ...(handler.name && { name: handler.name, id: handler.name }),
     uses: "actions/github-script@v7",
     with: {
@@ -86,7 +98,12 @@ export const githubScript = (
       script,
     },
   };
-};
+
+  // add a secret `handler` property so we can run the script locally but it won't get serialized into the yaml
+  Object.defineProperty(step, "handler", { value: handler, enumerable: false });
+
+  return step;
+}
 
 const prettyPrint = (script: string) => {
   try {

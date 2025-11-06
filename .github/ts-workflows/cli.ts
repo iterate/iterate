@@ -3,9 +3,10 @@ import * as path from "node:path";
 import assert from "node:assert";
 import { z } from "zod";
 import { createCli } from "trpc-cli";
-import { type Workflow } from "@jlarky/gha-ts/workflow-types";
+import { type Workflow, type Step } from "@jlarky/gha-ts/workflow-types";
 import * as YAML from "yaml";
 import { initTRPC } from "@trpc/server";
+import type { GithubScriptHandler, GitHubScriptVariables } from "./utils/github-script.ts";
 
 const t = initTRPC.create();
 
@@ -155,6 +156,70 @@ const router = t.router({
       }
       if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
       return ctx.updateMessage;
+    }),
+
+  githubScript: workflowsProcedure
+    .meta({ description: "Locally run a GitHub script defined in a workflow" })
+    .input(
+      z.object({
+        script: z
+          .string()
+          .transform((value, ctx) => {
+            const parts = value.split(".");
+            if (parts.length !== 3 || parts.filter(Boolean).length !== 3) {
+              ctx.addIssue({ code: "custom", message: "Expected <workflow>.<job>.<step> syntax" });
+              return z.NEVER;
+            }
+            const [workflow, job, step] = parts.map((p) => (p === "*" ? undefined : p));
+            return { workflow, job, step };
+          })
+          .describe(
+            "The step containing the script to run. Syntax: <workflow>.<job>.<step> - use * to match any e.g. `*.*.mystep` or `myworkflow.*.*` or `myworkflow.myjob.*`. An error will be thrown unless exactly one step is matches",
+          )
+          .meta({ positional: true }),
+        githubToken: z.string().describe("The GitHub token to use"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const workflow = Object.entries(ctx.tsWorkflows)
+        .flatMap(([name, workflow]) => {
+          return name === (input.script.workflow || name) ? workflow : [];
+        })
+        .find(Boolean);
+      if (!workflow) throw new Error(`Workflow ${input.script.workflow} not found`);
+      const scriptSteps = Object.entries(workflow.workflow.jobs).flatMap(([name, job]) => {
+        if (name !== (input.script.job || name)) return [];
+        if (!("steps" in job)) return [];
+        const steps: Array<Step & { handler?: GithubScriptHandler }> = job.steps;
+        return steps.flatMap((step) => {
+          const nameMatch = step.name === (input.script.step || step.name);
+          return typeof step.handler === "function" && nameMatch ? step : [];
+        });
+      });
+      if (scriptSteps.length !== 1) {
+        throw new Error(`Expected 1 script step, got ${scriptSteps.length}`, {
+          cause: scriptSteps,
+        });
+      }
+
+      const script = scriptSteps[0].handler;
+
+      const { Octokit } = await import("@octokit/rest");
+      const github = new Octokit({ auth: input.githubToken });
+      github.log = { ...console, debug: () => {} };
+      // todo: simulate the github context better to support more event trigger types. the most important ones are `context.repo` and `github`
+      const variables = {
+        context: {
+          repo: { owner: "iterate", repo: "iterate" },
+        } as GitHubScriptVariables["context"],
+        github,
+        core: {} as never,
+        glob: {} as never,
+        io: {} as never,
+        require: (id: string) => require(id),
+      } as GitHubScriptVariables;
+
+      return await script!(variables);
     }),
 });
 
