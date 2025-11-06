@@ -87,6 +87,7 @@ jobs:
         id: prd_release
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
           script: |-
             github.log = {
               ...console,
@@ -205,6 +206,13 @@ jobs:
                 }],
               ) => result === "failure").map(([name]) => name);
 
+              const {
+                release_name,
+                ...outputs
+              } = needs.variables?.outputs;
+
+              const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
+
               await slack.chat.postMessage({
                 channel: slackChannelIds["#error-pulse"],
 
@@ -213,7 +221,7 @@ jobs:
 
                   text: {
                     type: "plain_text",
-                    text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                    text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
                   },
                 }, {
                   type: "section",

@@ -120,19 +120,23 @@ export default {
         },
         {
           if: "needs.variables.outputs.stage == 'prd'",
-          ...utils.githubScript(import.meta, async function prd_release({ github, context }) {
-            const { promises: fs } = await import("fs");
-            await github.rest.repos.createRelease({
-              ...context.repo,
-              tag_name: "${{ needs.variables.outputs.release_name }}",
-              name: "${{ needs.variables.outputs.release_name }}",
-              body: [
-                `stage: \${{ needs.variables.outputs.stage }}`,
-                "", //
-                await fs.readFile("changelog.md", "utf8"),
-              ].join("\n"),
-            });
-          }),
+          ...utils.githubScript(
+            import.meta,
+            { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
+            async function prd_release({ github, context }) {
+              const { promises: fs } = await import("fs");
+              await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: "${{ needs.variables.outputs.release_name }}",
+                name: "${{ needs.variables.outputs.release_name }}",
+                body: [
+                  `stage: \${{ needs.variables.outputs.stage }}`,
+                  "", //
+                  await fs.readFile("changelog.md", "utf8"),
+                ].join("\n"),
+              });
+            },
+          ),
         },
       ],
     },
@@ -161,6 +165,8 @@ export default {
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")
             .map(([name]) => name);
+          const { release_name, ...outputs } = needs.variables?.outputs as Record<string, string>;
+          const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
             blocks: [
@@ -168,7 +174,7 @@ export default {
                 type: "header",
                 text: {
                   type: "plain_text",
-                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
                 },
               },
               {
