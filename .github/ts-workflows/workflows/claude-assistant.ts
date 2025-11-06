@@ -49,7 +49,7 @@ export default workflow({
           name: "Setup pnpm via Corepack",
           run: dedent`
             corepack enable
-            corepack prepare pnpm@$(node -p "require('./package.json').packageManager.split('@')[1]") --activate
+            corepack prepare pnpm@"$(node -p "require('./package.json').packageManager.split('@')[1]")" --activate
           `,
         },
         {
@@ -64,7 +64,7 @@ export default workflow({
           name: "Fetch secrets from Doppler",
           id: "doppler",
           run: dedent`
-            echo "ANTHROPIC_API_KEY=$(doppler secrets get ANTHROPIC_API_KEY --plain)" >> $GITHUB_OUTPUT
+            echo "ANTHROPIC_API_KEY='$(doppler secrets get ANTHROPIC_API_KEY --plain)'" >> $GITHUB_OUTPUT
           `,
           env: {
             DOPPLER_TOKEN: "${{ secrets.CLAUDE_DOPPLER_TOKEN }}",
