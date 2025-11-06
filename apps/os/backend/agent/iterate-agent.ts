@@ -303,7 +303,7 @@ export class IterateAgent<
   }
 
   callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
-    return logger.run(context, () => {
+    return logger.run(context, async () => {
       // @ts-expect-error trust me bro
       return this[methodName](...args);
     });
