@@ -5,6 +5,8 @@ import { agentInstance } from "../../db/schema.ts";
 import { schema, type DB } from "../../db/client.ts";
 import type { IterateConfig } from "../../../sdk/iterate-config.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
+import { logger } from "../../tag-logger.ts";
+import { stubStub } from "../../stub-stub.ts";
 
 // NOTE: This indirection is intentionally string-based. It's admittedly hacky,
 // but acceptable until we can collapse all IterateAgent subclasses into a
@@ -24,12 +26,6 @@ export function toAgentClassName(value: string): AgentClassName {
     `Unknown IterateAgent subclass "${value}". Known classes: ${AGENT_CLASS_NAMES.join(", ")}`,
   );
 }
-
-export type GetStubParams = {
-  agentInitParams: AgentInitParams;
-  jurisdiction?: DurableObjectJurisdiction;
-  locationHint?: DurableObjectLocationHint;
-};
 
 export type GetOrCreateStubByNameParams = {
   db: DB;
@@ -68,31 +64,28 @@ function getNamespaceForClassName(className: AgentClassName): AgentNamespace {
 
 export async function getAgentStub(
   className: AgentClassName,
-  params: GetStubParams,
-): Promise<DurableObjectStub<IterateAgent>> {
-  const { agentInitParams, jurisdiction, locationHint } = params;
-  let namespace = getNamespaceForClassName(className);
+  params: { agentInitParams: AgentInitParams },
+) {
+  const { agentInitParams } = params;
+  const namespace = getNamespaceForClassName(className);
 
-  if (jurisdiction) {
-    namespace = namespace.jurisdiction(jurisdiction);
-  }
+  const doStub = namespace.getByName(agentInitParams.record.durableObjectName);
+  const doStubStub = stubStub(doStub as {} as IterateAgent, {
+    className,
+    durableObjectName: agentInitParams.record.durableObjectName,
+    estateId: agentInitParams.record.estateId,
+    ...logger.tags,
+  });
 
-  const options = {
-    ...(locationHint && { locationHint }),
-  };
+  await doStubStub.initIterateAgent(agentInitParams);
 
-  const stub = namespace.getByName(agentInitParams.record.durableObjectName, options);
-
-  await stub.initIterateAgent(agentInitParams);
-
-  // @ts-expect-error, fix this infinite type error
-  return stub;
+  return doStubStub;
 }
 
 export async function getAgentStubByName(
   className: AgentClassName,
   params: { db: DB; agentInstanceName: string; estateId?: string },
-): Promise<DurableObjectStub<IterateAgent>> {
+) {
   const { db, agentInstanceName } = params;
 
   const row = await db.query.agentInstance.findFirst({
@@ -127,7 +120,7 @@ export async function getAgentStubByName(
 export async function getOrCreateAgentStubByRoute(
   className: AgentClassName,
   params: { db: DB; estateId: string; route: string; reason?: string },
-): Promise<DurableObjectStub<IterateAgent>> {
+) {
   const { db, estateId, route, reason } = params;
 
   const namespace = getNamespaceForClassName(className);

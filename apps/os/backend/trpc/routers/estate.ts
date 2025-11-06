@@ -617,7 +617,7 @@ export const estateRouter = router({
         agentInstanceName: agent.durableObjectName,
       });
 
-      const response = await stub.fetch("http://do/state");
+      const response = await stub.raw.fetch("http://do/state" as never);
       const state = (await response.json()) as { onboardingData?: OnboardingData };
 
       return {

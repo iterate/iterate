@@ -104,7 +104,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
       db: c.var.db,
       agentInstanceName,
     });
-    return agentStub.fetch(c.req.raw);
+    return agentStub.raw.fetch(c.req.raw);
   } catch (error) {
     const message = (error as Error).message || "Unknown error";
     if (message.includes("not found")) {
