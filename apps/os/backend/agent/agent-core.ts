@@ -1143,7 +1143,6 @@ export class AgentCore<
   private runLLMRequestInBackground(requestIndex: number, params: ResponsesAPIParams): void {
     this.deps.background(async () => {
       try {
-        logger.info("runLLMRequestInBackground", { requestIndex });
         await this.makeLLMRequest(requestIndex, params);
       } catch (err: any) {
         logger.error(err);

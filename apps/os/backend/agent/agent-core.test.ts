@@ -2235,10 +2235,7 @@ describe("CORE:FILE_SHARED event handling", () => {
 
       // Check that error log was written
       expect(logger.context.logs).toMatchObject(
-        logsMatcher(
-          "error",
-          expect.objectContaining({ message: "OpenAI serrrrrvice unavailable" }),
-        ),
+        logsMatcher("error", expect.objectContaining({ message: "OpenAI service unavailable" })),
       );
 
       // Check that error events were added
