@@ -318,6 +318,14 @@ async function setupDurableObjects() {
     },
   );
 
+  const ESTATE_BUILDS = DurableObjectNamespace<import("./backend/worker.ts").EstateBuilds>(
+    "estate-builds",
+    {
+      className: "EstateBuilds",
+      sqlite: true,
+    },
+  );
+
   return {
     ITERATE_AGENT,
     SLACK_AGENT,
@@ -325,6 +333,7 @@ async function setupDurableObjects() {
     ORGANIZATION_WEBSOCKET,
     SANDBOX,
     ADVISORY_LOCKER,
+    ESTATE_BUILDS,
   };
 }
 
