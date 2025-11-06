@@ -92,7 +92,7 @@ export default {
               LAST_RELEASE=$(git rev-parse HEAD~1)
               add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
             else
-              add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE..\${{ needs.variables.outputs.release_name }}))"
+              add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE...\${{ needs.variables.outputs.release_name }}))"
             fi
 
             write_git_changes() {
