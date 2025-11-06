@@ -19,6 +19,7 @@ import {
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import { ensureUserSynced } from "../integrations/slack/slack.ts";
 import { slackChannelOverrideExists } from "../utils/trial-channel-setup.ts";
+import { getDefaultOnboardingAgentName } from "../org-utils.ts";
 import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -43,8 +44,11 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
-import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
+import type { AgentInitParams } from "./iterate-agent.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
+
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -53,9 +57,6 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
-import type { AgentInitParams } from "./iterate-agent.ts";
-import { getConnectionKey } from "./mcp/mcp-slice.ts";
-
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
   private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -188,10 +189,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (this.estate.onboardingAgentName) {
       try {
         // Get a stub for the onboarding agent
-        const onboardingAgentStub = await getOrCreateAgentStubByName("OnboardingAgent", {
+        const onboardingAgentStub = await getOrCreateAgentStubByRoute("OnboardingAgent", {
           db: this.db,
           estateId: this.estate.id,
-          agentInstanceName: this.estate.onboardingAgentName,
+          route: getDefaultOnboardingAgentName(this.estate.id),
+          reason: `Getting onboarding agent for context rules - not expected to create a new one here`,
         });
 
         // Call onboardingPromptFragment on the stub

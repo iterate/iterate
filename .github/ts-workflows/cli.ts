@@ -66,15 +66,22 @@ const workflowsProcedure = t.procedure
       const ts = trimStrings(tsWorkflows[w.name]);
       const yaml = trimStrings(yamlWorkflows[w.name]);
       try {
+        const suffixes = [ts, yaml].map((w) => (w?.yaml.trim() ? "content" : "no content"));
+        if (suffixes[0] !== suffixes[1]) {
+          throw new Error(`ts has ${suffixes[0]}, but yaml has ${suffixes[1]}`);
+        }
         assert.deepStrictEqual(ts?.workflow, yaml?.workflow);
       } catch (error) {
-        const message = String(error).split("\n").slice(3).join("\n");
+        let message = String(error);
+        if (message.includes("Expected values to be strictly deep-equal:")) {
+          message = message.split("\n").slice(3).join("\n");
+        }
         const reason = `Workflow ${w.name} was out of date: ${message}`;
-        return { reason, ts, yaml };
+        return { name: w.name, reason, ts, yaml };
       }
 
       if (input.force.includes("*") || input.force.includes(w.name)) {
-        return { reason: "Forced update", ts, yaml };
+        return { name: w.name, reason: "Forced update", ts, yaml };
       }
 
       return [];
@@ -102,9 +109,13 @@ const router = t.router({
   fromTs: workflowsProcedure
     .meta({ description: "Generate YAML workflows from TS workflows" })
     .mutation(async ({ ctx, input }) => {
-      for (const { ts: tsWorkflow } of ctx.updatesNeeded) {
-        if (!tsWorkflow) continue; // Skip YAML-only workflows
-        const yamlPath = path.join(ctx.yamlWorkflowsDir, `${tsWorkflow.name}.yml`);
+      for (const { name, ts: tsWorkflow } of ctx.updatesNeeded) {
+        const yamlPath = path.join(ctx.yamlWorkflowsDir, `${name}.yml`);
+        if (!tsWorkflow) {
+          console.error(`${yamlPath} missing ts. run "from-yaml" or delete manually`);
+          continue;
+        }
+
         if (!input.dryRun) await fs.writeFile(yamlPath, tsWorkflow.yaml);
       }
       if (ctx.updateMessage && process.env.CI) throw new Error(ctx.updateMessage);
@@ -116,8 +127,8 @@ const router = t.router({
         "Generate TS workflows from YAML workflows. Will attempt to convert multiline strings to dedent expressions - make sure you check the output.",
     })
     .mutation(async ({ ctx, input }) => {
-      for (const { yaml } of ctx.updatesNeeded) {
-        const tsPath = path.join(ctx.tsWorkflowsDir, `${yaml.name}.ts`);
+      for (const { name, yaml } of ctx.updatesNeeded) {
+        const tsPath = path.join(ctx.tsWorkflowsDir, `${name}.ts`);
         const multilineStrings: string[] = [];
         let pojo = JSON.stringify(
           yaml.workflow,

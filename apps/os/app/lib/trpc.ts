@@ -9,18 +9,34 @@ export type TrpcContextType = ReturnType<typeof createTRPCContext<AppRouter>>;
 export const TrpcContext: TrpcContextType = createTRPCContext<AppRouter>();
 export const { useTRPC, useTRPCClient } = TrpcContext;
 
-export const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      retry: false,
-    },
-    mutations: {
-      onError: (error) => {
-        toast.error(error.message || "An error occurred");
+export const makeQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+      mutations: {
+        onError: (error) => {
+          toast.error(error.message || "An error occurred");
+        },
       },
     },
-  },
-});
+  });
+
+let browserQueryClient: QueryClient | undefined = undefined;
+export function getQueryClient() {
+  if (import.meta.env.SSR) {
+    // Server: always make a new query client
+    return makeQueryClient();
+  } else {
+    // Browser: make a new query client if we don't already have one
+    // This is very important, so we don't re-make a new client if React
+    // suspends during the initial render. This may not be needed if we
+    // have a suspense boundary BELOW the creation of the query client
+    if (!browserQueryClient) browserQueryClient = makeQueryClient();
+    return browserQueryClient;
+  }
+}
 
 const getTrpcUrl = () => {
   if (import.meta.env.SSR) {

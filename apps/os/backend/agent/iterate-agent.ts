@@ -621,6 +621,10 @@ export class IterateAgent<
     };
   }
 
+  async getHydrationInfo() {
+    return this.hydrationInfo; // callable via stub
+  }
+
   /**
    * Update the agent_instance row with latest event metadata and refresh DO-stored init params
    * Uses a background voided promise from storeEvents.

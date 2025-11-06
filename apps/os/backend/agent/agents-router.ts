@@ -2,7 +2,8 @@ import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod";
 
 import { and, eq, like } from "drizzle-orm";
-import { protectedProcedure, router } from "../trpc/trpc.ts";
+import { TRPCError } from "@trpc/server";
+import { estateProtectedProcedure, protectedProcedure, router } from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
 import { normalizeNullableFields } from "../utils/type-helpers.ts";
@@ -12,13 +13,12 @@ import {
   type AugmentedCoreReducedState,
 } from "./agent-core-schemas.ts";
 import { IterateAgent } from "./iterate-agent.ts";
-import { defaultContextRules } from "./default-context-rules.ts";
 import { MCPEvent } from "./mcp/mcp-slice.ts";
 import { SlackSliceEvent } from "./slack-slice.ts";
 import {
-  getOrCreateAgentStubByName,
-  toAgentClassName,
-  type GetOrCreateStubByNameParams,
+  AGENT_CLASS_NAMES,
+  getAgentStubByName,
+  getOrCreateAgentStubByRoute,
 } from "./agents/stub-getters.ts";
 
 export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
@@ -26,13 +26,13 @@ export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
   createdAt: string;
 };
 
-const agentStubProcedure = protectedProcedure
+/** operate on an existing agent - throws  */
+const agentStubProcedure = estateProtectedProcedure
   .input(
     z.object({
-      estateId: z.string().describe("The estate this agent belongs to"),
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
       agentClassName: z
-        .enum(["IterateAgent", "SlackAgent", "OnboardingAgent"])
+        .enum(AGENT_CLASS_NAMES)
         .default("IterateAgent")
         .describe("The class name of the agent"),
       reason: z.string().describe("The reason for creating/getting the agent stub").optional(),
@@ -41,19 +41,19 @@ const agentStubProcedure = protectedProcedure
   .use(async ({ input, ctx, next }) => {
     const estateId = input.estateId;
 
-    const getOrCreateStubParams: GetOrCreateStubByNameParams = {
+    const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
-      estateId,
       agentInstanceName: input.agentInstanceName,
-      reason: input.reason || "Created via agents router",
-    };
-    // Always use getOrCreateStubByName - agents are created on demand
-    const agent = await getOrCreateAgentStubByName(
-      toAgentClassName(input.agentClassName),
-      getOrCreateStubParams,
-    );
+      estateId,
+    }).catch((err) => {
+      // todo: effect!
+      if (String(err).includes("not found")) {
+        throw new TRPCError({ code: "NOT_FOUND", message: String(err), cause: err });
+      }
+      throw err;
+    });
 
-    // agent is "any" at this point - that's no good! we want it to be correctly inferred as "some subclass of IterateAgent"
+    // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
 
     return next({
       ctx: {
@@ -66,16 +66,6 @@ const agentStubProcedure = protectedProcedure
       },
     });
   });
-
-// Define a schema for context rules
-// TODO not sure why this is here and not in context.ts ...
-const ContextRule = z.object({
-  key: z.string(),
-  description: z.string().optional(),
-  prompt: z.any().optional(),
-  tools: z.array(z.any()).optional().default([]),
-  match: z.union([z.array(z.any()), z.any()]).optional(),
-});
 
 export const AllAgentEventInputSchemas = z.union([
   AgentCoreEvent,
@@ -95,10 +85,9 @@ export const agentsRouter = router({
       service: "agent",
     })),
 
-  list: protectedProcedure
+  list: estateProtectedProcedure
     .input(
       z.object({
-        estateId: z.string(),
         agentNameLike: z.string().optional(),
       }),
     )
@@ -112,27 +101,21 @@ export const agentsRouter = router({
       });
     }),
 
-  listContextRules: protectedProcedure
-    .meta({ description: "List all context rules available in the estate" })
-    .output(z.array(ContextRule))
-    .query(async () => {
-      // const dbRules = await db.query.contextRules.findMany();
-      // const rulesFromDb = dbRules.map((r) => r.serializedRule);
-      const rulesFromDb: z.infer<typeof ContextRule>[] = [];
-      // Merge and dedupe rules by slug, preferring the first occurrence (defaultContextRules first)
-      const allRules = [...defaultContextRules, ...rulesFromDb];
-      const seenKeys = new Set<string>();
-      const dedupedRules = allRules.filter((rule) => {
-        if (typeof rule.key !== "string") {
-          return false;
-        }
-        if (seenKeys.has(rule.key)) {
-          return false;
-        }
-        seenKeys.add(rule.key);
-        return true;
+  getOrCreateAgent: estateProtectedProcedure
+    .input(
+      z.object({
+        route: z.string(),
+        agentClassName: z.enum(AGENT_CLASS_NAMES),
+        reason: z.string(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const { agentClassName, ...createParams } = input;
+      const agentStub = await getOrCreateAgentStubByRoute(agentClassName, {
+        db: ctx.db,
+        ...createParams,
       });
-      return dedupedRules;
+      return { info: await agentStub.getHydrationInfo() };
     }),
 
   getState: agentStubProcedure

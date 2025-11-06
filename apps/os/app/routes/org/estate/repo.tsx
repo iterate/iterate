@@ -17,7 +17,7 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { data, redirect, useLoaderData } from "react-router";
+import { data, useLoaderData } from "react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
@@ -79,7 +79,7 @@ import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
-import { getDb } from "../../../../backend/db/client.ts";
+import { ReactRouterServerContext } from "../../../context.ts";
 import type { Route } from "./+types/repo.ts";
 
 // Use tRPC's built-in type inference for the build type
@@ -98,10 +98,9 @@ export function meta() {
   ];
 }
 
-export async function loader({ params }: Route.LoaderArgs) {
+export async function loader({ params, context }: Route.LoaderArgs) {
   const { estateId } = params;
-  if (!estateId) throw redirect("/");
-  const db = getDb();
+  const { db } = context.get(ReactRouterServerContext).variables;
 
   const githubInstallation = await getGithubInstallationForEstate(db, estateId);
 
