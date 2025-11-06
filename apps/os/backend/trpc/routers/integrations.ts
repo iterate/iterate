@@ -5,7 +5,7 @@ import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
 import { estateProtectedProcedure, router } from "../trpc.ts";
 import { account, organizationUserMembership, estateAccountsPermissions } from "../../db/schema.ts";
-import * as schemas from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
   getGithubRepoForEstate,
@@ -142,7 +142,7 @@ export const integrationsRouter = router({
     // Get MCP connections
     // 1. Get param-based MCP connections from mcpConnectionParam
     const mcpParams = await ctx.db.query.mcpConnectionParam.findMany({
-      where: eq(schemas.mcpConnectionParam.estateId, estateId),
+      where: eq(schema.mcpConnectionParam.estateId, estateId),
     });
 
     // Group by connectionKey
@@ -290,7 +290,7 @@ export const integrationsRouter = router({
         callbackURL,
       });
 
-      await ctx.db.insert(schemas.verification).values({
+      await ctx.db.insert(schema.verification).values({
         identifier: state,
         value: data,
         expiresAt,
@@ -436,13 +436,13 @@ export const integrationsRouter = router({
         .parse(repo.data);
 
       await ctx.db
-        .update(schemas.estate)
+        .update(schema.estate)
         .set({
           connectedRepoId: repoId,
           connectedRepoRef: branch,
           connectedRepoPath: path,
         })
-        .where(eq(schemas.estate.id, estateId));
+        .where(eq(schema.estate.id, estateId));
 
       const branchData = await scopedOctokit.rest.repos.getBranch({
         owner: repoData.owner.login,
@@ -487,24 +487,24 @@ export const integrationsRouter = router({
       const { estateId, deleteInstallation } = input;
 
       await ctx.db
-        .update(schemas.estate)
+        .update(schema.estate)
         .set({
           connectedRepoId: null,
           connectedRepoRef: null,
           connectedRepoPath: null,
         })
-        .where(eq(schemas.estate.id, estateId));
+        .where(eq(schema.estate.id, estateId));
 
       if (deleteInstallation) {
         const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
 
         if (githubInstallation) {
           await ctx.db
-            .delete(schemas.account)
+            .delete(schema.account)
             .where(
               and(
-                eq(schemas.account.accountId, githubInstallation.accountId),
-                eq(schemas.account.providerId, "github-app"),
+                eq(schema.account.accountId, githubInstallation.accountId),
+                eq(schema.account.providerId, "github-app"),
               ),
             );
         }
@@ -558,13 +558,13 @@ export const integrationsRouter = router({
           if (providerId === "github-app") {
             // Clear the connected repo information
             await ctx.db
-              .update(schemas.estate)
+              .update(schema.estate)
               .set({
                 connectedRepoId: null,
                 connectedRepoRef: null,
                 connectedRepoPath: null,
               })
-              .where(eq(schemas.estate.id, estateId));
+              .where(eq(schema.estate.id, estateId));
 
             // Always revoke the GitHub app installation
             for (const { account: acc } of estateAccountsToDisconnect) {
@@ -671,8 +671,8 @@ export const integrationsRouter = router({
       if (connectionType === "mcp-params") {
         // Delete from mcpConnectionParam table
         await ctx.db
-          .delete(schemas.mcpConnectionParam)
-          .where(eq(schemas.mcpConnectionParam.connectionKey, connectionId));
+          .delete(schema.mcpConnectionParam)
+          .where(eq(schema.mcpConnectionParam.connectionKey, connectionId));
       } else {
         // Delete from account table (OAuth)
         // First check if this account is linked to this estate
@@ -710,22 +710,22 @@ export const integrationsRouter = router({
             await ctx.db.transaction(async (tx) => {
               const clientInfo = await tx.query.dynamicClientInfo.findFirst({
                 where: and(
-                  eq(schemas.dynamicClientInfo.providerId, acc.providerId),
-                  eq(schemas.dynamicClientInfo.userId, ctx.user.id),
+                  eq(schema.dynamicClientInfo.providerId, acc.providerId),
+                  eq(schema.dynamicClientInfo.userId, ctx.user.id),
                 ),
               });
               if (clientInfo) {
                 const verificationKey = getMCPVerificationKey(acc.providerId, clientInfo.clientId);
 
                 await tx
-                  .delete(schemas.verification)
-                  .where(eq(schemas.verification.identifier, verificationKey));
+                  .delete(schema.verification)
+                  .where(eq(schema.verification.identifier, verificationKey));
                 await tx
-                  .delete(schemas.dynamicClientInfo)
-                  .where(eq(schemas.dynamicClientInfo.id, clientInfo.id));
+                  .delete(schema.dynamicClientInfo)
+                  .where(eq(schema.dynamicClientInfo.id, clientInfo.id));
               }
 
-              await tx.delete(account).where(eq(account.id, connectionId));
+              await tx.delete(schema.account).where(eq(account.id, connectionId));
             });
           }
         }
@@ -748,8 +748,8 @@ export const integrationsRouter = router({
         // Get params for param-based connection
         const params = await ctx.db.query.mcpConnectionParam.findMany({
           where: and(
-            eq(schemas.mcpConnectionParam.estateId, estateId),
-            eq(schemas.mcpConnectionParam.connectionKey, connectionId),
+            eq(schema.mcpConnectionParam.estateId, estateId),
+            eq(schema.mcpConnectionParam.connectionKey, connectionId),
           ),
         });
 
@@ -776,8 +776,8 @@ export const integrationsRouter = router({
 
         const dynamicClient = await ctx.db.query.dynamicClientInfo.findFirst({
           where: and(
-            eq(schemas.dynamicClientInfo.providerId, acc.providerId),
-            eq(schemas.dynamicClientInfo.userId, acc.userId),
+            eq(schema.dynamicClientInfo.providerId, acc.providerId),
+            eq(schema.dynamicClientInfo.userId, acc.userId),
           ),
         });
 
@@ -810,17 +810,17 @@ export const integrationsRouter = router({
       await ctx.db.transaction(async (tx) => {
         // Delete existing params
         await tx
-          .delete(schemas.mcpConnectionParam)
+          .delete(schema.mcpConnectionParam)
           .where(
             and(
-              eq(schemas.mcpConnectionParam.estateId, estateId),
-              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+              eq(schema.mcpConnectionParam.estateId, estateId),
+              eq(schema.mcpConnectionParam.connectionKey, connectionKey),
             ),
           );
 
         // Insert new params
         if (params.length > 0) {
-          await tx.insert(schemas.mcpConnectionParam).values(
+          await tx.insert(schema.mcpConnectionParam).values(
             params.map((param) => ({
               estateId,
               connectionKey,
@@ -862,14 +862,14 @@ export const integrationsRouter = router({
           }));
 
           await tx
-            .insert(schemas.mcpConnectionParam)
+            .insert(schema.mcpConnectionParam)
             .values(paramValues)
             .onConflictDoUpdate({
               target: [
-                schemas.mcpConnectionParam.estateId,
-                schemas.mcpConnectionParam.connectionKey,
-                schemas.mcpConnectionParam.paramKey,
-                schemas.mcpConnectionParam.paramType,
+                schema.mcpConnectionParam.estateId,
+                schema.mcpConnectionParam.connectionKey,
+                schema.mcpConnectionParam.paramKey,
+                schema.mcpConnectionParam.paramType,
               ],
               set: {
                 paramValue: sql`excluded.param_value`,
@@ -880,8 +880,8 @@ export const integrationsRouter = router({
           const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
           const existingParams = await tx.query.mcpConnectionParam.findMany({
             where: and(
-              eq(schemas.mcpConnectionParam.estateId, estateId),
-              eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+              eq(schema.mcpConnectionParam.estateId, estateId),
+              eq(schema.mcpConnectionParam.connectionKey, connectionKey),
             ),
           });
 
@@ -892,16 +892,16 @@ export const integrationsRouter = router({
           if (paramsToDelete.length > 0) {
             const idsToDelete = paramsToDelete.map((p) => p.id);
             await tx
-              .delete(schemas.mcpConnectionParam)
-              .where(inArray(schemas.mcpConnectionParam.id, idsToDelete));
+              .delete(schema.mcpConnectionParam)
+              .where(inArray(schema.mcpConnectionParam.id, idsToDelete));
           }
         } else {
           await tx
-            .delete(schemas.mcpConnectionParam)
+            .delete(schema.mcpConnectionParam)
             .where(
               and(
-                eq(schemas.mcpConnectionParam.estateId, estateId),
-                eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+                eq(schema.mcpConnectionParam.estateId, estateId),
+                eq(schema.mcpConnectionParam.connectionKey, connectionKey),
               ),
             );
         }
@@ -920,8 +920,8 @@ export const integrationsRouter = router({
       const { estateId, connectionKey } = input;
       const params = await ctx.db.query.mcpConnectionParam.findMany({
         where: and(
-          eq(schemas.mcpConnectionParam.estateId, estateId),
-          eq(schemas.mcpConnectionParam.connectionKey, connectionKey),
+          eq(schema.mcpConnectionParam.estateId, estateId),
+          eq(schema.mcpConnectionParam.connectionKey, connectionKey),
         ),
       });
       return params.map((param) => ({
@@ -1082,7 +1082,7 @@ export const integrationsRouter = router({
 
       // 3. Link current estate to iterate's bot account
       await ctx.db
-        .insert(schemas.estateAccountsPermissions)
+        .insert(schema.estateAccountsPermissions)
         .values({
           accountId: iterateBotAccount.accountId,
           estateId: ctx.estate.id,
@@ -1093,7 +1093,7 @@ export const integrationsRouter = router({
 
       // 4. Create provider estate mapping to link current estate to iterate's Slack workspace
       await ctx.db
-        .insert(schemas.providerEstateMapping)
+        .insert(schema.providerEstateMapping)
         .values({
           internalEstateId: ctx.estate.id,
           externalId: iterateTeamId,
@@ -1148,7 +1148,7 @@ export const integrationsRouter = router({
 
       // Verify this is actually a trial estate
       const estate = await ctx.db.query.estate.findFirst({
-        where: eq(schemas.estate.id, estateId),
+        where: eq(schema.estate.id, estateId),
         columns: {
           organizationId: true,
         },
@@ -1173,8 +1173,8 @@ export const integrationsRouter = router({
       // Verify user has permission to modify this estate
       const membership = await ctx.db.query.organizationUserMembership.findFirst({
         where: and(
-          eq(schemas.organizationUserMembership.organizationId, estate.organizationId),
-          eq(schemas.organizationUserMembership.userId, ctx.user.id),
+          eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+          eq(schema.organizationUserMembership.userId, ctx.user.id),
         ),
       });
 
@@ -1197,11 +1197,11 @@ export const integrationsRouter = router({
       await ctx.db.transaction(async (tx) => {
         // 1. Delete the channel override
         await tx
-          .delete(schemas.slackChannelEstateOverride)
+          .delete(schema.slackChannelEstateOverride)
           .where(
             and(
-              eq(schemas.slackChannelEstateOverride.estateId, estateId),
-              eq(schemas.slackChannelEstateOverride.slackTeamId, iterateTeamId),
+              eq(schema.slackChannelEstateOverride.estateId, estateId),
+              eq(schema.slackChannelEstateOverride.slackTeamId, iterateTeamId),
             ),
           );
 
@@ -1209,11 +1209,11 @@ export const integrationsRouter = router({
 
         // 2. Delete the provider estate mapping
         await tx
-          .delete(schemas.providerEstateMapping)
+          .delete(schema.providerEstateMapping)
           .where(
             and(
-              eq(schemas.providerEstateMapping.internalEstateId, estateId),
-              eq(schemas.providerEstateMapping.providerId, "slack-bot"),
+              eq(schema.providerEstateMapping.internalEstateId, estateId),
+              eq(schema.providerEstateMapping.providerId, "slack-bot"),
             ),
           );
 
@@ -1222,11 +1222,11 @@ export const integrationsRouter = router({
         // 3. Delete all old Slack provider user mappings
         // These were created during trial and will be stale after connecting own workspace
         await tx
-          .delete(schemas.providerUserMapping)
+          .delete(schema.providerUserMapping)
           .where(
             and(
-              eq(schemas.providerUserMapping.estateId, estateId),
-              eq(schemas.providerUserMapping.providerId, "slack-bot"),
+              eq(schema.providerUserMapping.estateId, estateId),
+              eq(schema.providerUserMapping.providerId, "slack-bot"),
             ),
           );
 
@@ -1235,13 +1235,13 @@ export const integrationsRouter = router({
         // 4. Get iterate's estate to find the bot account
         const iterateEstateResult = await tx
           .select({
-            estateId: schemas.providerEstateMapping.internalEstateId,
+            estateId: schema.providerEstateMapping.internalEstateId,
           })
-          .from(schemas.providerEstateMapping)
+          .from(schema.providerEstateMapping)
           .where(
             and(
-              eq(schemas.providerEstateMapping.externalId, iterateTeamId),
-              eq(schemas.providerEstateMapping.providerId, "slack-bot"),
+              eq(schema.providerEstateMapping.externalId, iterateTeamId),
+              eq(schema.providerEstateMapping.providerId, "slack-bot"),
             ),
           )
           .limit(1);
@@ -1251,17 +1251,17 @@ export const integrationsRouter = router({
         if (iterateEstateId) {
           const iterateBotAccount = await tx
             .select({
-              accountId: schemas.account.id,
+              accountId: schema.account.id,
             })
-            .from(schemas.estateAccountsPermissions)
+            .from(schema.estateAccountsPermissions)
             .innerJoin(
-              schemas.account,
-              eq(schemas.estateAccountsPermissions.accountId, schemas.account.id),
+              schema.account,
+              eq(schema.estateAccountsPermissions.accountId, schema.account.id),
             )
             .where(
               and(
-                eq(schemas.estateAccountsPermissions.estateId, iterateEstateId),
-                eq(schemas.account.providerId, "slack-bot"),
+                eq(schema.estateAccountsPermissions.estateId, iterateEstateId),
+                eq(schema.account.providerId, "slack-bot"),
               ),
             )
             .limit(1);
@@ -1269,11 +1269,11 @@ export const integrationsRouter = router({
           if (iterateBotAccount[0]) {
             // 5. Delete the estate account permission
             await tx
-              .delete(schemas.estateAccountsPermissions)
+              .delete(schema.estateAccountsPermissions)
               .where(
                 and(
-                  eq(schemas.estateAccountsPermissions.estateId, estateId),
-                  eq(schemas.estateAccountsPermissions.accountId, iterateBotAccount[0].accountId),
+                  eq(schema.estateAccountsPermissions.estateId, estateId),
+                  eq(schema.estateAccountsPermissions.accountId, iterateBotAccount[0].accountId),
                 ),
               );
 

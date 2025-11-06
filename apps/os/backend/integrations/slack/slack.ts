@@ -16,7 +16,6 @@ import {
   isBotMentionedInMessage,
   getMentionedExternalUserIds,
 } from "../../agent/slack-agent-utils.ts";
-import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
@@ -524,7 +523,7 @@ async function processWebhookForEstate({
 
   waitUntil(
     db
-      .insert(slackWebhookEvent)
+      .insert(schema.slackWebhookEvent)
       .values({
         data: body.event,
         ts: messageMetadata.ts,

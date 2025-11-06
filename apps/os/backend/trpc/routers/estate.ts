@@ -23,7 +23,6 @@ import {
   iterateConfig,
   organizationUserMembership,
   organization,
-  estateOnboardingEvent,
 } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
@@ -31,7 +30,7 @@ import {
   githubAppInstance,
   triggerGithubBuild,
 } from "../../integrations/github/github-utils.ts";
-import type { DB } from "../../db/client.ts";
+import { schema, type DB } from "../../db/client.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
@@ -754,7 +753,7 @@ export const estateRouter = router({
       await ctx.db.transaction(async (tx) => {
         // Append immutable confirmation event
         await tx
-          .insert(estateOnboardingEvent)
+          .insert(schema.estateOnboardingEvent)
           .values({
             estateId: ctx.estate.id,
             organizationId: ctx.estate.organizationId,
@@ -766,7 +765,7 @@ export const estateRouter = router({
           .onConflictDoNothing();
 
         await tx
-          .insert(estateOnboardingEvent)
+          .insert(schema.estateOnboardingEvent)
           .values({
             estateId: input.estateId,
             organizationId: ctx.estate.organizationId,
