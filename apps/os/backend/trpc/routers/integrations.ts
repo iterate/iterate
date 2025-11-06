@@ -19,6 +19,7 @@ import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-ge
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
 import { logger } from "../../tag-logger.ts";
+import { waitUntil } from "../../../env.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -1136,11 +1137,7 @@ export const integrationsRouter = router({
    * This removes all trial-specific configuration so the user can connect their own Slack workspace
    */
   upgradeTrialToFullInstallation: estateProtectedProcedure
-    .input(
-      z.object({
-        estateId: z.string(),
-      }),
-    )
+    .meta({ description: "Upgrades a trial estate to a full Slack installation" })
     .mutation(async ({ ctx, input }) => {
       const { estateId } = input;
 
@@ -1283,6 +1280,23 @@ export const integrationsRouter = router({
       });
 
       logger.info(`Successfully upgraded trial estate ${estateId} to full installation`);
+
+      const { getIterateSlackEstateId } = await import("../../utils/trial-channel-setup.ts");
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
+      if (!iterateEstateId) throw new Error("Iterate Slack workspace estate not found");
+
+      // 2. Get iterate's bot account and token
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
+
+      const slackAPI = new WebClient(iterateBotAccount.accessToken);
+
+      waitUntil(
+        slackAPI.chat.postMessage({
+          channel: trialChannelId,
+          text: `You've now installed me in your own workspace - please chat to me there, I won't respond here anymore.`,
+        }),
+      );
 
       return {
         success: true,
