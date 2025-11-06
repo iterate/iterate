@@ -87,6 +87,7 @@ jobs:
         id: prd_release
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}
           script: |-
             github.log = {
               ...console,

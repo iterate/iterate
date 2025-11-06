@@ -120,19 +120,23 @@ export default {
         },
         {
           if: "needs.variables.outputs.stage == 'prd'",
-          ...utils.githubScript(import.meta, async function prd_release({ github, context }) {
-            const { promises: fs } = await import("fs");
-            await github.rest.repos.createRelease({
-              ...context.repo,
-              tag_name: "${{ needs.variables.outputs.release_name }}",
-              name: "${{ needs.variables.outputs.release_name }}",
-              body: [
-                `stage: \${{ needs.variables.outputs.stage }}`,
-                "", //
-                await fs.readFile("changelog.md", "utf8"),
-              ].join("\n"),
-            });
-          }),
+          ...utils.githubScript(
+            import.meta,
+            { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
+            async function prd_release({ github, context }) {
+              const { promises: fs } = await import("fs");
+              await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: "${{ needs.variables.outputs.release_name }}",
+                name: "${{ needs.variables.outputs.release_name }}",
+                body: [
+                  `stage: \${{ needs.variables.outputs.stage }}`,
+                  "", //
+                  await fs.readFile("changelog.md", "utf8"),
+                ].join("\n"),
+              });
+            },
+          ),
         },
       ],
     },
