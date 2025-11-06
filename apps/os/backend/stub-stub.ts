@@ -43,8 +43,10 @@ export const stubStub = <Stub extends WithCallMethod>(
   return new Proxy({} as StubStub<Stub> & { raw: Stub }, {
     get: (_target, prop) => {
       if (prop === "raw") return stub;
-      // @ts-expect-error trust me bro
-      if (prop === "fetch" || prop === "then") return stub[prop].bind(stub);
+      if (prop === "fetch" || prop === "then") {
+        const value = stub[prop as keyof Stub];
+        return typeof value === "function" ? value.bind(stub) : value;
+      }
       return (...args: any[]) => stub.callMethod(prop as string, args, context);
     },
   });
