@@ -482,12 +482,6 @@ export class IterateAgent<
         }
       },
 
-      // Wrap the default console so every call is also sent to connected websocket clients
-      console: (() => {
-        // we're going to jettison this soon
-        return logger;
-      })(),
-
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
         const event = _event as MergedEventForSlices<Slices>;
         if (event.type === "CORE:INTERNAL_ERROR") {
