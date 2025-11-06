@@ -165,6 +165,8 @@ export default {
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")
             .map(([name]) => name);
+          const { release_name, ...outputs } = needs.variables?.outputs as Record<string, string>;
+          const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
             blocks: [
@@ -172,7 +174,7 @@ export default {
                 type: "header",
                 text: {
                   type: "plain_text",
-                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
                 },
               },
               {
