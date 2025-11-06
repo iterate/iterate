@@ -350,13 +350,9 @@ export class AgentCore<
   private readonly _seenIdempotencyKeys = new Set<string>();
 
   constructor(options: AgentCoreConstructorOptions<Slices, MergedDepsForSlices<Slices>>) {
-    const { deps, slices } = options;
+    const { slices, deps } = options;
 
-    // Always ensure console exists
-    this.deps = {
-      ...deps,
-      console: deps.console ?? console,
-    };
+    this.deps = { ...deps };
     this.slices = slices;
 
     // Initialize slice states and merge initial state into core state
