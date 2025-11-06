@@ -341,23 +341,36 @@ export default defineConfig([
               fixable: "code",
             },
             create: (context) => {
+              const dbMutateMethods = ["insert", "update", "delete"];
+              /** @type {Record<string, Function>} */
+              const dbMutateEnforcementListeners = {};
+              for (const m of dbMutateMethods) {
+                const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
+                dbMutateEnforcementListeners[selector] = (node) => {
+                  const before = node.arguments[0].name;
+                  const after = `schema.${node.arguments[0].name}`;
+                  if (
+                    m === "delete" &&
+                    node.callee.object.name !== "db" &&
+                    node.callee.object.name !== "tx"
+                  ) {
+                    return; // too many false positives for Maps
+                  }
+                  context.report({
+                    node: node.arguments[0],
+                    message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
+                    suggest: [
+                      {
+                        desc: `Change \`${before}\` to \`${after}\``,
+                        fix: (fixer) => fixer.replaceText(node.arguments[0], after),
+                      },
+                    ],
+                  });
+                };
+              }
+
               return {
-                "CallExpression[callee.property.name='insert']": (node) => {
-                  if (node.arguments[0]?.object?.name !== "schema") {
-                    context.report({
-                      node,
-                      message: `use \`db.insert(schema.tableName)\` instead of \`db.insert(tableName)\` - it makes it easier to find insert expressions in the codebase`,
-                    });
-                  }
-                },
-                "CallExpression[callee.property.name='update']": (node) => {
-                  if (node.arguments[0]?.object?.name !== "schema") {
-                    context.report({
-                      node,
-                      message: `use \`db.update(schema.tableName)\` instead of \`db.update(tableName)\` - it makes it easier to find update expressions in the codebase`,
-                    });
-                  }
-                },
+                ...dbMutateEnforcementListeners,
                 "CallExpression[callee.property.name='transaction']": (node) => {
                   // @ts-expect-error getScope exists I swear
                   const nodeScope = context.sourceCode.getScope(node.arguments[0]);
@@ -394,8 +407,7 @@ export default defineConfig([
       "iterate/prefer-const": "error",
       "iterate/side-effect-imports-first": "warn",
       "iterate/zod-schema-naming": "error",
-      // todo: enable this in CI too
-      ...(process.env.VSCODE_CWD && { "iterate/drizzle-conventions": "error" }),
+      "iterate/drizzle-conventions": "error",
     },
   },
   {

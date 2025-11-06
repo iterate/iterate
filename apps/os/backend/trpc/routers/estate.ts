@@ -14,6 +14,7 @@ import {
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
+  protectedProcedureWithNoEstateRestrictions,
 } from "../trpc.ts";
 import {
   estate,
@@ -22,7 +23,6 @@ import {
   iterateConfig,
   organizationUserMembership,
   organization,
-  estateOnboardingEvent,
 } from "../../db/schema.ts";
 import {
   getGithubInstallationForEstate,
@@ -30,7 +30,7 @@ import {
   githubAppInstance,
   triggerGithubBuild,
 } from "../../integrations/github/github-utils.ts";
-import type { DB } from "../../db/client.ts";
+import { schema, type DB } from "../../db/client.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
@@ -159,7 +159,7 @@ export async function triggerEstateRebuild(params: {
 
 export const estateRouter = router({
   // Check if user has access to a specific estate (non-throwing version)
-  checkAccess: protectedProcedure
+  checkAccess: protectedProcedureWithNoEstateRestrictions // we're going to carefully make sure we only give info to authorized users
     .input(
       z.object({
         estateId: z.string(),
@@ -753,7 +753,7 @@ export const estateRouter = router({
       await ctx.db.transaction(async (tx) => {
         // Append immutable confirmation event
         await tx
-          .insert(estateOnboardingEvent)
+          .insert(schema.estateOnboardingEvent)
           .values({
             estateId: ctx.estate.id,
             organizationId: ctx.estate.organizationId,
@@ -765,7 +765,7 @@ export const estateRouter = router({
           .onConflictDoNothing();
 
         await tx
-          .insert(estateOnboardingEvent)
+          .insert(schema.estateOnboardingEvent)
           .values({
             estateId: input.estateId,
             organizationId: ctx.estate.organizationId,
