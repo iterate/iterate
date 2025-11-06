@@ -145,14 +145,14 @@ export default {
                   }
                   const othersMentions = slackUsers
                     .filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase())
-                    .filter((u) => timeAgo(u.oooUntil || 0).days < 0)
+                    .filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now())
                     .map((u) => `<@${u.id}>`)
                     .join(" ");
 
                   const followup = await slack.chat.postMessage({
                     channel: slackChannelIds["#building"],
                     thread_ts: threadTs,
-                    text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <#${pr.number} ${pr.html_url}|${pr.title}>`,
+                    text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                   });
                   if (followup.ts) {
                     newNagInfo.followup_message_ts = followup.ts;
@@ -160,7 +160,7 @@ export default {
                 } else {
                   const message = await slack.chat.postMessage({
                     channel: slackChannelIds["#building"],
-                    text: `<#${pr.number} ${pr.html_url}|${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
+                    text: `<${pr.html_url}|#${pr.number} ${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
                   });
                   if (message.ts) {
                     newNagInfo.nag_message_ts = message.ts;
