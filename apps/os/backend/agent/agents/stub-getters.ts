@@ -69,16 +69,17 @@ export async function getAgentStub(
   const { agentInitParams } = params;
   const namespace = getNamespaceForClassName(className);
 
-  const stub = namespace.getByName(agentInitParams.record.durableObjectName);
-
-  await stub.initIterateAgent(agentInitParams);
-
-  return stubStub(stub as {} as IterateAgent, {
+  const doStub = namespace.getByName(agentInitParams.record.durableObjectName);
+  const doStubStub = stubStub(doStub as {} as IterateAgent, {
     className,
     durableObjectName: agentInitParams.record.durableObjectName,
     estateId: agentInitParams.record.estateId,
     ...logger.tags,
   });
+
+  await doStubStub.initIterateAgent(agentInitParams);
+
+  return doStubStub;
 }
 
 export async function getAgentStubByName(
