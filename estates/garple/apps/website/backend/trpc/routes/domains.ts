@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { eq, and, like, type SQL } from "drizzle-orm";
 import { publicProcedure, createRouter } from "../trpc.ts";
 import { db } from "../../db/client.ts";
-import { domains, purchases, authCodes } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import { createCheckoutSession } from "../../stripe.ts";
 
 export const domainsRouter = createRouter({
@@ -19,18 +19,18 @@ export const domainsRouter = createRouter({
     .query(async ({ input }) => {
       const filters = input || { availabilityFilter: "both" as const };
 
-      const baseQuery = db.select().from(domains);
+      const baseQuery = db.select().from(schema.domains);
 
       const conditions: SQL[] = [];
 
       if (filters.nameFilter && filters.nameFilter.length > 0) {
-        conditions.push(like(domains.nameWithTld, `%${filters.nameFilter}%`));
+        conditions.push(like(schema.domains.nameWithTld, `%${filters.nameFilter}%`));
       }
 
       if (filters.availabilityFilter === "available") {
-        conditions.push(eq(domains.purchased, false));
+        conditions.push(eq(schema.domains.purchased, false));
       } else if (filters.availabilityFilter === "sold") {
-        conditions.push(eq(domains.purchased, true));
+        conditions.push(eq(schema.domains.purchased, true));
       }
 
       const query =
@@ -38,7 +38,7 @@ export const domainsRouter = createRouter({
           ? baseQuery.where(conditions.length === 1 ? conditions[0]! : and(...conditions))
           : baseQuery;
 
-      const result = await query.orderBy(domains.nameWithTld);
+      const result = await query.orderBy(schema.domains.nameWithTld);
       return result;
     }),
 
@@ -48,8 +48,8 @@ export const domainsRouter = createRouter({
     .query(async ({ input }) => {
       const result = await db
         .select()
-        .from(domains)
-        .where(eq(domains.nameWithTld, input.nameWithTld))
+        .from(schema.domains)
+        .where(eq(schema.domains.nameWithTld, input.nameWithTld))
         .limit(1);
 
       return result[0] || null;
@@ -66,7 +66,11 @@ export const domainsRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       // Get domain details
-      const domain = await db.select().from(domains).where(eq(domains.id, input.domainId)).limit(1);
+      const domain = await db
+        .select()
+        .from(schema.domains)
+        .where(eq(schema.domains.id, input.domainId))
+        .limit(1);
 
       if (!domain[0]) {
         throw new Error("Domain not found");
@@ -98,7 +102,11 @@ export const domainsRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       // Check if domain is still available
-      const domain = await db.select().from(domains).where(eq(domains.id, input.domainId)).limit(1);
+      const domain = await db
+        .select()
+        .from(schema.domains)
+        .where(eq(schema.domains.id, input.domainId))
+        .limit(1);
 
       if (!domain[0]) {
         throw new Error("Domain not found");
@@ -110,15 +118,15 @@ export const domainsRouter = createRouter({
 
       // Mark domain as purchased
       await db
-        .update(domains)
+        .update(schema.domains)
         .set({
           purchased: true,
           purchasedAt: new Date(),
         })
-        .where(eq(domains.id, input.domainId));
+        .where(eq(schema.domains.id, input.domainId));
 
       // Create purchase record
-      await db.insert(purchases).values({
+      await db.insert(schema.purchases).values({
         domainId: input.domainId,
         stripeCheckoutSessionId: input.stripeCheckoutSessionId,
         customerEmail: input.customerEmail,
@@ -127,7 +135,7 @@ export const domainsRouter = createRouter({
 
       // Generate auth code
       const authCode = `AUTH-${Date.now()}-${Math.random().toString(36).substring(2, 15)}`;
-      await db.insert(authCodes).values({
+      await db.insert(schema.authCodes).values({
         domainId: input.domainId,
         code: authCode,
       });

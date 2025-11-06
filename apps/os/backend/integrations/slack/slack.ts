@@ -16,7 +16,6 @@ import {
   isBotMentionedInMessage,
   getMentionedExternalUserIds,
 } from "../../agent/slack-agent-utils.ts";
-import { slackWebhookEvent } from "../../db/schema.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
@@ -364,24 +363,21 @@ slackApp.post("/webhook", async (c) => {
 
   const messageMetadata = await getMessageMetadata(body.event, db);
 
-  const estateIdsToProcess = await determineEstateIdsToProcess({
+  const processInstruction = await determineEstateIdsToProcess({
     db,
     body,
     messageMetadata,
   });
 
-  if (estateIdsToProcess.length === 0) {
-    return c.text("ok");
-  }
-
   // Process the webhook for each estate independently
   await Promise.all(
-    estateIdsToProcess.map((estateId) =>
+    processInstruction.estateIds.map((estateId) =>
       processWebhookForEstate({
         db,
         body,
         messageMetadata,
         estateId,
+        instruction: processInstruction.instruction,
       }),
     ),
   );
@@ -397,9 +393,10 @@ async function determineEstateIdsToProcess({
   db: DB;
   body: SlackWebhookPayload;
   messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-}): Promise<string[]> {
+  // todo: remove the `estateId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the estate?
+}): Promise<{ estateIds: string[]; instruction: "process" | "store-webhooks" }> {
   if (!body.event) {
-    return [];
+    return { estateIds: [], instruction: "process" };
   }
 
   if (messageMetadata.threadTs) {
@@ -409,7 +406,7 @@ async function determineEstateIdsToProcess({
 
     if (existingRoutes.length > 0) {
       const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
-      return estateIds;
+      return { estateIds, instruction: "process" };
     }
   }
 
@@ -430,7 +427,7 @@ async function determineEstateIdsToProcess({
       });
 
       if (channelOverride) {
-        return [channelOverrideEstateId];
+        return { estateIds: [channelOverrideEstateId], instruction: "process" };
       }
     }
   }
@@ -452,12 +449,12 @@ async function determineEstateIdsToProcess({
     ];
 
     if (validEstateIds.length > 0) {
-      return validEstateIds;
+      return { estateIds: validEstateIds, instruction: "process" };
     }
   }
 
   if (!body.team_id) {
-    return [];
+    return { estateIds: [], instruction: "process" };
   }
 
   const estateId = await slackTeamIdToEstateId({
@@ -468,12 +465,10 @@ async function determineEstateIdsToProcess({
 
   if (estateId) {
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-    if (isDM) {
-      return [estateId];
-    }
+    return { estateIds: [estateId], instruction: isDM ? "process" : "store-webhooks" };
   }
 
-  return [];
+  return { estateIds: [], instruction: "process" };
 }
 
 async function processWebhookForEstate({
@@ -481,13 +476,35 @@ async function processWebhookForEstate({
   body,
   messageMetadata,
   estateId,
+  instruction,
 }: {
   db: DB;
   body: SlackWebhookPayload;
   messageMetadata: { channel?: string; threadTs?: string; ts?: string };
   estateId: string;
+  instruction: "process" | "store-webhooks";
 }) {
   if (!body.event) {
+    return;
+  }
+
+  waitUntil(
+    db
+      .insert(schema.slackWebhookEvent)
+      .values({
+        data: body.event,
+        ts: messageMetadata.ts,
+        thread_ts: messageMetadata.threadTs,
+        type: "type" in body.event ? body.event.type : null,
+        subtype: "subtype" in body.event ? body.event.subtype : null,
+        user: extractUserId(body.event),
+        channel: messageMetadata.channel,
+        estateId: estateId,
+      })
+      .returning(),
+  );
+
+  if (instruction === "store-webhooks") {
     return;
   }
 
@@ -520,22 +537,6 @@ async function processWebhookForEstate({
         await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
     }),
-  );
-
-  waitUntil(
-    db
-      .insert(slackWebhookEvent)
-      .values({
-        data: body.event,
-        ts: messageMetadata.ts,
-        thread_ts: messageMetadata.threadTs,
-        type: "type" in body.event ? body.event.type : null,
-        subtype: "subtype" in body.event ? body.event.subtype : null,
-        user: extractUserId(body.event),
-        channel: messageMetadata.channel,
-        estateId: estateId,
-      })
-      .returning(),
   );
 
   if (!messageMetadata.threadTs) {

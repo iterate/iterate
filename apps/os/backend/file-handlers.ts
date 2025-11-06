@@ -37,7 +37,7 @@ const startUpload = async (
     estateId,
   };
 
-  const [insertedFile] = await db.insert(files).values(newFile).returning();
+  const [insertedFile] = await db.insert(schema.files).values(newFile).returning();
 
   if (!insertedFile) {
     throw new Error(`Failed to create file record: ${fileId}`);
@@ -81,7 +81,7 @@ const doUpload = async ({
     const fileSize = r2Object.size;
 
     const [updatedFile] = await db
-      .update(files)
+      .update(schema.files)
       .set({
         status: "completed",
         filename,
@@ -103,7 +103,7 @@ const doUpload = async ({
   } catch (error) {
     // Update status to indicate failure
     await db
-      .update(files)
+      .update(schema.files)
       .set({
         status: "error",
       })

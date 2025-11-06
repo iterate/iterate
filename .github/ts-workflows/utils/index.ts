@@ -41,16 +41,18 @@ export const setupRepo = [
   },
 ] as const satisfies NamedStep[];
 
-export const setupDoppler = [
-  {
-    name: "Install Doppler CLI",
-    uses: "dopplerhq/cli-action@v2",
-  },
-  {
-    name: "Setup Doppler",
-    run: "doppler setup --config dev --project os",
-    env: {
-      DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
+export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
+  [
+    {
+      name: "Install Doppler CLI",
+      uses: "dopplerhq/cli-action@v2",
     },
-  },
-] as const satisfies NamedStep[];
+    {
+      name: "Setup Doppler",
+      run: `doppler setup --config ${config} --project os`,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+      },
+    },
+  ] as const satisfies NamedStep[];
