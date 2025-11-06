@@ -22,20 +22,16 @@ jobs:
     outputs:
       worker_url: ${{ steps.alchemy_deploy.outputs.worker_url }}
     steps:
-      - &a1
-        name: Checkout code
+      - name: Checkout code
         uses: actions/checkout@v4
-      - &a2
-        name: Setup pnpm
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
-      - &a3
-        name: Setup Node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: pnpm
-      - &a4
-        name: Install dependencies
+      - name: Install dependencies
         run: pnpm install
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
@@ -58,10 +54,17 @@ jobs:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     if: inputs.stage == 'prd'
     steps:
-      - *a1
-      - *a2
-      - *a3
-      - *a4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
@@ -76,10 +79,17 @@ jobs:
   deploy-mcp-mock-server:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
-      - *a1
-      - *a2
-      - *a3
-      - *a4
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
