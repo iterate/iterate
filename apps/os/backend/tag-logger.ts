@@ -321,29 +321,3 @@ function getLogger() {
 // #endregion: utils
 
 export const logger = getLogger();
-
-export interface WithCallMethod {
-  callMethod(
-    methodName: string,
-    args: unknown[],
-    context: Record<string, string>,
-  ): Promise<unknown>;
-}
-
-export type StubStub<T extends WithCallMethod> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R> : never;
-};
-
-export const stubStub = <Stub extends WithCallMethod>(
-  stub: Stub,
-  context: Record<string, string>,
-): StubStub<Stub> & { stub: Stub } => {
-  return new Proxy({} as StubStub<Stub> & { stub: Stub }, {
-    get: (_target, prop) => {
-      if (prop === "stub") return stub;
-      // @ts-expect-error trust me bro
-      if (prop === "fetch" || prop === "then") return stub[prop];
-      return (...args: any[]) => stub.callMethod(prop as string, args, context);
-    },
-  });
-};
