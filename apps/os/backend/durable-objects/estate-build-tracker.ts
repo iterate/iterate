@@ -82,7 +82,7 @@ export class EstateBuildTracker extends DurableObject {
       // Determine last processed sequence from SQL (no KV)
       let lastSeq = 0;
       try {
-        const rows = await this.ctx.storage.sql.exec(
+        const rows = this.ctx.storage.sql.exec(
           "SELECT MAX(seq) AS max_seq FROM logs WHERE build_id = ?",
           buildId,
         );
@@ -106,7 +106,7 @@ export class EstateBuildTracker extends DurableObject {
         const stream = entry.stream === "stderr" ? "stderr" : "stdout";
         const message = String(entry.message ?? "");
         try {
-          await this.ctx.storage.sql.exec(
+          this.ctx.storage.sql.exec(
             "INSERT INTO logs (build_id, seq, ts, stream, message, event) VALUES (?, ?, ?, ?, ?, ?)",
             buildId,
             entry.seq,
@@ -121,7 +121,7 @@ export class EstateBuildTracker extends DurableObject {
           if (msg.includes("UNIQUE") || msg.includes("constraint")) continue;
           throw err;
         }
-        await this.broadcast({ type: "LOG", buildId, stream, message, ts });
+        this.broadcast({ type: "LOG", buildId, stream, message, ts });
         // Handle typed config output event immediately
         if (entry.event === "CONFIG_OUTPUT") {
           await this._upsertIterateConfigFromEvent(estateId, message);
@@ -214,7 +214,7 @@ export class EstateBuildTracker extends DurableObject {
       if (now - last > 2 * 60_000) {
         // 2 minutes without heartbeat → timed out (distinct from explicit failure)
         await this.appendLog(buildId, now, "stdout", "[BUILD TIMED OUT]");
-        await this.broadcast({
+        this.broadcast({
           type: "LOG",
           buildId,
           stream: "stdout",
@@ -259,20 +259,20 @@ export class EstateBuildTracker extends DurableObject {
     const initialized = (await this.ctx.storage.get("__init__")) as boolean | undefined;
     if (!initialized) {
       // Single-step table + indexes (fresh schema)
-      await this.ctx.storage.sql.exec(
+      this.ctx.storage.sql.exec(
         "CREATE TABLE IF NOT EXISTS logs (build_id TEXT, seq INTEGER, ts INTEGER, stream TEXT, message TEXT, event TEXT)",
       );
-      await this.ctx.storage.sql.exec(
+      this.ctx.storage.sql.exec(
         "CREATE INDEX IF NOT EXISTS idx_logs_build_ts ON logs (build_id, ts)",
       );
-      await this.ctx.storage.sql.exec(
+      this.ctx.storage.sql.exec(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_build_seq ON logs (build_id, seq)",
       );
       await this.ctx.storage.put("__init__", true);
     }
     // Purge logs older than 90 days on boot-up
     const retentionBefore = Date.now() - 90 * 24 * 60 * 60 * 1000;
-    await this.ctx.storage.sql.exec("DELETE FROM logs WHERE ts < ?", retentionBefore);
+    this.ctx.storage.sql.exec("DELETE FROM logs WHERE ts < ?", retentionBefore);
   }
 
   private async appendLog(
@@ -293,7 +293,7 @@ export class EstateBuildTracker extends DurableObject {
       const lastSeq = maxSeqVal !== null && maxSeqVal !== undefined ? Number(maxSeqVal) || 0 : 0;
       seq = lastSeq + 1;
     }
-    await this.ctx.storage.sql.exec(
+    this.ctx.storage.sql.exec(
       "INSERT INTO logs (build_id, seq, ts, stream, message) VALUES (?, ?, ?, ?, ?)",
       buildId,
       seq,
