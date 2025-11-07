@@ -7,7 +7,9 @@ export interface WithCallMethod {
 }
 
 export type StubStub<T extends WithCallMethod> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R ? (...args: A) => Promise<R> : never;
+  [K in keyof T]: T[K] extends (...args: infer A) => infer R
+    ? (...args: A) => Promise<Awaited<R>>
+    : never;
 };
 
 /**
@@ -15,7 +17,7 @@ export type StubStub<T extends WithCallMethod> = {
  *
  * @example
  * class MyCalculator implements WithCallMethod {
- *   callMethod(methodName», args, context) {
+ *   callMethod(methodName, args, context) {
  *     // assuming a logger which uses async_hooks to manage context
  *     return logger.run(context, () => this[methodName](...args));
  *   }
