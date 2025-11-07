@@ -22,6 +22,8 @@ onlyBuiltDependencies:
   - sharp
   - workerd
 
+autoInstallPeers: false
+
 overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
   'agents>x402': '-'
