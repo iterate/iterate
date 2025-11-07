@@ -63,14 +63,21 @@ export class EstateBuildTracker extends DurableObject {
       if (!estateId) return new Response("Missing estateId", { status: 400 });
 
       const body = (await request.json()) as unknown;
-      const rawLogs = (body && typeof body === "object" && (body as any).logs) || [];
-      const logs: Array<{
-        seq: number;
-        ts: number;
-        stream: "stdout" | "stderr";
-        message: string;
-        event?: "BUILD_STARTED" | "BUILD_SUCCEEDED" | "BUILD_FAILED" | "CONFIG_OUTPUT";
-      }> = Array.isArray(rawLogs) ? rawLogs : [];
+      const LogEntry = z.object({
+        seq: z.number(),
+        ts: z.number(),
+        stream: z.enum(["stdout", "stderr"]),
+        message: z.string(),
+        event: z
+          .enum(["BUILD_STARTED", "BUILD_SUCCEEDED", "BUILD_FAILED", "CONFIG_OUTPUT"])
+          .optional(),
+      });
+      const BodySchema = z
+        .object({ logs: z.array(LogEntry).default([]) })
+        .catch({ logs: [] as Array<z.infer<typeof LogEntry>> });
+      const parsed = BodySchema.safeParse(body);
+      if (!parsed.success) return new Response("Invalid payload", { status: 400 });
+      const logs = parsed.data.logs;
 
       // Determine last processed sequence from SQL (no KV)
       let lastSeq = 0;
@@ -108,20 +115,11 @@ export class EstateBuildTracker extends DurableObject {
             message,
             entry.event ?? null,
           );
-        } catch (_err) {
-          // Fallback for older schema without seq/event columns
-          try {
-            await this.ctx.storage.sql.exec(
-              "INSERT INTO logs (build_id, ts, stream, message) VALUES (?, ?, ?, ?)",
-              buildId,
-              ts,
-              stream,
-              message,
-            );
-          } catch {
-            // If even fallback fails, skip broadcasting this entry
-            continue;
-          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          // Ignore duplicates (idempotency on repeated batches)
+          if (msg.includes("UNIQUE") || msg.includes("constraint")) continue;
+          throw err;
         }
         await this.broadcast({ type: "LOG", buildId, stream, message, ts });
         // Handle typed config output event immediately
@@ -260,25 +258,13 @@ export class EstateBuildTracker extends DurableObject {
   private async ensureInitialized(): Promise<void> {
     const initialized = (await this.ctx.storage.get("__init__")) as boolean | undefined;
     if (!initialized) {
+      // Single-step table + indexes (fresh schema)
       await this.ctx.storage.sql.exec(
         "CREATE TABLE IF NOT EXISTS logs (build_id TEXT, seq INTEGER, ts INTEGER, stream TEXT, message TEXT, event TEXT)",
       );
-      // Helpful index for replay and retention
       await this.ctx.storage.sql.exec(
         "CREATE INDEX IF NOT EXISTS idx_logs_build_ts ON logs (build_id, ts)",
       );
-      // Add columns for sequencing and structured events when upgrading older schema
-      try {
-        await this.ctx.storage.sql.exec("ALTER TABLE logs ADD COLUMN seq INTEGER");
-      } catch (_err) {
-        // ignore if column already exists
-      }
-      try {
-        await this.ctx.storage.sql.exec("ALTER TABLE logs ADD COLUMN event TEXT");
-      } catch (_err) {
-        // ignore if column already exists
-      }
-      // Ensure unique sequence numbers per build to prevent duplicates
       await this.ctx.storage.sql.exec(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_build_seq ON logs (build_id, seq)",
       );
@@ -294,10 +280,23 @@ export class EstateBuildTracker extends DurableObject {
     ts: number,
     stream: "stdout" | "stderr",
     message: string,
+    seqOverride?: number,
   ) {
+    // Ensure seq is monotonic to satisfy unique index and preserve ordering
+    let seq = seqOverride;
+    if (typeof seq !== "number") {
+      const rows = await this.ctx.storage.sql.exec(
+        "SELECT MAX(seq) AS max_seq FROM logs WHERE build_id = ?",
+        buildId,
+      );
+      const maxSeqVal = Array.isArray(rows) && rows.length > 0 ? (rows[0] as any)?.max_seq : null;
+      const lastSeq = maxSeqVal !== null && maxSeqVal !== undefined ? Number(maxSeqVal) || 0 : 0;
+      seq = lastSeq + 1;
+    }
     await this.ctx.storage.sql.exec(
-      "INSERT INTO logs (build_id, ts, stream, message) VALUES (?, ?, ?, ?)",
+      "INSERT INTO logs (build_id, seq, ts, stream, message) VALUES (?, ?, ?, ?, ?)",
       buildId,
+      seq,
       ts,
       stream,
       message,

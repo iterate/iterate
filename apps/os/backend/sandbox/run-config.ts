@@ -119,13 +119,13 @@ async function runConfigInSandboxInternal(
   const commandStart = `${nodePath} /tmp/sandbox-build-runner.js start '${startJsonArgs}'`;
 
   // Start long-running process; do not await completion
-  try {
-    await sandboxSession.startProcess(commandStart);
-  } catch (error) {
-    logger.error("Failed to start build process:", error);
+  const res = await sandboxSession.startProcess(commandStart);
+
+  if (res.status !== "running") {
+    logger.error("Failed to start build process:", res);
     return {
       error: "Failed to start build process",
-      details: error instanceof Error ? error.message : "Unknown error",
+      details: "Process did not start",
       commitHash,
     };
   }

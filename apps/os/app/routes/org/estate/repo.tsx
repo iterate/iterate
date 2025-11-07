@@ -302,12 +302,9 @@ function EstateContent({
 
   const getDerivedBuildStatus = (build: _Build): BuildStatus => {
     // Persistent timeout from DB
-    const failureReason = (build as any).failureReason as string | undefined;
+    const failureReason = build.failureReason as string | undefined;
     if (build.status === "failed" && failureReason === "timeout") return "timed_out";
-    // Ephemeral timeout while still in progress
-    const createdAtMs = new Date(build.createdAt).getTime();
-    const hasTimedOut = build.status === "in_progress" && createdAtMs < Date.now() - 2 * 60_000;
-    return hasTimedOut ? "timed_out" : (build.status as BuildStatus);
+    return build.status;
   };
 
   const formatDate = (date: Date | string) => {
@@ -1063,33 +1060,43 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
   }, [estateId, build.id]);
 
   const onMessage = (event: MessageEvent) => {
-    if (typeof event.data !== "string") return;
+    try {
+      const label = parseMessage(event);
+      if (label) toast.success(label);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  function parseMessage(event: MessageEvent): string | null {
+    if (typeof event.data !== "string") {
+      throw new Error("Non-string WebSocket data");
+    }
     let raw: unknown;
     try {
       raw = JSON.parse(event.data);
     } catch {
-      return;
+      throw new Error("Invalid JSON from WebSocket");
     }
-    const result = BroadcastMessage.safeParse(raw);
-    if (!result.success) return;
-    const parsed = result.data;
-    if (parsed.type === "LOG" && parsed.buildId === build.id) {
+    const parsed = BroadcastMessage.parse(raw);
+    if (parsed.buildId !== build.id) {
+      return null;
+    }
+    if (parsed.type === "LOG") {
       setLines((prev) => {
         const next = [...prev, { ts: parsed.ts, stream: parsed.stream, message: parsed.message }];
         return next.length > 5000 ? next.slice(-5000) : next;
       });
+      return null;
     }
-    if (parsed.type === "STATUS" && parsed.buildId === build.id) {
-      const label =
-        parsed.status === "complete"
-          ? "Build completed"
-          : parsed.status === "failed"
-            ? "Build failed"
-            : "Build in progress";
-      if (parsed.status === "complete") toast.success(label);
-      else if (parsed.status === "failed") toast.error(label);
+    if (parsed.type === "STATUS") {
+      if (parsed.status === "complete") return "Build completed";
+      if (parsed.status === "failed") throw new Error("Build failed");
+      return null;
     }
-  };
+    // CONNECTED and any other types: no-op
+    return null;
+  }
 
   const ws = useWebSocket(wsUrl, [], {
     maxReconnectionDelay: 10000,

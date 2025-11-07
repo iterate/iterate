@@ -23,7 +23,7 @@ import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { EstateBuildTracker } from "./durable-objects/estate-builds.ts";
+import { EstateBuildTracker } from "./durable-objects/estate-build-tracker.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
 import { getUserEstateAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
