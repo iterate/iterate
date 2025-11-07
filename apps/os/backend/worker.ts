@@ -2,8 +2,6 @@ import { Hono } from "hono";
 import { createRequestHandler, RouterContextProvider } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
-import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
@@ -25,9 +23,10 @@ import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { runConfigInSandbox } from "./sandbox/run-config.ts";
+import { EstateBuildTracker } from "./durable-objects/estate-build-tracker.ts";
+import { verifySignedUrl } from "./utils/url-signing.ts";
+import { getUserEstateAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
-import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
@@ -157,7 +156,6 @@ app.get("/api/files/:id", getFileHandler);
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
-app.route("/api/build", buildCallbackApp);
 
 // WebSocket endpoint for organization connections
 app.get("/api/ws/:organizationId", async (c) => {
@@ -180,61 +178,58 @@ app.get("/api/ws/:organizationId", async (c) => {
   );
 });
 
-// Test build endpoint for sandbox
-app.post(
-  "/api/test-build",
-  zValidator(
-    "json",
-    z.object({
-      githubRepoUrl: z
-        .string()
-        .url()
-        .regex(/^https:\/\/github\.com\/[\w-]+\/[\w.-]+$/, {
-          message: "Invalid GitHub repository URL format",
-        }),
-      githubToken: z.string().min(1, "GitHub token is required"),
-      branch: z.string().optional(),
-      commitHash: z
-        .string()
-        .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
-        .optional(),
-      connectedRepoPath: z
-        .string()
-        .refine(
-          (val) => !val || !val.startsWith("/"),
-          "Directory to use within the connected repository",
-        )
-        .optional(),
+// Watch logs (admin UI) → DO (requires user session + estate access)
+app.get("/api/estate/:estateId/builds/:buildId/ws", async (c) => {
+  const estateId = c.req.param("estateId");
+  const buildId = c.req.param("buildId");
+
+  const session = c.var.session;
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
+
+  const id = c.env.ESTATE_BUILDS.idFromName(estateId);
+  const stub = c.env.ESTATE_BUILDS.get(id);
+
+  const url = new URL(c.req.url);
+  url.pathname = "/ws";
+  url.searchParams.set("estateId", estateId);
+  url.searchParams.set("buildId", buildId);
+  return stub.fetch(
+    new Request(url.toString(), {
+      method: c.req.method,
+      headers: c.req.raw.headers,
+      body: c.req.raw.body,
     }),
-  ),
-  async (c) => {
-    try {
-      const body = c.req.valid("json");
+  );
+});
 
-      // Run the configuration in the sandbox
-      const result = await runConfigInSandbox(c.env, body);
+// Ingest logs via HTTP from container (signed URL required)
+app.post("/api/builds/:estateId/:buildId/ingest", async (c) => {
+  const estateId = c.req.param("estateId");
+  const buildId = c.req.param("buildId");
 
-      // Return appropriate status code based on the result
-      if ("error" in result) {
-        return c.json(result, 400);
-      }
+  const id = c.env.ESTATE_BUILDS.idFromName(estateId);
+  const stub = c.env.ESTATE_BUILDS.get(id);
 
-      return c.json(result);
-    } catch (error) {
-      logger.error(
-        "Test build error:",
-        error instanceof Error ? error : new Error(error as string),
-      );
-      return c.json(
-        {
-          error: "Internal server error during build test",
-          details: error instanceof Error ? error.message : "Unknown error",
-        },
-        500,
-      );
-    }
-  },
-);
+  const url = new URL(c.req.url);
+  const hasSignature = !!url.searchParams.get("signature");
+  if (!hasSignature) return c.json({ error: "Signature required" }, 401);
+  const valid = await verifySignedUrl(c.req.url, c.env.EXPIRING_URLS_SIGNING_KEY);
+  if (!valid) return c.json({ error: "Invalid or expired signature" }, 401);
+
+  url.pathname = "/ingest";
+  url.searchParams.set("estateId", estateId);
+  url.searchParams.set("buildId", buildId);
+
+  return stub.fetch(
+    new Request(url.toString(), {
+      method: "POST",
+      headers: c.req.raw.headers,
+      body: c.req.raw.body,
+    }),
+  );
+});
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
@@ -293,5 +288,12 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket, AdvisoryLocker };
+export {
+  IterateAgent,
+  OnboardingAgent,
+  SlackAgent,
+  OrganizationWebSocket,
+  AdvisoryLocker,
+  EstateBuildTracker,
+};
 export { Sandbox } from "@cloudflare/sandbox";

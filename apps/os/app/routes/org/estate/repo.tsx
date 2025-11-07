@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Edit2,
@@ -18,6 +18,8 @@ import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import { data, useLoaderData } from "react-router";
+import { useWebSocket } from "partysocket/react";
+import { z } from "zod/v4";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
@@ -139,6 +141,8 @@ function EstateContent({
   const [rebuildTarget, setRebuildTarget] = useState("");
   const [rebuildTargetType, setRebuildTargetType] = useState<"branch" | "commit">("branch");
   const [advancedValue, setAdvancedValue] = useState<string | undefined>(undefined);
+  const [isLogsSheetOpen, setIsLogsSheetOpen] = useState(false);
+  const [logsBuild, setLogsBuild] = useState<Build | null>(null);
 
   // Get estate ID from URL
   const estateId = useEstateId();
@@ -294,6 +298,13 @@ function EstateContent({
         status satisfies never;
         return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
     }
+  };
+
+  const getDerivedBuildStatus = (build: _Build): BuildStatus => {
+    // Persistent timeout from DB
+    const failureReason = build.failureReason as string | undefined;
+    if (build.status === "failed" && failureReason === "timeout") return "timed_out";
+    return build.status;
   };
 
   const formatDate = (date: Date | string) => {
@@ -549,13 +560,8 @@ function EstateContent({
               </div>
             ) : builds && builds.length > 0 ? (
               <div className="space-y-3">
-                {builds.map((build: Build) => {
-                  if (
-                    build.status === "in_progress" &&
-                    new Date(build.createdAt).getTime() < Date.now() - 2 * 60_000
-                  ) {
-                    build = { ...build, status: "timed_out" };
-                  }
+                {builds.map((build) => {
+                  const derivedStatus = getDerivedBuildStatus(build);
                   const isExpanded = expandedBuilds.has(build.id);
                   return (
                     <div
@@ -572,7 +578,7 @@ function EstateContent({
                           ) : (
                             <ChevronRight className="h-5 w-5 text-gray-500 shrink-0" />
                           )}
-                          {getBuildStatusIcon(build.status)}
+                          {getBuildStatusIcon(derivedStatus)}
                           <div className="text-left flex-1 min-w-0 overflow-hidden">
                             <div
                               className="font-medium text-gray-900 dark:text-gray-100 truncate"
@@ -586,9 +592,9 @@ function EstateContent({
                           </div>
                         </div>
                         <span
-                          className={`px-3 py-1 rounded-full text-sm font-medium ${getBuildStatusColor(build.status)}`}
+                          className={`px-3 py-1 rounded-full text-sm font-medium ${getBuildStatusColor(derivedStatus)}`}
                         >
-                          {build.status.replace("_", " ")}
+                          {derivedStatus.replace("_", " ")}
                         </span>
                       </button>
 
@@ -617,7 +623,8 @@ function EstateContent({
                               <Button
                                 onClick={() => handleRebuildCommit(build)}
                                 disabled={
-                                  triggerRebuildMutation.isPending || build.status === "in_progress"
+                                  triggerRebuildMutation.isPending ||
+                                  derivedStatus === "in_progress"
                                 }
                                 variant="outline"
                                 size="sm"
@@ -633,6 +640,17 @@ function EstateContent({
                                     Rebuild This Commit
                                   </>
                                 )}
+                              </Button>
+                              <Button
+                                onClick={() => {
+                                  setLogsBuild(build);
+                                  setIsLogsSheetOpen(true);
+                                }}
+                                variant="outline"
+                                size="sm"
+                                className="ml-2"
+                              >
+                                View Logs
                               </Button>
                             </div>
                           </div>
@@ -706,6 +724,41 @@ function EstateContent({
             ) : (
               <div className="flex flex-1 items-center justify-center text-center text-sm text-muted-foreground">
                 No compiled iterate config available yet.
+              </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Build Logs Sheet */}
+      <Sheet
+        open={isLogsSheetOpen}
+        onOpenChange={(open) => {
+          setIsLogsSheetOpen(open);
+          if (!open) setLogsBuild(null);
+        }}
+      >
+        <SheetContent
+          side="right"
+          className="max-w-none w-full sm:max-w-none"
+          style={{ width: "min(100vw, max(1000px, 70vw))" }}
+        >
+          <SheetHeader>
+            <SheetTitle>
+              {logsBuild
+                ? `Compiled logs for ${logsBuild.commitHash.substring(0, 7)}`
+                : "Build logs"}
+            </SheetTitle>
+            <SheetDescription>
+              Streams stdout and stderr as they arrive. Past logs load first.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="flex flex-1 min-h-0 p-4">
+            {logsBuild ? (
+              <BuildLogsViewer estateId={estateId!} build={logsBuild} />
+            ) : (
+              <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+                Select a build to view logs
               </div>
             )}
           </div>
@@ -960,4 +1013,157 @@ function EstateContent({
 export default function ManageEstate() {
   const installationStatus = useLoaderData<typeof loader>();
   return <EstateContent installationStatus={installationStatus} />;
+}
+
+// ========== Build Logs Viewer ==========
+const BroadcastMessage = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("CONNECTED"), buildId: z.string() }),
+  z.object({
+    type: z.literal("LOG"),
+    buildId: z.string(),
+    stream: z.enum(["stdout", "stderr"]),
+    message: z.string(),
+    ts: z.number(),
+  }),
+  z.object({
+    type: z.literal("STATUS"),
+    buildId: z.string(),
+    status: z.enum(["in_progress", "complete", "failed"]),
+    ts: z.number(),
+  }),
+]);
+
+type BroadcastMessage = z.infer<typeof BroadcastMessage>;
+
+function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }) {
+  const [lines, setLines] = useState<
+    Array<{
+      ts: number;
+      stream: "stdout" | "stderr";
+      message: string;
+    }>
+  >([]);
+  const [showStdout, setShowStdout] = useState(true);
+  const [showStderr, setShowStderr] = useState(true);
+  const [follow, setFollow] = useState(true);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+
+  const wsUrl = useMemo(() => {
+    const base = import.meta.env.SSR
+      ? import.meta.env.VITE_PUBLIC_URL
+      : globalThis.location?.origin;
+    if (!base) return "";
+    const url = new URL(base);
+    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    url.pathname = `/api/estate/${estateId}/builds/${build.id}/ws`;
+    return url.toString();
+  }, [estateId, build.id]);
+
+  const onMessage = (event: MessageEvent) => {
+    try {
+      const label = parseMessage(event);
+      if (label) toast.success(label);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : String(error));
+    }
+  };
+
+  function parseMessage(event: MessageEvent): string | null {
+    if (typeof event.data !== "string") {
+      throw new Error("Non-string WebSocket data");
+    }
+    let raw: unknown;
+    try {
+      raw = JSON.parse(event.data);
+    } catch {
+      throw new Error("Invalid JSON from WebSocket");
+    }
+    const parsed = BroadcastMessage.parse(raw);
+    if (parsed.buildId !== build.id) {
+      return null;
+    }
+    if (parsed.type === "LOG") {
+      setLines((prev) => {
+        const next = [...prev, { ts: parsed.ts, stream: parsed.stream, message: parsed.message }];
+        return next.length > 5000 ? next.slice(-5000) : next;
+      });
+      return null;
+    }
+    if (parsed.type === "STATUS") {
+      if (parsed.status === "complete") return "Build completed";
+      if (parsed.status === "failed") throw new Error("Build failed");
+      return null;
+    }
+    // CONNECTED and any other types: no-op
+    return null;
+  }
+
+  const ws = useWebSocket(wsUrl, [], {
+    maxReconnectionDelay: 10000,
+    minReconnectionDelay: 1000,
+    reconnectionDelayGrowFactor: 1.3,
+    connectionTimeout: 4000,
+    maxRetries: Infinity,
+    minUptime: 2000,
+    onMessage,
+  });
+
+  // Rely on useWebSocket to manage lifecycle (closes on unmount and URL changes)
+
+  React.useEffect(() => {
+    if (!follow) return;
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [lines, follow]);
+
+  const filtered = lines.filter((l) => (l.stream === "stdout" ? showStdout : showStderr));
+
+  return (
+    <div className="flex flex-col w-full">
+      <div className="flex items-center gap-2 pb-3">
+        <Button
+          variant={showStdout ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowStdout((v) => !v)}
+        >
+          stdout
+        </Button>
+        <Button
+          variant={showStderr ? "default" : "outline"}
+          size="sm"
+          onClick={() => setShowStderr((v) => !v)}
+        >
+          stderr
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setFollow((v) => !v)}>
+          {follow ? "Unfollow" : "Follow"}
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => setLines([])}>
+          Clear
+        </Button>
+        {ws.readyState === 1 ? (
+          <span className="text-xs text-green-600 dark:text-green-400">Connected</span>
+        ) : (
+          <span className="text-xs text-muted-foreground">Connecting…</span>
+        )}
+      </div>
+      <div
+        ref={scrollerRef}
+        className="flex-1 min-h-0 rounded-md border border-gray-200 dark:border-gray-800 bg-black/90 text-white p-3 overflow-auto"
+      >
+        <pre className="text-xs leading-5 font-mono whitespace-pre-wrap">
+          {filtered.map((l, idx) => (
+            <div key={idx} className={l.stream === "stderr" ? "text-red-400" : "text-gray-200"}>
+              <span className="text-gray-500">[{new Date(l.ts).toLocaleTimeString()}]</span>{" "}
+              <span className="uppercase text-[10px] px-1 rounded-sm bg-white/10 text-white/80">
+                {l.stream}
+              </span>{" "}
+              <span>{l.message}</span>
+            </div>
+          ))}
+        </pre>
+      </div>
+    </div>
+  );
 }

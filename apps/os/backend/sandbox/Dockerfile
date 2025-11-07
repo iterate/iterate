@@ -1,3 +1,17 @@
+FROM docker.io/cloudflare/sandbox:0.4.4 AS builder
+COPY scripts/package.json /tmp/package.json
+RUN npm install -g pnpm@10
+RUN cd /tmp && pnpm install
+COPY ./scripts/sandbox-build-runner.ts /tmp/sandbox-build-runner.ts
+RUN cd /tmp && ./node_modules/.bin/esbuild \
+    sandbox-build-runner.ts \
+    --bundle \
+    --platform=node \
+    --format=cjs \
+    --target=node24 \
+    --outfile=/tmp/sandbox-build-runner.js
+
+
 FROM docker.io/cloudflare/sandbox:0.4.4
 
 ENV COMMAND_TIMEOUT_MS=360000
@@ -30,8 +44,12 @@ ENV CODEX_NO_CONFIRM=1
 # Create a temporary directory that everyone can use
 RUN mkdir -p /tmp/ && chmod 777 /tmp/
 
-COPY sandbox-entry.ts /tmp/sandbox-entry.ts
+COPY ./scripts/sandbox-entry.ts /tmp/sandbox-entry.ts
 RUN chmod +x /tmp/sandbox-entry.ts
+
+
+COPY --from=builder /tmp/sandbox-build-runner.js /tmp/sandbox-build-runner.js
+RUN chmod +x /tmp/sandbox-build-runner.js
 
 # Expose the ports you want to expose
 EXPOSE 3000

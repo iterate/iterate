@@ -318,6 +318,13 @@ async function setupDurableObjects() {
     },
   );
 
+  const ESTATE_BUILD_TRACKER = DurableObjectNamespace<
+    import("./backend/worker.ts").EstateBuildTracker
+  >("estate-build-tracker", {
+    className: "EstateBuildTracker",
+    sqlite: true,
+  });
+
   return {
     ITERATE_AGENT,
     SLACK_AGENT,
@@ -325,6 +332,7 @@ async function setupDurableObjects() {
     ORGANIZATION_WEBSOCKET,
     SANDBOX,
     ADVISORY_LOCKER,
+    ESTATE_BUILDS: ESTATE_BUILD_TRACKER,
   };
 }
 

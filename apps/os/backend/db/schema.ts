@@ -497,7 +497,7 @@ export const builds = pgTable("builds", (t) => ({
     .notNull()
     .references(() => estate.id, { onDelete: "cascade" }),
   completedAt: t.timestamp(),
-  output: t.jsonb().$type<{ stdout?: string; stderr?: string; exitCode?: number }>(),
+  failureReason: t.text(),
   ...withTimestamps,
 }));
 
