@@ -76,20 +76,21 @@ async function start() {
   const flush = async () => {
     if (isFlushing) return;
     isFlushing = true;
+    // Send periodic heartbeat even if there is a backlog
+    const now = Date.now();
+    if (now - lastHeartbeatAt >= 10_000) {
+      try {
+        await fetch(args.ingestUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ buildId: args.buildId, estateId: args.estateId, logs: [] }),
+        });
+        lastHeartbeatAt = now;
+      } catch {}
+    }
     const batch = pending;
     if (batch.length === 0) {
       // send heartbeat (empty logs) every 10s only
-      const now = Date.now();
-      if (now - lastHeartbeatAt >= 10_000) {
-        try {
-          await fetch(args.ingestUrl, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ buildId: args.buildId, estateId: args.estateId, logs: [] }),
-          });
-          lastHeartbeatAt = now;
-        } catch {}
-      }
       isFlushing = false;
       return;
     }
