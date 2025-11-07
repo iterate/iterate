@@ -148,6 +148,9 @@ export class EstateBuildTracker extends DurableObject {
         const failureReason = desiredStatus === "failed" ? "error" : null;
         await this._updateBuildStatus(estateId, buildId, desiredStatus, failureReason);
         await this.ctx.storage.put(statusKey, desiredStatus);
+        if (desiredStatus === "complete" || desiredStatus === "failed") {
+          await this._removeHeartbeatAndReschedule(buildId);
+        }
       }
 
       return new Response(JSON.stringify({ ok: true, lastSeq: newLast }), {
@@ -309,6 +312,22 @@ export class EstateBuildTracker extends DurableObject {
     await this.ctx.storage.put("heartbeats", updated);
     // Schedule alarm for the earliest expected timeout among active builds
     const values = Object.values(updated);
+    if (values.length > 0) {
+      const earliestDue = Math.min(...values.map((last) => last + 2 * 60_000));
+      await this.ctx.storage.setAlarm(new Date(earliestDue));
+    }
+  }
+
+  private async _removeHeartbeatAndReschedule(buildId: string) {
+    const heartbeats = (await this.ctx.storage.get("heartbeats")) as
+      | Record<string, number>
+      | undefined;
+    if (!heartbeats) return;
+    if (heartbeats[buildId] !== undefined) {
+      delete heartbeats[buildId];
+      await this.ctx.storage.put("heartbeats", heartbeats);
+    }
+    const values = Object.values(heartbeats);
     if (values.length > 0) {
       const earliestDue = Math.min(...values.map((last) => last + 2 * 60_000));
       await this.ctx.storage.setAlarm(new Date(earliestDue));
