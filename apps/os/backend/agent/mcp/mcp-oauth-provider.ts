@@ -2,7 +2,6 @@ import type { AgentsOAuthProvider } from "agents/mcp/do-oauth-client-provider";
 import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { generateRandomString } from "better-auth/crypto";
-import { refreshAccessToken } from "better-auth/oauth2";
 import { logger } from "../../tag-logger.ts";
 import type { Auth } from "../../auth/auth.ts";
 import type { DB } from "../../db/client.ts";
@@ -37,10 +36,8 @@ import { env } from "../../../env.ts";
  * Congrats, we successfully connected to the MCP server.
  *
  * ## Token Refresh
- * Token refresh is handled by this provider using better-auth's refreshAccessToken utility.
- * The tokens() method checks if the access token is expired and automatically refreshes it
- * using the stored refresh token and OAuth server metadata from dynamic_client_info.
- * Note: The MCP SDK does NOT handle token refresh - we must do it ourselves.
+ * Token refresh is handled by MCP SDK.
+ * https://github.com/modelcontextprotocol/typescript-sdk/blob/2da89dbfc5f61d92bfc3ef6663d8886911bd4666/src/client/auth.ts#L994
  */
 
 export function getMCPVerificationKey(providerId: string, clientId: string): string {
@@ -95,60 +92,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       ),
     });
 
-    if (!account || !account.accessToken) {
-      return undefined;
-    }
-
-    const isExpired = account.accessTokenExpiresAt && account.accessTokenExpiresAt < new Date();
-
-    if (isExpired && account.refreshToken) {
-      try {
-        const clientInfo = await this.clientInformation();
-
-        if (!clientInfo?.client_secret || !clientInfo?.token_endpoint) {
-          logger.error(
-            `Cannot refresh MCP token: missing client_secret or token_endpoint for ${this.providerId}`,
-          );
-          return {
-            access_token: account.accessToken,
-            token_type: "Bearer",
-            refresh_token: account.refreshToken,
-          };
-        }
-
-        const newTokens = await refreshAccessToken({
-          refreshToken: account.refreshToken,
-          tokenEndpoint: clientInfo.token_endpoint,
-          options: {
-            clientId: clientInfo.client_id,
-            clientSecret: clientInfo.client_secret,
-          },
-          authentication:
-            clientInfo.token_endpoint_auth_method === "client_secret_post" ? "post" : "basic",
-        });
-
-        await this.params.db
-          .update(schema.account)
-          .set({
-            accessToken: newTokens.accessToken,
-            refreshToken: newTokens.refreshToken || account.refreshToken,
-            accessTokenExpiresAt: newTokens.accessTokenExpiresAt,
-          })
-          .where(eq(schema.account.id, account.id));
-
-        logger.info(`Successfully refreshed MCP access token for ${this.providerId}`);
-
-        return {
-          access_token: newTokens.accessToken!,
-          token_type: "Bearer",
-          refresh_token: newTokens.refreshToken || account.refreshToken,
-        };
-      } catch (error) {
-        logger.error(`Failed to refresh MCP access token for ${this.providerId}`, error);
-        // Fall through to return existing (expired) token
-        // The connection will likely fail and trigger re-authentication
-      }
-    }
+    if (!account || !account.accessToken) return undefined;
 
     return {
       access_token: account.accessToken,
