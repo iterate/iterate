@@ -10,6 +10,7 @@ import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
 import { env } from "../../../env.ts";
+import { getAgentStubByName, toAgentClassName } from "../agents/stub-getters.ts";
 
 /**
  * Connector between MCP OAuthClientProvider and our better auth plugin
@@ -184,6 +185,30 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         return newAccount;
       });
     }
+
+    const agentStub = await getAgentStubByName(
+      toAgentClassName(this.params.agentDurableObject.className),
+      {
+        db: this.params.db,
+        agentInstanceName: this.params.agentDurableObject.durableObjectName,
+        estateId: this.params.estateId,
+      },
+    );
+
+    await agentStub.addEvents([
+      {
+        type: "MCP:TOKENS_UPDATED",
+        data: {
+          estateId: this.params.estateId,
+          serverUrl: this.params.serverUrl,
+          userId: this.params.userId,
+          clientId: this.clientId,
+          integrationSlug: this.params.integrationSlug,
+          tokenExpiresIn: tokens.expires_in ?? null,
+          hasRefreshToken: !!tokens.refresh_token,
+        },
+      },
+    ]);
   }
 
   async saveClientInformation(_info: unknown): Promise<void> {

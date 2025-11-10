@@ -195,6 +195,28 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
   return { user, organization, estate, hasSeedData };
 });
 
+const markTestUserAsOnboarded = adminProcedure
+  .input(
+    z.object({
+      organizationId: z.string(),
+      estateId: z.string(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    await ctx.db.insert(schema.estateOnboardingEvent).values({
+      estateId: input.estateId,
+      organizationId: input.organizationId,
+      eventType: "OnboardingCompleted",
+      category: "user",
+    });
+    await ctx.db
+      .update(schema.organization)
+      .set({
+        stripeCustomerId: "TEST_CUSTOMER_ID",
+      })
+      .where(eq(schema.organization.id, input.organizationId));
+  });
+
 const allProcedureInputs = adminProcedure.query(async () => {
   const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
   const parsed = parseRouter({ router });
@@ -212,6 +234,7 @@ export const adminRouter = router({
   getEstateOwner,
   deleteUserByEmail,
   setupTestOnboardingUser,
+  markTestUserAsOnboarded,
   allProcedureInputs,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
