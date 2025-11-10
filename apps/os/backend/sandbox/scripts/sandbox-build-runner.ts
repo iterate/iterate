@@ -1,6 +1,7 @@
 #!/opt/node24/bin/node
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { createBatchHttpFlusher } from "./batch-http-flusher.ts";
 
 interface StartArgs {
   sessionDir: string;
@@ -46,15 +47,6 @@ function execCommand(
   });
 }
 
-type Stream = "stdout" | "stderr";
-type BuildEvent = "BUILD_STARTED" | "BUILD_SUCCEEDED" | "BUILD_FAILED" | "CONFIG_OUTPUT";
-type LogItem = {
-  seq: number;
-  ts: number;
-  stream: Stream;
-  message: string;
-  event?: BuildEvent;
-};
 
 async function start() {
   const args = parseArgs<StartArgs>();
@@ -64,69 +56,20 @@ async function start() {
     ? path.join(args.sessionDir, args.connectedRepoPath)
     : args.sessionDir;
 
-  // Batch logs and POST to DO every second
-  let seq = 0;
-  let pending: LogItem[] = [];
-  const enqueue = (stream: Stream, message: string, event?: BuildEvent) => {
-    seq += 1;
-    pending.push({ seq, ts: Date.now(), stream, message, event });
-  };
-  let lastHeartbeatAt = 0;
-  let isFlushing = false;
-  const flush = async () => {
-    if (isFlushing) return;
-    isFlushing = true;
-    // Send periodic heartbeat even if there is a backlog
-    const now = Date.now();
-    if (now - lastHeartbeatAt >= 10_000) {
-      try {
-        await fetch(args.ingestUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ buildId: args.buildId, estateId: args.estateId, logs: [] }),
-        });
-        lastHeartbeatAt = now;
-      } catch {}
-    }
-    const batch = pending;
-    if (batch.length === 0) {
-      // send heartbeat (empty logs) every 10s only
-      isFlushing = false;
-      return;
-    }
-    // create a new pending array; new enqueues will append there while batch is in-flight
-    pending = [];
-    try {
-      const res = await fetch(args.ingestUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ buildId: args.buildId, estateId: args.estateId, logs: batch }),
-      });
-      if (!res.ok) {
-        // requeue at the front to preserve order
-        pending = batch.concat(pending);
-        isFlushing = false;
-        return;
-      }
-      // best-effort: read json to keep connection clean
-      try {
-        await res.json();
-      } catch {}
-    } catch {
-      // put back to queue on error (front to preserve order)
-      pending = batch.concat(pending);
-    } finally {
-      isFlushing = false;
-    }
-  };
-  // initial marker
-  enqueue("stdout", "[BUILD STARTED]", "BUILD_STARTED");
-  const flushTimer = setInterval(() => {
-    void flush();
-  }, 1000);
+  type BuildEvent = "BUILD_STARTED" | "BUILD_SUCCEEDED" | "BUILD_FAILED" | "CONFIG_OUTPUT";
+
+  // Create a reusable HTTP flusher for all logs in this session
+  const flusher = createBatchHttpFlusher<BuildEvent>({
+    url: args.ingestUrl,
+    meta: { buildId: args.buildId, estateId: args.estateId },
+    flushIntervalMs: 1000,
+    heartbeatIntervalMs: 10_000,
+  });
+  flusher.start();
+  flusher.enqueue({ stream: "stdout", message: "[BUILD STARTED]", event: "BUILD_STARTED" });
   try {
     // GH auth
-    enqueue("stdout", "Configuring GitHub CLI");
+    flusher.enqueue({ stream: "stdout", message: "Configuring GitHub CLI" });
     const auth = await execCommand("gh", ["auth", "login", "--with-token"], {
       stdin: args.githubToken,
     });
@@ -134,7 +77,7 @@ async function start() {
     await execCommand("gh", ["auth", "setup-git"]);
 
     // Always clone fresh repository into the session directory
-    enqueue("stdout", "Cloning repository");
+    flusher.enqueue({ stream: "stdout", message: "Cloning repository" });
     const cloneArgs = ["repo", "clone", args.githubRepoUrl, repoDir];
     if (!args.isCommitHash && args.checkoutTarget && args.checkoutTarget !== "main") {
       cloneArgs.push("--", "--depth", "1", "--branch", args.checkoutTarget);
@@ -149,21 +92,21 @@ async function start() {
     }
 
     // Install dependencies
-    enqueue("stdout", "Installing dependencies");
+    flusher.enqueue({ stream: "stdout", message: "Installing dependencies" });
     const install = await execCommand("pnpm", ["i", "--prefer-offline"], { cwd: workDir });
     if (install.exitCode !== 0) throw new Error(`Install failed: ${install.stderr}`);
 
     // Run iterate, piping logs
-    enqueue("stdout", "Running pnpm iterate");
+    flusher.enqueue({ stream: "stdout", message: "Running pnpm iterate" });
     let iterateStdout = "";
     await new Promise<void>((resolve, reject) => {
       const proc = spawn("pnpm", ["iterate"], { cwd: workDir, shell: false });
       proc.stdout?.on("data", (d) => {
         const s = d.toString();
         iterateStdout += s;
-        enqueue("stdout", s);
+        flusher.enqueue({ stream: "stdout", message: s });
       });
-      proc.stderr?.on("data", (d) => enqueue("stderr", d.toString()));
+      proc.stderr?.on("data", (d) => flusher.enqueue({ stream: "stderr", message: d.toString() }));
       proc.on("error", (err) => reject(err));
       proc.on("close", (code) => {
         if ((code ?? 1) === 0) resolve();
@@ -175,24 +118,23 @@ async function start() {
     const jsonMatch = iterateStdout.match(/\{[\s\S]*\}(?![\s\S]*\{)/);
     if (jsonMatch) {
       const jsonStr = jsonMatch[0];
-      enqueue("stdout", jsonStr, "CONFIG_OUTPUT");
-      await flush();
+      flusher.enqueue({ stream: "stdout", message: jsonStr, event: "CONFIG_OUTPUT" });
+      await flusher.flush();
     }
 
     // Completed
-    enqueue("stdout", "Build completed successfully");
-    enqueue("stdout", "[BUILD SUCCEEDED]", "BUILD_SUCCEEDED");
-    await flush();
+    flusher.enqueue({ stream: "stdout", message: "Build completed successfully" });
+    flusher.enqueue({ stream: "stdout", message: "[BUILD SUCCEEDED]", event: "BUILD_SUCCEEDED" });
+    await flusher.flush();
     process.exit(0);
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    enqueue("stderr", `ERROR: ${msg}`);
-    enqueue("stdout", "[BUILD FAILED]", "BUILD_FAILED");
-    await flush();
+    flusher.enqueue({ stream: "stderr", message: `ERROR: ${msg}` });
+    flusher.enqueue({ stream: "stdout", message: "[BUILD FAILED]", event: "BUILD_FAILED" });
+    await flusher.flush();
     process.exit(1);
   } finally {
-    clearInterval(flushTimer);
-    await flush();
+    await flusher.stop();
   }
 }
 

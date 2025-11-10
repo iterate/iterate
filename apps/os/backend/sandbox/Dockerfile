@@ -2,9 +2,10 @@ FROM docker.io/cloudflare/sandbox:0.4.4 AS builder
 COPY scripts/package.json /tmp/package.json
 RUN npm install -g pnpm@10
 RUN cd /tmp && pnpm install
-COPY ./scripts/sandbox-build-runner.ts /tmp/sandbox-build-runner.ts
+# Copy the entire scripts directory so esbuild can resolve local imports
+COPY ./scripts /tmp/scripts
 RUN cd /tmp && ./node_modules/.bin/esbuild \
-    sandbox-build-runner.ts \
+    scripts/sandbox-build-runner.ts \
     --bundle \
     --platform=node \
     --format=cjs \
