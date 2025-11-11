@@ -343,6 +343,90 @@ export class IterateAgent<
     });
 
     const baseDeps: AgentCoreDeps = {
+      setupCodemode: (functions) => {
+        const codemodeCallerId = this.createCodemodeCaller(functions);
+        const baseUrl = this.env.VITE_PUBLIC_URL;
+        const baseFetchProps = {
+          estateId: this.databaseRecord.estateId,
+          agentInstanceName: this.databaseRecord.durableObjectName,
+          agentClassName: this.constructor.name,
+          codemodeCallerId,
+        };
+        const preamble: string[] = [];
+        const addVar = (name: string, value: unknown) => {
+          preamble.push(`const ${name} = ${JSON.stringify(value)};\n`);
+        };
+        addVar("baseUrl", baseUrl);
+        addVar("baseFetchProps", baseFetchProps);
+        async function callCodemodeCallbackOnDO(functionName: string, input: unknown) {
+          const res = await fetch(`${baseUrl}/api/trpc/agents.callCodemodeCallback`, {
+            method: "post",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ ...baseFetchProps, functionName, input }),
+          });
+          const json = await res.json<any>();
+          if (!res.ok) {
+            const errorMessage = json.error?.message || "Request failed";
+            const errorCode = json.error?.data?.code || res.status;
+            throw new Error(`${errorCode}: ${errorMessage}`);
+          }
+
+          if (!json.result || !("data" in json.result)) {
+            throw new Error("Invalid tRPC response format");
+          }
+
+          return json.result.data;
+        }
+        const fnString = callCodemodeCallbackOnDO.toString();
+        const indent = fnString.split("\n").at(-1)?.slice(0, -1) || "";
+        preamble.push(fnString.replaceAll(indent, ""));
+        for (const [name] of Object.entries(functions)) {
+          preamble.push(
+            `const ${name} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
+          );
+        }
+
+        const preambleCode = preamble.join("\n");
+        return {
+          eval: async (code) => {
+            const evalerUrl = `http://localhost:7001`;
+            const fullCode = [...preamble, "\n\n", code].join("\n");
+            let res: Response;
+            try {
+              res = await fetch(evalerUrl, {
+                method: "post",
+                body: fullCode,
+              });
+
+              const contentType = res.headers.get("content-type");
+              if (!contentType?.includes("application/json")) {
+                throw new Error(`Expected JSON response from ${evalerUrl}, got ${contentType}`);
+              }
+            } catch (err) {
+              throw new Error(`Failed to eval code: ${String(err)}\n\nCode:\n${code}`.trim(), {
+                cause: err,
+              });
+            }
+
+            if (!res.ok) {
+              const error = await res.text();
+              const json = error.startsWith("{") ? JSON.parse(error) : { message: error };
+              const message = String(json.error?.message || error);
+              if (res.status < 500)
+                throw new Error(`Error evaluating code:\n${message}\n\nCode:\n${fullCode}`, {
+                  cause: error,
+                });
+              throw new Error(`${res.status} hitting ${evalerUrl}:\n${message}`, { cause: error });
+            }
+
+            const result = await res.json<unknown>();
+            return { preamble: preambleCode, result };
+          },
+          [Symbol.dispose]: async () => {
+            this.deleteCodemodeCaller(codemodeCallerId);
+          },
+        };
+      },
       getRuleMatchData: (state) => ({
         agentCoreState: state,
         durableObjectClassName: this.constructor.name,
@@ -352,17 +436,25 @@ export class IterateAgent<
       ) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
+          if (!event.data) {
+            logger.warn("Event has no data:", event);
+          }
           this.sql`
             INSERT OR REPLACE INTO agent_events (
-              event_index, event_type, created_at, 
-              trigger_llm_request, idempotency_key, data_json, metadata_json
+              event_index,
+              event_type,
+              created_at, 
+              trigger_llm_request,
+              idempotency_key,
+              data_json,
+              metadata_json
             ) VALUES (
               ${event.eventIndex},
               ${event.type},
               ${event.createdAt},
               ${typeof event.triggerLLMRequest === "boolean" ? Number(event.triggerLLMRequest) : 0},
               ${event.idempotencyKey || null},
-              ${JSON.stringify(event.data)},
+              ${JSON.stringify(event.data) || "{}"},
               ${JSON.stringify(event.metadata || {})}
             )
           `;
@@ -604,6 +696,23 @@ export class IterateAgent<
       deps: deps,
       slices: slices,
     });
+  }
+
+  private _codemodeCallers: Record<`codemode_caller_${string}`, Record<string, Function>> = {};
+  private createCodemodeCaller(functions: Record<string, Function>) {
+    const id = typeid("codemode_caller").toString();
+    this._codemodeCallers[id] = functions;
+    return id;
+  }
+  private deleteCodemodeCaller(id: `codemode_caller_${string}`) {
+    delete this._codemodeCallers[id];
+  }
+  callCodemodeCallback(id: `codemode_caller_${string}`, functionName: string, input: unknown) {
+    const codemodeCaller = this._codemodeCallers[id];
+    if (!codemodeCaller) {
+      throw new Error(`codemode_caller ${id} not found`);
+    }
+    return codemodeCaller[functionName](input);
   }
 
   /**
@@ -871,13 +980,31 @@ export class IterateAgent<
     triggerLLMRequest?: boolean;
   }) {
     // Create a mock function call object that matches OpenAI's format
-    const functionCall = {
+    let functionCall = {
       type: "function_call" as const,
       call_id: `injected-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: toolName,
       arguments: JSON.stringify(args),
       status: "completed" as const,
     };
+
+    const isCodemodeEnabled = this.agentCore.state.codemodeEnabledTools.includes(toolName);
+    if (isCodemodeEnabled) {
+      functionCall = {
+        type: "function_call",
+        call_id: `injected-codemode-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        name: "codemode",
+        arguments: JSON.stringify({
+          functionCode: [
+            "async function codemode() {",
+            `  return await ${toolName}(${JSON.stringify(args, null, 2).replaceAll("\n", "\n  ")});`,
+            "}",
+          ].join("\n"),
+          statusIndicatorText: `running ${toolName}`,
+        }),
+        status: "completed",
+      };
+    }
 
     // Use the agentCore's existing tryInvokeLocalFunctionTool method
     const result = await this.agentCore.tryInvokeLocalFunctionTool(functionCall);

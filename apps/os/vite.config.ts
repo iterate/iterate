@@ -49,4 +49,7 @@ export default defineConfig({
     tailwindcss(),
     reactRouter(),
   ],
+  define: {
+    "import.meta.vitest": "undefined",
+  },
 });

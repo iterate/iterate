@@ -96,6 +96,8 @@ export type LocalFunctionToolExecuteFunction<TEventInput = AgentCoreEvent> = (
 ) => Promise<LocalFunctionToolExecuteResult<TEventInput>>;
 
 export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEvent> = FunctionTool & {
+  unfiddledInputJSONSchema?: () => {};
+  unfiddledOutputJSONSchema?: () => {};
   canBeParallelized?: boolean; // If true, the tool can be called in parallel with other tools
   wrappers?: Array<
     (
@@ -104,7 +106,7 @@ export type LocalFunctionRuntimeTool<TEventInput = AgentCoreEvent> = FunctionToo
   >;
   execute:
     | LocalFunctionToolExecuteFunction<TEventInput>
-    | "MAKE SURE YOU DO NOT CALL THIS DIRECTLY WITHOUT RUNNING THE WRAPPERS FIRST! THERE IS A UTILITY FUNCTION FOR THIS IN AGENT-CORE.TS. YOU WILL ALSO NEED TO USE A CAST TO EXCLUDE THIS STUPID STRING FROM THE TYPE!";
+    | "wrapper_usage_type_error: MAKE SURE YOU DO NOT CALL THIS DIRECTLY WITHOUT RUNNING THE WRAPPERS FIRST! THERE IS A UTILITY FUNCTION FOR THIS IN AGENT-CORE.TS. YOU WILL ALSO NEED TO USE A CAST TO EXCLUDE THIS STUPID STRING FROM THE TYPE! SEARCH FOR wrapper_usage_type_error TO FIND IT.";
   isAsync?: boolean; // If true, tool execution creates an ASYNC_TOOL_CALL_CREATED event
   statusIndicatorText?: string; // Text to show in Slack typing indicator when this tool is being called
   metadata?: {

@@ -429,7 +429,9 @@ describe("AgentCore", () => {
     // The first request should be cancelled
     const events = h.getEvents();
     const cancelEvents = events.filter((e) => e.type === "CORE:LLM_REQUEST_CANCEL");
-    expect(pluckFields(cancelEvents, ["data.reason"])).toMatchInlineSnapshot(`"["superseded"]"`);
+    expect(pluckFields(cancelEvents, ["data.reason"])).toMatchInlineSnapshot(
+      `"["old request 4 superseded by new request 6"]"`,
+    );
 
     // System-generated events should have empty metadata
     const cancelEvent = cancelEvents[0];
@@ -2508,10 +2510,11 @@ describe("onEventAdded callback state timing", () => {
       getOpenAIClient: async () => {
         throw new Error("OpenAI client should not be requested in this test");
       },
-      toolSpecsToImplementations: () => {
-        throw new Error("toolSpecToImplementation should not be called in this test");
-      },
+      toolSpecsToImplementations: () => [],
       getRuleMatchData: {} as never,
+      setupCodemode: () => {
+        throw new Error("setupCodemode should not be called in this test");
+      },
     } satisfies ConstructorParameters<typeof AgentCore>[0]["deps"];
 
     const agentCore = new AgentCore({
@@ -2559,10 +2562,11 @@ describe("onEventAdded callback state timing", () => {
       getOpenAIClient: async () => {
         throw new Error("OpenAI client should not be requested in this test");
       },
-      toolSpecsToImplementations: () => {
-        throw new Error("toolSpecToImplementation should not be called in this test");
-      },
+      toolSpecsToImplementations: () => [],
       getRuleMatchData: {} as never,
+      setupCodemode: () => {
+        throw new Error("setupCodemode should not be called in this test");
+      },
     } satisfies ConstructorParameters<typeof AgentCore>[0]["deps"];
 
     const agentCore = new AgentCore({

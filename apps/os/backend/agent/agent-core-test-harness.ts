@@ -182,6 +182,9 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
       getOpenAIClient: this.getOpenAIClientMock,
       toolSpecsToImplementations: this.toolSpecToImplementationMock,
       onLLMStreamResponseStreamingChunk: streamingCallback,
+      setupCodemode: () => {
+        throw new Error("setupCodemode should not be called in this test");
+      },
     };
 
     const combinedDeps = {

@@ -10,6 +10,7 @@ import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
 import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { useTheme } from "next-themes";
+import { foldService } from "@codemirror/language";
 import { Switch } from "./ui/switch.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.js";
 
@@ -146,6 +147,7 @@ export function SerializedObjectCodeBlock({
     codeMirrorTheme,
     lang(),
     search({ top: true }),
+    foldPromptBlocks(),
     keymap.of(searchKeymap),
     EditorView.editable.of(false), // This is enough for readonly
     EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcutss
@@ -297,9 +299,54 @@ export function YamlCodeBlock({
     <SerializedObjectCodeBlock
       data={data}
       className={className}
-      initialFormat="yaml"
       showToggle={showCopyAsYAMLButton && showCopyAsJSONButton}
       showCopyButton={showCopyAsYAMLButton || showCopyAsJSONButton}
     />
   );
+}
+
+function foldPromptBlocks() {
+  return foldService.of((state, from, to) => {
+    const line = state.doc.lineAt(from);
+
+    if (line.text.match(/^\s*<\S+>$/)) {
+      const closeTag = line.text.replace("<", "</"); // must be a perfect match including indent
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+
+        if (nextLine.text === closeTag) {
+          return { from: to, to: nextLine.from - 1 };
+        }
+      }
+    }
+
+    if (line.text.match(/^\s*```\w*\s*$/)) {
+      const closeTag = line.text.slice(0, line.text.lastIndexOf("`") + 1);
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+
+        if (nextLine.text === closeTag) {
+          return { from: to, to: nextLine.from - 1 };
+        }
+      }
+    }
+
+    const markdownHeadingRegex = /^\s*#+ \w/;
+    if (markdownHeadingRegex.test(line.text)) {
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+        const indentSize = (s: string) => s.length - s.trimStart().length;
+        const startIndentSize = indentSize(nextLine.text);
+        if (
+          markdownHeadingRegex.test(nextLine.text) ||
+          indentSize(nextLine.text) < startIndentSize ||
+          i === state.doc.lines
+        ) {
+          return { from: to, to: state.doc.line(i - 1).from - 1 };
+        }
+      }
+    }
+
+    return null;
+  });
 }

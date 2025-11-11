@@ -53,7 +53,7 @@ const t = initTRPC.context<Context>().create({
       // zod errors are big and ugly, but it ships a built-in pretty printer, so let's override the `message` with a more useful one if we can.
       //  we need to check that it's a zod error (or other standard schema failure) before using it though.
       ...(looksLikeStandardSchemaFailureResult(error.cause) && {
-        message: prettifyError(error.cause),
+        message: "pretty standard schema failure: " + prettifyError(error.cause),
       }),
       data: {
         ...shape.data,

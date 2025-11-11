@@ -55,6 +55,7 @@ export const iterateAgentTools = defineDOTools({
     description:
       "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
     statusIndicatorText: "🔗 getting debug url",
+    input: z.object({}),
   },
   remindMyselfLater: {
     input: z.object({

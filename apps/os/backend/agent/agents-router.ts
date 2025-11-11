@@ -3,7 +3,12 @@ import { z } from "zod";
 
 import { and, eq, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { estateProtectedProcedure, protectedProcedure, router } from "../trpc/trpc.ts";
+import {
+  estateProtectedProcedure,
+  protectedProcedure,
+  publicProcedure,
+  router,
+} from "../trpc/trpc.ts";
 import { agentInstance } from "../db/schema.ts";
 // import { env } from "../../env.ts";
 import { normalizeNullableFields } from "../utils/type-helpers.ts";
@@ -84,6 +89,44 @@ export const agentsRouter = router({
       timestamp: new Date().toISOString(),
       service: "agent",
     })),
+
+  callCodemodeCallback: publicProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+        agentInstanceName: z.string().describe("The durable object name for the agent instance"),
+        agentClassName: z
+          .enum(AGENT_CLASS_NAMES)
+          .default("IterateAgent")
+          .describe("The class name of the agent"),
+        codemodeCallerId: z
+          .string()
+          .startsWith("codemode_caller_")
+          .describe("The id of the codemode caller to use"),
+        functionName: z.string().describe("The function to call"),
+        input: z.unknown().describe("The input to pass to the callable function"),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      const agent = await getAgentStubByName(input.agentClassName, {
+        db: ctx.db,
+        agentInstanceName: input.agentInstanceName,
+        estateId: input.estateId,
+      });
+      return agent
+        .callCodemodeCallback(
+          input.codemodeCallerId as `codemode_caller_${string}`,
+          input.functionName,
+          input.input,
+        )
+        .catch((err) => {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: `${err}\n\n(codemode_caller: ${input.codemodeCallerId}, function: ${input.functionName})`,
+            cause: err,
+          });
+        });
+    }),
 
   list: estateProtectedProcedure
     .input(

@@ -2,7 +2,7 @@
   "compilerOptions": {
     "module": "esnext",
     "target": "esnext",
-    "types": ["@cloudflare/workers-types", "node", "vite/client"],
+    "types": ["@cloudflare/workers-types", "node", "vite/client", "vitest/importMeta"],
     "sourceMap": false,
     "lib": ["ESNext", "DOM"],
     "declaration": false,

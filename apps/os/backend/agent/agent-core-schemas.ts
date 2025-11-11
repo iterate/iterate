@@ -354,6 +354,7 @@ export const InitializedWithEventsEvent = z.object({
 // CORE:PAUSE_LLM_REQUESTS
 const pauseLLMRequestsEventFields = {
   type: z.literal("CORE:PAUSE_LLM_REQUESTS"),
+  data: z.object({ reason: z.string().optional() }).optional(),
 };
 export const PauseLLMRequestsEvent = z.object({
   ...agentCoreBaseEventFields,
@@ -658,6 +659,7 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
    * slices to continuously update their context item. Derived from contextRules.
    */
   ephemeralPromptFragments: Record<string, PromptFragment>;
+  codemodeEnabledTools: string[];
   /** The keys on the original, un-augmented state. Can be used to get the original state without the derived props. */
   rawKeys: string[];
 }

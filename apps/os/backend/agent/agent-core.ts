@@ -20,6 +20,7 @@
  * • LLM requests use reduced state computed from full event history
  */
 
+import * as R from "remeda";
 import { Mutex } from "async-mutex";
 import jsonata from "@mmkal/jsonata/sync";
 import type { OpenAI } from "openai";
@@ -29,6 +30,7 @@ import type {
 } from "openai/resources/responses/responses.mjs";
 import { z } from "zod";
 import { mergeDeep } from "remeda";
+import dedent from "dedent";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { logger } from "../tag-logger.ts";
@@ -45,6 +47,7 @@ import {
 import { renderPromptFragment } from "./prompt-fragments.js";
 import { type LocalFunctionRuntimeTool, type RuntimeTool, type ToolSpec } from "./tool-schemas.ts";
 import { evaluateContextRuleMatchers } from "./context.ts";
+import { generateTypes } from "./codemode.ts";
 
 /**
  * AgentCoreSliceSpec – single generic object describing a slice.
@@ -132,6 +135,10 @@ export type CheckDepsConflict<T> =
 // -----------------------------------------------------------------------------
 
 export interface AgentCoreDeps {
+  setupCodemode: (functions: Record<string, Function>) => {
+    eval: (code: string, status: string) => Promise<{ preamble: string; result: unknown }>;
+    [Symbol.dispose]: () => Promise<void>;
+  };
   /** Persist the full event array whenever it changes – safe to store by ref */
   storeEvents(events: ReadonlyArray<AgentCoreEvent>): void;
   /** Run a background task */
@@ -270,7 +277,9 @@ export interface AgentCoreConstructorOptions<
   slices: Slices;
 }
 
-type ResponsesAPIParams = Parameters<OpenAI["responses"]["stream"]>[0];
+type ResponsesAPIParams = Parameters<OpenAI["responses"]["stream"]>[0] & {
+  input: OpenAI.Responses.ResponseInput;
+};
 
 export class AgentCore<
   Slices extends readonly AgentCoreSlice[] = [],
@@ -294,33 +303,179 @@ export class AgentCore<
       ephemeralPromptFragments: {},
       toolSpecs: [],
       mcpServers: [],
+      codemodeEnabledTools: [],
       rawKeys: Object.keys(inputState),
     };
 
-    const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
-      const matchAgainst = this.deps.getRuleMatchData(next);
-      return evaluateContextRuleMatchers({ contextRule, matchAgainst });
-    });
-    next.enabledContextRules = enabledContextRules;
-    // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
-    // into the LLM instructions for this request. These are ephemeral and recomputed per request.
-    next.ephemeralPromptFragments = Object.fromEntries(
-      enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
-    );
-    const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
-    next.groupedRuntimeTools = {
-      ...next.groupedRuntimeTools,
-      "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
+    const setEnabledContextRules = () => {
+      const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
+        const matchAgainst = this.deps.getRuleMatchData(next);
+        return evaluateContextRuleMatchers({ contextRule, matchAgainst });
+      });
+      next.enabledContextRules = enabledContextRules;
+      // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
+      // into the LLM instructions for this request. These are ephemeral and recomputed per request.
+      next.ephemeralPromptFragments = {
+        ...next.ephemeralPromptFragments,
+        ...Object.fromEntries(
+          enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
+        ),
+      };
+      const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
+      next.groupedRuntimeTools = {
+        ...next.groupedRuntimeTools,
+        "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
+      };
+      next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
+      next.mcpServers = [...next.mcpServers];
     };
-    next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
-    next.mcpServers = [...next.mcpServers];
+
+    next.ephemeralPromptFragments = {};
+
+    setEnabledContextRules();
 
     // todo: figure out how to deduplicate these in case of name collisions?
     next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
 
+    const codemodeified = this.codemodeifyState(next);
+
+    if (codemodeified.modified) {
+      setEnabledContextRules();
+    }
+
     return next as MergedStateForSlices<Slices> &
       MergedStateForSlices<CoreSlices> &
       AugmentedCoreReducedState;
+  }
+
+  /** modifies the state to swap out tools for a codemode tool, if applicable */
+  private codemodeifyState(state: AugmentedCoreReducedState) {
+    const flatRuntimeTools = state.runtimeTools;
+
+    const policies = state.enabledContextRules.flatMap((rule) => rule.toolPolicies || []);
+    const codemodeGrouped = R.groupBy(state.runtimeTools, (tool) => {
+      let codemodeEnabled = false;
+      for (const policy of policies.filter((p) => p.codemode !== undefined)) {
+        const evaluator = jsonata(policy.matcher || "true");
+        const result = evaluator.evaluate(tool);
+        if (result) {
+          codemodeEnabled = policy.codemode!;
+        }
+      }
+      return codemodeEnabled ? ("codemode" as const) : ("normal" as const);
+    });
+
+    if (!codemodeGrouped.codemode?.length) return { modified: false };
+
+    const toolTypes = generateTypes(state.runtimeTools, {
+      blocklist:
+        codemodeGrouped.normal?.flatMap((tool) => ("name" in tool && tool.name) || []) || [],
+    });
+    const codemodeTool: (typeof state.runtimeTools)[number] = {
+      type: "function",
+      name: "codemode",
+      description: "codemode: a tool that can generate code to achieve a goal",
+      strict: true,
+      parameters: {
+        type: "object",
+        required: ["functionCode", "statusIndicatorText"],
+        additionalProperties: false,
+        properties: {
+          functionCode: {
+            type: "string",
+            description: "The javascript code for the async function named 'codemode'",
+          },
+          statusIndicatorText: {
+            type: "string",
+            description:
+              "The text to display in the status indicator while the generated code is executed - a very short human-readable description, less than six words. Sacrifice grammar for brevity.",
+          },
+        },
+      },
+      execute: async (params) => {
+        const { functionCode, statusIndicatorText } = JSON.parse(params.arguments) as {
+          functionCode: string;
+          statusIndicatorText: string;
+        };
+
+        const functions = Object.fromEntries(
+          flatRuntimeTools.flatMap((tool): [] | [[string, Function]] => {
+            if (tool.type !== "function") return [];
+            const fn = async (input: unknown) => {
+              const call: ResponseFunctionToolCall = {
+                type: "function_call",
+                call_id: params.call_id + "-codemode" + Date.now() + String(Math.random()),
+                name: tool.name,
+                arguments: JSON.stringify([input]),
+                status: "in_progress",
+              };
+              const x = await executeLocalFunctionTool(this.approvify(call, tool), call, input);
+              return x;
+            };
+            return [[tool.name, fn]];
+          }),
+        );
+
+        const cm = this.deps.setupCodemode(functions);
+        // waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]()));
+        const output = await cm.eval(functionCode + "\n\ncodemode()", statusIndicatorText);
+        const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
+        return {
+          ...result,
+          type: "function_call_output",
+          call_id: "codemode",
+          output,
+          toolCallResult: result.toolCallResult,
+          triggerLLMRequest: result.triggerLLMRequest,
+        };
+      },
+    };
+    state.runtimeTools = [...toolTypes.unavailable, codemodeTool];
+    state.codemodeEnabledTools = toolTypes.available.map((tool) => tool.name);
+    state.ephemeralPromptFragments.codemode = {
+      content: dedent`
+        Note: the following functions are available to you via codemode. If asked to use one of these as a "tool", use via the "codemode" tool
+  
+        \`\`\`typescript
+        __codemode_tool_types__
+        \`\`\`
+  
+        When using codemode, generate an async function called "codemode" that achieves the goal. This async function doesn't accept any arguments. Parameters must be hard-coded into the individual function calls inside the codemode() function. Don't do any processing on the return values from helper functions unless specifically requested to, or you need to pass them into another helper function. Just await/return them. Don't use try/catch at all - instead, allow errors to be thrown, there will be an opportunity to fix the code next time. We should always use the return value from each helper function, don't ever call as a side-effect.
+  
+        Example if the user asks you to name Christopher Nolan movies:
+  
+        \`\`\`javascript
+        async function codemode() {
+          return await searchWeb({ query: "Christopher Nolan movies" });
+        }
+        \`\`\`
+
+        BAD example of a side-effect:
+
+        \`\`\`javascript
+        async function codemode() {
+          await addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // BAD! this is a side-effect
+          return await searchWeb({ query: "Christopher Nolan movies" });
+        }
+        \`\`\`
+
+        GOOD example of using the return value:
+
+        \`\`\`javascript
+        async function codemode() {
+          const [reaction, search] = await Promise.all([
+            addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // GOOD! tracking the result via Promise.all
+            searchWeb({ query: "Christopher Nolan movies" }),
+          ]);
+          return {reaction, search} // GOOD! returning both results for the tool call output
+        }
+        \`\`\`
+
+        If you're called two functions in one go, but you got a failure, figure out which one failed, and next time, call them separately via parallel tool calls.
+      `.replace("__codemode_tool_types__", toolTypes.typescript()),
+    };
+
+    return { modified: true };
   }
 
   get state() {
@@ -472,6 +627,7 @@ export class AgentCore<
         logger.warn(
           `[AgentCore] Resuming interrupted LLM request at index ${requestIndex} - indicates DO crash during request`,
         );
+
         this.runLLMRequestInBackground(requestIndex, this.getResponsesAPIParams());
       }
     }
@@ -598,66 +754,113 @@ export class AgentCore<
         throw err;
       }
 
-      // Handle LLM request triggering if needed
-      if (this._state.triggerLLMRequest) {
-        // Check if paused before starting
+      const responsesAPIParams = this.getResponsesAPIParams();
+
+      const maybeTriggerLLMRequest = () => {
+        if (!this._state.triggerLLMRequest) return;
+
         if (this._state.paused) {
           logger.warn("[AgentCore] LLM request trigger ignored - requests are paused");
-        } else {
-          // Check if we need to cancel an in-flight request
-          // This happens after processing all events in the batch, so if a batch contains
-          // both a trigger event and an LLM_REQUEST_END event (like when makeLLMRequest
-          // processes a tool call), the llmRequestStartedAtIndex will already be cleared
-          // and we won't cancel. This is intentional - when an LLM request returns a tool call,
-          // makeLLMRequest adds all events for that request as one batch (output event,
-          // tool call input/output, and LLM request end), so we don't want to cancel.
-          if (this.llmRequestInProgress()) {
-            logger.warn("[AgentCore] Cancelling in-flight request – new trigger received");
-            // Add a cancel event
-            const cancelEvent = {
-              type: "CORE:LLM_REQUEST_CANCEL",
-              data: { reason: "superseded" },
-              metadata: {},
-              eventIndex: this._events.length,
-              createdAt: new Date().toISOString(),
-              triggerLLMRequest: false,
-            } as const;
-            // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
-            this._events.push(cancelEvent);
-            this._state = this.runReducersOnSingleEvent(this._state, cancelEvent);
+          return;
+        }
 
-            // Invoke callback for cancel event
-            if (this.deps.onEventAdded) {
-              this.deps.onEventAdded({ event: cancelEvent, reducedState: { ...this._state } });
-            }
-          }
+        // hard-coded failsafe - if the agent is in an infinite loop, we need to pause it
+        // i don't know why this is sometimes happening with codemode on
+        const lastUserActionIndex = responsesAPIParams.input.findLastIndex(
+          (item) =>
+            item.type === "message" &&
+            item.role === "developer" &&
+            Array.isArray(item.content) &&
+            item.content[0].type === "input_text" &&
+            item.content[0].text.trimStart().match(/^User (mentioned|message)/),
+        );
 
-          // Add LLM_REQUEST_START event
-          const responsesAPIParams = this.getResponsesAPIParams();
-          const startEvent = {
-            type: "CORE:LLM_REQUEST_START",
+        const messagesSinceLastUserAction = responsesAPIParams.input.filter(
+          (item, index) =>
+            index > lastUserActionIndex &&
+            item.type === "function_call" &&
+            item.name === "sendSlackMessage",
+        );
+
+        if (messagesSinceLastUserAction.length >= 5) {
+          const pauseEvent = {
+            type: "CORE:PAUSE_LLM_REQUESTS",
             eventIndex: this._events.length,
             createdAt: new Date().toISOString(),
-            data: { rawRequest: responsesAPIParams },
-            metadata: {},
             triggerLLMRequest: false,
+            data: {
+              reason: `Too many messages since last user action. Agent may be in an infinite loop`,
+            },
           } satisfies AgentCoreEvent;
+
           // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
-          this._events.push(startEvent);
-          this._state = this.runReducersOnSingleEvent(this._state, startEvent);
+          this._events.push(pauseEvent);
+          this._state = this.runReducersOnSingleEvent(this._state, pauseEvent);
 
-          // Invoke callback for start event
+          // Invoke callback for cancel event
           if (this.deps.onEventAdded) {
-            this.deps.onEventAdded({ event: startEvent, reducedState: { ...this._state } });
+            this.deps.onEventAdded({ event: pauseEvent, reducedState: { ...this._state } });
           }
-
-          // Store the request index for this LLM call
-          const thisRequestIndex = startEvent.eventIndex;
-
-          // Execute LLM call in background
-          this.runLLMRequestInBackground(thisRequestIndex, responsesAPIParams);
         }
-      }
+
+        // Handle LLM request triggering if needed
+
+        // This happens after processing all events in the batch, so if a batch contains
+        // both a trigger event and an LLM_REQUEST_END event (like when makeLLMRequest
+        // processes a tool call), the llmRequestStartedAtIndex will already be cleared
+        // and we won't cancel. This is intentional - when an LLM request returns a tool call,
+        // makeLLMRequest adds all events for that request as one batch (output event,
+        // tool call input/output, and LLM request end), so we don't want to cancel.
+        if (this.llmRequestInProgress()) {
+          logger.warn("[AgentCore] Cancelling in-flight request – new trigger received");
+          // Add a cancel event
+          const cancelEvent = {
+            type: "CORE:LLM_REQUEST_CANCEL",
+            data: {
+              reason: `old request ${this._state.llmRequestStartedAtIndex} superseded by new request ${this._events.length}`,
+            },
+            metadata: {},
+            eventIndex: this._events.length,
+            createdAt: new Date().toISOString(),
+            triggerLLMRequest: false,
+          } as const;
+          // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
+          this._events.push(cancelEvent);
+          this._state = this.runReducersOnSingleEvent(this._state, cancelEvent);
+
+          // Invoke callback for cancel event
+          if (this.deps.onEventAdded) {
+            this.deps.onEventAdded({ event: cancelEvent, reducedState: { ...this._state } });
+          }
+        }
+
+        // Add LLM_REQUEST_START event
+        const startEvent = {
+          type: "CORE:LLM_REQUEST_START",
+          eventIndex: this._events.length,
+          createdAt: new Date().toISOString(),
+          data: { rawRequest: responsesAPIParams },
+          metadata: {},
+          triggerLLMRequest: false,
+        } satisfies AgentCoreEvent;
+        // TODO: This pattern of push-then-update could be cleaned up to match addEvents pattern
+        this._events.push(startEvent);
+        this._state = this.runReducersOnSingleEvent(this._state, startEvent);
+
+        // Invoke callback for start event
+        if (this.deps.onEventAdded) {
+          this.deps.onEventAdded({ event: startEvent, reducedState: { ...this._state } });
+        }
+
+        // Store the request index for this LLM call
+        const thisRequestIndex = startEvent.eventIndex;
+
+        // Execute LLM call in background
+        this.runLLMRequestInBackground(thisRequestIndex, responsesAPIParams);
+      };
+
+      maybeTriggerLLMRequest();
+
       return eventsAddedThisBatch.map((e) => e.event);
     } finally {
       // Finally, make sure the callback to actually store all the new events is called
@@ -1170,18 +1373,20 @@ export class AgentCore<
 
     const unsortedInput: typeof this._state.inputItems = this._state.inputItems;
 
+    const instructions = renderPromptFragment([
+      this._state.systemPrompt,
+      // Ephemeral input items at the start to avoid the bug described here
+      // https://iterate-com.slack.com/archives/C06LU7PGK0S/p1757362465658609
+      // the cost of this is that if the matched context items change,
+      // we bust the LLM cache and get a slower/more expensive response.
+      ...Object.entries(this.state.ephemeralPromptFragments).map(([key, promptFragment]) =>
+        renderPromptFragment({ tag: key, content: promptFragment }),
+      ),
+    ]);
+
     return {
       ...modelOpts,
-      instructions: renderPromptFragment([
-        this._state.systemPrompt,
-        // Ephemeral input items at the start to avoid the bug described here
-        // https://iterate-com.slack.com/archives/C06LU7PGK0S/p1757362465658609
-        // the cost of this is that if the matched context items change,
-        // we bust the LLM cache and get a slower/more expensive response.
-        ...Object.entries(this.state.ephemeralPromptFragments).map(([key, promptFragment]) =>
-          renderPromptFragment({ tag: key, content: promptFragment }),
-        ),
-      ]),
+      instructions,
       input: unsortedInput
         .map((item, index) => ({ item, score: item.getSortScore?.() ?? index }))
         .sort((a, b) => a.score - b.score)
@@ -1196,6 +1401,7 @@ export class AgentCore<
     params: ResponsesAPIParams,
   ): Promise<void> {
     const openai = await this.deps.getOpenAIClient();
+
     if (this._state.llmRequestStartedAtIndex !== thisRequestIndex) {
       return; // Request cancelled, don't add any events
     }
@@ -1419,65 +1625,22 @@ export class AgentCore<
   > {
     const tools = this.state.runtimeTools;
     let tool = tools.find((t: RuntimeTool) => t.type === "function" && t.name === call.name);
+
     if (!tool || tool.type !== "function" || !("execute" in tool)) {
-      logger.error("Tool not found or not local:", {
+      const err = new Error(`Tool not found or not local: ${call.name}`);
+      logger.error(err.message, {
+        stack: err.stack,
         tool,
         runtimeTools: tools,
         toolString: JSON.stringify(tool, null, 2),
       });
-      return { success: false, error: `Tool not found or not local: ${call.name}` };
+      return { success: false, error: err.message };
     }
 
     try {
+      tool = this.approvify(call, tool);
+
       const args = JSON.parse(call.arguments || "{}");
-
-      const policies = this.state.enabledContextRules.flatMap(
-        (rule) => rule.toolApprovalPolicies || [],
-      );
-      let needsApproval = false;
-      for (const policy of policies) {
-        const evaluator = jsonata(policy.matcher || "true");
-        const result = evaluator.evaluate(call);
-        if (result) {
-          needsApproval = policy.approvalRequired;
-        }
-      }
-      if (call.call_id.startsWith("injected-")) needsApproval = false;
-
-      if (needsApproval) {
-        const wrappers = tool.wrappers?.slice() || []; // slice to avoid mutating the original array
-        wrappers.push((_next) => async (call, args) => {
-          const approvalKey = await this.deps.requestApprovalForToolCall!({
-            toolName: call.name,
-            args: args as {},
-            toolCallId: call.call_id,
-          }).catch((e) => {
-            const error = e instanceof Error ? e : new Error(String(e));
-            error.message = `Failed to request approval: ${error.message}`;
-            throw error;
-          });
-          return {
-            toolCallResult: {
-              success: true,
-              output: { message: "Tool call needs approval" },
-            },
-            triggerLLMRequest: false,
-            addEvents: [
-              {
-                type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
-                data: {
-                  approvalKey,
-                  toolName: call.name,
-                  args,
-                  toolCallId: call.call_id,
-                },
-              },
-            ],
-          };
-        });
-        tool = { ...tool, wrappers };
-      }
-
       const result = await executeLocalFunctionTool(tool, call, args);
       return {
         success: true,
@@ -1503,6 +1666,53 @@ export class AgentCore<
 
       return { success: false, error: errorMessage };
     }
+  }
+
+  private approvify(call: ResponseFunctionToolCall, tool: LocalFunctionRuntimeTool) {
+    const policies = this.state.enabledContextRules.flatMap((rule) => rule.toolPolicies || []);
+    let needsApproval = false;
+    for (const policy of policies.filter((p) => p.approvalRequired !== undefined)) {
+      const evaluator = jsonata(policy.matcher || "true");
+      const result = evaluator.evaluate(call);
+      if (result) {
+        needsApproval = policy.approvalRequired!;
+      }
+    }
+    if (call.call_id.startsWith("injected-")) needsApproval = false;
+
+    if (!needsApproval) return tool;
+
+    const wrappers = tool.wrappers?.slice() || []; // slice to avoid mutating the original array
+    wrappers.push((_next) => async (call, args) => {
+      const approvalKey = await this.deps.requestApprovalForToolCall!({
+        toolName: call.name,
+        args: args as {},
+        toolCallId: call.call_id,
+      }).catch((e) => {
+        const error = e instanceof Error ? e : new Error(String(e));
+        error.message = `Failed to request approval: ${error.message}`;
+        throw error;
+      });
+      return {
+        toolCallResult: {
+          success: true,
+          output: { message: "Tool call needs approval" },
+        },
+        triggerLLMRequest: false,
+        addEvents: [
+          {
+            type: "CORE:TOOL_CALL_APPROVAL_REQUESTED",
+            data: {
+              approvalKey,
+              toolName: call.name,
+              args,
+              toolCallId: call.call_id,
+            },
+          },
+        ],
+      };
+    });
+    return { ...tool, wrappers };
   }
 
   /**
@@ -1550,7 +1760,9 @@ export const executeLocalFunctionTool = async (
   call: ResponseFunctionToolCall,
   args: unknown,
 ) => {
+  tool.execute satisfies Function | `wrapper_usage_type_error: ${string}`;
   if (typeof tool.execute !== "function") throw new Error("Tool execute is not a function");
+  tool.execute satisfies Function;
   const wrapped = (tool.wrappers || []).toReversed().reduce(
     (acc, wrapper) => wrapper((call, args) => acc(call, args)), //
     tool.execute,
