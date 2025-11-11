@@ -243,21 +243,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
                   (t) => t.type === "function" && t.name === toolName,
                 );
 
-                let st = "";
-                if (chunk.item.arguments.startsWith("{")) {
-                  try {
-                    st = JSON.parse(chunk.item.arguments).statusIndicatorText || "";
-                  } catch {}
-                } else if (chunk.item.arguments.startsWith("[")) {
-                  try {
-                    st = JSON.parse(chunk.item.arguments)?.[0]?.statusIndicatorText || "";
-                  } catch {}
-                }
-                if (!st && tool && tool.type === "function" && tool.statusIndicatorText) {
-                  st = tool.statusIndicatorText;
-                }
-
-                this.updateSlackThreadStatus({ status: st || `🛠️ ${toolName}...` });
+                const statusText =
+                  tool && tool.type === "function" && tool.statusIndicatorText
+                    ? tool.statusIndicatorText
+                    : `🛠️ ${toolName}...`;
+                this.updateSlackThreadStatus({ status: statusText });
                 break;
               }
               case "reasoning": {
