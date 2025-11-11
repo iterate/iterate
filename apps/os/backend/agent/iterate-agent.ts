@@ -95,6 +95,7 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+import { toCamelCase } from "./codemode.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -352,9 +353,11 @@ export class IterateAgent<
           agentClassName: this.constructor.name,
           codemodeCallerId,
         };
-        const preamble: string[] = [];
+        const preamble = [
+          "// #region: helper functions - these are deterministically written by the system and cannot be changed by the agent",
+        ];
         const addVar = (name: string, value: unknown) => {
-          preamble.push(`const ${name} = ${JSON.stringify(value)};\n`);
+          preamble.push(`const ${name} = ${JSON.stringify(value, null, 2)};\n`);
         };
         addVar("baseUrl", baseUrl);
         addVar("baseFetchProps", baseFetchProps);
@@ -380,9 +383,11 @@ export class IterateAgent<
         const fnString = callCodemodeCallbackOnDO.toString();
         const indent = fnString.split("\n").at(-1)?.slice(0, -1) || "";
         preamble.push(fnString.replaceAll(indent, ""));
+
+        preamble.push("// #endregion: helper functions");
         for (const [name] of Object.entries(functions)) {
           preamble.push(
-            `const ${name} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
+            `const ${toCamelCase(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
           );
         }
 

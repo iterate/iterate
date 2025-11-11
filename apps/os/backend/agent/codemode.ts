@@ -1,7 +1,10 @@
 import * as jsonSchemaToTypescript from "@mmkal/json-schema-to-typescript";
 import * as tsParser from "recast/parsers/typescript.js";
 import * as recast from "recast";
+import * as R from "remeda";
 import type { AugmentedCoreReducedState } from "./agent-core-schemas.ts";
+
+export const toCamelCase = R.toCamelCase;
 
 function makeJsonSchemaJsonSchemaToTypescriptFriendly<T>(jsonSchema: T) {
   return JSON.parse(
@@ -106,7 +109,8 @@ export function generateTypes(
     }
     available.push(tool);
 
-    const toolName = tool.name;
+    const rawToolName = tool.name;
+    const identifierToolName = toCamelCase(rawToolName);
 
     toolFunctions.push(() => {
       const inputCode = jsonSchemaToInlineTypescript(
@@ -118,7 +122,7 @@ export function generateTypes(
       const placeholderArgs = "/* placeholder args */ ...args: unknown[]";
       const placeholderReturnType = "/* placeholder return type */ unknown";
 
-      let fnCode = `declare function ${toolName}(${placeholderArgs}): Promise<${placeholderReturnType}>`;
+      let fnCode = `declare function ${identifierToolName}(${placeholderArgs}): Promise<${placeholderReturnType}>`;
 
       if (tool.parameters?.$original === "empty_schema" || inputCode.inlineType === "{}") {
         fnCode = fnCode.replace(placeholderArgs, "");
