@@ -466,6 +466,8 @@ export class IterateAgent<
             const stripeCustomerId = this.organization.stripeCustomerId;
             const model = this.agentCore.state.modelOpts.model;
 
+            if (stripeCustomerId === "TEST_CUSTOMER_ID") return;
+
             if (stripeCustomerId) {
               void trackTokenUsageInStripe({
                 stripeCustomerId,
