@@ -817,7 +817,7 @@ export class AgentCore<
           const cancelEvent = {
             type: "CORE:LLM_REQUEST_CANCEL",
             data: {
-              reason: `old request ${this._state.llmRequestStartedAtIndex} superseded by new request ${this._events.length}`,
+              reason: `#${this._state.llmRequestStartedAtIndex} superseded by #${this._events.length}`,
             },
             metadata: {},
             eventIndex: this._events.length,
