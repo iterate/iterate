@@ -333,15 +333,12 @@ function foldPromptBlocks() {
 
     const markdownHeadingRegex = /^\s*#+ \w/;
     if (markdownHeadingRegex.test(line.text)) {
+      const startIndent = line.text.match(/^\s*/)?.[0] || "";
       for (let i = line.number + 1; i <= state.doc.lines; i++) {
-        const nextLine = state.doc.line(i);
-        const indentSize = (s: string) => s.length - s.trimStart().length;
-        const startIndentSize = indentSize(nextLine.text);
-        if (
-          markdownHeadingRegex.test(nextLine.text) ||
-          indentSize(nextLine.text) < startIndentSize ||
-          i === state.doc.lines
-        ) {
+        const { text } = state.doc.line(i);
+        const lessIndentedThanStart = text.trim() && !text.startsWith(startIndent);
+
+        if (markdownHeadingRegex.test(text) || lessIndentedThanStart || i === state.doc.lines) {
           return { from: to, to: state.doc.line(i - 1).from - 1 };
         }
       }

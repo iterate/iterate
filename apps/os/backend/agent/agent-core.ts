@@ -409,8 +409,8 @@ export class AgentCore<
                 arguments: JSON.stringify([input]),
                 status: "in_progress",
               };
-              const x = await executeLocalFunctionTool(this.approvify(call, tool), call, input);
-              return x;
+              const toolWithApproval = this.approvify(call, tool);
+              return executeLocalFunctionTool(toolWithApproval, call, input);
             };
             return [[tool.name, fn]];
           }),
@@ -432,48 +432,46 @@ export class AgentCore<
     };
     state.runtimeTools = [...toolTypes.unavailable, codemodeTool];
     state.codemodeEnabledTools = toolTypes.available.map((tool) => tool.name);
-    state.ephemeralPromptFragments.codemode = {
-      content: dedent`
-        Note: the following functions are available to you via codemode. If asked to use one of these as a "tool", use via the "codemode" tool
+    state.ephemeralPromptFragments.codemode = dedent`
+      Note: the following functions are available to you via codemode. If asked to use one of these as a "tool", use via the "codemode" tool
   
-        \`\`\`typescript
-        __codemode_tool_types__
-        \`\`\`
+      \`\`\`typescript
+      __codemode_tool_types__
+      \`\`\`
   
-        When using codemode, generate an async function called "codemode" that achieves the goal. This async function doesn't accept any arguments. Parameters must be hard-coded into the individual function calls inside the codemode() function. Don't do any processing on the return values from helper functions unless specifically requested to, or you need to pass them into another helper function. Just await/return them. Don't use try/catch at all - instead, allow errors to be thrown, there will be an opportunity to fix the code next time. We should always use the return value from each helper function, don't ever call as a side-effect.
+      When using codemode, generate an async function called "codemode" that achieves the goal. This async function doesn't accept any arguments. Parameters must be hard-coded into the individual function calls inside the codemode() function. Don't do any processing on the return values from helper functions unless specifically requested to, or you need to pass them into another helper function. Just await/return them. Don't use try/catch at all - instead, allow errors to be thrown, there will be an opportunity to fix the code next time. We should always use the return value from each helper function, don't ever call as a side-effect.
   
-        Example if the user asks you to name Christopher Nolan movies:
+      Example if the user asks you to name Christopher Nolan movies:
   
-        \`\`\`javascript
-        async function codemode() {
-          return await searchWeb({ query: "Christopher Nolan movies" });
-        }
-        \`\`\`
+      \`\`\`javascript
+      async function codemode() {
+        return await searchWeb({ query: "Christopher Nolan movies" });
+      }
+      \`\`\`
 
-        BAD example of a side-effect:
+      BAD example of a side-effect:
 
-        \`\`\`javascript
-        async function codemode() {
-          await addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // BAD! this is a side-effect
-          return await searchWeb({ query: "Christopher Nolan movies" });
-        }
-        \`\`\`
+      \`\`\`javascript
+      async function codemode() {
+        await addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // BAD! this is a side-effect
+        return await searchWeb({ query: "Christopher Nolan movies" });
+      }
+      \`\`\`
 
-        GOOD example of using the return value:
+      GOOD example of using the return value:
 
-        \`\`\`javascript
-        async function codemode() {
-          const [reaction, search] = await Promise.all([
-            addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // GOOD! tracking the result via Promise.all
-            searchWeb({ query: "Christopher Nolan movies" }),
-          ]);
-          return {reaction, search} // GOOD! returning both results for the tool call output
-        }
-        \`\`\`
+      \`\`\`javascript
+      async function codemode() {
+        const [reaction, search] = await Promise.all([
+          addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // GOOD! tracking the result via Promise.all
+          searchWeb({ query: "Christopher Nolan movies" }),
+        ]);
+        return {reaction, search} // GOOD! returning both results for the tool call output
+      }
+      \`\`\`
 
-        If you're called two functions in one go, but you got a failure, figure out which one failed, and next time, call them separately via parallel tool calls.
-      `.replace("__codemode_tool_types__", toolTypes.typescript()),
-    };
+      If you're called two functions in one go, but you got a failure, figure out which one failed, and next time, call them separately via parallel tool calls.
+    `.replace("__codemode_tool_types__", toolTypes.typescript());
 
     return { modified: true };
   }
@@ -771,7 +769,7 @@ export class AgentCore<
             item.type === "message" &&
             item.role === "developer" &&
             Array.isArray(item.content) &&
-            item.content[0].type === "input_text" &&
+            item.content[0]?.type === "input_text" &&
             item.content[0].text.trimStart().match(/^User (mentioned|message)/),
         );
 
