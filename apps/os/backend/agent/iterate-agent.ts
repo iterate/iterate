@@ -1,4 +1,3 @@
-import * as codemode from "./codemode.ts";
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
@@ -59,6 +58,7 @@ import {
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
 import type { WithCallMethod } from "../stub-stub.ts";
+import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
