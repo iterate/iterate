@@ -21,22 +21,6 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
 import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
-export type AgentInitParams = {
-  record: AgentInstanceDatabaseRecord;
-  estate: typeof schema.estate.$inferSelect;
-  organization: typeof schema.organization.$inferSelect;
-  iterateConfig: IterateConfig;
-  // Optional props forwarded to PartyKit when setting the room name
-  // Used to pass initial metadata for the room/server initialisation
-  props?: Record<string, unknown>;
-  // Optional tracing information for logger context
-  tracing?: {
-    userId?: string;
-    parentSpan?: string;
-    traceId?: string;
-  };
-};
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import {
@@ -54,7 +38,6 @@ import {
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
 import type { WithCallMethod } from "../stub-stub.ts";
-import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
@@ -92,6 +75,23 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInitParams = {
+  record: AgentInstanceDatabaseRecord;
+  estate: typeof schema.estate.$inferSelect;
+  organization: typeof schema.organization.$inferSelect;
+  iterateConfig: IterateConfig;
+  // Optional props forwarded to PartyKit when setting the room name
+  // Used to pass initial metadata for the room/server initialisation
+  props?: Record<string, unknown>;
+  // Optional tracing information for logger context
+  tracing?: {
+    userId?: string;
+    parentSpan?: string;
+    traceId?: string;
+  };
+};
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
