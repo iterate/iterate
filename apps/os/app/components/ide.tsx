@@ -834,19 +834,6 @@ export function IDE() {
             );
             queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
 
-            // Get updated pulls data
-            // const pullsData = queryClient.getQueryData(
-            //   trpc.estate.listPulls.queryKey({ estateId, state: "open" }),
-            // ) as typeof pullsQuery.data | undefined;
-
-            // Find latest PR (highest number) or fall back to default branch
-            // const latestPr =
-            //   pullsData && pullsData.length > 0
-            //     ? pullsData.reduce((latest, pr) => (pr.number > latest.number ? pr : latest))
-            //     : null;
-
-            // const nextBranch = latestPr?.head.ref || defaultBranch;
-            // setCurrentPrBranch(nextBranch);
             setSelectedFile(null);
           },
         },
