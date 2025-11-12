@@ -6,8 +6,7 @@ export default {
   name: "Push staging estate",
   on: {
     schedule: [
-      // every day at 4am UTC
-      { cron: "0 4 * * *" },
+      { cron: "0 4 * * *" }, // every day at 4am UTC
     ],
     push: {
       paths: [".github/workflows/push-staging-estate.yml"],
