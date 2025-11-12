@@ -463,7 +463,7 @@ export class AgentCore<
       \`\`\`javascript
       async function codemode() {
         const [reaction, search] = await Promise.all([
-          addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }); // GOOD! tracking the result via Promise.all
+          addSlackReaction({ messageTs: "1231231231.878289", name: "grimacing" }), // GOOD! tracking the result via Promise.all
           searchWeb({ query: "Christopher Nolan movies" }),
         ]);
         return {reaction, search} // GOOD! returning both results for the tool call output

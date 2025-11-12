@@ -4,7 +4,11 @@ import * as recast from "recast";
 import * as R from "remeda";
 import type { AugmentedCoreReducedState } from "./agent-core-schemas.ts";
 
-export const toCamelCase = R.toCamelCase;
+/**
+ * some tool names use hyphens, so we can't use them directly as identifiers. They also have to be converted in a consistent way.
+ * Note that this is lossy (foo-bar and fooBar both become fooBar) so might cause issues if you have two very confusingly similar tool names.
+ */
+export const toolNameToJsIdentifier = R.toCamelCase;
 
 function makeJsonSchemaJsonSchemaToTypescriptFriendly<T>(jsonSchema: T) {
   return JSON.parse(
@@ -110,7 +114,7 @@ export function generateTypes(
     available.push(tool);
 
     const rawToolName = tool.name;
-    const identifierToolName = toCamelCase(rawToolName);
+    const identifierToolName = toolNameToJsIdentifier(rawToolName);
 
     toolFunctions.push(() => {
       const inputCode = jsonSchemaToInlineTypescript(

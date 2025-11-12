@@ -1,3 +1,4 @@
+import * as codemode from "./codemode.ts";
 import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
@@ -95,7 +96,7 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
-import { toCamelCase } from "./codemode.ts";
+import { toolNameToJsIdentifier } from "./codemode.ts";
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -387,7 +388,7 @@ export class IterateAgent<
         preamble.push("// #endregion: helper functions");
         for (const [name] of Object.entries(functions)) {
           preamble.push(
-            `const ${toCamelCase(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
+            `const ${toolNameToJsIdentifier(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
           );
         }
 
@@ -1002,7 +1003,7 @@ export class IterateAgent<
         arguments: JSON.stringify({
           functionCode: [
             "async function codemode() {",
-            `  return await ${toolName}(${JSON.stringify(args, null, 2).replaceAll("\n", "\n  ")});`,
+            `  return await ${codemode.toolNameToJsIdentifier(toolName)}(${JSON.stringify(args, null, 2).replaceAll("\n", "\n  ")});`,
             "}",
           ].join("\n"),
           statusIndicatorText: `running ${toolName}`,
