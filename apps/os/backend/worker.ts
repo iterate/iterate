@@ -144,7 +144,11 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
   if (!c.var.session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  //TODO: session.user.estates.includes(c.req.param("estateId")) -> PASS
+  const estateId = c.req.param("estateId");
+  const session = c.var.session;
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
   return next();
 });
 
