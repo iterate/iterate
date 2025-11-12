@@ -11,7 +11,6 @@
 import { spawn } from "child_process";
 import { existsSync } from "fs";
 import { access, constants } from "fs/promises";
-import path from "path";
 
 interface SharedArgs {
   sessionDir: string;
@@ -22,22 +21,6 @@ interface InitArgs extends SharedArgs {
   githubToken: string;
   checkoutTarget: string;
   isCommitHash: boolean;
-}
-
-interface BuildArgs extends SharedArgs {
-  connectedRepoPath?: string;
-  callbackUrl: string;
-  buildId: string;
-  estateId: string;
-}
-
-interface BuildCallbackPayload {
-  buildId: string;
-  estateId: string;
-  success: boolean;
-  stdout: string;
-  stderr: string;
-  exitCode: number;
 }
 
 /**
@@ -77,90 +60,6 @@ function parseInstallDependenciesArgs(): { sessionDir: string } {
     throw new Error(
       `Failed to parse JSON arguments: ${error instanceof Error ? error.message : "Unknown error"}`,
     );
-  }
-}
-
-/**
- * Parse command line arguments, expects JSON string containing args as the second argument
- */
-function parseBuildArgs(): BuildArgs {
-  const jsonArg = process.argv[3];
-  if (!jsonArg) {
-    throw new Error("Missing JSON arguments");
-  }
-  try {
-    const parsed = JSON.parse(jsonArg) as BuildArgs;
-    const args = {
-      sessionDir: parsed.sessionDir || "",
-      connectedRepoPath: parsed.connectedRepoPath || "",
-      callbackUrl: parsed.callbackUrl || "",
-      buildId: parsed.buildId || "",
-      estateId: parsed.estateId || "",
-    };
-    return args;
-  } catch (error) {
-    throw new Error(
-      `Failed to parse JSON arguments: ${error instanceof Error ? error.message : "Unknown error"}`,
-    );
-  }
-}
-
-/**
- * Send callback to the specified URL using built-in fetch
- */
-async function sendBuildCallback(
-  args: BuildArgs,
-  success: boolean,
-  stdout: string,
-  stderr: string,
-  exitCode: number,
-): Promise<void> {
-  if (!args.callbackUrl) {
-    return;
-  }
-
-  const payload: BuildCallbackPayload = {
-    buildId: args.buildId,
-    estateId: args.estateId,
-    success,
-    stdout,
-    stderr,
-    exitCode,
-  };
-
-  console.error(`=== Sending callback to: ${args.callbackUrl} ===`);
-  console.error("=== Sending callback request ===");
-
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    const response = await fetch(args.callbackUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    const responseText = await response.text();
-    console.error(`[CALLBACK_RESPONSE]: ${responseText}`);
-    console.error(`[HTTP_STATUS]: ${response.status}`);
-    console.error("=== Callback completed ===");
-  } catch (error) {
-    if (error instanceof Error) {
-      if (error.name === "AbortError") {
-        console.error("[CALLBACK_ERROR]: Request timeout");
-      } else {
-        console.error(`[CALLBACK_ERROR]: ${error.message}`);
-      }
-    } else {
-      console.error(`[CALLBACK_ERROR]: Unknown error`);
-    }
-    console.error("=== Callback failed but continuing ===");
   }
 }
 
@@ -247,7 +146,7 @@ async function ensurePnpmInstalled(): Promise<void> {
 }
 
 /**
- * Main build process
+ * Main entry
  */
 async function main() {
   const subCommand = process.argv[2];
@@ -256,15 +155,10 @@ async function main() {
     return subcommandInit(args);
   }
 
-  await ensurePnpmInstalled();
-
   if (subCommand === "install-dependencies") {
+    await ensurePnpmInstalled();
     const args = parseInstallDependenciesArgs();
     return subcommandInstallDependencies(args);
-  }
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    return subcommandBuild(args);
   }
 }
 
@@ -377,123 +271,9 @@ async function subcommandInstallDependencies({ sessionDir }: { sessionDir: strin
   }
 }
 
-async function subcommandBuild(args: BuildArgs) {
-  if (!args.sessionDir) {
-    const errorMsg = "sessionDir is missing";
-    console.error(`ERROR: ${errorMsg}`);
-    await sendBuildCallback(args, false, "", errorMsg, 1);
-    process.exit(1);
-  }
-
-  const repoDir = args.sessionDir;
-  const workDir = args.connectedRepoPath
-    ? path.join(args.sessionDir, args.connectedRepoPath)
-    : args.sessionDir;
-
-  console.error("=== Starting building process ===");
-  console.error(`Repo directory: ${repoDir}`);
-  console.error(`Work directory: ${workDir}`);
-  if (args.callbackUrl) {
-    console.error(`Callback URL: ${args.callbackUrl}`);
-  }
-  console.error("");
-
-  try {
-    // Verify work directory exists (provides better error messages)
-    if (!(await directoryExists(workDir))) {
-      const errorMsg = `Work directory ${workDir} does not exist`;
-      console.error(`ERROR: ${errorMsg}`);
-      await sendBuildCallback(args, false, "", errorMsg, 1);
-      process.exit(1);
-    }
-
-    // Install dependencies (optimized: prefer offline cache for speed)
-    console.error("=== Installing dependencies ===");
-    const installResult = await execCommand("pnpm", ["i", "--prefer-offline"], {
-      cwd: workDir,
-    });
-
-    if (installResult.exitCode !== 0) {
-      const errorMsg = "Failed to install dependencies";
-      const fullError = [installResult.stdout, installResult.stderr].filter(Boolean).join("\n");
-      console.error(`ERROR: ${errorMsg}`);
-      console.error(fullError);
-      await sendBuildCallback(args, false, "", errorMsg + "\n" + fullError, installResult.exitCode);
-      process.exit(installResult.exitCode);
-    }
-
-    // Run pnpm iterate
-    console.error("=== Running pnpm iterate ===");
-    const iterateResult = await execCommand("pnpm", ["iterate"], { cwd: workDir });
-
-    if (iterateResult.exitCode === 0) {
-      // Success
-      console.log(iterateResult.stdout);
-      await sendBuildCallback(args, true, iterateResult.stdout, "", 0);
-      process.exit(0);
-    } else {
-      // Failure
-      const errorMsg = `pnpm iterate failed with exit code ${iterateResult.exitCode}`;
-      console.error(`ERROR: ${errorMsg}`);
-      console.error(iterateResult.stderr);
-      await sendBuildCallback(args, false, "", iterateResult.stderr, iterateResult.exitCode);
-      process.exit(iterateResult.exitCode);
-    }
-  } catch (error) {
-    // Catch any unexpected errors
-    const errorMsg = error instanceof Error ? error.message : "Unknown error occurred";
-    console.error(`ERROR: ${errorMsg}`);
-    await sendBuildCallback(args, false, "", errorMsg, 1);
-    process.exit(1);
-  }
-}
-
-// Ensure callback is sent even if the process is killed
-process.on("SIGINT", async () => {
-  const subCommand = process.argv[2];
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    await sendBuildCallback(args, false, "", "Process interrupted (SIGINT)", 130);
-  }
-  process.exit(130);
-});
-
-process.on("SIGTERM", async () => {
-  const subCommand = process.argv[2];
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    await sendBuildCallback(args, false, "", "Process terminated (SIGTERM)", 143);
-  }
-  process.exit(143);
-});
-
-process.on("uncaughtException", async (error) => {
-  const subCommand = process.argv[2];
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    await sendBuildCallback(args, false, "", `Uncaught exception: ${error.message}`, 1);
-  }
-  process.exit(1);
-});
-
-process.on("unhandledRejection", async (reason) => {
-  const subCommand = process.argv[2];
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    const errorMsg = reason instanceof Error ? reason.message : String(reason);
-    await sendBuildCallback(args, false, "", `Unhandled rejection: ${errorMsg}`, 1);
-  }
-  process.exit(1);
-});
-
 // Run the main function
-main().catch(async (error) => {
-  const subCommand = process.argv[2];
+main().catch((error) => {
   const errorMsg = error instanceof Error ? error.message : "Unknown error";
   console.error(`FATAL ERROR: ${errorMsg}`);
-  if (subCommand === "build") {
-    const args = parseBuildArgs();
-    await sendBuildCallback(args, false, "", errorMsg, 1);
-  }
   process.exit(1);
 });
