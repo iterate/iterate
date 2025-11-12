@@ -41,7 +41,7 @@ export default {
             cp -r source-branch/estates/iterate staging-estate/estates/iterate
             rm -rf staging-estate/estates/iterate/apps
 
-            source_branch_sha=$(cd ../source-branch && git log --pretty=format:'%h' -n 1)
+            source_branch_sha=$(cd source-branch && git log --pretty=format:'%h' -n 1)
             echo "Using commit hash: $source_branch_sha"
 
             # Replace workspace:* with pkg.pr.new URL
