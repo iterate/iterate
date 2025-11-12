@@ -161,7 +161,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       if (log.message?.startsWith(`{"type"`) && log.message.includes(`"text":`)) {
         try {
           const json = JSON.parse(log.message);
-          const text = json.item?.text?.replaceAll("**", "").slice(0, 50);
+          const text = json.item?.text?.replaceAll?.("**", "").slice(0, 50);
           if (text) {
             waitUntil(this.updateSlackThreadStatus({ status: text }));
             break;
