@@ -23,6 +23,7 @@ export default {
           name: "Checkout code",
           uses: "actions/checkout@v4",
           with: {
+            ref: "main",
             path: "source-branch",
           },
         },
