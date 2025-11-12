@@ -7,6 +7,7 @@ on:
   push:
     paths:
       - .github/workflows/push-staging-estate.yml
+      - .github/ts-workflows/workflows/push-staging-estate.ts
 jobs:
   run:
     runs-on: ubuntu-latest

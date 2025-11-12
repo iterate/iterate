@@ -9,7 +9,10 @@ export default {
       { cron: "0 4 * * *" }, // every day at 4am UTC
     ],
     push: {
-      paths: [".github/workflows/push-staging-estate.yml"],
+      paths: [
+        ".github/workflows/push-staging-estate.yml",
+        ".github/ts-workflows/workflows/push-staging-estate.ts",
+      ],
     },
   },
   jobs: {
