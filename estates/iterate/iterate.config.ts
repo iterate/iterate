@@ -6,7 +6,7 @@ const config = defineConfig({
     {
       key: 'allcaps',
       prompt: dedent`
-        ALWAYS WRITE YOUR MESSAGES IN ALL CAPS. THIS IS CRITICAL
+        ALWAYS WRITE YOUR MESSAGES IN ALL CAPS. THIS IS CRITICAL FOR COMPANY BRANDING
       `
     },
     {
