@@ -310,7 +310,7 @@ export const estateRouter = router({
   updateRepo: githubInstallationScopedProcedure
     .input(
       z.object({
-        commit: CreateCommitOnBranchInput.omit({ branch: true }),
+        commit: CreateCommitOnBranchInput,
         format: z.enum(["base64", "plaintext"]),
       }),
     )
@@ -327,6 +327,30 @@ export const estateRouter = router({
         deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, deletion.path);
       });
 
+      const branchName = input.commit.branch.branchName ?? ctx.estate.connectedRepoRef!;
+      const branch = await ctx.github.rest.repos
+        .getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: branchName,
+        })
+        .catch(() => null);
+
+      if (!branch || branch.status !== 200) {
+        // create the branch
+        const defaultBranch = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: ctx.estate.connectedRepoRef!,
+        });
+        await ctx.github.rest.git.createRef({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          ref: `refs/heads/${branchName}`,
+          sha: defaultBranch.data.commit.sha,
+        });
+      }
+
       const result = await ctx.github.graphql(
         dedent`
           mutation ($input: CreateCommitOnBranchInput!) {
@@ -341,7 +365,7 @@ export const estateRouter = router({
           input: {
             ...input.commit,
             branch: {
-              branchName: ctx.estate.connectedRepoRef!,
+              branchName: branchName,
               repositoryNameWithOwner: ctx.repoData.full_name,
             },
           } satisfies CreateCommitOnBranchInput,
@@ -349,42 +373,109 @@ export const estateRouter = router({
       );
       return result;
     }),
-  getRepoFilesystem: githubInstallationScopedProcedure.query(async ({ ctx }) => {
-    const zipball = await ctx.github.rest.repos.downloadZipballArchive({
-      owner: ctx.repo.owner,
-      repo: ctx.repo.repo,
-      ref: ctx.refName ?? "main",
-    });
+  createPullRequest: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        fromBranch: z.string(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: input.fromBranch,
+        });
+      } catch (_error: unknown) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Branch not found: ${input.fromBranch}`,
+        });
+      }
 
-    if (!(zipball.data instanceof ArrayBuffer)) {
-      logger.error(
-        `Failed to download repo filesystem: ${inspect(zipball, { depth: null, colors: true })}`,
-      );
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: `Failed to download repo filesystem`,
+      const pullRequest = await ctx.github.rest.pulls.create({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        head: input.fromBranch,
+        base: ctx.refName ?? "main",
+        title: `Update from in-browser IDE (${input.fromBranch})`,
       });
-    }
 
-    const unzipped = fflate.unzipSync(new Uint8Array(zipball.data));
+      return pullRequest;
+    }),
+  getRepoFilesystem: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        branch: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const requestedBranch = input?.branch ?? ctx.refName ?? "main";
+      const defaultBranch = ctx.refName ?? "main";
 
-    const pathPrefix = "./" + ctx.connectedRepoPathWithoutLeadingSlash;
-    const filesystem: Record<string, string | null> = Object.fromEntries(
-      Object.entries(unzipped)
-        .map(([filename, data]) => [
-          filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
-          fflate.strFromU8(data),
-        ])
-        .filter(([k, v]) => !k.endsWith("/") && v.trim())
-        .flatMap(([k, v]) => {
-          const relativePath = path.relative(pathPrefix, k);
-          if (relativePath.startsWith("..")) return [];
-          return [[relativePath, v] as const];
-        }),
-    );
-    const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
-    return { repoData: ctx.repoData, pathPrefix, filesystem, sha, branch: ctx.refName };
-  }),
+      // Check if the requested branch exists, fall back to default branch if not
+      let branch = requestedBranch;
+      let branchExists = true;
+      try {
+        const branchResponse = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: requestedBranch,
+        });
+        if (branchResponse.status !== 200) {
+          branchExists = false;
+          branch = defaultBranch;
+        }
+      } catch (_error: unknown) {
+        // Branch doesn't exist (404) or other error, use default branch
+        branchExists = false;
+        branch = defaultBranch;
+      }
+
+      const zipball = await ctx.github.rest.repos.downloadZipballArchive({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        ref: branch,
+      });
+
+      if (!(zipball.data instanceof ArrayBuffer)) {
+        logger.error(
+          `Failed to download repo filesystem: ${inspect(zipball, { depth: null, colors: true })}`,
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to download repo filesystem`,
+        });
+      }
+
+      const unzipped = fflate.unzipSync(new Uint8Array(zipball.data));
+
+      const pathPrefix = "./" + ctx.connectedRepoPathWithoutLeadingSlash;
+      const filesystem: Record<string, string | null> = Object.fromEntries(
+        Object.entries(unzipped)
+          .map(([filename, data]) => [
+            filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+            fflate.strFromU8(data),
+          ])
+          .filter(([k, v]) => !k.endsWith("/") && v.trim())
+          .flatMap(([k, v]) => {
+            const relativePath = path.relative(pathPrefix, k);
+            if (relativePath.startsWith("..")) return [];
+            return [[relativePath, v] as const];
+          }),
+      );
+      const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
+      return {
+        repoData: ctx.repoData,
+        pathPrefix,
+        filesystem,
+        sha,
+        branch,
+        requestedBranch: requestedBranch,
+        branchExists,
+        defaultBranch,
+      };
+    }),
 
   listPulls: githubInstallationScopedProcedure
     .input(
@@ -395,6 +486,39 @@ export const estateRouter = router({
     .query(async ({ ctx, input }) => {
       const { data: pulls } = await ctx.github.rest.pulls.list({ ...ctx.repo, state: input.state });
       return pulls;
+    }),
+
+  mergePull: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        pullNumber: z.number(),
+        mergeMethod: z.enum(["merge", "squash", "rebase"]).default("squash"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { data: pull } = await ctx.github.rest.pulls.merge({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        pull_number: input.pullNumber,
+        merge_method: input.mergeMethod,
+      });
+      return pull;
+    }),
+
+  closePull: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        pullNumber: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { data: pull } = await ctx.github.rest.pulls.update({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        pull_number: input.pullNumber,
+        state: "closed",
+      });
+      return pull;
     }),
 
   getDTS: protectedProcedure

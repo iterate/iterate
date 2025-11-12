@@ -1,6 +1,6 @@
 import Editor from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
-import { useSessionStorage } from "usehooks-ts";
+import { useSessionStorage, useLocalStorage } from "usehooks-ts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { useTheme } from "next-themes";
@@ -18,19 +18,44 @@ import {
   FolderPlus,
   Pencil,
   Trash2,
+  GitPullRequest,
+  GitMerge,
+  X,
+  Plus,
 } from "lucide-react";
 import { useSearchParams } from "react-router";
+import { formatDate } from "date-fns";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { Button } from "./ui/button.tsx";
+import { Spinner } from "./ui/spinner.tsx";
 import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
   ContextMenuTrigger,
 } from "./ui/context-menu.tsx";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "./ui/alert-dialog.tsx";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "./ui/dialog.tsx";
+import { Input } from "./ui/input.tsx";
 
 interface FileTreeNode {
   name: string;
@@ -43,7 +68,7 @@ interface FileTreeNode {
 function getFileIcon(filename: string) {
   // Special case for iterate.config.ts
   if (filename === "iterate.config.ts") {
-    return <IterateLetterI className="h-3 w-3 flex-shrink-0" />;
+    return <IterateLetterI className="h-3 w-3 shrink-0" />;
   }
 
   if (filename === ".gitignore") {
@@ -55,22 +80,22 @@ function getFileIcon(filename: string) {
   switch (extension) {
     case "md":
     case "markdown":
-      return <FileText className="h-3 w-3 flex-shrink-0 text-blue-500" />;
+      return <FileText className="h-3 w-3 shrink-0 text-blue-500" />;
     case "ts":
     case "tsx":
-      return <FileCode className="h-3 w-3 flex-shrink-0 text-blue-600" />;
+      return <FileCode className="h-3 w-3 shrink-0 text-blue-600" />;
     case "js":
     case "jsx":
-      return <FileCode className="h-3 w-3 flex-shrink-0 text-yellow-500" />;
+      return <FileCode className="h-3 w-3 shrink-0 text-yellow-500" />;
     case "json":
-      return <FileJson className="h-3 w-3 flex-shrink-0 text-yellow-600" />;
+      return <FileJson className="h-3 w-3 shrink-0 text-yellow-600" />;
     case "yaml":
     case "yml":
-      return <Braces className="h-3 w-3 flex-shrink-0 text-purple-500" />;
+      return <Braces className="h-3 w-3 shrink-0 text-purple-500" />;
     case "toml":
-      return <Settings className="h-3 w-3 flex-shrink-0 text-gray-500" />;
+      return <Settings className="h-3 w-3 shrink-0 text-gray-500" />;
     default:
-      return <File className="h-3 w-3 flex-shrink-0" />;
+      return <File className="h-3 w-3 shrink-0" />;
   }
 }
 
@@ -145,6 +170,7 @@ interface FileTreeViewProps {
   onNewFile: (params?: { folderPath?: string; fileName?: string; contents?: string }) => void;
   onNewFolder: (folderPath: string) => void;
   onRename: (oldPath: string, newPath: string) => void;
+  onRenameOpen: (path: string, name: string, type: "file" | "folder") => void;
   onDelete: (path: string) => void;
   level?: number;
 }
@@ -159,6 +185,7 @@ function FileTreeView({
   onNewFile,
   onNewFolder,
   onRename,
+  onRenameOpen,
   onDelete,
   level = 0,
 }: FileTreeViewProps) {
@@ -198,9 +225,9 @@ function FileTreeView({
                       <>
                         {hasChildren ? (
                           isCollapsed ? (
-                            <ChevronRight className="h-3 w-3 flex-shrink-0" />
+                            <ChevronRight className="h-3 w-3 shrink-0" />
                           ) : (
-                            <ChevronDown className="h-3 w-3 flex-shrink-0" />
+                            <ChevronDown className="h-3 w-3 shrink-0" />
                           )
                         ) : (
                           <span className="w-3" />
@@ -245,12 +272,7 @@ function FileTreeView({
               <ContextMenuContent>
                 <ContextMenuItem
                   onClick={() => {
-                    const newName = prompt(`Rename ${node.type}:`, node.name);
-                    if (newName && newName !== node.name) {
-                      const parentPath = node.path.split("/").slice(0, -1).join("/");
-                      const newPath = parentPath ? `${parentPath}/${newName}` : newName;
-                      onRename(node.path, newPath);
-                    }
+                    onRenameOpen(node.path, node.name, node.type);
                   }}
                 >
                   <Pencil />
@@ -273,6 +295,7 @@ function FileTreeView({
                 onNewFile={onNewFile}
                 onNewFolder={onNewFolder}
                 onRename={onRename}
+                onRenameOpen={onRenameOpen}
                 onDelete={onDelete}
                 level={level + 1}
               />
@@ -281,6 +304,132 @@ function FileTreeView({
         );
       })}
     </>
+  );
+}
+
+interface PRSidebarProps {
+  estateId: string;
+  currentBranch: string;
+  onBranchSelect: (branch: string) => void;
+  onCreateNewBranch: () => void;
+  branchExists?: boolean;
+  actualBranch?: string;
+  currentPr: { number: number; title: string; headRef: string; baseRef: string } | null;
+  onMergePr?: (pullNumber: number) => void;
+  onClosePr?: (pullNumber: number) => void;
+}
+
+function PRSidebar({
+  estateId,
+  currentBranch,
+  onBranchSelect,
+  onCreateNewBranch,
+  branchExists = true,
+  actualBranch,
+  currentPr,
+  onMergePr,
+  onClosePr,
+}: PRSidebarProps) {
+  const trpc = useTRPC();
+  const pullsQuery = useQuery(trpc.estate.listPulls.queryOptions({ estateId, state: "open" }));
+
+  return (
+    <div className="w-48 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+      <div className="p-2 border-b">
+        <div className="text-xs font-semibold mb-1">Pull Requests</div>
+        <Button
+          onClick={onCreateNewBranch}
+          size="sm"
+          variant="ghost"
+          className="w-full h-7 text-xs gap-1.5"
+        >
+          <Plus className="h-3 w-3" />
+          New Branch
+        </Button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-2">
+        {pullsQuery.isLoading ? (
+          <div className="text-xs text-muted-foreground p-2">Loading...</div>
+        ) : pullsQuery.data && pullsQuery.data.length > 0 ? (
+          <div className="space-y-1">
+            {pullsQuery.data.map((pr) => {
+              const isSelected = pr.head.ref === currentBranch;
+              return (
+                <button
+                  key={pr.id}
+                  onClick={() => onBranchSelect(pr.head.ref)}
+                  className={cn(
+                    "w-full text-left px-2 py-1.5 text-xs rounded-sm hover:bg-accent transition-colors",
+                    isSelected && "bg-accent font-medium",
+                  )}
+                  title={pr.title}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <GitPullRequest className="h-3 w-3 shrink-0" />
+                    <span className="truncate flex-1">#{pr.number}</span>
+                  </div>
+                  <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                    {pr.head.ref}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-xs text-muted-foreground p-2">No open PRs</div>
+        )}
+        <div className="mt-2 pt-2 border-t">
+          <div className="text-xs font-semibold mb-1">Current Branch</div>
+          <div className="text-xs text-muted-foreground px-2 py-1 break-all">{currentBranch}</div>
+          {!branchExists && actualBranch && actualBranch !== currentBranch && (
+            <div className="text-[10px] text-orange-600 dark:text-orange-400 px-2 mt-1">
+              Branch doesn't exist yet, showing {actualBranch}
+            </div>
+          )}
+          {currentPr ? (
+            <div className="mt-2">
+              <div className="px-2 mb-2">
+                <div className="text-xs font-semibold mb-1">PR #{currentPr.number}</div>
+                <div className="text-[10px] text-muted-foreground line-clamp-2 mb-2">
+                  {currentPr.title}
+                </div>
+                <div className="text-[10px] text-muted-foreground">
+                  {currentPr.headRef} → {currentPr.baseRef}
+                </div>
+              </div>
+              <div className="flex gap-1">
+                {onMergePr && (
+                  <Button
+                    onClick={() => onMergePr(currentPr.number)}
+                    size="sm"
+                    variant="default"
+                    className="flex-1 h-7 text-xs gap-1.5"
+                  >
+                    <GitMerge className="h-3 w-3" />
+                    Merge
+                  </Button>
+                )}
+                {onClosePr && (
+                  <Button
+                    onClick={() => onClosePr(currentPr.number)}
+                    size="sm"
+                    variant="destructive"
+                    className="flex-1 h-7 text-xs gap-1.5"
+                  >
+                    <X className="h-3 w-3" />
+                    Close
+                  </Button>
+                )}
+              </div>
+            </div>
+          ) : branchExists ? (
+            <div className="text-[10px] text-muted-foreground px-2 mt-1">
+              (No PR for this branch)
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -298,8 +447,14 @@ export function IDE() {
     },
     [searchParams, setSearchParams],
   );
-  const [localEdits, setLocalEdits] = useSessionStorage<Record<string, string | null> | null>(
-    "iterate-local-edits",
+  const [currentPrBranch, setCurrentPrBranch] = useLocalStorage<string>(
+    "iterate-pr-branch",
+    () => `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm")}`,
+  );
+
+  // Use localStorage for per-branch local edits
+  const [localEdits, setLocalEdits] = useLocalStorage<Record<string, string | null>>(
+    `iterate-local-edits-${currentPrBranch}`,
     {},
   );
   const [expectedEdits, setExpectedEdits] = useState({} as Record<string, string | null>);
@@ -313,8 +468,16 @@ export function IDE() {
     [collapsedFoldersRecord],
   );
 
-  const getRepoFilesystemQueryOptions = trpc.estate.getRepoFilesystem.queryOptions({ estateId });
   const queryClient = useQueryClient();
+
+  const getRepoFilesystemQueryOptions = useMemo(
+    () =>
+      trpc.estate.getRepoFilesystem.queryOptions({
+        estateId,
+        branch: currentPrBranch,
+      }),
+    [trpc, estateId, currentPrBranch],
+  );
 
   const saveFileMutation = useMutation(
     trpc.estate.updateRepo.mutationOptions({
@@ -324,7 +487,9 @@ export function IDE() {
           ...(variables.commit.fileChanges.deletions?.map((deletion) => deletion.path) || []),
         ]);
 
-        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+        queryClient.invalidateQueries(
+          trpc.estate.getRepoFilesystem.queryFilter({ estateId, branch: currentPrBranch }),
+        );
         setExpectedEdits(localEdits || {});
         setLocalEdits(
           localEdits &&
@@ -334,22 +499,85 @@ export function IDE() {
     }),
   );
 
+  const pullsQuery = useQuery(trpc.estate.listPulls.queryOptions({ estateId, state: "open" }));
+  const currentPr = useMemo(() => {
+    const pr = pullsQuery.data?.find((pr) => pr.head.ref === currentPrBranch);
+    if (!pr) return null;
+    return {
+      number: pr.number,
+      title: pr.title,
+      headRef: pr.head.ref,
+      baseRef: pr.base.ref,
+    };
+  }, [pullsQuery.data, currentPrBranch]);
+
+  const createPullRequestMutation = useMutation(
+    trpc.estate.createPullRequest.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
+      },
+    }),
+  );
+
+  const mergePullMutation = useMutation(
+    trpc.estate.mergePull.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
+        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+      },
+    }),
+  );
+
+  const closePullMutation = useMutation(
+    trpc.estate.closePull.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
+      },
+    }),
+  );
+
   const getRepoFileSystemQuery = useQuery({
     ...getRepoFilesystemQueryOptions,
-    placeholderData: (old) =>
-      old && { ...old, filesystem: { ...old.filesystem, ...expectedEdits }, sha: "" },
+    enabled: !!currentPrBranch,
+    // Only use placeholder data if it's for the same branch
+    placeholderData: (old) => {
+      if (!old) return undefined;
+      // Only use placeholder if it's for the same branch
+      if (old.requestedBranch === currentPrBranch) {
+        return { ...old, filesystem: { ...old.filesystem, ...expectedEdits }, sha: "" };
+      }
+      return undefined;
+    },
   });
 
-  const dts = useQuery({
-    ...trpc.estate.getDTS.queryOptions({
-      packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
-    }),
-    enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
-  });
-  const { filesystem, sha, repoData } = getRepoFileSystemQuery.data || {
+  const dts = useQuery(
+    trpc.estate.getDTS.queryOptions(
+      {
+        packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
+      },
+      {
+        enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
+        staleTime: Infinity,
+      },
+    ),
+  );
+
+  const {
+    filesystem,
+    sha,
+    repoData,
+    branchExists = true,
+    branch: actualBranch,
+    defaultBranch = "main",
+  } = getRepoFileSystemQuery.data || {
     filesystem: {},
     sha: "",
     repoData: null,
+    branchExists: true,
+    requestedBranch: currentPrBranch,
+    branch: currentPrBranch,
+    defaultBranch: "main",
   };
   const repoName = repoData?.full_name?.split("/")[1] || "repository";
 
@@ -388,27 +616,75 @@ export function IDE() {
     setCollapsedFolders((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
-  const handleNewFile = ({ folderPath = "", fileName = "", contents = "" } = {}) => {
-    fileName ||= prompt("Enter file name:") || "";
-    if (!fileName) return;
+  const [newFileDialogOpen, setNewFileDialogOpen] = useState(false);
+  const [newFileState, setNewFileState] = useState<{ folderPath: string; contents: string } | null>(
+    null,
+  );
+  const [newFileName, setNewFileName] = useState("");
 
-    const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
-    setLocalEdits((prev) => ({
-      ...prev,
-      [fullPath]: contents,
-    }));
-    setSelectedFile(fullPath);
-    // Expand the folder if it's collapsed
-    if (folderPath && collapsedFolders.has(folderPath)) {
-      handleToggleFolder(folderPath);
+  const handleNewFile = ({ folderPath = "", fileName = "", contents = "" } = {}) => {
+    if (fileName) {
+      const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
+      setLocalEdits((prev) => ({
+        ...prev,
+        [fullPath]: contents,
+      }));
+      setSelectedFile(fullPath);
+      // Expand the folder if it's collapsed
+      if (folderPath && collapsedFolders.has(folderPath)) {
+        handleToggleFolder(folderPath);
+      }
+    } else {
+      setNewFileState({ folderPath, contents });
+      setNewFileName("");
+      setNewFileDialogOpen(true);
     }
   };
 
-  const handleNewFolder = (parentPath: string) => {
-    const folderName = prompt("Enter folder name:");
-    if (!folderName) return;
+  const confirmNewFile = () => {
+    if (!newFileState || !newFileName.trim()) {
+      setNewFileDialogOpen(false);
+      setNewFileState(null);
+      return;
+    }
 
-    const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
+    const fullPath = newFileState.folderPath
+      ? `${newFileState.folderPath}/${newFileName.trim()}`
+      : newFileName.trim();
+    setLocalEdits((prev) => ({
+      ...prev,
+      [fullPath]: newFileState.contents,
+    }));
+    setSelectedFile(fullPath);
+    // Expand the folder if it's collapsed
+    if (newFileState.folderPath && collapsedFolders.has(newFileState.folderPath)) {
+      handleToggleFolder(newFileState.folderPath);
+    }
+    setNewFileDialogOpen(false);
+    setNewFileState(null);
+    setNewFileName("");
+  };
+
+  const [newFolderDialogOpen, setNewFolderDialogOpen] = useState(false);
+  const [newFolderParentPath, setNewFolderParentPath] = useState<string | null>(null);
+  const [newFolderName, setNewFolderName] = useState("");
+
+  const handleNewFolder = (parentPath: string) => {
+    setNewFolderParentPath(parentPath);
+    setNewFolderName("");
+    setNewFolderDialogOpen(true);
+  };
+
+  const confirmNewFolder = () => {
+    if (!newFolderParentPath || !newFolderName.trim()) {
+      setNewFolderDialogOpen(false);
+      setNewFolderParentPath(null);
+      return;
+    }
+
+    const fullPath = newFolderParentPath
+      ? `${newFolderParentPath}/${newFolderName.trim()}`
+      : newFolderName.trim();
     // Create a placeholder file in the folder to make it appear
     const placeholderPath = `${fullPath}/.gitkeep`;
     setLocalEdits((prev) => ({
@@ -416,10 +692,21 @@ export function IDE() {
       [placeholderPath]: "",
     }));
     // Expand parent folder
-    if (parentPath && collapsedFolders.has(parentPath)) {
-      handleToggleFolder(parentPath);
+    if (newFolderParentPath && collapsedFolders.has(newFolderParentPath)) {
+      handleToggleFolder(newFolderParentPath);
     }
+    setNewFolderDialogOpen(false);
+    setNewFolderParentPath(null);
+    setNewFolderName("");
   };
+
+  const [renameDialogOpen, setRenameDialogOpen] = useState(false);
+  const [fileToRename, setFileToRename] = useState<{
+    path: string;
+    name: string;
+    type: "file" | "folder";
+  } | null>(null);
+  const [renameValue, setRenameValue] = useState("");
 
   const handleRename = (oldPath: string, newPath: string) => {
     if (oldPath === newPath) return;
@@ -431,32 +718,60 @@ export function IDE() {
     if (validSelectedFile === oldPath) setSelectedFile(newPath);
   };
 
+  const openRenameDialog = (path: string, name: string, type: "file" | "folder") => {
+    setFileToRename({ path, name, type });
+    setRenameValue(name);
+    setRenameDialogOpen(true);
+  };
+
+  const confirmRename = () => {
+    if (!fileToRename || !renameValue.trim() || renameValue === fileToRename.name) {
+      setRenameDialogOpen(false);
+      setFileToRename(null);
+      return;
+    }
+
+    const parentPath = fileToRename.path.split("/").slice(0, -1).join("/");
+    const newPath = parentPath ? `${parentPath}/${renameValue.trim()}` : renameValue.trim();
+    handleRename(fileToRename.path, newPath);
+    setRenameDialogOpen(false);
+    setFileToRename(null);
+    setRenameValue("");
+  };
+
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [fileToDelete, setFileToDelete] = useState<string | null>(null);
+
   const handleDelete = (path: string) => {
-    if (!confirm(`Are you sure you want to delete ${path}?`)) return;
+    setFileToDelete(path);
+    setDeleteDialogOpen(true);
+  };
+
+  const confirmDelete = () => {
+    if (!fileToDelete) return;
 
     setLocalEdits((prev) => {
       const updated = { ...prev };
-      updated[path] = null;
+      updated[fileToDelete] = null;
       for (const otherpath of Object.keys(filesystem)) {
-        if (otherpath.startsWith(path + "/")) {
+        if (otherpath.startsWith(fileToDelete + "/")) {
           updated[otherpath] = null;
         }
       }
       return updated;
     });
     // Clear selection if deleted file was selected
-    if (validSelectedFile === path || validSelectedFile?.startsWith(path + "/")) {
+    if (validSelectedFile === fileToDelete || validSelectedFile?.startsWith(fileToDelete + "/")) {
       setSelectedFile(null);
     }
+    setDeleteDialogOpen(false);
+    setFileToDelete(null);
   };
 
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
     return fileContents[filename] !== (filesystem as Record<string, string>)[filename];
   };
-
-  // Check if current file has unsaved changes
-  const hasUnsavedChanges = validSelectedFile ? isFileEdited(validSelectedFile) : false;
 
   const handleContentChange = (newContent: string) => {
     if (validSelectedFile) {
@@ -465,10 +780,6 @@ export function IDE() {
         [validSelectedFile]: newContent,
       }));
     }
-  };
-
-  const handleSave = () => {
-    if (validSelectedFile) handleSaveAll([validSelectedFile]);
   };
 
   const handleSaveAll = (filepaths = Object.keys(fileContents)) => {
@@ -497,6 +808,10 @@ export function IDE() {
     saveFileMutation.mutate({
       estateId,
       commit: {
+        branch: {
+          branchName: currentPrBranch,
+          repositoryNameWithOwner: repoData?.full_name || "",
+        },
         expectedHeadOid: sha,
         message: {
           headline: `in-browser changes: ${summary}`,
@@ -578,31 +893,163 @@ export function IDE() {
 
   const language = getLanguage(validSelectedFile || "");
 
+  const handleBranchSelect = useCallback(
+    (branch: string) => {
+      setCurrentPrBranch(branch);
+    },
+    [setCurrentPrBranch],
+  );
+
+  const [newBranchDialogOpen, setNewBranchDialogOpen] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+  const [pendingActionAfterBranch, setPendingActionAfterBranch] = useState<
+    "push" | "createPr" | null
+  >(null);
+
+  const handleCreateNewBranch = useCallback((action?: "push" | "createPr") => {
+    const defaultBranchName = `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm")}`;
+    setNewBranchName(defaultBranchName);
+    setPendingActionAfterBranch(action || null);
+    setNewBranchDialogOpen(true);
+  }, []);
+
+  const confirmNewBranch = () => {
+    if (newBranchName.trim()) {
+      const newBranch = newBranchName.trim();
+      setCurrentPrBranch(newBranch);
+
+      // Execute pending action after branch is created
+      if (pendingActionAfterBranch === "push") {
+        // Wait for state to update, then push
+        setTimeout(() => {
+          handleSaveAll();
+        }, 100);
+      } else if (pendingActionAfterBranch === "createPr") {
+        // Wait for state to update, then create PR
+        setTimeout(() => {
+          createPullRequestMutation.mutate({ estateId, fromBranch: newBranch });
+        }, 100);
+      }
+    }
+    setNewBranchDialogOpen(false);
+    setNewBranchName("");
+    setPendingActionAfterBranch(null);
+  };
+
+  const [mergeDialogOpen, setMergeDialogOpen] = useState(false);
+  const [prToMerge, setPrToMerge] = useState<number | null>(null);
+
+  const handleMergePr = (pullNumber: number) => {
+    setPrToMerge(pullNumber);
+    setMergeDialogOpen(true);
+  };
+
+  const confirmMerge = () => {
+    if (prToMerge && currentPr) {
+      const branchToClear = currentPr.headRef;
+      mergePullMutation.mutate(
+        { estateId, pullNumber: prToMerge, mergeMethod: "merge" },
+        {
+          onSuccess: async () => {
+            localStorage.removeItem(`iterate-local-edits-${branchToClear}`);
+
+            // Invalidate and refetch queries
+            await queryClient.refetchQueries(
+              trpc.estate.listPulls.queryFilter({ estateId, state: "open" }),
+            );
+            queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+
+            // Get updated pulls data
+            const pullsData = queryClient.getQueryData(
+              trpc.estate.listPulls.queryKey({ estateId, state: "open" }),
+            ) as typeof pullsQuery.data | undefined;
+
+            // Find latest PR (highest number) or fall back to default branch
+            const latestPr =
+              pullsData && pullsData.length > 0
+                ? pullsData.reduce((latest, pr) => (pr.number > latest.number ? pr : latest))
+                : null;
+
+            const nextBranch = latestPr?.head.ref || defaultBranch;
+            setCurrentPrBranch(nextBranch);
+            setSelectedFile(null);
+          },
+        },
+      );
+      setMergeDialogOpen(false);
+      setPrToMerge(null);
+    }
+  };
+
+  const [closeDialogOpen, setCloseDialogOpen] = useState(false);
+  const [prToClose, setPrToClose] = useState<number | null>(null);
+
+  const handleClosePr = (pullNumber: number) => {
+    setPrToClose(pullNumber);
+    setCloseDialogOpen(true);
+  };
+
+  const confirmClose = () => {
+    if (prToClose && currentPr) {
+      const branchToClear = currentPr.headRef;
+      closePullMutation.mutate(
+        { estateId, pullNumber: prToClose },
+        {
+          onSuccess: async () => {
+            // Clear local edits for the closed branch
+            localStorage.removeItem(`iterate-local-edits-${branchToClear}`);
+            // Invalidate and refetch queries
+            await queryClient.refetchQueries(
+              trpc.estate.listPulls.queryFilter({ estateId, state: "open" }),
+            );
+
+            // Get updated pulls data
+            const pullsData = queryClient.getQueryData(
+              trpc.estate.listPulls.queryKey({ estateId, state: "open" }),
+            ) as typeof pullsQuery.data | undefined;
+
+            // Find latest PR (highest number) or fall back to default branch
+            const latestPr =
+              pullsData && pullsData.length > 0
+                ? pullsData.reduce((latest, pr) => (pr.number > latest.number ? pr : latest))
+                : null;
+
+            const nextBranch = latestPr?.head.ref || defaultBranch;
+            setCurrentPrBranch(nextBranch);
+            setSelectedFile(null);
+          },
+        },
+      );
+      setCloseDialogOpen(false);
+      setPrToClose(null);
+    }
+  };
+
   return (
     <div className="flex h-[calc(100vh-8rem)] overflow-hidden">
-      {/* Left sidebar - File tree */}
-      <div className="w-48 flex-shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+      {/* PR Sidebar */}
+      <PRSidebar
+        estateId={estateId}
+        currentBranch={currentPrBranch}
+        onBranchSelect={handleBranchSelect}
+        onCreateNewBranch={handleCreateNewBranch}
+        branchExists={branchExists}
+        actualBranch={actualBranch}
+        currentPr={currentPr}
+        onMergePr={handleMergePr}
+        onClosePr={handleClosePr}
+      />
+      {/* File tree sidebar */}
+      <div className="w-48 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
         <div className="p-2 border-b">
           <Button
-            onClick={handleSave}
-            disabled={
-              !hasUnsavedChanges || saveFileMutation.isPending || getRepoFileSystemQuery.isPending
-            }
-            size="sm"
-            variant="ghost"
-            className="w-full h-7 text-xs gap-1.5"
-          >
-            <Upload className="h-3 w-3" />
-            {saveFileMutation.isPending
-              ? "Pushing..."
-              : getRepoFileSystemQuery.isPending
-                ? "Loading..."
-                : `Push to ${getRepoFileSystemQuery.data?.branch || "GitHub"}`}
-          </Button>
-        </div>
-        <div className="p-2 border-b">
-          <Button
-            onClick={() => handleSaveAll()}
+            onClick={() => {
+              if (currentPrBranch === defaultBranch) {
+                handleCreateNewBranch("push");
+              } else {
+                handleSaveAll();
+              }
+            }}
             disabled={
               Object.keys(localEdits || {}).length === 0 ||
               saveFileMutation.isPending ||
@@ -613,8 +1060,30 @@ export function IDE() {
             className="w-full h-7 text-xs gap-1.5"
           >
             <Upload className="h-3 w-3" />
-            Push all
+            {saveFileMutation.isPending
+              ? "Pushing..."
+              : getRepoFileSystemQuery.isPending
+                ? "Loading..."
+                : `Push`}
           </Button>
+          {!currentPr && (
+            <Button
+              onClick={() => {
+                if (currentPrBranch === defaultBranch) {
+                  handleCreateNewBranch("createPr");
+                } else {
+                  createPullRequestMutation.mutate({ estateId, fromBranch: currentPrBranch });
+                }
+              }}
+              disabled={createPullRequestMutation.isPending}
+              size="sm"
+              variant="ghost"
+              className="w-full h-7 text-xs gap-1.5"
+            >
+              <GitPullRequest className="h-3 w-3" />
+              Create PR
+            </Button>
+          )}
         </div>
         <div className="p-2 flex-1 overflow-y-auto">
           <FileTreeView
@@ -627,6 +1096,7 @@ export function IDE() {
             onNewFile={handleNewFile}
             onNewFolder={handleNewFolder}
             onRename={handleRename}
+            onRenameOpen={openRenameDialog}
             onDelete={handleDelete}
           />
         </div>
@@ -653,7 +1123,13 @@ export function IDE() {
       </div>
 
       {/* Main panel - Editor */}
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-0 relative">
+        {getRepoFileSystemQuery.isFetching ? (
+          <div className="absolute top-2 right-2 z-10 flex items-center gap-2 bg-background/95 border rounded-md px-2 py-1 shadow-sm">
+            <Spinner className="h-3 w-3" />
+            <span className="text-xs text-muted-foreground">Refreshing...</span>
+          </div>
+        ) : null}
         {validSelectedFile ? (
           <Editor
             path={validSelectedFile ? `file:///app/${validSelectedFile}` : undefined}
@@ -702,6 +1178,209 @@ export function IDE() {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Dialog */}
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {fileToDelete}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this {fileToDelete?.includes(".") ? "file" : "folder"}
+              ? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setFileToDelete(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDelete}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Rename Dialog */}
+      <Dialog open={renameDialogOpen} onOpenChange={setRenameDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Rename {fileToRename?.type === "file" ? "File" : "Folder"}</DialogTitle>
+            <DialogDescription>Enter a new name for {fileToRename?.name}</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={renameValue}
+              onChange={(e) => setRenameValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  confirmRename();
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRenameDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmRename}
+              disabled={!renameValue.trim() || renameValue === fileToRename?.name}
+            >
+              Rename
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New File Dialog */}
+      <Dialog open={newFileDialogOpen} onOpenChange={setNewFileDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New File</DialogTitle>
+            <DialogDescription>Enter a name for the new file</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={newFileName}
+              onChange={(e) => setNewFileName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  confirmNewFile();
+                }
+              }}
+              placeholder="filename.ts"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewFileDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmNewFile} disabled={!newFileName.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Folder Dialog */}
+      <Dialog open={newFolderDialogOpen} onOpenChange={setNewFolderDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Folder</DialogTitle>
+            <DialogDescription>Enter a name for the new folder</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={newFolderName}
+              onChange={(e) => setNewFolderName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  confirmNewFolder();
+                }
+              }}
+              placeholder="folder-name"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewFolderDialogOpen(false)}>
+              Cancel
+            </Button>
+            <Button onClick={confirmNewFolder} disabled={!newFolderName.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Branch Dialog */}
+      <Dialog open={newBranchDialogOpen} onOpenChange={setNewBranchDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>New Branch</DialogTitle>
+            <DialogDescription>
+              {pendingActionAfterBranch
+                ? `Cannot work on ${defaultBranch} branch. Please create a new branch to continue.`
+                : "Enter a name for the new branch"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              value={newBranchName}
+              onChange={(e) => setNewBranchName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  confirmNewBranch();
+                }
+              }}
+              placeholder="branch-name"
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setNewBranchDialogOpen(false);
+                setPendingActionAfterBranch(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button onClick={confirmNewBranch} disabled={!newBranchName.trim()}>
+              Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Merge PR Confirmation Dialog */}
+      <AlertDialog open={mergeDialogOpen} onOpenChange={setMergeDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Merge Pull Request #{prToMerge}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to merge this pull request? This will merge the branch into the
+              base branch.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPrToMerge(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmMerge}
+              disabled={mergePullMutation.isPending}
+              className="bg-primary text-primary-foreground hover:bg-primary/90"
+            >
+              {mergePullMutation.isPending ? "Merging..." : "Merge"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Close PR Confirmation Dialog */}
+      <AlertDialog open={closeDialogOpen} onOpenChange={setCloseDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close Pull Request #{prToClose}</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to close this pull request? This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPrToClose(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmClose}
+              disabled={closePullMutation.isPending}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {closePullMutation.isPending ? "Closing..." : "Close"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
