@@ -762,8 +762,8 @@ export class AgentCore<
           return;
         }
 
-        // hard-coded failsafe - if the agent is in an infinite loop, we need to pause it
-        // i don't know why this is sometimes happening with codemode on
+        // Hard-coded failsafe - if the agent is in an infinite loop, we need to pause it
+        // I don't know why this was sometimes happening with codemode on
         const lastUserActionIndex = responsesAPIParams.input.findLastIndex(
           (item) =>
             item.type === "message" &&
@@ -780,7 +780,7 @@ export class AgentCore<
             item.name === "sendSlackMessage",
         );
 
-        if (messagesSinceLastUserAction.length >= 5) {
+        if (messagesSinceLastUserAction.length >= 10) {
           const pauseEvent = {
             type: "CORE:PAUSE_LLM_REQUESTS",
             eventIndex: this._events.length,
