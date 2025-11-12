@@ -424,7 +424,7 @@ export class AgentCore<
           type: "function_call_output",
           call_id: "codemode",
           output,
-          toolCallResult: result.toolCallResult,
+          toolCallResult: result.toolCallResult || result,
           triggerLLMRequest: result.triggerLLMRequest,
         };
       },
