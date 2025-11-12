@@ -6,6 +6,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
+import { z } from "zod/v4";
 import type { CloudflareEnv } from "../env.ts";
 import { ReactRouterServerContext } from "../app/context.ts";
 import { getDb, type DB } from "./db/client.ts";
@@ -29,9 +30,9 @@ import { getUserEstateAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
-import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 import { processSystemTasks } from "./onboarding-tasks.ts";
+import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 
 type TrpcCaller = ReturnType<typeof appRouter.createCaller>;
 export type Variables = {
@@ -143,7 +144,11 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
   if (!c.var.session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  //TODO: session.user.estates.includes(c.req.param("estateId")) -> PASS
+  const estateId = c.req.param("estateId");
+  const session = c.var.session;
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
   return next();
 });
 
@@ -229,6 +234,47 @@ app.post("/api/builds/:estateId/:buildId/ingest", async (c) => {
       body: c.req.raw.body,
     }),
   );
+});
+
+// Ingest agent background task logs (from sandbox/codex), batched every ~10s
+app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async (c) => {
+  const estateId = c.req.param("estateId");
+  const durableObjectName = c.req.param("durableObjectName");
+
+  const url = new URL(c.req.url);
+  const hasSignature = !!url.searchParams.get("signature");
+  if (!hasSignature) return c.json({ error: "Signature required" }, 401);
+  const valid = await verifySignedUrl(c.req.url, c.env.EXPIRING_URLS_SIGNING_KEY);
+  if (!valid) return c.json({ error: "Invalid or expired signature" }, 401);
+
+  // Parse body
+  const body = (await c.req.json()) as unknown;
+  const LogItem = z.object({
+    seq: z.number(),
+    ts: z.number(),
+    stream: z.enum(["stdout", "stderr"]),
+    message: z.string(),
+    event: z.string().optional(),
+  });
+  const Body = z.object({
+    processId: z.string(),
+    logs: z.array(LogItem).default([]),
+  });
+  const parsed = Body.safeParse(body);
+  if (!parsed.success) return c.json({ error: "Invalid payload" }, 400);
+  const { processId, logs } = parsed.data;
+
+  const agent = await getAgentStubByName(toAgentClassName(c.req.param("className")!), {
+    db: c.var.db,
+    agentInstanceName: durableObjectName,
+    estateId,
+  });
+  const result = (await agent.ingestBackgroundLogs({
+    processId,
+    logs,
+  })) as { lastSeq?: number } | void;
+  const lastSeq = result && typeof result.lastSeq === "number" ? result.lastSeq : undefined;
+  return c.json({ ok: true, lastSeq });
 });
 
 const requestHandler = createRequestHandler(
