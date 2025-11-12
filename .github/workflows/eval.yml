@@ -6,6 +6,7 @@ on:
     branches:
       - "**/*eval*"
       - "*eval*"
+  workflow_dispatch: {}
 permissions:
   contents: read
   deployments: write

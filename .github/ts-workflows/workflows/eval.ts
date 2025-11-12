@@ -8,6 +8,7 @@ export default workflow({
     push: {
       branches: ["**/*eval*", "*eval*"],
     },
+    workflow_dispatch: {},
   },
   permissions: {
     contents: "read",
