@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { Suspense, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Edit2,
@@ -76,7 +76,11 @@ import {
   SheetTitle,
 } from "../../../components/ui/sheet.tsx";
 import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
-import { IDE } from "../../../components/ide.tsx";
+// Lazy-load IDE (heavy Monaco) to avoid blocking initial page render
+const IDELazy = React.lazy(() =>
+  import("../../../components/ide.tsx").then((m) => ({ default: m.IDE })),
+);
+import { Skeleton } from "../../../components/ui/skeleton.tsx";
 import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
@@ -149,16 +153,21 @@ function EstateContent({
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const { data: connectedRepo } = useQuery(
+  const { data: connectedRepo, isLoading: connectedRepoLoading } = useQuery(
     trpc.integrations.getGithubRepoForEstate.queryOptions({
       estateId: estateId,
     }),
   );
-  const { data: repos } = useQuery(
-    trpc.integrations.listAvailableGithubRepos.queryOptions({
+  const reposQuery = useQuery({
+    ...trpc.integrations.listAvailableGithubRepos.queryOptions({
       estateId: estateId,
     }),
-  );
+    // Only enumerate repos when the config dialog is open and the user-managed installation is active
+    enabled:
+      isConfigDialogOpen && status === "ACTIVE_USER_MANAGED_INSTALLATION" && Boolean(estateId),
+    staleTime: 5 * 60 * 1000,
+  });
+  const repos = reposQuery.data;
 
   const { data: builds, isLoading: buildsLoading } = useQuery(
     trpc.estate.getBuilds.queryOptions({
@@ -177,6 +186,23 @@ function EstateContent({
   const iterateConfigUpdatedAt = compiledConfigQuery.data?.updatedAt
     ? new Date(compiledConfigQuery.data.updatedAt).toLocaleString()
     : null;
+
+  // Determine whether the IDE will be shown and preload it to avoid layout shift
+  const shouldShowIDE =
+    (status === "ACTIVE_USER_MANAGED_INSTALLATION" || status === "ITERATE_MANAGED_INSTALLATION") &&
+    Boolean(connectedRepo);
+  const [ideReady, setIdeReady] = useState(false);
+  React.useEffect(() => {
+    if (connectedRepoLoading) return;
+    if (!shouldShowIDE) {
+      setIdeReady(true);
+      return;
+    }
+    if (ideReady) return;
+    // Preload the IDE chunk; React caches dynamic imports so this is cheap on repeat
+    import("../../../components/ide.tsx").then(() => setIdeReady(true));
+  }, [connectedRepoLoading, shouldShowIDE, ideReady]);
+  const pageLoading = connectedRepoLoading || (shouldShowIDE && !ideReady);
 
   // Compute display values for repo fields
   // Use state values if they've been explicitly set (including empty string), otherwise use defaults
@@ -369,6 +395,37 @@ function EstateContent({
     );
   };
 
+  if (pageLoading) {
+    return (
+      <>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <Card variant="muted">
+            <CardHeader>
+              <Skeleton className="h-6 w-40" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Skeleton className="h-4 w-5/6" />
+              <Skeleton className="h-4 w-2/3" />
+              <Skeleton className="h-4 w-1/2" />
+            </CardContent>
+          </Card>
+          <Card variant="muted">
+            <CardHeader>
+              <Skeleton className="h-6 w-56" />
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <Skeleton className="h-4 w-64" />
+              <Skeleton className="h-9 w-40" />
+            </CardContent>
+          </Card>
+        </div>
+        <div className="mt-6">
+          <Skeleton className="h-[calc(100vh-8rem)] w-full" />
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       {/* Top Row - Two Cards Side by Side */}
@@ -448,32 +505,57 @@ function EstateContent({
             </div>
           </CardHeader>
           <CardContent>
-            {(status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
-              status === "ITERATE_MANAGED_INSTALLATION") &&
-            connectedRepo ? (
-              <>
-                <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
-                  <div className="text-sm text-muted-foreground">Repository:</div>
-                  <a
-                    href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="font-mono text-sm text-blue-600 hover:text-blue-800 underline break-all"
-                  >
-                    {connectedRepo.repoFullName || connectedRepo.repoName}
-                  </a>
-
-                  <div className="text-sm text-muted-foreground">Branch:</div>
-                  <span className="font-mono text-sm">{connectedRepo.branch}</span>
-
-                  <div className="text-sm text-muted-foreground">Path:</div>
-                  <span className="font-mono text-sm">{connectedRepo.path}</span>
+            {status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
+            status === "ITERATE_MANAGED_INSTALLATION" ? (
+              connectedRepoLoading ? (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+                    <Skeleton className="h-4 w-20" />
+                    <Skeleton className="h-4 w-64" />
+                    <Skeleton className="h-4 w-16" />
+                    <Skeleton className="h-4 w-24" />
+                    <Skeleton className="h-4 w-12" />
+                    <Skeleton className="h-4 w-20" />
+                  </div>
+                  <Skeleton className="h-3 w-72" />
                 </div>
-                <span className="text-xs text-muted-foreground">
-                  This repository is managed by Iterate, connect github integration to add custom
-                  repository
-                </span>
-              </>
+              ) : connectedRepo ? (
+                <>
+                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+                    <div className="text-sm text-muted-foreground">Repository:</div>
+                    <a
+                      href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="font-mono text-sm text-blue-600 hover:text-blue-800 underline break-all"
+                    >
+                      {connectedRepo.repoFullName || connectedRepo.repoName}
+                    </a>
+
+                    <div className="text-sm text-muted-foreground">Branch:</div>
+                    <span className="font-mono text-sm">{connectedRepo.branch}</span>
+
+                    <div className="text-sm text-muted-foreground">Path:</div>
+                    <span className="font-mono text-sm">{connectedRepo.path}</span>
+                  </div>
+                  {status === "ITERATE_MANAGED_INSTALLATION" && (
+                    <span className="text-xs text-muted-foreground">
+                      This repository is managed by Iterate, connect github integration to add
+                      custom repository
+                    </span>
+                  )}
+                </>
+              ) : (
+                <>
+                  <CardDescription>
+                    Connect your iterate repository to enable automatic builds and deployments.
+                  </CardDescription>
+                  <Button onClick={() => setIsConfigDialogOpen(true)} className="mt-4">
+                    <GitBranch className="h-4 w-4 mr-2" />
+                    Configure Repository
+                  </Button>
+                </>
+              )
             ) : status === "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" ? (
               <>
                 <CardDescription className="text-amber-600 dark:text-amber-400">
@@ -493,16 +575,6 @@ function EstateContent({
                     Remove and Reconnect
                   </Button>
                 </div>
-              </>
-            ) : repos && repos.length > 0 ? (
-              <>
-                <CardDescription>
-                  Connect your iterate repository to enable automatic builds and deployments.
-                </CardDescription>
-                <Button onClick={() => setIsConfigDialogOpen(true)} className="mt-4">
-                  <GitBranch className="h-4 w-4 mr-2" />
-                  Configure Repository
-                </Button>
               </>
             ) : (
               <>
@@ -532,7 +604,17 @@ function EstateContent({
 
       {(status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
         status === "ITERATE_MANAGED_INSTALLATION") &&
-        connectedRepo && <IDE />}
+        connectedRepo && (
+          <Suspense
+            fallback={
+              <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+                <Spinner className="h-6 w-6" />
+              </div>
+            }
+          >
+            <IDELazy />
+          </Suspense>
+        )}
 
       {/* Build History */}
       {connectedRepo && (
@@ -798,10 +880,11 @@ function EstateContent({
                   <Select
                     value={displaySelectedRepo}
                     onValueChange={setSelectedRepo}
-                    disabled={setGithubRepoForEstateMutation.isPending}
+                    disabled={reposQuery.isLoading || setGithubRepoForEstateMutation.isPending}
                   >
                     <SelectTrigger id="repository">
                       <SelectValue placeholder="Select a repository" />
+                      {reposQuery.isLoading && <Spinner className="h-3 w-3 opacity-60" />}
                     </SelectTrigger>
                     <SelectContent>
                       {repos?.map((repo) => (

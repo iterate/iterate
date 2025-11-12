@@ -455,6 +455,22 @@ export const FileSharedEvent = z.object({
   ...fileSharedEventFields,
 });
 
+// CORE:BACKGROUND_TASK_PROGRESS
+const backgroundTaskProgressEventFields = {
+  type: z.literal("CORE:BACKGROUND_TASK_PROGRESS"),
+  data: z.object({
+    processId: z.string(),
+    stdout: z.string().default(""),
+    stderr: z.string().default(""),
+    lastSeq: z.number().optional(),
+    complete: z.boolean().optional(),
+  }),
+};
+export const BackgroundTaskProgressEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...backgroundTaskProgressEventFields,
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const agentCoreEventSchemasUndiscriminated = [
@@ -481,6 +497,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantMentionedEvent,
+  BackgroundTaskProgressEvent,
 ] as const;
 
 export const AgentCoreEvent = z.discriminatedUnion("type", agentCoreEventSchemasUndiscriminated);

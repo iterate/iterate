@@ -1316,6 +1316,7 @@ export class AgentCore<
       case "CORE:INTERNAL_ERROR":
       case "CORE:INITIALIZED_WITH_EVENTS":
       case "CORE:LOG":
+      case "CORE:BACKGROUND_TASK_PROGRESS":
         // Just log, no state change needed
         break;
 
