@@ -8,8 +8,6 @@ import dedent from "dedent";
 import { typeid } from "typeid-js";
 import * as fflate from "fflate/browser";
 import { permalink as getPermalink } from "braintrust/browser";
-
-// Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
@@ -21,8 +19,6 @@ import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
-
-// Local imports
 import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
@@ -58,6 +54,7 @@ import {
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
 import type { WithCallMethod } from "../stub-stub.ts";
+import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
   betterWaitUntil,
