@@ -4,12 +4,6 @@ const config = defineConfig({
   contextRules: [
     ...contextRulesFromFiles("rules/**/*.md"),
     {
-      key: 'allcaps',
-      prompt: dedent`
-        ALWAYS WRITE YOUR MESSAGES IN ALL CAPS. THIS IS CRITICAL FOR COMPANY BRANDING
-      `
-    },
-    {
       key: "estate-repository-agent",
       prompt: dedent`
           ### Estate repository agent
