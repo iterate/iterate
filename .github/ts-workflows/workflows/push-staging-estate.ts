@@ -45,7 +45,7 @@ export default {
             echo "Using commit hash: $source_branch_sha"
 
             # Replace workspace:* with pkg.pr.new URL
-            sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@$source_branch_sha\"|g" package.json
+            sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@$source_branch_sha\"|g" staging-estate/estates/iterate/package.json
           `,
         },
         {
