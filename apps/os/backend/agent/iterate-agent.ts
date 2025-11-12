@@ -15,7 +15,7 @@ import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
 import { logger } from "../tag-logger.ts";
-import { env, type CloudflareEnv } from "../../env.ts";
+import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
@@ -426,7 +426,12 @@ export class IterateAgent<
             return { preamble: preambleCode, result };
           },
           [Symbol.dispose]: async () => {
-            this.deleteCodemodeCaller(codemodeCallerId);
+            // for some reason `using cm = ...` was disposing too early, so dispose after plenty of time has passed
+            waitUntil(
+              new Promise((r) => setTimeout(r, 5 * 60_000)).then(() =>
+                this.deleteCodemodeCaller(codemodeCallerId),
+              ),
+            );
           },
         };
       },

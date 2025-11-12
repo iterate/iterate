@@ -418,10 +418,9 @@ export class AgentCore<
           }),
         );
 
-        const cm = this.deps.setupCodemode(functions);
+        using cm = this.deps.setupCodemode(functions);
         const output = await cm.eval(functionCode + "\n\ncodemode()", statusIndicatorText);
         const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
-        waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]())); // for some reason `using cm = ...` was disposing too early
         return {
           ...result,
           type: "function_call_output",
