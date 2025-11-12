@@ -538,10 +538,12 @@ function EstateContent({
                     <div className="text-sm text-muted-foreground">Path:</div>
                     <span className="font-mono text-sm">{connectedRepo.path}</span>
                   </div>
-                  <span className="text-xs text-muted-foreground">
-                    This repository is managed by Iterate, connect github integration to add custom
-                    repository
-                  </span>
+                  {status === "ITERATE_MANAGED_INSTALLATION" && (
+                    <span className="text-xs text-muted-foreground">
+                      This repository is managed by Iterate, connect github integration to add
+                      custom repository
+                    </span>
+                  )}
                 </>
               ) : (
                 <>

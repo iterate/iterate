@@ -307,133 +307,6 @@ function FileTreeView({
   );
 }
 
-interface PRSidebarProps {
-  estateId: string;
-  currentBranch: string;
-  onBranchSelect: (branch: string) => void;
-  onCreateNewBranch: () => void;
-  branchExists?: boolean;
-  actualBranch?: string;
-  currentPr: { number: number; title: string; headRef: string; baseRef: string } | null;
-  onMergePr?: (pullNumber: number) => void;
-  onClosePr?: (pullNumber: number) => void;
-}
-
-function PRSidebar({
-  estateId,
-  currentBranch,
-  onBranchSelect,
-  onCreateNewBranch,
-  branchExists = true,
-  actualBranch,
-  currentPr,
-  onMergePr,
-  onClosePr,
-}: PRSidebarProps) {
-  const trpc = useTRPC();
-  const pullsQuery = useQuery(trpc.estate.listPulls.queryOptions({ estateId, state: "open" }));
-
-  return (
-    <div className="w-48 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
-      <div className="p-2 border-b">
-        <div className="text-xs font-semibold mb-1">Pull Requests</div>
-        <Button
-          onClick={onCreateNewBranch}
-          size="sm"
-          variant="ghost"
-          className="h-7 text-xs gap-1.5 bg-accent"
-        >
-          <Plus className="h-3 w-3" />
-          New Branch
-        </Button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-2">
-        {pullsQuery.isLoading ? (
-          <div className="text-xs text-muted-foreground p-2">Loading...</div>
-        ) : pullsQuery.data && pullsQuery.data.length > 0 ? (
-          <div className="space-y-1">
-            {pullsQuery.data.map((pr) => {
-              const isSelected = pr.head.ref === currentBranch;
-              return (
-                <button
-                  key={pr.id}
-                  onClick={() => onBranchSelect(pr.head.ref)}
-                  className={cn(
-                    "w-full text-left px-2 py-1.5 text-xs rounded-sm hover:bg-accent transition-colors",
-                    isSelected && "bg-accent font-medium",
-                  )}
-                  title={pr.title}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <GitPullRequest className="h-3 w-3 shrink-0" />
-                    <span className="truncate flex-1">#{pr.number}</span>
-                  </div>
-                  <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                    {pr.head.ref}
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        ) : (
-          <div className="text-xs text-muted-foreground p-2">No `ide/*` PRs found</div>
-        )}
-        <div className="mt-2 pt-2 border-t">
-          <div className="text-xs font-semibold mb-1">Current Branch</div>
-          <div className="text-xs text-muted-foreground px-2 py-1 break-all">{currentBranch}</div>
-          {!branchExists && actualBranch && actualBranch !== currentBranch && (
-            <div className="text-[10px] text-orange-600 dark:text-orange-400 px-2 mt-1">
-              Branch doesn't exist yet, showing {actualBranch}
-            </div>
-          )}
-
-          {currentPr ? (
-            <div className="mt-2">
-              <div className="px-2 mb-2">
-                <div className="text-xs font-semibold mb-1">PR #{currentPr.number}</div>
-                <div className="text-[10px] text-muted-foreground line-clamp-2 mb-2">
-                  {currentPr.title}
-                </div>
-                <div className="text-[10px] text-muted-foreground">
-                  {currentPr.headRef} → {currentPr.baseRef}
-                </div>
-              </div>
-              <div className="flex gap-1">
-                {onMergePr && (
-                  <Button
-                    onClick={() => onMergePr(currentPr.number)}
-                    size="sm"
-                    variant="default"
-                    className="flex-1 h-7 text-xs gap-1.5"
-                  >
-                    <GitMerge className="h-3 w-3" />
-                    Merge
-                  </Button>
-                )}
-                {onClosePr && (
-                  <Button
-                    onClick={() => onClosePr(currentPr.number)}
-                    size="sm"
-                    variant="destructive"
-                    className="flex-1 h-7 text-xs gap-1.5"
-                  >
-                    <X className="h-3 w-3" />
-                    Close
-                  </Button>
-                )}
-              </div>
-            </div>
-          ) : branchExists ? (
-            <div className="text-[10px] text-muted-foreground px-2 mt-1">
-              (No PR for this branch)
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export function IDE() {
   const trpc = useTRPC();
   const estateId = useEstateId();
@@ -909,7 +782,7 @@ export function IDE() {
   >(null);
 
   const handleCreateNewBranch = useCallback((action?: "push" | "createPr") => {
-    const defaultBranchName = `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm")}`;
+    const defaultBranchName = `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm-ss")}`;
     setNewBranchName(defaultBranchName);
     setPendingActionAfterBranch(action || null);
     setNewBranchDialogOpen(true);
