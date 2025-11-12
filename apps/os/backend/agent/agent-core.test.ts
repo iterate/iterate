@@ -430,7 +430,7 @@ describe("AgentCore", () => {
     const events = h.getEvents();
     const cancelEvents = events.filter((e) => e.type === "CORE:LLM_REQUEST_CANCEL");
     expect(pluckFields(cancelEvents, ["data.reason"])).toMatchInlineSnapshot(
-      `"["old request 4 superseded by new request 6"]"`,
+      `"["#4 superseded by #6"]"`,
     );
 
     // System-generated events should have empty metadata
