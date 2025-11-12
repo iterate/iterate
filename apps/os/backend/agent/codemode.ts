@@ -105,6 +105,7 @@ export function generateTypes(
   const available: Array<Extract<(typeof tools)[number], { name: string }>> = [];
   const unavailable: typeof tools = [];
   const toolFunctions: Array<() => string> = [];
+  const types: Record<string, { input: string; output: string }> = {};
   const blocklistSet = new Set(blocklist);
   for (const tool of tools) {
     if (!("name" in tool) || blocklistSet.has(tool.name)) {
@@ -117,16 +118,23 @@ export function generateTypes(
     const identifierToolName = toolNameToJsIdentifier(rawToolName);
 
     toolFunctions.push(() => {
-      const inputCode = jsonSchemaToInlineTypescript(
-        tool.unfiddledInputJSONSchema?.() || tool.parameters || {},
-      );
-      const outputCode = tool.unfiddledOutputJSONSchema
-        ? jsonSchemaToInlineTypescript(tool.unfiddledOutputJSONSchema()).inlineType
-        : "unknown";
       const placeholderArgs = "/* placeholder args */ ...args: unknown[]";
       const placeholderReturnType = "/* placeholder return type */ unknown";
 
+      const inputCode = jsonSchemaToInlineTypescript(
+        tool.unfiddledInputJSONSchema?.() || tool.parameters || {},
+      );
+
       let fnCode = `declare function ${identifierToolName}(${placeholderArgs}): Promise<${placeholderReturnType}>`;
+
+      const inputTypeTs =
+        tool.parameters?.$original === "empty_schema" || inputCode.inlineType === "{}"
+          ? ""
+          : inputCode.inlineType;
+
+      const outputTypeTs = tool.unfiddledOutputJSONSchema
+        ? jsonSchemaToInlineTypescript(tool.unfiddledOutputJSONSchema()).inlineType
+        : "unknown";
 
       if (tool.parameters?.$original === "empty_schema" || inputCode.inlineType === "{}") {
         fnCode = fnCode.replace(placeholderArgs, "");
@@ -134,7 +142,9 @@ export function generateTypes(
         fnCode = fnCode.replace(placeholderArgs, `input: ${inputCode.inlineType}`);
       }
 
-      fnCode = fnCode.replace(placeholderReturnType, outputCode);
+      fnCode = fnCode.replace(placeholderReturnType, outputTypeTs);
+
+      types[rawToolName] = { input: inputTypeTs, output: outputTypeTs };
 
       if (tool.description) {
         fnCode = [
@@ -157,6 +167,7 @@ export function generateTypes(
       const strings = toolFunctions.map((fn) => fn());
       return strings.join("\n\n");
     },
+    types,
     available,
     unavailable,
   };

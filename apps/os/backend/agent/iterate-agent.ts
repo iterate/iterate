@@ -345,6 +345,7 @@ export class IterateAgent<
       setupCodemode: (functions) => {
         const codemodeCallerId = this.createCodemodeCaller(functions);
         const baseUrl = this.env.VITE_PUBLIC_URL;
+        const callbackResults: Record<string, unknown[]> = {};
         const baseFetchProps = {
           estateId: this.databaseRecord.estateId,
           agentInstanceName: this.databaseRecord.durableObjectName,
@@ -359,6 +360,7 @@ export class IterateAgent<
         };
         addVar("baseUrl", baseUrl);
         addVar("baseFetchProps", baseFetchProps);
+        addVar("callbackResults", callbackResults);
         async function callCodemodeCallbackOnDO(functionName: string, input: unknown) {
           const res = await fetch(`${baseUrl}/api/trpc/agents.callCodemodeCallback`, {
             method: "post",
@@ -376,6 +378,9 @@ export class IterateAgent<
             throw new Error("Invalid tRPC response format");
           }
 
+          callbackResults[functionName] ||= [];
+          callbackResults[functionName].push(json.result.data);
+
           return json.result.data;
         }
         const fnString = callCodemodeCallbackOnDO.toString();
@@ -391,9 +396,15 @@ export class IterateAgent<
 
         const preambleCode = preamble.join("\n");
         return {
-          eval: async (code) => {
+          eval: async (functionCode) => {
             const evalerUrl = `http://localhost:7001`;
-            const fullCode = [...preamble, "\n\n", code].join("\n");
+            const fullCode = [
+              ...preamble,
+              "\n",
+              functionCode,
+              "\n",
+              `[codemode(), callbackResults];`,
+            ].join("\n");
             let res: Response;
             try {
               res = await fetch(evalerUrl, {
@@ -406,9 +417,10 @@ export class IterateAgent<
                 throw new Error(`Expected JSON response from ${evalerUrl}, got ${contentType}`);
               }
             } catch (err) {
-              throw new Error(`Failed to eval code: ${String(err)}\n\nCode:\n${code}`.trim(), {
-                cause: err,
-              });
+              throw new Error(
+                `Failed to eval code: ${String(err)}\n\nCode:\n${functionCode}`.trim(),
+                { cause: err },
+              );
             }
 
             if (!res.ok) {
@@ -422,8 +434,9 @@ export class IterateAgent<
               throw new Error(`${res.status} hitting ${evalerUrl}:\n${message}`, { cause: error });
             }
 
-            const result = await res.json<unknown>();
-            return { preamble: preambleCode, result };
+            const responseData = await res.json<[unknown, Record<string, unknown[]>]>();
+            const [result, callbackResults] = responseData;
+            return { preamble: preambleCode, result, callbackResults };
           },
           [Symbol.dispose]: async () => {
             this.deleteCodemodeCaller(codemodeCallerId);

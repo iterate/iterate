@@ -21,6 +21,7 @@
  */
 
 import * as R from "remeda";
+// import * as quicktype from "quicktype-core";
 import { Mutex } from "async-mutex";
 import jsonata from "@mmkal/jsonata/sync";
 import type { OpenAI } from "openai";
@@ -136,7 +137,10 @@ export type CheckDepsConflict<T> =
 
 export interface AgentCoreDeps {
   setupCodemode: (functions: Record<string, Function>) => {
-    eval: (code: string, status: string) => Promise<{ preamble: string; result: unknown }>;
+    eval: (
+      code: string,
+      status: string,
+    ) => Promise<{ preamble: string; result: unknown; callbackResults: Record<string, unknown[]> }>;
     [Symbol.dispose]: () => Promise<void>;
   };
   /** Persist the full event array whenever it changes – safe to store by ref */
@@ -417,9 +421,29 @@ export class AgentCore<
         );
 
         using cm = this.deps.setupCodemode(functions);
-        // waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]()));
-        const output = await cm.eval(functionCode + "\n\ncodemode()", statusIndicatorText);
+        const output = await cm.eval(functionCode, statusIndicatorText);
         const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
+
+        // const jsonInput = quicktype.jsonInputForTargetLanguage("typescript");
+        // await jsonInput.addSource({
+        //   name: "Queries",
+        //   samples: [JSON.stringify(output.callbackResults, null, 2)],
+        // });
+        // const inputData = new quicktype.InputData();
+        // inputData.addInput(jsonInput);
+        // const typescript = await quicktype.quicktype({
+        //   inputData,
+        //   lang: "typescript",
+        //   rendererOptions: {
+        //     "just-types": true,
+        //     "prefer-unions": true,
+        //   },
+        // });
+
+        // console.log({
+        //   quicktype: typescript.lines.join("\n"),
+        // });
+
         return {
           ...result,
           type: "function_call_output",
