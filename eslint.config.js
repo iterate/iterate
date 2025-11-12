@@ -274,12 +274,37 @@ export default defineConfig([
             getBuiltinRule("prefer-const"),
             "Change to const, if you're finished tinkering",
           ),
-          "side-effect-imports-first": {
+          "import-rules": {
             meta: {
               fixable: "code",
             },
             create: (context) => {
               return {
+                ImportDeclaration: (node) => {
+                  const parentBodyIndex = node.parent.body.indexOf(node);
+                  const lastImportIndex = node.parent.body.findLastIndex(
+                    (n) => n.type === "ImportDeclaration",
+                  );
+                  if (parentBodyIndex === -1 || parentBodyIndex !== lastImportIndex) {
+                    return;
+                  }
+                  const exportsBefore = node.parent.body
+                    .slice(0, parentBodyIndex)
+                    .filter(
+                      (n) =>
+                        n.type === "ExportDeclaration" ||
+                        n.type === "ExportNamedDeclaration" ||
+                        n.type === "ExportAllDeclaration" ||
+                        n.type === "ExportDefaultDeclaration",
+                    );
+
+                  exportsBefore.forEach((e) => {
+                    context.report({
+                      node: e,
+                      message: `Exports should come after imports`,
+                    });
+                  });
+                },
                 "ImportDeclaration[specifiers.length=0]": (node) => {
                   const parentBodyIndex = node.parent.body.indexOf(node);
                   const nonSideEffectImportBefore = node.parent.body
@@ -405,7 +430,7 @@ export default defineConfig([
     name: "iterate-config",
     rules: {
       "iterate/prefer-const": "error",
-      "iterate/side-effect-imports-first": "warn",
+      "iterate/import-rules": "warn",
       "iterate/zod-schema-naming": "error",
       "iterate/drizzle-conventions": "error",
     },

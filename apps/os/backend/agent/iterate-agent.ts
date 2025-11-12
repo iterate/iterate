@@ -8,8 +8,6 @@ import dedent from "dedent";
 import { typeid } from "typeid-js";
 import * as fflate from "fflate/browser";
 import { permalink as getPermalink } from "braintrust/browser";
-
-// Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
@@ -21,26 +19,8 @@ import { env, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
-
-// Local imports
 import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
-export type AgentInitParams = {
-  record: AgentInstanceDatabaseRecord;
-  estate: typeof schema.estate.$inferSelect;
-  organization: typeof schema.organization.$inferSelect;
-  iterateConfig: IterateConfig;
-  // Optional props forwarded to PartyKit when setting the room name
-  // Used to pass initial metadata for the room/server initialisation
-  props?: Record<string, unknown>;
-  // Optional tracing information for logger context
-  tracing?: {
-    userId?: string;
-    parentSpan?: string;
-    traceId?: string;
-  };
-};
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import {
@@ -95,6 +75,23 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInitParams = {
+  record: AgentInstanceDatabaseRecord;
+  estate: typeof schema.estate.$inferSelect;
+  organization: typeof schema.organization.$inferSelect;
+  iterateConfig: IterateConfig;
+  // Optional props forwarded to PartyKit when setting the room name
+  // Used to pass initial metadata for the room/server initialisation
+  props?: Record<string, unknown>;
+  // Optional tracing information for logger context
+  tracing?: {
+    userId?: string;
+    parentSpan?: string;
+    traceId?: string;
+  };
+};
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
