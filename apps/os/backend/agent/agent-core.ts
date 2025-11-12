@@ -416,7 +416,7 @@ export class AgentCore<
           }),
         );
 
-        const cm = this.deps.setupCodemode(functions);
+        using cm = this.deps.setupCodemode(functions);
         // waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]()));
         const output = await cm.eval(functionCode + "\n\ncodemode()", statusIndicatorText);
         const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
