@@ -406,7 +406,7 @@ export class AgentCore<
                 type: "function_call",
                 call_id: params.call_id + "-codemode" + Date.now() + String(Math.random()),
                 name: tool.name,
-                arguments: JSON.stringify([input]),
+                arguments: JSON.stringify(input),
                 status: "in_progress",
               };
               const toolWithApproval = this.approvify(call, tool);
@@ -1666,6 +1666,7 @@ export class AgentCore<
     }
   }
 
+  // TODO: don't accept `call`, all we really need is the call id
   private approvify(call: ResponseFunctionToolCall, tool: LocalFunctionRuntimeTool) {
     const policies = this.state.enabledContextRules.flatMap((rule) => rule.toolPolicies || []);
     let needsApproval = false;
