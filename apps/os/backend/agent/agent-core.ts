@@ -20,7 +20,6 @@
  * • LLM requests use reduced state computed from full event history
  */
 
-import { setTimeout } from "node:timers/promises";
 import * as R from "remeda";
 import { Mutex } from "async-mutex";
 import jsonata from "@mmkal/jsonata/sync";
@@ -35,7 +34,6 @@ import dedent from "dedent";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { logger } from "../tag-logger.ts";
-import { waitUntil } from "../../env.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
