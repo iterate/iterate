@@ -21,7 +21,7 @@ export default {
           name: "Checkout code",
           uses: "actions/checkout@v4",
           with: {
-            path: "main",
+            path: "source-branch",
           },
         },
         {
@@ -34,12 +34,18 @@ export default {
           },
         },
         {
-          name: "Replace estate folder with contents from main",
+          name: "Replace estate folder with contents from source-branch",
           run: dedent`
             rm -rf staging-estate/estates/iterate
             mkdir -p staging-estate/estates
-            cp -r main/estates/iterate staging-estate/estates/iterate
+            cp -r source-branch/estates/iterate staging-estate/estates/iterate
             rm -rf staging-estate/estates/iterate/apps
+
+            source_branch_sha=$(cd ../source-branch && git log --pretty=format:'%h' -n 1)
+            echo "Using commit hash: $source_branch_sha"
+
+            # Replace workspace:* with pkg.pr.new URL
+            sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@$source_branch_sha\"|g" package.json
           `,
         },
         {
