@@ -489,7 +489,7 @@ export const estateRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { data: pulls } = await ctx.github.rest.pulls.list({ ...ctx.repo, state: input.state });
-      return pulls.filter((p) => p.head.ref.includes("ide/"));
+      return pulls.filter((p) => p.head.ref.match(/\bide\//));
     }),
 
   mergePull: githubInstallationScopedProcedure
