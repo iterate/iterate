@@ -172,7 +172,7 @@ export const iterateAgentTools = defineDOTools({
   },
   exec: {
     description:
-      "Execute a shell in a sandbox. This should be used for making commits and PRs using git, gh and to perform simple-read-only shell commands.",
+      "Execute a shell in an ephemeral sandbox. This should be used for making commits and PRs using git, gh and to perform simple-read-only shell commands. Do not assume that the user can see any file in the sandbox (they can't) - the ONLY way to upload a file generated in the sandbox - you MUST run `/tmp/upload-file <path-to-file>`.",
     statusIndicatorText: "⚙️ running command",
     input: z.object({
       command: z.string(),
@@ -195,7 +195,8 @@ export const iterateAgentTools = defineDOTools({
     }),
   },
   execCodex: {
-    description: "Ask codex to perform a task in the sandbox.",
+    description:
+      "Ask codex to perform a task in the sandbox. Exactly like exec, you can upload a file generated in the sandbox, you can tell codex to run `/tmp/upload-file <path-to-file>`.",
     statusIndicatorText: "⚙️ running command",
     input: z.object({
       command: z.string(),

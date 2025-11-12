@@ -15,6 +15,7 @@ import {
   uploadFileFromURLHandler,
   getFileHandler,
   getExportHandler,
+  uploadFileForAgentHandler,
 } from "./file-handlers.ts";
 import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
@@ -148,10 +149,27 @@ app.all("/api/trpc/*", (c) => {
 
 // File upload routes
 app.use("/api/estate/:estateId/*", async (c, next) => {
-  if (!c.var.session) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
   const estateId = c.req.param("estateId");
+  const url = new URL(c.req.url);
+
+  // Allow signed URLs
+  const isUploadRoute =
+    c.req.method === "POST" &&
+    (url.pathname === `/api/estate/${estateId}/files` ||
+      url.pathname === `/api/estate/${estateId}/files/from-url` ||
+      // agent-specific upload endpoint
+      /^\/api\/estate\/[^/]+\/[^/]+\/[^/]+\/files$/.test(url.pathname));
+  if (isUploadRoute) {
+    const hasSignature = !!url.searchParams.get("signature");
+    if (hasSignature) {
+      const valid = await verifySignedUrl(c.req.url, c.env.EXPIRING_URLS_SIGNING_KEY);
+      if (valid) {
+        return next();
+      }
+    }
+  }
+
+  // Fallback to session-based access control
   const session = c.var.session;
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
   const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
@@ -160,6 +178,10 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
 });
 
 app.post("/api/estate/:estateId/files", uploadFileHandler);
+app.post(
+  "/api/estate/:estateId/:agentClassName/:agentInstanceName/files",
+  uploadFileForAgentHandler,
+);
 app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
 app.get("/api/estate/:estateId/exports/:exportId", getExportHandler);
 

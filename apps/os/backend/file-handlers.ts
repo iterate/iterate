@@ -9,6 +9,7 @@ import { files } from "./db/schema.ts";
 import { openAIProvider } from "./agent/openai-client.ts";
 import { getBaseURL } from "./utils/utils.ts";
 import { logger } from "./tag-logger.ts";
+import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 
 // Types
 export type FileRecord = InferSelectModel<typeof files>;
@@ -118,6 +119,73 @@ const generateFileId = () => typeid("file").toString();
 
 // Helper function to generate R2 key for a file
 const generateR2Key = (fileId: string) => `files/${fileId}`;
+
+export const uploadFileForAgentHandler = async (
+  c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
+) => {
+  try {
+    const db = c.var.db;
+    if (!db) {
+      return c.json({ error: "Database unavailable" }, 500);
+    }
+
+    const estateId = c.req.param("estateId");
+    const agentClassName = c.req.param("agentClassName");
+    const agentInstanceName = c.req.param("agentInstanceName");
+    if (!estateId || !agentClassName || !agentInstanceName) {
+      return c.json({ error: "Missing required path params" }, 400);
+    }
+
+    const filename = c.req.query("filename");
+    if (!filename) {
+      return c.json({ error: "filename query parameter is required" }, 400);
+    }
+    const contentType = c.req.header("content-type") || "application/octet-stream";
+    const contentLengthHeader = c.req.header("content-length");
+    const stream = c.req.raw.body!;
+    const contentLength = contentLengthHeader ? Number.parseInt(contentLengthHeader) : 0;
+
+    const fileRecord = await uploadFile({
+      stream,
+      contentLength,
+      filename,
+      contentType,
+      estateId,
+      db,
+    });
+
+    // Emit CORE:FILE_SHARED to the agent so it can share the file back to the user
+    const agent = await getAgentStubByName(toAgentClassName(agentClassName), {
+      db,
+      agentInstanceName,
+      estateId,
+    });
+
+    await agent.addEvents([
+      {
+        type: "CORE:FILE_SHARED",
+        data: {
+          direction: "from-agent-to-user",
+          iterateFileId: fileRecord.id,
+          originalFilename: fileRecord.filename ?? undefined,
+          size: fileRecord.fileSize ?? undefined,
+          mimeType: fileRecord.mimeType ?? undefined,
+          openAIFileId: fileRecord.openAIFileId ?? undefined,
+        },
+      },
+    ]);
+
+    return c.json(fileRecord);
+  } catch (error) {
+    logger.error("uploadFileForAgentHandler error:", error);
+    return c.json(
+      {
+        error: error instanceof Error ? error.message : "Upload for agent failed",
+      },
+      500,
+    );
+  }
+};
 
 export const uploadFileHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,

@@ -1876,10 +1876,15 @@ export class IterateAgent<
   async execCodex(input: Inputs["execCodex"]) {
     const instructions: string = input.command;
     const instructionsFilePath = `/tmp/instructions-${Math.floor(Math.random() * 1e6)}.txt`;
+    // Precompute a signed upload URL for this agent so the sandbox CLI can upload files
+    const uploadUrl = await this.getSignedAgentUploadUrl();
     const execInput: Inputs["exec"] = {
       command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
       files: [{ path: instructionsFilePath, content: instructions }],
-      env: { CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY") },
+      env: {
+        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
+        ITERATE_AGENT_UPLOAD_URL: uploadUrl,
+      },
     };
     return await this.runExecWithOptions(execInput, {
       formatOutput: (stdout) => formatCodexOutput(stdout),
@@ -2089,7 +2094,24 @@ export class IterateAgent<
   }
 
   async exec(input: Inputs["exec"]) {
-    return await this.runExecWithOptions(input);
+    // Provide sandbox with a signed upload URL so it can use /tmp/upload-file
+    const uploadUrl = await this.getSignedAgentUploadUrl();
+    return await this.runExecWithOptions({
+      ...input,
+      env: {
+        ...(input.env || {}),
+        ITERATE_AGENT_UPLOAD_URL: uploadUrl,
+      },
+    });
+  }
+
+  private async getSignedAgentUploadUrl(): Promise<string> {
+    let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+    if (baseUrl.includes("localhost")) {
+      baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
+    }
+    const unsignedUpload = `${baseUrl}/api/estate/${this.databaseRecord.estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/files`;
+    return await signUrl(unsignedUpload, this.env.EXPIRING_URLS_SIGNING_KEY, 60 * 60);
   }
 
   async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {

@@ -14,8 +14,8 @@ export async function signUrl(
   // Add expiration to URL
   urlObj.searchParams.set("expires", expiresAt.toString());
 
-  // Create signature payload
-  const payload = `${urlObj.pathname}${urlObj.search}&expires=${expiresAt}`;
+  // Create signature payload using ONLY pathname and expires to allow extra query params (like filename)
+  const payload = `${urlObj.pathname}?expires=${expiresAt}`;
 
   // Create signature using Web Crypto API
   const encoder = new TextEncoder();
@@ -60,9 +60,8 @@ export async function verifySignedUrl(url: string, signingKey: string): Promise<
       return false;
     }
 
-    // Remove signature from URL to recreate payload
-    urlObj.searchParams.delete("signature");
-    const payload = `${urlObj.pathname}${urlObj.search}&expires=${expires}`;
+    // Create signature payload using ONLY pathname and expires (ignore other query params)
+    const payload = `${urlObj.pathname}?expires=${expires}`;
 
     // Recreate signature
     const encoder = new TextEncoder();
