@@ -390,7 +390,7 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
   - You do not need to share a link to the generated image with the user. It'll be shared as a side-effect of calling generateImage
 
   # Capabilities
-  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. 
+  - NEVER suggest that you can do something if you don't have access to any tools that could possibly do it. 
   - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.
 `;
 

@@ -20,6 +20,7 @@
  * • LLM requests use reduced state computed from full event history
  */
 
+import { setTimeout } from "node:timers/promises";
 import * as R from "remeda";
 import { Mutex } from "async-mutex";
 import jsonata from "@mmkal/jsonata/sync";
@@ -34,6 +35,7 @@ import dedent from "dedent";
 import { stripNonSerializableProperties } from "../utils/schema-helpers.ts";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { logger } from "../tag-logger.ts";
+import { waitUntil } from "../../env.ts";
 import { deepCloneWithFunctionRefs } from "./deep-clone-with-function-refs.ts";
 import {
   AgentCoreEvent,
@@ -416,10 +418,10 @@ export class AgentCore<
           }),
         );
 
-        using cm = this.deps.setupCodemode(functions);
-        // waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]()));
+        const cm = this.deps.setupCodemode(functions);
         const output = await cm.eval(functionCode + "\n\ncodemode()", statusIndicatorText);
         const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
+        waitUntil(setTimeout(60_000).then(() => cm[Symbol.dispose]())); // for some reason `using cm = ...` was disposing too early
         return {
           ...result,
           type: "function_call_output",
