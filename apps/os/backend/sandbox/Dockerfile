@@ -18,6 +18,13 @@ RUN cd /tmp && ./node_modules/.bin/esbuild \
     --format=cjs \
     --target=node24 \
     --outfile=/tmp/sandbox-exec-runner.js
+RUN cd /tmp && ./node_modules/.bin/esbuild \
+    scripts/upload-file.ts \
+    --bundle \
+    --platform=node \
+    --format=cjs \
+    --target=node24 \
+    --outfile=/tmp/upload-file
 
 
 FROM docker.io/cloudflare/sandbox:0.4.4
@@ -60,6 +67,8 @@ COPY --from=builder /tmp/sandbox-build-runner.js /tmp/sandbox-build-runner.js
 RUN chmod +x /tmp/sandbox-build-runner.js
 COPY --from=builder /tmp/sandbox-exec-runner.js /tmp/sandbox-exec-runner.js
 RUN chmod +x /tmp/sandbox-exec-runner.js
+COPY --from=builder /tmp/upload-file /tmp/upload-file
+RUN chmod +x /tmp/upload-file
 
 # Expose the ports you want to expose
 EXPOSE 3000
