@@ -459,7 +459,7 @@ export class IterateAgent<
               ${event.createdAt},
               ${typeof event.triggerLLMRequest === "boolean" ? Number(event.triggerLLMRequest) : 0},
               ${event.idempotencyKey || null},
-              ${JSON.stringify(event.data) || "{}"},
+              ${JSON.stringify(event.data || {})},
               ${JSON.stringify(event.metadata || {})}
             )
           `;
