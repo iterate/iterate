@@ -327,7 +327,7 @@ export const estateRouter = router({
         deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, deletion.path);
       });
 
-      const branchName = input.commit.branch.branchName ?? ctx.estate.connectedRepoRef!;
+      const branchName = input.commit.branch.branchName;
       const branch = await ctx.github.rest.repos
         .getBranch({
           owner: ctx.repo.owner,
@@ -336,6 +336,8 @@ export const estateRouter = router({
         })
         .catch(() => null);
 
+      let sha = input.commit.expectedHeadOid;
+
       if (!branch || branch.status !== 200) {
         // create the branch
         const defaultBranch = await ctx.github.rest.repos.getBranch({
@@ -343,12 +345,13 @@ export const estateRouter = router({
           repo: ctx.repo.repo,
           branch: ctx.estate.connectedRepoRef!,
         });
-        await ctx.github.rest.git.createRef({
+        const { data: newRef } = await ctx.github.rest.git.createRef({
           owner: ctx.repo.owner,
           repo: ctx.repo.repo,
           ref: `refs/heads/${branchName}`,
           sha: defaultBranch.data.commit.sha,
         });
+        sha = newRef.object.sha;
       }
 
       const result = await ctx.github.graphql(
@@ -368,6 +371,7 @@ export const estateRouter = router({
               branchName: branchName,
               repositoryNameWithOwner: ctx.repoData.full_name,
             },
+            expectedHeadOid: sha,
           } satisfies CreateCommitOnBranchInput,
         },
       );
@@ -485,7 +489,7 @@ export const estateRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const { data: pulls } = await ctx.github.rest.pulls.list({ ...ctx.repo, state: input.state });
-      return pulls;
+      return pulls.filter((p) => p.head.ref.match(/\bide\//));
     }),
 
   mergePull: githubInstallationScopedProcedure
