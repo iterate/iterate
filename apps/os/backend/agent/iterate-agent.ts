@@ -1,4 +1,3 @@
-import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
@@ -22,6 +21,7 @@ import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
 import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
+import { signUrl } from "../utils/url-signing.ts";
 import { searchWeb, getURLContent } from "../default-tools.ts";
 import {
   getFileContent,
@@ -74,7 +74,6 @@ import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
-import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
 
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
@@ -297,6 +296,18 @@ export class IterateAgent<
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bg_logs (process_id TEXT, seq INTEGER, ts INTEGER, stream TEXT, message TEXT, event TEXT)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_bg_logs_proc_seq ON bg_logs (process_id, seq)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS idx_bg_logs_proc_ts ON bg_logs (process_id, ts)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bg_processes (process_id TEXT PRIMARY KEY, formatter TEXT, last_heartbeat INTEGER, status TEXT NOT NULL DEFAULT 'in_progress')",
+    );
   }
 
   callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
@@ -1742,147 +1753,22 @@ export class IterateAgent<
 
   async execCodex(input: Inputs["execCodex"]) {
     const instructions: string = input.command;
-
-    const instructionsFilePath = `/tmp/instructions-${R.randomInteger(0, 99999)}.txt`;
-    const newInput: Inputs["exec"] = {
+    const instructionsFilePath = `/tmp/instructions-${Math.floor(Math.random() * 1e6)}.txt`;
+    const execInput: Inputs["exec"] = {
       command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
-      files: [
-        {
-          path: instructionsFilePath,
-          content: instructions,
-        },
-      ],
-      env: {
-        // this tells codex to use the openai api key
-        // setting OPENAI_API_KEY is not enough, because codex will not use it
-        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
-      },
+      files: [{ path: instructionsFilePath, content: instructions }],
+      env: { CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY") },
     };
-    const result = await this.exec(newInput);
-
-    // codex exec supports a --json mode that streams events to stdout as JSON Lines (JSONL) while the agent runs.
-
-    // Supported event types:
-
-    // thread.started - when a thread is started or resumed.
-    // turn.started - when a turn starts. A turn encompasses all events between the user message and the assistant response.
-    // turn.completed - when a turn completes; includes token usage.
-    // turn.failed - when a turn fails; includes error details.
-    // item.started/item.updated/item.completed - when a thread item is added/updated/completed.
-    // error - when the stream reports an unrecoverable error; includes the error message.
-    // Supported item types:
-
-    // agent_message - assistant message.
-    // reasoning - a summary of the assistant's thinking.
-    // command_execution - assistant executing a command.
-    // file_change - assistant making file changes.
-    // mcp_tool_call - assistant calling an MCP tool.
-    // web_search - assistant performing a web search.
-    // todo_list - the agent's running plan when the plan tool is active, updating as steps change.
-    // Typically, an agent_message is added at the end of the turn.
-
-    // Sample output:
-
-    // {"type":"thread.started","thread_id":"0199a213-81c0-7800-8aa1-bbab2a035a53"}
-    // {"type":"turn.started"}
-    // {"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Searching for README files**"}}
-    // {"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"","status":"in_progress"}}
-    // {"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc ls","aggregated_output":"2025-09-11\nAGENTS.md\nCHANGELOG.md\ncliff.toml\ncodex-cli\ncodex-rs\ndocs\nexamples\nflake.lock\nflake.nix\nLICENSE\nnode_modules\nNOTICE\npackage.json\npnpm-lock.yaml\npnpm-workspace.yaml\nPNPM.md\nREADME.md\nscripts\nsdk\ntmp\n","exit_code":0,"status":"completed"}}
-    // {"type":"item.completed","item":{"id":"item_2","type":"reasoning","text":"**Checking repository root for README**"}}
-    // {"type":"item.completed","item":{"id":"item_3","type":"agent_message","text":"Yep — there’s a `README.md` in the repository root."}}
-    // {"type":"turn.completed","usage":{"input_tokens":24763,"cached_input_tokens":24448,"output_tokens":122}}
-
-    const parsedOutput = result.output?.stdout
-      ?.split("\n")
-      .map((line: string): string | null => {
-        try {
-          const parsed = JSON.parse(line);
-          if (typeof parsed === "object" && parsed.type) {
-            switch (parsed.type) {
-              case "thread.started":
-                return null; // don't need to return this to the iterate agent
-              case "turn.started":
-                return null; // don't need to return this to the iterate agent
-              case "turn.completed":
-                return null; // don't need to return this to the iterate agent
-              case "item.started":
-                return null; // we don't need to add this to the output because we should already have a completed or failed item
-              case "turn.failed":
-                return line; // return the raw line  on failure
-              case "item.updated":
-                // TODO: implement support for these, if the actually exist
-                logger.warn("item.updated message encountered", parsed);
-                return truncateLongString(JSON.stringify(parsed), 250);
-              case "item.completed":
-                switch (parsed.item.type) {
-                  case "file_change":
-                    if (parsed.item.status === "completed") {
-                      return parsed.item.changes
-                        ? `<files changed>\n${JSON.stringify(parsed.item.changes)}</files changed>`
-                        : (parsed.item.text ?? parsed.item);
-                    }
-                    logger.warn("unknown file change status:", parsed.item);
-                    return line;
-                  case "agent_message":
-                    return parsed.item.text ?? parsed.item;
-                  case "reasoning":
-                    return `<reasoning>\n${truncateLongString(parsed.item.text ?? parsed.item, 250)}\n</reasoning>`;
-                  case "command_execution":
-                    if (parsed.item.status === "completed") {
-                      if (parsed.item.command) {
-                        const { command, aggregated_output, exit_code } = parsed.item;
-                        const shortCommand = truncateLongString(command);
-                        const shortAggregatedOutput = truncateLongString(aggregated_output);
-                        return `<command executed>\n<command>${shortCommand}</command>\n<aggregated_output>${shortAggregatedOutput}</aggregated_output>\n<exit_code>${exit_code}</exit_code>\n</command executed>`;
-                      }
-                      return parsed.item.text ?? parsed.item;
-                    }
-                    logger.warn("unknown command execution status:", parsed.item);
-                    return line;
-                  case "web_search":
-                    return `<web search>\n${truncateLongString(parsed.item, 250)}\n</web search>`;
-                  case "todo_list":
-                    return `<todo list>\n${parsed.item}\n</todo list>`;
-                  case "mcp_tool_call":
-                    return `<mcp tool call>\n${truncateLongString(parsed.item, 250)}\n</mcp tool call>`;
-                  default:
-                    logger.warn("unknown item.completed type:", parsed.item.type);
-                    return parsed.item;
-                }
-              case "error":
-                return parsed;
-              default:
-                logger.warn("unknown event type:", parsed.type);
-                return line;
-            }
-          } else {
-            return line;
-          }
-        } catch (err) {
-          logger.warn("error parsing codex output", err);
-          return line;
-        }
-      })
-      .filter(Boolean)
-      .map((line) => {
-        let str = typeof line === "string" ? line : JSON.stringify(line);
-        // Remove leading/trailing asterisks, double, and single quotes from each line
-        str = str.replace(/\\n/g, "\n"); // Replace literal '\n' with actual newlines
-        str = str.replace(/^[*"'\s]+|[*"'\s]+$/g, ""); // Remove leading/trailing asterisks, quotes, and whitespace
-        str = str.replace(/\n{2,}/g, "\n"); // Collapse consecutive newlines into a single newline
-        return str;
-      });
-
-    return {
-      ...result,
-      output: {
-        ...result.output,
-        stdout: parsedOutput?.join("\n"),
-      },
-    };
+    return await this.runExecWithOptions(execInput, {
+      formatOutput: (stdout) => formatCodexOutput(stdout),
+      formatterKey: "codex",
+    });
   }
 
-  async exec(input: Inputs["exec"]) {
+  private async runExecWithOptions(
+    input: Inputs["exec"],
+    opts?: { formatOutput?: (stdout: string) => string | null; formatterKey?: string },
+  ) {
     // ------------------------------------------------------------------------
     // Get config
     // ------------------------------------------------------------------------
@@ -1943,8 +1829,8 @@ export class IterateAgent<
       logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
       // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
-      // TODO: switch to using branch names instead of session ids
-      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}`;
+      // Use a unique working directory per exec to avoid contention
+      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}-${R.randomInteger(0, 99999)}`;
       const nodePath = "/opt/node24/bin/node";
 
       try {
@@ -1952,10 +1838,12 @@ export class IterateAgent<
       } catch (err) {
         logger.error("Error creating session directory", err);
         const { success, exitCode } = await sandbox.listFiles(sessionDir);
+        logger.info("List files in session directory:", { success, exitCode });
+
         if (success && exitCode === 0) {
           // continue with the session
         } else {
-          throw new Error("Error creating session directory");
+          throw new Error("Error creating session directory", { cause: err });
         }
       }
 
@@ -1981,172 +1869,65 @@ export class IterateAgent<
           throw new Error("Error creating session");
         }
       }
-
       try {
-        // Determine the checkout target and whether it's a commit hash
-        const checkoutTarget = commitHash || branch || "main";
-        const isCommitHash = Boolean(commitHash);
-
-        // Prepare arguments as a JSON object
-        const initArgs = {
+        // Start background exec runner; it will perform repo setup (auth/clone/install)
+        const processId = typeid("exec").toString();
+        let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+        if (baseUrl.includes("localhost")) {
+          baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
+        }
+        const unsignedIngest = `${baseUrl}/api/agent-logs/${estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
+        const ingestUrl = await signUrl(
+          unsignedIngest,
+          this.env.EXPIRING_URLS_SIGNING_KEY,
+          60 * 60,
+        );
+        const startArgs = {
           sessionDir,
           githubRepoUrl,
           githubToken: scopedToken.data.token,
-          checkoutTarget,
-          isCommitHash,
+          checkoutTarget: commitHash || branch || "main",
+          isCommitHash: Boolean(commitHash),
+          connectedRepoPath: estate.connectedRepoPath,
+          ingestUrl,
+          estateId,
+          processId,
+          command: input.command,
+          env: input.env,
+          files: input.files,
         };
-        // Escape the JSON string for shell
-        const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-        // Init the sandbox (ignore any errors)
-        const commandInit = `pwd && ${nodePath} /tmp/sandbox-entry.ts init '${initJsonArgs}' && ${nodePath} /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
-        using resultInit = await sandboxSession.exec(commandInit, {
-          timeout: 360 * 1000, // 360 seconds total timeout
-        });
-        if (!resultInit.success) {
-          logger.error(
-            "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
-            resultInit,
-          );
-        } else {
-          logger.info("Sandbox initialized successfully");
+        const startJsonArgs = JSON.stringify(startArgs).replace(/'/g, "'\\''");
+        const commandStart = `${nodePath} /tmp/sandbox-exec-runner.js start '${startJsonArgs}'`;
+        const res = await sandboxSession.startProcess(commandStart);
+        if (res.status !== "running") {
+          logger.error("Failed to start exec process:", res);
+          return {
+            success: false,
+            error: "Failed to start background exec process",
+          };
         }
-
-        if (input.command.length > 256) {
-          if (!input.files) {
-            input.files = [];
-          }
-          const commandId = R.randomInteger(0, 99999);
-          input.files.push({
-            path: `/tmp/command-id-${commandId}.sh`,
-            content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
-          });
-          input.command = `bash /tmp/command-id-${commandId}.sh`;
-        }
-        // ------------------------------------------------------------------------
-        // Write files
-        // ------------------------------------------------------------------------
-        await Promise.all(
-          (input.files ?? []).map(async (file) => {
-            await sandboxSession.writeFile(file.path, file.content);
-          }),
-        );
-
-        // ------------------------------------------------------------------------
-        // Run exec
-        // ------------------------------------------------------------------------
-
-        // Run the exec command in streaming mode
-        const commandExec = input.command;
-        const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-          timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
-        });
-        let stdout = "";
-        let stderr = "";
-        const stream = resultStream[Symbol.asyncIterator]();
-
-        // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
-        let sandboxHealthy = true;
-        const interval = setInterval(async () => {
-          try {
-            const state = await sandbox.getState();
-            if (state.status !== "healthy") {
-              sandboxHealthy = false;
-            }
-            await sandbox.renewActivityTimeout();
-          } catch (err) {
-            logger.error("Error renewing activity timeout", err);
-          }
-        }, 5000);
-
-        // try finallyblock to close the interval
+        // Ensure a metadata row exists for monitoring (formatter may be null)
         try {
-          while (true) {
-            if (!sandboxHealthy) {
-              logger.warn("Sandbox is not healthy, exiting");
-              return {
-                success: false,
-                message: "Sandbox crashed after completing this work",
-                stdout,
-                stderr,
-                exitCode: 1,
-              };
-            }
-
-            // We allow 510 seconds for the next stream event, if we don't get one, we timeout.
-            // The Bun Server idle timeout is 255 seconds but it may stay alive for longer if we
-            // don't get an event in 510s though we're pretty sure that bun has timed out.
-            const abortController = new AbortController();
-            const getNextStreamEventTimeout = setTimeoutPromise(510_000, {
-              signal: abortController.signal,
-            }).then(() => "TIMEOUT" as const);
-
-            const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
-
-            // Clean up the timeout regardless of which promise won the race
-            abortController.abort();
-
-            if (result === "TIMEOUT") {
-              return {
-                message: "The connection to codex timed out",
-                success: false,
-                stdout,
-                stderr,
-                exitCode: 1,
-              };
-            }
-            if (result.done) {
-              logger.info("Exec readable exhausted without complete event", {
-                input,
-                stdout,
-                stderr,
-              });
-              // should not get here
-              return {
-                success: false,
-                message: "Result stream terminated before process completion signal was received",
-                stdout,
-                stderr,
-                exitCode: 1,
-              };
-            }
-            const event = result.value;
-            switch (event.type) {
-              case "stdout":
-                stdout += event.data;
-                logger.debug(`Exec stdout: ${event.data}`);
-                break;
-              case "stderr":
-                stderr += event.data;
-                logger.info(`Exec stderr: ${event.data}`);
-                break;
-              case "error":
-                stderr += event.data;
-                logger.info(`Exec error: ${event.data}`);
-                logger.error(`Error running \`${commandExec}\` in sandbox`, event);
-                return {
-                  message: "Execution errors occurred",
-                  success: false,
-                  stdout,
-                  stderr,
-                  exitCode: 1,
-                };
-              case "complete":
-                logger.info(`Exec ${event.exitCode === 0 ? "succeeded" : "failed"}`);
-                return {
-                  message:
-                    event.exitCode === 0
-                      ? "Execution completed successfully"
-                      : "Execution completed with errors",
-                  success: event.exitCode === 0,
-                  stdout,
-                  stderr,
-                  exitCode: event.exitCode,
-                };
-            }
-          }
-        } finally {
-          clearInterval(interval);
-        }
+          this.ctx.storage.sql.exec(
+            "INSERT OR REPLACE INTO bg_processes (process_id, formatter, last_heartbeat, status) VALUES (?, ?, ?, ?)",
+            processId,
+            opts?.formatterKey ?? null,
+            Date.now(),
+            "in_progress",
+          );
+        } catch {}
+        // Schedule monitor for timeouts
+        await this.schedule(120, "monitorBackgroundProcess", { processId });
+        return {
+          success: true,
+          output: {
+            message: `Started background exec task with process id ${processId}. You will get an event when it completes, you do not need to monitor it yourself.`,
+            processId,
+          },
+          __addAgentCoreEvents: [
+            { type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } },
+          ],
+        };
       } finally {
         // TODO: uncomment when cloudflare sandbox is fixed
         // await sandbox.deleteSession(sessionId);
@@ -2167,37 +1948,26 @@ export class IterateAgent<
     if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
+    logger.info("Sandbox state:", sandboxState);
 
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
 
     if (!resultExec.success) {
-      logger.error("Exec failed", resultExec);
+      logger.error("Exec failed to start", resultExec);
       return {
         success: false,
-        error: dedent`
-          Command failed with exit code ${resultExec.exitCode} and message "${resultExec.message}"
-
-          stdout:
-          ${resultExec.stdout || "(empty)"}
-
-          stderr:
-          ${resultExec.stderr || "(empty)"}
-        `,
+        error: resultExec.error || "Failed to start background exec process",
         __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
       };
     }
 
-    logger.info("Exec succeeded 1", resultExec);
-    return {
-      success: true,
-      output: {
-        message: resultExec.message,
-        stdout: resultExec.stdout,
-        stderr: resultExec.stderr,
-      },
-      __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
-    };
+    logger.info("Exec background task started");
+    return resultExec;
+  }
+
+  async exec(input: Inputs["exec"]) {
+    return await this.runExecWithOptions(input);
   }
 
   async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
@@ -2412,6 +2182,214 @@ export class IterateAgent<
       data: { message: `Label "${label}" added successfully` },
     };
   }
+
+  /**
+   * Ingest background task logs (from sandbox runners) into DO storage and emit progress events.
+   * Stores logs idempotently in an internal SQL table keyed by process_id and seq.
+   */
+  async ingestBackgroundLogs(input: {
+    processId: string;
+    logs: Array<{
+      seq: number;
+      ts: number;
+      stream: "stdout" | "stderr";
+      message: string;
+      event?: string;
+    }>;
+  }): Promise<{ lastSeq: number }> {
+    const { processId, logs } = input;
+
+    // Record heartbeat for this process
+    try {
+      this.ctx.storage.sql.exec(
+        "UPDATE bg_processes SET last_heartbeat = ? WHERE process_id = ?",
+        Date.now(),
+        processId,
+      );
+    } catch {}
+
+    // Get current max seq
+    let lastSeq = 0;
+    try {
+      const rowsCursor = this.ctx.storage.sql.exec<{ max_seq: number | null }>(
+        "SELECT MAX(seq) AS max_seq FROM bg_logs WHERE process_id = ?",
+        processId,
+      );
+      const rows = Array.from(rowsCursor, (r) => ({ max_seq: r.max_seq }));
+      const maxSeqVal = rows.length > 0 ? rows[0].max_seq : null;
+      lastSeq = maxSeqVal !== null && maxSeqVal !== undefined ? Number(maxSeqVal) || 0 : 0;
+    } catch {
+      lastSeq = 0;
+    }
+
+    // Insert new logs idempotently
+    const sorted = logs
+      .filter((l) => typeof l.seq === "number" && l.seq > lastSeq)
+      .sort((a, b) => a.seq - b.seq);
+    for (const entry of sorted) {
+      try {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO bg_logs (process_id, seq, ts, stream, message, event) VALUES (?, ?, ?, ?, ?, ?)",
+          processId,
+          entry.seq,
+          Number(entry.ts) || Date.now(),
+          entry.stream === "stderr" ? "stderr" : "stdout",
+          String(entry.message ?? ""),
+          entry.event ?? null,
+        );
+        lastSeq = entry.seq;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("UNIQUE") || msg.includes("constraint")) {
+          continue; // duplicate, ignore
+        }
+        throw err;
+      }
+    }
+
+    // Aggregate complete logs for this process
+    const rowsCursor = this.ctx.storage.sql.exec<{
+      seq: number;
+      stream: string;
+      message: string;
+      event: string | null;
+    }>(
+      "SELECT seq, stream, message, event FROM bg_logs WHERE process_id = ? ORDER BY seq ASC",
+      processId,
+    );
+    const rows = Array.from(rowsCursor, (r) => ({
+      seq: Number(r.seq),
+      stream: String(r.stream),
+      message: String(r.message ?? ""),
+      event: r.event ?? undefined,
+    }));
+    let stdout = "";
+    let stderr = "";
+    let fullOutput = "";
+    let complete = false;
+    let failed = false;
+    for (const r of rows) {
+      fullOutput += String(r.message ?? "");
+      if ((r.stream as string) === "stderr") stderr += String(r.message ?? "");
+      else stdout += String(r.message ?? "");
+      if (r.event && (r.event.includes("SUCCEEDED") || r.event.includes("FAILED"))) {
+        complete = true;
+        if (r.event.includes("FAILED")) failed = true;
+      }
+    }
+
+    // Emit progress event
+    this.addEvent({
+      type: "CORE:BACKGROUND_TASK_PROGRESS",
+      data: { processId, stdout, stderr, lastSeq, complete },
+    });
+
+    // If complete, add developer message and trigger the model
+    if (complete) {
+      try {
+        this.ctx.storage.sql.exec(
+          "UPDATE bg_processes SET status = ? WHERE process_id = ?",
+          failed ? "failed" : "succeeded",
+          processId,
+        );
+      } catch {}
+      // Optionally format output based on per-process formatter selection (from SQL)
+      let formatterFn: ((stdout: string) => string | null) | null = null;
+      try {
+        const cur = this.ctx.storage.sql.exec<{ formatter: string | null }>(
+          "SELECT formatter FROM bg_processes WHERE process_id = ?",
+          processId,
+        );
+        const arr = Array.from(cur, (r) => ({ formatter: r.formatter }));
+        const key = arr.length > 0 ? arr[0].formatter : null;
+        if (key === "codex") {
+          formatterFn = (s: string) => formatCodexOutput(s);
+        }
+      } catch {}
+      const stream = failed ? fullOutput : stdout;
+      const formatted = formatterFn ? formatterFn(stream) : truncateLongString(stream, 5_000);
+      try {
+        this.ctx.storage.sql.exec("DELETE FROM bg_processes WHERE process_id = ?", processId);
+      } catch {}
+      this.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Background task ${processId} has completed.${
+                formatted ? `\n\nOutput:\n${formatted}` : ""
+              }`,
+            },
+          ],
+        },
+        triggerLLMRequest: true,
+      });
+    }
+    return { lastSeq };
+  }
+
+  /**
+   * Monitor a background process for heartbeats; if stale > 2 minutes and not complete/failed,
+   * post a developer message about timeout.
+   */
+  async monitorBackgroundProcess(data: { processId: string }) {
+    const { processId } = data;
+    // Read process metadata from SQL (status + last_heartbeat)
+    let status: string | null = null;
+    let last = 0;
+    try {
+      const cur = this.ctx.storage.sql.exec<{
+        status: string | null;
+        last_heartbeat: number | null;
+      }>("SELECT status, last_heartbeat FROM bg_processes WHERE process_id = ?", processId);
+      const arr = Array.from(cur, (r) => ({
+        status: r.status ?? null,
+        last_heartbeat: r.last_heartbeat ?? 0,
+      }));
+      if (arr.length === 0) {
+        // No row means process metadata was cleaned up (completed) or never existed
+        return;
+      }
+      status = arr[0].status ?? "in_progress";
+      last = Number(arr[0].last_heartbeat) || 0;
+    } catch {
+      // If SQL read fails, bail out silently
+      return;
+    }
+    if (status === "succeeded" || status === "failed" || status === "timed_out") {
+      return;
+    }
+    const now = Date.now();
+    if (now - last > 120_000) {
+      try {
+        this.ctx.storage.sql.exec(
+          "UPDATE bg_processes SET status = ? WHERE process_id = ?",
+          "timed_out",
+          processId,
+        );
+      } catch {}
+      this.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Background task ${processId} timed out (no heartbeat for over 2 minutes).`,
+            },
+          ],
+        },
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+    // Still alive – reschedule another monitor
+    await this.schedule(120, "monitorBackgroundProcess", { processId });
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -2483,4 +2461,114 @@ function truncateLongString(str: string, maxLength = 100): string {
   return str.length > maxLength
     ? str.slice(0, showChars) + "...[truncated]..." + str.slice(-showChars)
     : str;
+}
+
+/**
+ * Best-effort formatter for codex JSONL output streams.
+ * Returns a compact human-readable summary or null if the output doesn't look like codex JSONL.
+ */
+function formatCodexOutput(stdout: string): string {
+  if (!stdout) return "";
+  const lines = stdout.split("\n").filter((l) => l.trim().length > 0);
+  let sawCodexType = false;
+  const out: string[] = [];
+
+  for (const line of lines) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // not JSON – keep plain line only if we have no JSON at all
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || !parsed.type) continue;
+    sawCodexType = true;
+
+    switch (parsed.type) {
+      case "thread.started":
+      case "turn.started":
+      case "turn.completed":
+        // ignore admin/meta events
+        break;
+      case "turn.failed":
+        out.push("Turn failed");
+        break;
+      case "item.updated":
+        out.push(`item.updated: ${truncateLongString(JSON.stringify(parsed), 250)}`);
+        break;
+      case "item.completed": {
+        const item = parsed.item;
+        if (!item || typeof item !== "object") break;
+        switch (item.type) {
+          case "file_change": {
+            if (item.status === "completed") {
+              if (item.changes) {
+                out.push(`<files changed>\n${JSON.stringify(item.changes)}\n</files changed>`);
+              } else {
+                out.push(String(item.text ?? "[file_change]"));
+              }
+            } else {
+              out.push(`file_change: ${String(item.status)}`);
+            }
+            break;
+          }
+          case "agent_message":
+            out.push(String(item.text ?? "[agent_message]"));
+            break;
+          case "reasoning":
+            out.push(
+              `<reasoning>\n${truncateLongString(String(item.text ?? "[reasoning]"), 250)}\n</reasoning>`,
+            );
+            break;
+          case "command_execution": {
+            if (item.status === "completed") {
+              if (item.command) {
+                const shortCommand = truncateLongString(String(item.command));
+                const shortOutput = truncateLongString(String(item.aggregated_output ?? ""), 500);
+                const exitCode = String(item.exit_code ?? "0");
+                out.push(
+                  `<command executed>\n<command>${shortCommand}</command>\n<aggregated_output>${shortOutput}</aggregated_output>\n<exit_code>${exitCode}</exit_code>\n</command executed>`,
+                );
+              } else {
+                out.push(String(item.text ?? "[command_execution]"));
+              }
+            } else {
+              out.push(`command_execution: ${String(item.status)}`);
+            }
+            break;
+          }
+          case "web_search":
+            out.push(
+              `<web search>\n${truncateLongString(JSON.stringify(item), 250)}\n</web search>`,
+            );
+            break;
+          case "todo_list":
+            out.push(`<todo list>\n${String(item)}\n</todo list>`);
+            break;
+          case "mcp_tool_call":
+            out.push(
+              `<mcp tool call>\n${truncateLongString(JSON.stringify(item), 250)}\n</mcp tool call>`,
+            );
+            break;
+          default:
+            out.push(truncateLongString(JSON.stringify(item), 250));
+            break;
+        }
+        break;
+      }
+      case "error":
+        out.push(truncateLongString(JSON.stringify(parsed)));
+        break;
+      default:
+        // Unknown codex event type -> keep compact JSON
+        out.push(truncateLongString(JSON.stringify(parsed)));
+        break;
+    }
+  }
+
+  if (!sawCodexType) {
+    // Not codex JSONL – return truncated raw stdout directly
+    return truncateLongString(stdout);
+  }
+  return out.filter(Boolean).join("\n");
 }
