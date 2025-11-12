@@ -151,6 +151,26 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     100,
   );
 
+  override async ingestBackgroundLogs(
+    input: Parameters<IterateAgent<SlackAgentSlices>["ingestBackgroundLogs"]>[0],
+  ) {
+    const result = await super.ingestBackgroundLogs(input);
+    const last = input.logs.findLast(
+      (log) => log.message?.startsWith(`{"type"`) && log.message.includes(`"text":`),
+    );
+    try {
+      if (last) {
+        const json = JSON.parse(last?.message);
+        let text = json.item?.text;
+        text = text.replaceAll("**", "");
+        text = text.slice(0, 50);
+        if (text) waitUntil(this.updateSlackThreadStatus({ status: text }));
+      }
+    } catch {}
+
+    return result;
+  }
+
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
