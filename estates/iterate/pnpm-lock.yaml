@@ -1,0 +1,52 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .:
+    devDependencies:
+      '@iterate-com/sdk':
+        specifier: https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@7c6b344
+        version: https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@7c6b344
+
+packages:
+
+  '@iterate-com/sdk@https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@7c6b344':
+    resolution: {tarball: https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@7c6b344}
+    version: 0.0.1
+    hasBin: true
+
+  dedent@1.7.0:
+    resolution: {integrity: sha512-HGFtf8yhuhGhqO07SV79tRp+br4MnbdjeVxotpn1QBl30pcLLCQjX5b2295ll0fv8RKDKsmWYrl05usHM9CewQ==}
+    peerDependencies:
+      babel-plugin-macros: ^3.1.0
+    peerDependenciesMeta:
+      babel-plugin-macros:
+        optional: true
+
+  yaml@2.8.1:
+    resolution: {integrity: sha512-lcYcMxX2PO9XMGvAJkJ3OsNMw+/7FKes7/hgerGUYWIoWu5j/+YQqcZr5JnPZWzOsEBgMbSbiSTn/dv/69Mkpw==}
+    engines: {node: '>= 14.6'}
+    hasBin: true
+
+  zod@4.1.12:
+    resolution: {integrity: sha512-JInaHOamG8pt5+Ey8kGmdcAcg3OL9reK8ltczgHTAwNhMys/6ThXHityHxVV2p3fkw/c+MAvBHFVYHFZDmjMCQ==}
+
+snapshots:
+
+  '@iterate-com/sdk@https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@7c6b344':
+    dependencies:
+      dedent: 1.7.0
+      yaml: 2.8.1
+      zod: 4.1.12
+    transitivePeerDependencies:
+      - babel-plugin-macros
+
+  dedent@1.7.0: {}
+
+  yaml@2.8.1: {}
+
+  zod@4.1.12: {}
