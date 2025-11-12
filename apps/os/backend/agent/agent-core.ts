@@ -424,8 +424,8 @@ export class AgentCore<
           type: "function_call_output",
           call_id: "codemode",
           output,
-          toolCallResult: result.toolCallResult || result,
-          triggerLLMRequest: result.triggerLLMRequest,
+          toolCallResult: result?.toolCallResult || result,
+          triggerLLMRequest: result?.triggerLLMRequest,
         };
       },
     };
@@ -762,7 +762,7 @@ export class AgentCore<
         }
 
         // Hard-coded failsafe - if the agent is in an infinite loop, we need to pause it
-        // I don't know why this was sometimes happening with codemode on
+        // I don't know why this was sometimes happening with codemode and the original prompt, but it was
         const lastUserActionIndex = responsesAPIParams.input.findLastIndex(
           (item) =>
             item.type === "message" &&
