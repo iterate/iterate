@@ -125,3 +125,51 @@ const prettyPrint = (script: string) => {
     );
   }
 };
+
+/**
+ * Adds/updates a comment block to a markdown string. Looks for an existing comment block with the given label, returns the previous
+ * contents of it, as well as the updated body with the new contents.
+ * Useful for keeping part of a PR body up to date even while the rest of the body is updated elsewhere (e.g. manually in the GitHub UI)
+ */
+export const annotateMarkdown = (body: string, label: string, contents = "") => {
+  const startMarker = `<!-- #region ${label} -->`;
+  const endMarker = `<!-- endregion -->`;
+  const existingSectionStart = body.indexOf(startMarker);
+  if (existingSectionStart === -1) {
+    return {
+      previousContents: null,
+      newBody: `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
+    };
+  }
+
+  let existingSectionEnd = body.indexOf(endMarker, existingSectionStart);
+  if (existingSectionEnd === -1) {
+    existingSectionEnd = body.length;
+  }
+
+  const previousContents = body
+    .slice(existingSectionStart + startMarker.length, existingSectionEnd)
+    .trim();
+
+  return {
+    previousContents,
+    newBody: `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd).trimStart()}`,
+  };
+};
+
+export const prState = <State>(body: string, label: string, parser = JSON) => {
+  let currentBody = body;
+  return {
+    read: () => {
+      const parsed = annotateMarkdown(currentBody, label);
+      const previousContents = parsed.previousContents || `<!-- {} -->`;
+      const s = previousContents.replaceAll("\n", " ").match(/^<!-- (.*) -->$/)?.[1];
+      if (!s) throw new Error(`Invalid previous contents: ${previousContents}`);
+      return parser.parse(s) as Partial<State>;
+    },
+    write: (state: State) => {
+      const newContents = `<!-- ${parser.stringify(state, null, 2)} -->`;
+      return (currentBody = annotateMarkdown(currentBody, label, newContents).newBody);
+    },
+  };
+};

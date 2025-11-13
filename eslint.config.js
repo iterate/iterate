@@ -167,6 +167,13 @@ export default defineConfig([
   {
     rules: {
       "unicorn/template-indent": "warn",
+      "unicorn/isolated-functions": [
+        "error",
+        {
+          functions: ["githubScript"],
+          selectors: [`CallExpression[callee.property.name='githubScript'] FunctionExpression`],
+        },
+      ],
     },
   },
   {

@@ -53,8 +53,8 @@ importers:
         specifier: ^0.4.24
         version: 0.4.24(eslint@9.38.0(jiti@2.6.1))
       eslint-plugin-unicorn:
-        specifier: ^62.0.0
-        version: 62.0.0(eslint@9.38.0(jiti@2.6.1))
+        specifier: github:mmkal/eslint-plugin-unicorn#4b6340834f94ebb53a1aee5b91dd5c0e103249b3
+        version: https://codeload.github.com/mmkal/eslint-plugin-unicorn/tar.gz/4b6340834f94ebb53a1aee5b91dd5c0e103249b3(eslint@9.38.0(jiti@2.6.1))
       globals:
         specifier: ^16.4.0
         version: 16.4.0
@@ -5906,8 +5906,9 @@ packages:
     peerDependencies:
       eslint: '>=8.40'
 
-  eslint-plugin-unicorn@62.0.0:
-    resolution: {integrity: sha512-HIlIkGLkvf29YEiS/ImuDZQbP12gWyx5i3C6XrRxMvVdqMroCI9qoVYCoIl17ChN+U89pn9sVwLxhIWj5nEc7g==}
+  eslint-plugin-unicorn@https://codeload.github.com/mmkal/eslint-plugin-unicorn/tar.gz/4b6340834f94ebb53a1aee5b91dd5c0e103249b3:
+    resolution: {tarball: https://codeload.github.com/mmkal/eslint-plugin-unicorn/tar.gz/4b6340834f94ebb53a1aee5b91dd5c0e103249b3}
+    version: 62.0.0
     engines: {node: ^20.10.0 || >=21.0.0}
     peerDependencies:
       eslint: '>=9.38.0'
@@ -15235,7 +15236,7 @@ snapshots:
     dependencies:
       eslint: 9.38.0(jiti@2.6.1)
 
-  eslint-plugin-unicorn@62.0.0(eslint@9.38.0(jiti@2.6.1)):
+  eslint-plugin-unicorn@https://codeload.github.com/mmkal/eslint-plugin-unicorn/tar.gz/4b6340834f94ebb53a1aee5b91dd5c0e103249b3(eslint@9.38.0(jiti@2.6.1)):
     dependencies:
       '@babel/helper-validator-identifier': 7.28.5
       '@eslint-community/eslint-utils': 4.9.0(eslint@9.38.0(jiti@2.6.1))
