@@ -1,9 +1,9 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams, Link } from "react-router";
 import { ArrowLeft, Clock, Upload, X } from "lucide-react";
 import { useAgent } from "agents/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { trpcClient, useTRPC } from "../lib/trpc.ts";
+import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useEstateId } from "../hooks/use-estate.ts";
 import { Card } from "../components/ui/card.tsx";
@@ -620,12 +620,18 @@ function FileUploadDialog({
   );
 }
 
-export default function AgentsPage() {
-  const params = useParams();
-  const { agentClassName, durableObjectName } = params;
+export const Route = createFileRoute(
+  "/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName",
+)({
+  component: AgentsPage,
+});
+
+function AgentsPage() {
+  const { agentClassName, durableObjectName } = Route.useParams();
   const estateId = useEstateId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
+  const trpcClient = useTRPCClient();
 
   if (
     !(

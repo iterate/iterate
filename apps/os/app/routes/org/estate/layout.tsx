@@ -1,69 +1,71 @@
-import { Outlet, redirect, data } from "react-router";
+import { z } from "zod";
+import { notFound, Outlet, redirect, createFileRoute } from "@tanstack/react-router";
+import { setResponseHeader } from "@tanstack/react-start/server";
 import { getUserEstateAccess } from "../../../../backend/trpc/trpc.ts";
 import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
-import { ReactRouterServerContext } from "../../../context.ts";
 import { isValidTypeID } from "../../../../backend/utils/utils.ts";
-import type { Route } from "./+types/layout.ts";
+import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 
-export async function loader({ request, params, context }: Route.LoaderArgs) {
-  const { organizationId, estateId } = params;
-  const { db, session } = context.get(ReactRouterServerContext).variables;
+const assertDoesNotNeedOnboarding = authenticatedServerFn
+  .inputValidator(
+    z.object({ organizationId: z.string(), estateId: z.string(), pathname: z.string() }),
+  )
+  .handler(async ({ context, data }) => {
+    const { organizationId, estateId, pathname } = data;
+    if (!isValidTypeID(organizationId, "org") || !isValidTypeID(estateId, "est")) throw notFound();
 
-  if (!isValidTypeID(organizationId, "org") || !isValidTypeID(estateId, "est")) {
-    throw new Response("Not found", { status: 404 });
-  }
+    const isOnboardingPath = pathname.endsWith("/onboarding");
 
-  if (!session?.user?.id) {
-    throw redirect(`/login?redirectUrl=${encodeURIComponent(request.url)}`);
-  }
+    const [accessResult, needsOnboarding] = await Promise.all([
+      getUserEstateAccess(
+        context.variables.db,
+        context.variables.session.user.id,
+        estateId,
+        organizationId,
+      ),
+      isOnboardingPath
+        ? Promise.resolve(false)
+        : isEstateOnboardingRequired(context.variables.db, estateId),
+    ]);
 
-  // Determine onboarding redirect and access in parallel to reduce latency
-  const isOnboardingPath = new URL(request.url).pathname.endsWith("/onboarding");
-  const [accessResult, needsOnboarding] = await Promise.all([
-    getUserEstateAccess(db, session.user.id, estateId, organizationId),
-    isOnboardingPath ? Promise.resolve(false) : isEstateOnboardingRequired(db, estateId),
-  ]);
+    if (!accessResult.hasAccess || !accessResult.estate) {
+      throw notFound({
+        headers: {
+          "Set-Cookie": "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+        },
+      });
+    }
 
-  const { hasAccess: hasEstateAccess, estate: userEstate } = accessResult;
+    if (needsOnboarding && !isOnboardingPath) {
+      throw redirect({
+        to: `/$organizationId/$estateId/onboarding`,
+        params: { organizationId, estateId },
+      });
+    }
 
-  if (!hasEstateAccess || !userEstate) {
-    const headers = new Headers();
-    headers.append(
+    const estateData = JSON.stringify({ organizationId, estateId: accessResult.estate.id });
+    const encodedData = encodeURIComponent(estateData);
+    const expires = new Date();
+    expires.setDate(expires.getDate() + 30);
+
+    setResponseHeader(
       "Set-Cookie",
-      "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
+      `iterate-selected-estate=${encodedData}; Path=/; Expires=${expires.toUTCString()}; SameSite=Lax`,
     );
 
-    throw new Response("Not found", {
-      status: 404,
-    });
-  }
+    return {
+      estate: accessResult.estate,
+    };
+  });
 
-  if (needsOnboarding) {
-    throw redirect(`/${organizationId}/${estateId}/onboarding`);
-  }
-
-  // Set estate cookie
-  const estateData = JSON.stringify({ organizationId, estateId: userEstate.id });
-  const encodedData = encodeURIComponent(estateData);
-  const expires = new Date();
-  expires.setDate(expires.getDate() + 30);
-
-  const responseHeaders = new Headers({ "Content-Type": "application/json" });
-  responseHeaders.append(
-    "Set-Cookie",
-    `iterate-selected-estate=${encodedData}; Path=/; Expires=${expires.toUTCString()}; SameSite=Lax`,
-  );
-
-  return data(
-    {
-      estate: userEstate,
-    },
-    {
-      headers: responseHeaders,
-    },
-  );
-}
-
-export default function EstateLayout() {
-  return <Outlet />;
-}
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId")({
+  component: Outlet,
+  beforeLoad: ({ params, location }) =>
+    assertDoesNotNeedOnboarding({
+      data: {
+        organizationId: params.organizationId,
+        estateId: params.estateId,
+        pathname: location.pathname,
+      },
+    }),
+});

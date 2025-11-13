@@ -1,6 +1,5 @@
 import { Check, Sun, Moon, Monitor } from "lucide-react";
 import { useTheme } from "next-themes";
-import { useEffect, useState } from "react";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
 import {
   DropdownMenu,
@@ -10,25 +9,15 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 
+const themes = [
+  { value: "light", label: "Light", icon: Sun },
+  { value: "dark", label: "Dark", icon: Moon },
+  { value: "system", label: "System", icon: Monitor },
+];
+
 export default function ThemeSwitcher() {
   const { theme, setTheme } = useTheme();
-
-  const themes = [
-    { value: "light", label: "Light", icon: Sun },
-    { value: "dark", label: "Dark", icon: Moon },
-    { value: "system", label: "System", icon: Monitor },
-  ];
-
-  // This is a workaround to avoid hydration errors
-  // Classic SSR hack for things that makes out life harder
-  const [isLoaded, setIsLoaded] = useState(false);
-  useEffect(() => {
-    setIsLoaded(true);
-  }, []);
-
   const currentTheme = themes.find((t) => t.value === theme) || themes[2];
-
-  if (!isLoaded) return null;
 
   return (
     <SidebarMenu>

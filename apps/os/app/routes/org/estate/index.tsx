@@ -1,5 +1,5 @@
 import { useState, useMemo, Suspense } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useQueryState } from "nuqs";
 import {
   Bot,
@@ -15,6 +15,7 @@ import {
 import { format, formatDistanceToNow } from "date-fns";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { createFileRoute } from "@tanstack/react-router";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
 import {
@@ -52,14 +53,6 @@ import { Input } from "../../../components/ui/input.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { useSlackConnection } from "../../../hooks/use-slack-connection.ts";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
-import type { Route } from "./+types/index.ts";
-
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Iterate Dashboard" },
-    { name: "description", content: "Iterate platform dashboard" },
-  ];
-}
 
 type SortField = "name" | "createdAt" | "updatedAt";
 
@@ -196,7 +189,17 @@ function slackUrlTheadTs(filter: string): string | undefined {
   return undefined;
 }
 
-export default function Home() {
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/")({
+  component: Home,
+  head: () => ({
+    meta: [
+      { title: "Iterate Dashboard" },
+      { name: "description", content: "Iterate platform dashboard" },
+    ],
+  }),
+});
+
+function Home() {
   const navigate = useNavigate();
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
@@ -264,7 +267,7 @@ export default function Home() {
 
   const handleCreateAgent = () => {
     if (agentName.trim()) {
-      navigate(getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`));
+      navigate({ to: getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`) });
     }
   };
 
@@ -424,7 +427,7 @@ export default function Home() {
               </div>
               <Button
                 variant="outline"
-                onClick={() => navigate(getEstateUrl("/agents/offline"))}
+                onClick={() => navigate({ to: getEstateUrl("/agents/offline") })}
                 className="w-full"
               >
                 <Archive className="h-4 w-4 mr-2" />
@@ -650,9 +653,11 @@ export default function Home() {
                         <AgentNameCell
                           name={agent.durableObjectName}
                           onClick={() => {
-                            navigate(
-                              getEstateUrl(`/agents/${agent.className}/${agent.durableObjectName}`),
-                            );
+                            navigate({
+                              to: getEstateUrl(
+                                `/agents/${agent.className}/${agent.durableObjectName}`,
+                              ),
+                            });
                           }}
                         />
                       </TableCell>
@@ -671,9 +676,11 @@ export default function Home() {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            navigate(
-                              getEstateUrl(`/agents/${agent.className}/${agent.durableObjectName}`),
-                            );
+                            navigate({
+                              to: getEstateUrl(
+                                `/agents/${agent.className}/${agent.durableObjectName}`,
+                              ),
+                            });
                           }}
                         >
                           <Eye className="h-4 w-4 mr-2" />

@@ -1,3 +1,4 @@
+import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { MoreVertical } from "lucide-react";
 import { useState } from "react";
@@ -26,7 +27,11 @@ import {
   DialogDescription,
 } from "../../components/ui/dialog.tsx";
 
-export default function AdminEstatesPage() {
+export const Route = createFileRoute("/_auth.layout/admin/estates")({
+  component: AdminEstatesPage,
+});
+
+function AdminEstatesPage() {
   const trpc = useTRPC();
   const trpcClient = useTRPCClient();
   const { data: estates } = useSuspenseQuery(trpc.admin.listAllEstates.queryOptions());

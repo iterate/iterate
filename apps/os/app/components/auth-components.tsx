@@ -1,15 +1,13 @@
-import { useSearchParams } from "react-router";
 import { MailIcon } from "lucide-react";
 import { useCallback, useEffect } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { authClient } from "../lib/auth-client.ts";
 import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 import { Spinner } from "./ui/spinner.tsx";
 
 export function LoginProviders() {
-  const [searchParams] = useSearchParams();
-  const redirectUrl = searchParams.get("redirectUrl");
-  const autoSignin = searchParams.get("autoSignin");
+  const { redirectUrl, autoSignin } = useSearch({ from: "/login" });
 
   const handleGoogleSignIn = async () => {
     try {
@@ -17,7 +15,7 @@ export function LoginProviders() {
 
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: redirectUrl || "/",
+        callbackURL: redirectUrl,
       });
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
@@ -29,7 +27,7 @@ export function LoginProviders() {
       console.log("🚀 Attempting Slack sign-in...");
       await authClient.signIn.social({
         provider: "slack",
-        callbackURL: redirectUrl || "/",
+        callbackURL: redirectUrl,
       });
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);

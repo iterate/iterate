@@ -1,18 +1,17 @@
-import { AlertCircle, Home, RotateCcw } from "lucide-react";
-import { Link } from "react-router";
-import { useEffect } from "react";
+import { AlertCircle, Home } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { useEffect, type ReactNode } from "react";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
 
-export function ErrorRenderer({
-  message,
-  details,
-  stack,
-}: {
+type ErrorRendererProps = {
   message: string;
   details: string;
   stack?: string;
-}) {
+  actions?: { label: ReactNode; action: () => void | Promise<void>; key: string }[];
+};
+
+export function ErrorRenderer({ message, details, stack, actions }: ErrorRendererProps) {
   useEffect(() => {
     console.error({ message, details, stack });
   }, [message, details, stack]);
@@ -42,14 +41,11 @@ export function ErrorRenderer({
                 Try refreshing the page or return to the dashboard
               </p>
               <div className="flex flex-col sm:flex-row gap-2">
-                <Button
-                  className="flex-1"
-                  variant="outline"
-                  onClick={() => window.location.reload()}
-                >
-                  <RotateCcw className="h-4 w-4 mr-2" />
-                  Refresh Page
-                </Button>
+                {actions?.map(({ label, action, key }) => (
+                  <Button className="flex-1" key={key} variant="outline" onClick={action}>
+                    {label}
+                  </Button>
+                ))}
                 <Link to="/" className="flex-1">
                   <Button className="w-full">
                     <Home className="h-4 w-4 mr-2" />

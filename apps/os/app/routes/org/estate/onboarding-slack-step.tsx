@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { Check } from "lucide-react";
 import { toast } from "sonner";
 import { authClient } from "../../../lib/auth-client.ts";
@@ -82,11 +82,10 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
   };
 
   const handleGoToDashboard = () => {
-    if (trialData) {
-      navigate(`/${trialData.organizationId}/${trialData.estateId}`);
-    } else {
-      navigate(`/${organizationId}/${estateId}`);
-    }
+    navigate({
+      to: `/$organizationId/$estateId`,
+      params: trialData ?? { organizationId, estateId },
+    });
   };
 
   const handleOpenSlack = () => {

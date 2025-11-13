@@ -1,6 +1,7 @@
 import { ArrowRight, Github, ChevronDown, X, Puzzle } from "lucide-react";
 import { useState, useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Badge } from "../../../../components/ui/badge.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
@@ -65,17 +66,6 @@ import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
 import { authClient } from "../../../../lib/auth-client.ts";
-import type { Route } from "./+types/index.ts";
-
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Iterate Connectors" },
-    {
-      name: "description",
-      content: "Connect your iterate bot to third parties",
-    },
-  ];
-}
 
 function ScopesList({ scope }: { scope: string }) {
   // Split scopes by comma or space and clean them up
@@ -125,7 +115,22 @@ type MCPConnection = {
   connectedAt: Date | string;
 };
 
-export default function Integrations() {
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/integrations/")({
+  component: Integrations,
+  head: () => ({
+    meta: [
+      {
+        title: "Iterate Connectors",
+      },
+      {
+        name: "description",
+        content: "Connect your iterate bot to third parties",
+      },
+    ],
+  }),
+});
+
+function Integrations() {
   const estateId = useEstateId();
   const trpc = useTRPC();
   const { data, refetch } = useQuery(

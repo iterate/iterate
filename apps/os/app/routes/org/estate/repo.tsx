@@ -17,9 +17,9 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { data, useLoaderData } from "react-router";
 import { useWebSocket } from "partysocket/react";
 import { z } from "zod/v4";
+import { createFileRoute } from "@tanstack/react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
@@ -85,8 +85,7 @@ import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
-import { ReactRouterServerContext } from "../../../context.ts";
-import type { Route } from "./+types/repo.ts";
+import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -94,44 +93,52 @@ type _Build = RouterOutputs["estate"]["getBuilds"][0];
 type BuildStatus = _Build["status"] | "timed_out";
 type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
-export function meta() {
-  return [
-    { title: "Manage Estate - Iterate Dashboard" },
-    {
-      name: "description",
-      content: "Manage your estate and connect to GitHub",
-    },
-  ];
-}
+export const estateRepoLoader = authenticatedServerFn
+  .inputValidator(z.object({ estateId: z.string() }))
+  .handler(async ({ context, data }) => {
+    const { estateId } = data;
+    const { db } = context.variables;
 
-export async function loader({ params, context }: Route.LoaderArgs) {
-  const { estateId } = params;
-  const { db } = context.get(ReactRouterServerContext).variables;
+    const githubInstallation = await getGithubInstallationForEstate(db, estateId);
 
-  const githubInstallation = await getGithubInstallationForEstate(db, estateId);
+    // There is no github app installation, that means its using a managed installation
+    if (!githubInstallation) return { status: "ITERATE_MANAGED_INSTALLATION" as const };
 
-  // There is no github app installation, that means its using a managed installation
-  if (!githubInstallation) return data({ status: "ITERATE_MANAGED_INSTALLATION" as const });
+    const octokit = await getOctokitForInstallation(githubInstallation.accountId).catch(() => null);
+    const authInfo = octokit
+      ? await octokit
+          .request("GET /app/installations/{installation_id}", {
+            installation_id: parseInt(githubInstallation.accountId),
+          })
+          .catch(() => null)
+      : null;
 
-  const octokit = await getOctokitForInstallation(githubInstallation.accountId).catch(() => null);
-  const authInfo = octokit
-    ? await octokit
-        .request("GET /app/installations/{installation_id}", {
-          installation_id: parseInt(githubInstallation.accountId),
-        })
-        .catch(() => null)
-    : null;
+    if (!authInfo || authInfo.status !== 200 || authInfo.data.suspended_at)
+      return { status: "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" as const };
 
-  if (!authInfo || authInfo.status !== 200 || authInfo.data.suspended_at)
-    return data({ status: "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" as const });
+    return { status: "ACTIVE_USER_MANAGED_INSTALLATION" as const };
+  });
 
-  return data({ status: "ACTIVE_USER_MANAGED_INSTALLATION" as const });
-}
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/repo")({
+  component: ManageEstate,
+  loader: ({ params }) => estateRepoLoader({ data: { estateId: params.estateId } }),
+  head: () => ({
+    meta: [
+      {
+        title: "Manage Estate - Iterate Dashboard",
+      },
+      {
+        name: "description",
+        content: "Manage your estate and connect to GitHub",
+      },
+    ],
+  }),
+});
 
 function EstateContent({
   installationStatus,
 }: {
-  installationStatus: Awaited<ReturnType<typeof loader>>["data"];
+  installationStatus: Awaited<ReturnType<typeof estateRepoLoader>>;
 }) {
   const { status } = installationStatus;
 
@@ -1094,7 +1101,7 @@ function EstateContent({
 }
 
 export default function ManageEstate() {
-  const installationStatus = useLoaderData<typeof loader>();
+  const installationStatus = Route.useLoaderData();
   return <EstateContent installationStatus={installationStatus} />;
 }
 
