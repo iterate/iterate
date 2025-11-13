@@ -91,6 +91,15 @@ export const agentsRouter = router({
     })),
 
   callCodemodeCallback: publicProcedure
+    .use(async ({ next }) => {
+      if (new URL(import.meta.env.VITE_PUBLIC_URL).hostname !== "localhost") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "This endpoint is only available on localhost",
+        });
+      }
+      return next();
+    })
     .input(
       z.object({
         estateId: z.string(),
