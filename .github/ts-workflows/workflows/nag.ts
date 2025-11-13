@@ -111,12 +111,20 @@ export default {
                 return timeAgo(d).pretty;
               };
 
+              const workingHours = (now: Date) => {
+                const [hour, day] = [now.getHours(), now.getDay()];
+                return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
+              };
+              const lastNagTime = oldNagInfo?.get("last_nag_time");
+
               const reasonsToNag = {
                 automerge: `${!!pr.auto_merge}: <-- automerge-status`,
                 approval: approval ? `false: approved already` : `true: not approved yet`,
                 unresolvedComments: `${unresolvedComments?.length === 0}: ${unresolvedComments?.length} unresolved comments`,
                 noActivityForAWhile: `${timeAgo(lastActive).minutes > 60}: last active ${when(lastActive)}`,
-                noNagForAWhile: `${timeAgo(oldNagInfo?.get("last_nag_time") || 0).hours > 2}: last nag ${when(oldNagInfo?.get("last_nag_time"))}`,
+                noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
+                lastNagWasIgnored: `${lastActive < new Date(lastNagTime || Date.now())}: (also true if nag hasn't happened yet)`,
+                workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
               } as Record<string, `${boolean}: ${string}`>;
 
               const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
