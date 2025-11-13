@@ -123,7 +123,7 @@ export default {
                 unresolvedComments: `${unresolvedComments?.length === 0}: ${unresolvedComments?.length} unresolved comments`,
                 noActivityForAWhile: `${timeAgo(lastActive).minutes > 60}: last active ${when(lastActive)}`,
                 noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
-                activitySinceLastNag: `${lastActive > new Date(lastNagTime || 0)}: there was activity since last nag`,
+                lastNagWasIgnored: `${lastActive < new Date(lastNagTime || Date.now())}: (also true if nag hasn't happened yet)`,
                 workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
               } as Record<string, `${boolean}: ${string}`>;
 
