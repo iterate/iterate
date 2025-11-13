@@ -1,3 +1,25 @@
+FROM docker.io/cloudflare/sandbox:0.4.4 AS builder
+COPY scripts/package.json /tmp/package.json
+RUN npm install -g pnpm@10
+RUN cd /tmp && pnpm install
+# Copy the entire scripts directory so esbuild can resolve local imports
+COPY ./scripts /tmp/scripts
+RUN cd /tmp && ./node_modules/.bin/esbuild \
+    scripts/sandbox-build-runner.ts \
+    --bundle \
+    --platform=node \
+    --format=cjs \
+    --target=node24 \
+    --outfile=/tmp/sandbox-build-runner.js
+RUN cd /tmp && ./node_modules/.bin/esbuild \
+    scripts/sandbox-exec-runner.ts \
+    --bundle \
+    --platform=node \
+    --format=cjs \
+    --target=node24 \
+    --outfile=/tmp/sandbox-exec-runner.js
+
+
 FROM docker.io/cloudflare/sandbox:0.4.4
 
 ENV COMMAND_TIMEOUT_MS=360000
@@ -19,7 +41,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 
 # Configure git
 RUN git config --global user.name "iterate" && \
-    git config --global user.email "iterate@iterate.com"
+    git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
 
 # Alias python to python3 because AI often tries to use `python` and if we don't do this there's nothing called python on the path
 RUN ln -s /usr/bin/python3 /usr/bin/python
@@ -30,8 +52,14 @@ ENV CODEX_NO_CONFIRM=1
 # Create a temporary directory that everyone can use
 RUN mkdir -p /tmp/ && chmod 777 /tmp/
 
-COPY sandbox-entry.ts /tmp/sandbox-entry.ts
+COPY ./scripts/sandbox-entry.ts /tmp/sandbox-entry.ts
 RUN chmod +x /tmp/sandbox-entry.ts
+
+
+COPY --from=builder /tmp/sandbox-build-runner.js /tmp/sandbox-build-runner.js
+RUN chmod +x /tmp/sandbox-build-runner.js
+COPY --from=builder /tmp/sandbox-exec-runner.js /tmp/sandbox-exec-runner.js
+RUN chmod +x /tmp/sandbox-exec-runner.js
 
 # Expose the ports you want to expose
 EXPOSE 3000

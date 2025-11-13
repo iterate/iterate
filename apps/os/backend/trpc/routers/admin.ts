@@ -3,7 +3,7 @@ import { and, eq, desc, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import { protectedProcedure, router } from "../trpc.ts";
+import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
@@ -21,7 +21,8 @@ import {
 import { env } from "../../../env.ts";
 import { deleteUserAccount } from "./user.ts";
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+// don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
+const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -194,6 +195,28 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
   return { user, organization, estate, hasSeedData };
 });
 
+const markTestUserAsOnboarded = adminProcedure
+  .input(
+    z.object({
+      organizationId: z.string(),
+      estateId: z.string(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    await ctx.db.insert(schema.estateOnboardingEvent).values({
+      estateId: input.estateId,
+      organizationId: input.organizationId,
+      eventType: "OnboardingCompleted",
+      category: "user",
+    });
+    await ctx.db
+      .update(schema.organization)
+      .set({
+        stripeCustomerId: "TEST_CUSTOMER_ID",
+      })
+      .where(eq(schema.organization.id, input.organizationId));
+  });
+
 const allProcedureInputs = adminProcedure.query(async () => {
   const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
   const parsed = parseRouter({ router });
@@ -211,6 +234,7 @@ export const adminRouter = router({
   getEstateOwner,
   deleteUserByEmail,
   setupTestOnboardingUser,
+  markTestUserAsOnboarded,
   allProcedureInputs,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information

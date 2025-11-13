@@ -1,5 +1,6 @@
 import { getSandbox } from "@cloudflare/sandbox";
 import type { CloudflareEnv } from "../../env.ts";
+import { signUrl } from "../utils/url-signing.ts";
 import { logger } from "../tag-logger.ts";
 
 export interface RunConfigOptions {
@@ -8,9 +9,8 @@ export interface RunConfigOptions {
   commitHash?: string;
   branch?: string;
   connectedRepoPath?: string;
-  callbackUrl?: string;
-  buildId?: string;
-  estateId?: string;
+  buildId: string;
+  estateId: string;
 }
 
 export interface RunConfigResult {
@@ -52,15 +52,14 @@ async function runConfigInSandboxInternal(
   env: CloudflareEnv,
   options: RunConfigOptions,
 ): Promise<RunConfigResult | RunConfigError> {
-  const {
-    githubRepoUrl,
-    githubToken,
-    commitHash,
-    branch,
-    connectedRepoPath,
-    callbackUrl,
-    estateId,
-  } = options;
+  const { githubRepoUrl, githubToken, commitHash, branch, connectedRepoPath, estateId } = options;
+  if (!estateId) {
+    return {
+      error: "Missing required estateId",
+      details: "RunConfigOptions.estateId is required",
+      commitHash,
+    };
+  }
 
   // Retrieve the sandbox
   const sandboxId = `agent-sandbox-${estateId}`;
@@ -92,81 +91,52 @@ async function runConfigInSandboxInternal(
   const checkoutTarget = commitHash || branch || "main";
   const isCommitHash = Boolean(commitHash);
 
-  // Prepare arguments as a JSON object
-  const initArgs = {
+  // Compute signed ingest URL for the DO (container will POST logs periodically)
+  // Use an externally-reachable base for the sandboxed container
+  let baseUrl = env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+  const isLocalhost = baseUrl.includes("localhost");
+  if (isLocalhost) {
+    // Use the dev domain for local, e.g. nick.dev.iterate.com
+    baseUrl = `https://${env.ITERATE_USER}.dev.iterate.com`;
+  }
+  const buildId = options.buildId;
+  // Create an HTTPS URL first for signing; signer binds only path+query
+  const unsignedIngest = `${baseUrl}/api/builds/${estateId}/${buildId}/ingest`;
+  const ingestUrl = await signUrl(unsignedIngest, env.EXPIRING_URLS_SIGNING_KEY, 60 * 60);
+  const nodePath = "/opt/node24/bin/node";
+  const startArgs = {
     sessionDir,
     githubRepoUrl,
     githubToken,
     checkoutTarget,
     isCommitHash,
-  };
-  // Escape the JSON string for shell
-  const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-  // Init the sandbox (ignore any errors)
-  const nodePath = "/opt/node24/bin/node";
-
-  const commandInit = `${nodePath} /tmp/sandbox-entry.ts init '${initJsonArgs}'`;
-  const resultInit = await sandboxSession.exec(commandInit, {
-    timeout: 360 * 1000, // 360 seconds total timeout
-  });
-  if (!resultInit.success) {
-    logger.error(
-      JSON.stringify({
-        message: `Error running \`${nodePath} /tmp/sandbox-entry.ts init <ARGS>\` in sandbox`,
-        result: resultInit,
-      }),
-    );
-  }
-
-  // Prepare arguments as a JSON object
-  const buildArgs = {
-    // Ensure we use a clean clone
-    sessionDir,
     connectedRepoPath,
-    callbackUrl: callbackUrl || "",
-    buildId: options.buildId || "",
+    ingestUrl,
+    buildId,
     estateId,
   };
-  // Escape the JSON string for shell
-  const buildJsonArgs = JSON.stringify(buildArgs).replace(/'/g, "'\\''");
-  // Run the build in sandbox
-  const commandBuild = `${nodePath} /tmp/sandbox-entry.ts build '${buildJsonArgs}'`;
-  const resultBuild = await sandboxSession.exec(commandBuild, {
-    timeout: 360 * 1000, // 360 seconds total timeout
-  });
+  const startJsonArgs = JSON.stringify(startArgs).replace(/'/g, "'\\''");
+  const commandStart = `${nodePath} /tmp/sandbox-build-runner.js start '${startJsonArgs}'`;
 
-  if (!resultBuild.success) {
-    logger.error(
-      JSON.stringify({
-        message: `Error running \`${nodePath} /tmp/sandbox-entry.ts build <ARGS>\` in sandbox`,
-        result: resultBuild,
-      }),
-    );
-  }
+  // Start long-running process; do not await completion
+  const res = await sandboxSession.startProcess(commandStart);
 
-  // If callback URL is provided, the script will handle the callback
-  // Otherwise, return the result directly
-  if (callbackUrl) {
-    // When using callback, we just return a simple acknowledgment
+  if (res.status !== "running") {
+    logger.error("Failed to start build process:", res);
     return {
-      success: true,
-      message: "Build started, results will be sent to callback",
-      output: {
-        stdout: "Build process initiated",
-        stderr: "",
-        exitCode: 0,
-      },
+      error: "Failed to start build process",
+      details: "Process did not start",
+      commitHash,
     };
   }
 
-  // Return the result directly if no callback
   return {
-    success: resultBuild.success,
-    message: resultBuild.success ? "Build completed successfully" : "Build failed",
+    success: true,
+    message: "Build started",
     output: {
-      stdout: resultBuild.stdout,
-      stderr: resultBuild.stderr,
-      exitCode: resultBuild.exitCode,
+      stdout: "Started background container process",
+      stderr: "",
+      exitCode: 0,
     },
   };
 }

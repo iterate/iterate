@@ -274,12 +274,37 @@ export default defineConfig([
             getBuiltinRule("prefer-const"),
             "Change to const, if you're finished tinkering",
           ),
-          "side-effect-imports-first": {
+          "import-rules": {
             meta: {
               fixable: "code",
             },
             create: (context) => {
               return {
+                ImportDeclaration: (node) => {
+                  const parentBodyIndex = node.parent.body.indexOf(node);
+                  const lastImportIndex = node.parent.body.findLastIndex(
+                    (n) => n.type === "ImportDeclaration",
+                  );
+                  if (parentBodyIndex === -1 || parentBodyIndex !== lastImportIndex) {
+                    return;
+                  }
+                  const exportsBefore = node.parent.body
+                    .slice(0, parentBodyIndex)
+                    .filter(
+                      (n) =>
+                        n.type === "ExportDeclaration" ||
+                        n.type === "ExportNamedDeclaration" ||
+                        n.type === "ExportAllDeclaration" ||
+                        n.type === "ExportDefaultDeclaration",
+                    );
+
+                  exportsBefore.forEach((e) => {
+                    context.report({
+                      node: e,
+                      message: `Exports should come after imports`,
+                    });
+                  });
+                },
                 "ImportDeclaration[specifiers.length=0]": (node) => {
                   const parentBodyIndex = node.parent.body.indexOf(node);
                   const nonSideEffectImportBefore = node.parent.body
@@ -335,6 +360,67 @@ export default defineConfig([
               };
             },
           },
+          "drizzle-conventions": {
+            meta: {
+              hasSuggestions: true,
+              fixable: "code",
+            },
+            create: (context) => {
+              const dbMutateMethods = ["insert", "update", "delete"];
+              /** @type {Record<string, Function>} */
+              const dbMutateEnforcementListeners = {};
+              for (const m of dbMutateMethods) {
+                const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
+                dbMutateEnforcementListeners[selector] = (node) => {
+                  const before = node.arguments[0].name;
+                  const after = `schema.${node.arguments[0].name}`;
+                  if (
+                    m === "delete" &&
+                    node.callee.object.name !== "db" &&
+                    node.callee.object.name !== "tx"
+                  ) {
+                    return; // too many false positives for Maps
+                  }
+                  context.report({
+                    node: node.arguments[0],
+                    message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
+                    suggest: [
+                      {
+                        desc: `Change \`${before}\` to \`${after}\``,
+                        fix: (fixer) => fixer.replaceText(node.arguments[0], after),
+                      },
+                    ],
+                  });
+                };
+              }
+
+              return {
+                ...dbMutateEnforcementListeners,
+                "CallExpression[callee.property.name='transaction']": (node) => {
+                  // @ts-expect-error getScope exists I swear
+                  const nodeScope = context.sourceCode.getScope(node.arguments[0]);
+                  // `through`: "The array of references which could not be resolved in this scope" https://eslint.org/docs/latest/extend/scope-manager-interface#scope-interface
+                  for (const reference of nodeScope.through) {
+                    const { identifier } = reference;
+                    if (identifier.name === node.callee.object?.name) {
+                      const used = identifier.name;
+                      const shouldUse = node.arguments[0].params[0]?.name;
+                      context.report({
+                        node: identifier,
+                        message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
+                        suggest: [
+                          {
+                            desc: `Change \`${used}\` to \`${shouldUse}\``,
+                            fix: (fixer) => fixer.replaceText(identifier, shouldUse),
+                          },
+                        ],
+                      });
+                    }
+                  }
+                },
+              };
+            },
+          },
         },
       },
     },
@@ -344,8 +430,9 @@ export default defineConfig([
     name: "iterate-config",
     rules: {
       "iterate/prefer-const": "error",
-      "iterate/side-effect-imports-first": "warn",
+      "iterate/import-rules": "warn",
       "iterate/zod-schema-naming": "error",
+      "iterate/drizzle-conventions": "error",
     },
   },
   {

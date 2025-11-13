@@ -1,10 +1,12 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { typeid } from "typeid-js";
 import type { AgentInitParams, IterateAgent } from "../iterate-agent.ts";
-import { agentInstance, agentInstanceRoute } from "../../db/schema.ts";
+import { agentInstance } from "../../db/schema.ts";
 import { schema, type DB } from "../../db/client.ts";
 import type { IterateConfig } from "../../../sdk/iterate-config.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
+import { logger } from "../../tag-logger.ts";
+import { stubStub } from "../../stub-stub.ts";
 
 // NOTE: This indirection is intentionally string-based. It's admittedly hacky,
 // but acceptable until we can collapse all IterateAgent subclasses into a
@@ -25,34 +27,10 @@ export function toAgentClassName(value: string): AgentClassName {
   );
 }
 
-export type GetStubParams = {
-  agentInitParams: AgentInitParams;
-  jurisdiction?: DurableObjectJurisdiction;
-  locationHint?: DurableObjectLocationHint;
-};
-
-export type GetStubByNameParams = {
-  db: DB;
-  agentInstanceName: string;
-};
-
-export type GetStubsByRouteParams = {
-  db: DB;
-  routingKey: string;
-  estateId?: string;
-};
-
 export type GetOrCreateStubByNameParams = {
   db: DB;
   estateId: string;
   agentInstanceName: string;
-  reason?: string;
-};
-
-export type GetOrCreateStubByRouteParams = {
-  db: DB;
-  estateId: string;
-  route: string;
   reason?: string;
 };
 
@@ -86,51 +64,40 @@ function getNamespaceForClassName(className: AgentClassName): AgentNamespace {
 
 export async function getAgentStub(
   className: AgentClassName,
-  params: GetStubParams,
-): Promise<DurableObjectStub<IterateAgent>> {
-  const { agentInitParams, jurisdiction, locationHint } = params;
-  let namespace = getNamespaceForClassName(className);
+  params: { agentInitParams: AgentInitParams },
+) {
+  const { agentInitParams } = params;
+  const namespace = getNamespaceForClassName(className);
 
-  if (jurisdiction) {
-    namespace = namespace.jurisdiction(jurisdiction);
-  }
+  const doStub = namespace.getByName(agentInitParams.record.durableObjectName);
+  const doStubStub = stubStub(doStub as {} as IterateAgent, {
+    className,
+    durableObjectName: agentInitParams.record.durableObjectName,
+    estateId: agentInitParams.record.estateId,
+    ...logger.tags,
+  });
 
-  const options = {
-    ...(locationHint && { locationHint }),
-  };
+  await doStubStub.initIterateAgent(agentInitParams);
 
-  const stub = namespace.getByName(agentInitParams.record.durableObjectName, options);
-
-  await stub.initIterateAgent(agentInitParams);
-
-  // @ts-expect-error, fix this infinite type error
-  return stub;
+  return doStubStub;
 }
 
 export async function getAgentStubByName(
   className: AgentClassName,
-  params: GetStubByNameParams,
-): Promise<DurableObjectStub<IterateAgent>> {
+  params: { db: DB; agentInstanceName: string; estateId?: string },
+) {
   const { db, agentInstanceName } = params;
 
   const row = await db.query.agentInstance.findFirst({
     where: and(
       eq(agentInstance.durableObjectName, agentInstanceName),
       eq(agentInstance.className, className),
+      eq(agentInstance.estateId, params.estateId || agentInstance.estateId), // todo: make estateId required? seems safer. but we have lots of calls of this already, so will do separately
     ),
-    with: {
-      estate: {
-        with: {
-          organization: true,
-          iterateConfigs: true,
-        },
-      },
-    },
+    with: { estate: { with: { organization: true, iterateConfigs: true } } },
   });
 
-  if (!row) {
-    throw new Error(`Agent instance ${agentInstanceName} not found`);
-  }
+  if (!row) throw new Error(`Agent instance ${agentInstanceName} not found`);
 
   const { estate: estateJoined, ...record } = row;
 
@@ -150,231 +117,38 @@ export async function getAgentStubByName(
   });
 }
 
-export async function getAgentStubsByRoute(
-  className: AgentClassName,
-  params: GetStubsByRouteParams,
-): Promise<DurableObjectStub<IterateAgent>[]> {
-  const { db, routingKey, estateId } = params;
-
-  const routes = await db.query.agentInstanceRoute.findMany({
-    where: eq(agentInstanceRoute.routingKey, routingKey),
-    with: {
-      agentInstance: {
-        with: {
-          estate: {
-            with: {
-              organization: true,
-              iterateConfigs: true,
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const matchingAgents = routes
-    .map((r) => r.agentInstance)
-    .filter((r) => r.className === className && (!estateId || r.estateId === estateId));
-
-  if (matchingAgents.length > 1) {
-    throw new Error(`Multiple agents found for routing key ${routingKey}`);
-  }
-
-  const stubs = await Promise.all(
-    matchingAgents.map(async (row) => {
-      const { estate: estateJoined, ...record } = row;
-      const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
-      return getAgentStub(className, {
-        agentInitParams: {
-          record,
-          estate: estateJoined,
-          organization: estateJoined.organization!,
-          iterateConfig,
-        },
-      });
-    }),
-  );
-
-  return stubs as unknown as DurableObjectStub<IterateAgent>[];
-}
-
-export async function getOrCreateAgentStubByName(
-  className: AgentClassName,
-  params: GetOrCreateStubByNameParams,
-): Promise<DurableObjectStub<IterateAgent>> {
-  const { db, estateId, agentInstanceName, reason } = params;
-
-  const existing = await db.query.agentInstance.findFirst({
-    where: and(
-      eq(agentInstance.durableObjectName, agentInstanceName),
-      eq(agentInstance.className, className),
-      eq(agentInstance.estateId, estateId),
-    ),
-    with: {
-      estate: {
-        with: {
-          organization: true,
-          iterateConfigs: true,
-        },
-      },
-    },
-  });
-
-  if (existing) {
-    const { estate: estateJoined, ...record } = existing;
-    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
-    return getAgentStub(className, {
-      agentInitParams: {
-        record,
-        estate: estateJoined,
-        organization: estateJoined.organization!,
-        iterateConfig,
-      },
-    });
-  }
-
-  const namespace = getNamespaceForClassName(className);
-  const durableObjectId = namespace.idFromName(agentInstanceName);
-
-  const [inserted] = await db
-    .insert(agentInstance)
-    .values({
-      estateId,
-      className,
-      durableObjectName: agentInstanceName,
-      durableObjectId: durableObjectId.toString(),
-      metadata: { reason },
-    })
-    .onConflictDoUpdate({
-      target: agentInstance.durableObjectId,
-      set: {
-        metadata: { reason },
-      },
-    })
-    .returning();
-
-  const row = await db.query.agentInstance.findFirst({
-    where: eq(agentInstance.id, inserted.id),
-    with: {
-      estate: {
-        with: {
-          organization: true,
-          iterateConfigs: true,
-        },
-      },
-    },
-  });
-
-  if (!row) {
-    throw new Error(`Failed to fetch created agent instance ${agentInstanceName}`);
-  }
-
-  if (row.estateId !== estateId) {
-    throw new Error(`Agent instance ${agentInstanceName} already exists in a different estate`);
-  }
-
-  const { estate: estateJoined, ...record } = row;
-  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
-
-  return getAgentStub(className, {
-    agentInitParams: {
-      record,
-      estate: estateJoined,
-      organization: estateJoined.organization!,
-      iterateConfig,
-    },
-  });
-}
-
 export async function getOrCreateAgentStubByRoute(
   className: AgentClassName,
-  params: GetOrCreateStubByRouteParams,
-): Promise<DurableObjectStub<IterateAgent>> {
+  params: { db: DB; estateId: string; route: string; reason?: string },
+) {
   const { db, estateId, route, reason } = params;
-
-  const existingRoutes = await db.query.agentInstanceRoute.findMany({
-    where: eq(schema.agentInstanceRoute.routingKey, route),
-    orderBy: desc(schema.agentInstance.updatedAt),
-    with: {
-      agentInstance: {
-        with: {
-          estate: {
-            with: {
-              organization: true,
-              iterateConfigs: { limit: 1, orderBy: desc(schema.iterateConfig.updatedAt) },
-            },
-          },
-        },
-      },
-    },
-  });
-
-  const existingAgent = existingRoutes
-    .map((r) => r.agentInstance)
-    .find((r) => r.className === className && r.estateId === estateId);
-
-  if (existingAgent) {
-    const { estate: estateJoined, ...record } = existingAgent;
-    const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
-    return getAgentStub(className, {
-      agentInitParams: {
-        record,
-        estate: estateJoined,
-        organization: estateJoined.organization!,
-        iterateConfig,
-      },
-    });
-  }
 
   const namespace = getNamespaceForClassName(className);
   const durableObjectName = `${className}-${route}-${typeid().toString()}`;
   const durableObjectId = namespace.idFromName(durableObjectName);
 
-  const insertedId = await db.transaction(async (tx) => {
-    const [inserted] = await tx
-      .insert(agentInstance)
-      .values({
-        estateId,
-        className,
-        durableObjectName,
-        durableObjectId: durableObjectId.toString(),
-        metadata: { reason },
-      })
-      .onConflictDoUpdate({
-        target: agentInstance.durableObjectId,
-        set: {
-          metadata: { reason },
-        },
-      })
-      .returning();
+  // insert if the routing key doesn't yet exist
+  await db
+    .insert(schema.agentInstance)
+    .values({
+      estateId,
+      className,
+      durableObjectName,
+      durableObjectId: durableObjectId.toString(),
+      metadata: { reason },
+      routingKey: route,
+    })
+    .onConflictDoNothing({ target: schema.agentInstance.routingKey });
 
-    await tx
-      .insert(agentInstanceRoute)
-      .values({ agentInstanceId: inserted.id, routingKey: route })
-      .onConflictDoNothing();
-
-    return inserted.id;
+  const existingAgent = await db.query.agentInstance.findFirst({
+    where: eq(agentInstance.routingKey, route),
+    with: { estate: { with: { organization: true, iterateConfigs: true } } },
   });
 
-  const row = await db.query.agentInstance.findFirst({
-    where: eq(agentInstance.id, insertedId),
-    with: {
-      estate: {
-        with: {
-          organization: true,
-          iterateConfigs: true,
-        },
-      },
-    },
-  });
+  if (!existingAgent) throw new Error(`No agent at ${route} - we should have just inserted it!`);
 
-  if (!row) {
-    throw new Error(`Failed to fetch created agent instance ${durableObjectName}`);
-  }
-
-  const { estate: estateJoined, ...record } = row;
+  const { estate: estateJoined, ...record } = existingAgent;
   const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
-
   return getAgentStub(className, {
     agentInitParams: {
       record,

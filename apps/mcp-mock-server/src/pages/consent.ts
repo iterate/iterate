@@ -105,7 +105,8 @@ export function renderConsentPage(
     }
     
     input[type="email"],
-    input[type="password"] {
+    input[type="password"],
+    input[type="number"] {
       width: 100%;
       padding: 0.75rem 1rem;
       border: 1px solid #e5e5e5;
@@ -310,6 +311,7 @@ export function renderConsentPage(
       <p>Generate a temporary test user and authorize immediately.</p>
       <form method="POST" action="${actionUrl}">
         <input type="hidden" name="action" value="auto">
+        <input type="number" name="expires_in" min="60" placeholder="expires in (seconds)">
         <button type="submit" class="btn-secondary">authorize with auto-generated user</button>
       </form>
     </div>

@@ -1,5 +1,6 @@
-export * from "./github-script.ts";
 import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
+
+export * from "./github-script.ts";
 
 export const prTriggerable = {
   on: {} satisfies Workflow["on"],
@@ -37,16 +38,18 @@ export const setupRepo = [
   },
 ] as const satisfies Step[];
 
-export const setupDoppler = [
-  {
-    name: "Install Doppler CLI",
-    uses: "dopplerhq/cli-action@v2",
-  },
-  {
-    name: "Setup Doppler",
-    run: "doppler setup --config dev --project os",
-    env: {
-      DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+type DopplerConfigName = `dev_${string}` | "dev" | "stg" | "prd" | `\${{ ${string} }}`;
+export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
+  [
+    {
+      name: "Install Doppler CLI",
+      uses: "dopplerhq/cli-action@v2",
     },
-  },
-] as const satisfies Step[];
+    {
+      name: "Setup Doppler",
+      run: `doppler setup --config ${config} --project os`,
+      env: {
+        DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
+      },
+    },
+  ] as const satisfies Step[];

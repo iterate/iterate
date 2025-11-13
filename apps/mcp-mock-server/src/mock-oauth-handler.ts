@@ -12,7 +12,8 @@ interface MockOAuthSession {
   sessionId: string;
 }
 
-const app = new Hono<{ Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } }>();
+type HonoContext = { Bindings: Env & { OAUTH_PROVIDER: OAuthHelpers } };
+const app = new Hono<HonoContext>();
 
 app.get("/guide", async (c) => {
   return c.html(renderDocsPage(c.req.url));
@@ -72,7 +73,7 @@ app.post("/oauth/authorize", async (c) => {
   const formData = await c.req.formData();
   const action = formData.get("action") as string;
   const url = new URL(c.req.url);
-  const expiresIn = url.searchParams.get("expires_in");
+  const expiresIn = formData.get("expires_in") ?? url.searchParams.get("expires_in");
 
   let session: MockOAuthSession;
 
@@ -113,12 +114,13 @@ app.post("/oauth/authorize", async (c) => {
 });
 
 async function completeAuthorizationFlow(
-  c: Context,
+  c: Context<HonoContext>,
   oauthReqInfo: AuthRequest,
   session: MockOAuthSession,
   expiresIn: string | null,
 ) {
-  const authOptions: any = {
+  const expiresInSeconds = expiresIn ? Number(expiresIn) : null;
+  const authOptions = {
     request: oauthReqInfo,
     userId: session.userId,
     scope: oauthReqInfo.scope,
@@ -128,18 +130,12 @@ async function completeAuthorizationFlow(
       email: session.email,
       sessionId: session.sessionId,
       accessToken: `mock-token-${session.userId}`,
+      expiresIn: expiresInSeconds,
     },
     metadata: {
       label: session.userName,
     },
   };
-
-  if (expiresIn) {
-    const seconds = Number.parseInt(expiresIn, 10);
-    if (!Number.isNaN(seconds) && seconds > 0) {
-      authOptions.expiresIn = seconds;
-    }
-  }
 
   const { redirectTo } = await c.env.OAUTH_PROVIDER.completeAuthorization(authOptions);
 

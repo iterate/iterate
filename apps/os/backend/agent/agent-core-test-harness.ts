@@ -6,6 +6,7 @@
 
 import type { OpenAI } from "openai";
 import { test as base, vi } from "vitest";
+import { logger } from "../tag-logger.ts";
 import type { AgentCoreEvent } from "./agent-core-schemas.ts";
 import {
   AgentCore,
@@ -37,78 +38,6 @@ export function nextResponseId(): string {
 
 export function nextCallId(): string {
   return `call_${++callIdCounter}`;
-}
-
-// Create a capturing console that stores logs for assertion and debugginga
-export function createCapturingConsole(): { console: Console; getLogs: () => string[] } {
-  const logs: string[] = [];
-
-  const captureLog = (level: string, ...args: any[]) => {
-    const message = args
-      .map((arg) => {
-        if (arg instanceof Error) {
-          return `${arg.name}: ${arg.message}`;
-        }
-        return typeof arg === "object" ? JSON.stringify(arg) : String(arg);
-      })
-      .join(" ");
-    logs.push(`[${level}] ${message}`);
-  };
-
-  const capturingConsole = {
-    log: (...args: any[]) => captureLog("LOG", ...args),
-    info: (...args: any[]) => captureLog("INFO", ...args),
-    warn: (...args: any[]) => captureLog("WARN", ...args),
-    error: (...args: any[]) => captureLog("ERROR", ...args),
-    debug: (...args: any[]) => captureLog("DEBUG", ...args),
-    trace: (...args: any[]) => captureLog("TRACE", ...args),
-    table: (...args: any[]) => captureLog("TABLE", ...args),
-    group: (...args: any[]) => captureLog("GROUP", ...args),
-    groupEnd: () => captureLog("GROUP_END"),
-    groupCollapsed: (...args: any[]) => captureLog("GROUP_COLLAPSED", ...args),
-    clear: () => captureLog("CLEAR"),
-    count: (...args: any[]) => captureLog("COUNT", ...args),
-    countReset: (...args: any[]) => captureLog("COUNT_RESET", ...args),
-    time: (...args: any[]) => captureLog("TIME", ...args),
-    timeEnd: (...args: any[]) => captureLog("TIME_END", ...args),
-    timeLog: (...args: any[]) => captureLog("TIME_LOG", ...args),
-    timeStamp: (...args: any[]) => captureLog("TIME_STAMP", ...args),
-    profile: (...args: any[]) => captureLog("PROFILE", ...args),
-    profileEnd: (...args: any[]) => captureLog("PROFILE_END", ...args),
-    assert: (...args: any[]) => captureLog("ASSERT", ...args),
-    dir: (...args: any[]) => captureLog("DIR", ...args),
-    dirxml: (...args: any[]) => captureLog("DIRXML", ...args),
-    Console: console.Console,
-  } as Console;
-
-  return {
-    console: capturingConsole,
-    getLogs: () => [...logs],
-  };
-}
-
-// Helper function to setup console log capture with print-on-failure
-export function setupConsoleCaptureForTest(): {
-  console: Console;
-  getLogs: () => string[];
-  printLogsOnFailure: () => void;
-} {
-  const { console: capturingConsole, getLogs } = createCapturingConsole();
-
-  const printLogsOnFailure = () => {
-    const logs = getLogs();
-    if (logs.length > 0) {
-      console.log("\n--- Captured Console Output ---");
-      logs.forEach((log) => console.log(log));
-      console.log("--- End Console Output ---\n");
-    }
-  };
-
-  return {
-    console: capturingConsole,
-    getLogs,
-    printLogsOnFailure,
-  };
 }
 
 // Mock OpenAI streaming controller
@@ -199,12 +128,10 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
   constructor({
     streamingCallback,
     slices,
-    console: customConsole,
     extraDeps,
   }: {
     streamingCallback?: (chunk: any) => void;
     slices?: Slices;
-    console?: Console;
     extraDeps?: Partial<MergedDepsForSlices<Slices>>;
   } = {}) {
     this.storeEventsMock.mockImplementation((events) => {
@@ -255,7 +182,6 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
       getOpenAIClient: this.getOpenAIClientMock,
       toolSpecsToImplementations: this.toolSpecToImplementationMock,
       onLLMStreamResponseStreamingChunk: streamingCallback,
-      console: customConsole ?? console,
     };
 
     const combinedDeps = {
@@ -382,7 +308,6 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
     return new CoreTestHarness({
       streamingCallback: callback,
       slices: (this.agentCore as any).slices,
-      console: (this.agentCore as any).deps.console,
     });
   }
 
@@ -390,7 +315,6 @@ export class CoreTestHarness<Slices extends ReadonlyArray<AgentCoreSlice> = []> 
   static create<Slices extends ReadonlyArray<AgentCoreSlice> = []>(options?: {
     streamingCallback?: (chunk: any) => void;
     slices?: Slices;
-    console?: Console;
     extraDeps?: Partial<MergedDepsForSlices<Slices>>;
   }): CoreTestHarness<Slices> {
     return new CoreTestHarness(options);
@@ -490,23 +414,18 @@ export function createAgentCoreTest<Slices extends ReadonlyArray<AgentCoreSlice>
   slices: Slices,
   options?: {
     streamingCallback?: (chunk: any) => void;
-    console?: Console;
     extraDeps?: Partial<MergedDepsForSlices<Slices>>;
   },
 ) {
   return base.extend<{ h: CoreTestHarness<Slices> }>({
     h: async ({ task }, playwrightUse) => {
+      logger.defaultStore = { level: "info", tags: {}, logs: [] };
       // Reset ID counters for deterministic tests
       resetIdCounters();
 
-      // Setup console capture
-      const { console: capturingConsole, getLogs } = setupConsoleCaptureForTest();
-
-      // Create harness with slices and capturing console
       const harness = CoreTestHarness.create({
         slices,
         streamingCallback: options?.streamingCallback,
-        console: options?.console ?? capturingConsole,
         extraDeps: options?.extraDeps,
       });
 
@@ -519,14 +438,12 @@ export function createAgentCoreTest<Slices extends ReadonlyArray<AgentCoreSlice>
       } finally {
         // Check if test failed and print logs
         if (task.result?.state === "fail") {
-          const logs = getLogs();
-          if (logs.length > 0) {
+          if (logger.context.logs.length) {
             console.log("\n--- Captured Console Output ---");
-            logs.forEach((log) => console.log(log));
+            logger.context.logs.forEach((log) => console[log.level](...log.args));
             console.log("--- End Console Output ---\n");
           }
         }
-
         // Cleanup
         harness.end();
       }

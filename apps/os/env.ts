@@ -23,10 +23,7 @@ export const env = _env as CloudflareEnv;
 
 // todo: better way to determine if we're in production
 /** 🤷 */
-export const isProduction =
-  import.meta.env.VITE_APP_STAGE === "prd" ||
-  import.meta.env.VITE_APP_STAGE === "production" ||
-  import.meta.env.VITE_APP_STAGE === "prod";
+export const isProduction = ["prd", "production", "prod"].includes(import.meta.env.VITE_APP_STAGE);
 
 export const isNonProd = !isProduction;
 

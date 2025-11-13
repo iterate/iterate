@@ -6,7 +6,6 @@ import type { DB } from "../../db/client.ts";
 import * as schemas from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { runConfigInSandbox } from "../../sandbox/run-config.ts";
-import { signUrl } from "../../utils/url-signing.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
 const privateKey = createPrivateKey({
@@ -155,24 +154,12 @@ export async function triggerGithubBuild(params: {
     });
   }
 
-  // Generate a signed callback URL
-  let baseUrl = env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
-  // If it's localhost, use the ngrok dev URL instead
-  if (baseUrl.includes("localhost")) {
-    baseUrl = `https://${env.ITERATE_USER}.dev.iterate.com`;
-  }
-  const callbackUrl = await signUrl(
-    `${baseUrl}/api/build/callback`,
-    env.EXPIRING_URLS_SIGNING_KEY,
-    60 * 60, // 1 hour expiry
-  );
   const buildPromise = runConfigInSandbox(env, {
     githubRepoUrl: repoUrl,
     githubToken: installationToken,
     commitHash,
     branch,
     connectedRepoPath: connectedRepoPath || "/",
-    callbackUrl,
     buildId: build.id,
     estateId,
   });

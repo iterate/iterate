@@ -47,11 +47,13 @@ export default {
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
           run: dedent`
             echo stage=\${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+            echo release_name="v$(TS=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
           `,
         },
       ],
       outputs: {
         stage: "${{ steps.get_env.outputs.stage }}",
+        release_name: "${{ steps.get_env.outputs.release_name }}",
       },
     },
     deploy: {
@@ -62,6 +64,81 @@ export default {
       with: {
         stage: "${{ needs.variables.outputs.stage }}",
       },
+    },
+    release: {
+      needs: ["variables", "deploy"],
+      ...utils.runsOnUbuntuLatest,
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@v4",
+          with: {
+            "fetch-depth": 0,
+          },
+        },
+        {
+          name: "Write last release",
+          run: `echo "LAST_RELEASE=$(git describe --tags --abbrev=0 || echo '')" >> $GITHUB_ENV`,
+        },
+        {
+          name: "Write changelog",
+          run: dedent`
+            add_to_changelog() {
+              echo "$1" >> changelog.md
+              echo "" >> changelog.md
+            }
+
+            if [ "$LAST_RELEASE" = "" ]; then
+              LAST_RELEASE=$(git rev-parse HEAD~1)
+              add_to_changelog "No previous release found - using HEAD~1 ($LAST_RELEASE)"
+            else
+              add_to_changelog "Last tagged release: [$LAST_RELEASE](\${{ github.event.repository.html_url }}/releases/$LAST_RELEASE) ([compare link](\${{ github.event.repository.html_url }}/compare/$LAST_RELEASE...\${{ needs.variables.outputs.release_name }}))"
+            fi
+
+            write_git_changes() {
+              glob=$1
+              description=\${2:-$glob}
+
+              changes=$(git log $LAST_RELEASE..HEAD --oneline -- $glob | sed 's/^/- /g')
+
+              if [ "$changes" != "" ]; then
+                add_to_changelog "## $description"
+                add_to_changelog "$changes"
+              fi
+            }
+
+            write_git_changes apps/os 'apps/os changes'
+            write_git_changes ':!apps/os' 'other changes'
+
+            add_to_changelog "Triggered by: @\${{ github.actor }}"
+
+            add_to_changelog "[Comparison with current main](\${{ github.event.repository.html_url }}/compare/\${{ needs.variables.outputs.release_name }}...main)"
+
+            echo "echoing changes for debugging (notes are not published unless deploying to production):"
+            cat changelog.md
+          `,
+        },
+        {
+          if: "needs.variables.outputs.stage == 'prd'",
+          ...utils.githubScript(
+            import.meta,
+            { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
+            async function prd_release({ github, context }) {
+              const { promises: fs } = await import("fs");
+              await github.rest.repos.createRelease({
+                ...context.repo,
+                tag_name: "${{ needs.variables.outputs.release_name }}",
+                name: "${{ needs.variables.outputs.release_name }}",
+                body: [
+                  `stage: \${{ needs.variables.outputs.stage }}`,
+                  "", //
+                  await fs.readFile("changelog.md", "utf8"),
+                ].join("\n"),
+              });
+            },
+          ),
+        },
+      ],
     },
     e2e: {
       if: "needs.variables.outputs.stage == 'prd' || needs.variables.outputs.stage == 'stg'",
@@ -75,7 +152,7 @@ export default {
       },
     },
     slack_failure: {
-      needs: ["variables", "deploy", "e2e"],
+      needs: ["variables", "deploy", "e2e", "release"],
       if: `always() && contains(needs.*.result, 'failure')`,
       "runs-on": "ubuntu-latest",
       env: { NEEDS: "${{ toJson(needs) }}" },
@@ -88,6 +165,8 @@ export default {
           const failedJobs = Object.entries(needs)
             .filter(([_, { result }]: [string, any]) => result === "failure")
             .map(([name]) => name);
+          const { release_name, ...outputs } = needs.variables?.outputs as Record<string, string>;
+          const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
             blocks: [
@@ -95,7 +174,7 @@ export default {
                 type: "header",
                 text: {
                   type: "plain_text",
-                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${new URLSearchParams(needs.variables?.outputs)}`,
+                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
                 },
               },
               {

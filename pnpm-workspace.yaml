@@ -5,6 +5,7 @@ packages:
   - estates/*/apps/*
   - vibe-rules
   - .github/ts-workflows
+  - apps/os/backend/sandbox/scripts
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:

@@ -1,6 +1,6 @@
 import { useState, Suspense } from "react";
 import { Save, ArrowLeft } from "lucide-react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router";
 import { toast } from "sonner";
 import { Spinner } from "../components/ui/spinner.tsx";
@@ -37,6 +37,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../components/ui/alert-dialog.tsx";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 import type { Route } from "./+types/user-settings";
 
 export function meta(_args: Route.MetaArgs) {
@@ -49,20 +50,22 @@ export function meta(_args: Route.MetaArgs) {
 function UserSettingsContent() {
   const trpc = useTRPC();
   const navigate = useNavigate();
-  const { data: user } = useQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
+  const queryClient = useQueryClient();
 
-  const [userName, setUserName] = useState(user?.name || "");
-  const [debugMode, setDebugMode] = useState(user?.debugMode || false);
+  const [userName, setUserName] = useState(user.name);
+  const [debugMode, setDebugMode] = useState(user.debugMode);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const updateUser = useMutation(
     trpc.user.updateProfile.mutationOptions({
-      onSuccess: (data) => {
+      onSuccess: async (data) => {
         toast.success("User settings updated successfully");
+        queryClient.invalidateQueries({ queryKey: trpc.user.me.queryKey() });
         setUserName(data.name);
-        setDebugMode(data.debugMode || false);
+        setDebugMode(data.debugMode ?? false);
         setError(null);
       },
       onError: (error) => {
@@ -124,25 +127,25 @@ function UserSettingsContent() {
       return;
     }
 
-    if (userName === user?.name && debugMode === (user?.debugMode || false)) {
+    if (userName === user.name && debugMode === (user.debugMode || false)) {
       setError("No changes to save");
       return;
     }
 
     const updates: { name?: string; debugMode?: boolean } = {};
 
-    if (userName !== user?.name) {
+    if (userName !== user.name) {
       updates.name = userName;
     }
 
-    if (debugMode !== (user?.debugMode || false)) {
+    if (debugMode !== (user.debugMode || false)) {
       updates.debugMode = debugMode;
     }
 
     updateUser.mutate(updates);
   };
 
-  const hasChanges = userName !== user?.name || debugMode !== (user?.debugMode || false);
+  const hasChanges = userName !== user.name || debugMode !== (user.debugMode || false);
 
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
@@ -153,7 +156,7 @@ function UserSettingsContent() {
     }
   };
 
-  const userInitials = user?.name
+  const userInitials = user.name
     .split(" ")
     .map((n) => n[0])
     .join("")
@@ -181,7 +184,7 @@ function UserSettingsContent() {
                   {/* Avatar and User ID */}
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
-                      <AvatarImage src={user?.image || undefined} alt={user?.name || ""} />
+                      <AvatarImage src={user.image || undefined} alt={user.name || ""} />
                       <AvatarFallback className="text-lg">{userInitials}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
@@ -189,7 +192,7 @@ function UserSettingsContent() {
                         User ID
                       </FieldLabel>
                       <p className="font-mono text-sm bg-muted px-2 py-1 rounded w-full truncate">
-                        {user?.id}
+                        {user.id}
                       </p>
                     </div>
                   </div>
@@ -211,7 +214,7 @@ function UserSettingsContent() {
                   {/* Email (Read-only) */}
                   <Field>
                     <FieldLabel htmlFor="email">Email Address</FieldLabel>
-                    <Input id="email" value={user?.email || ""} disabled className="bg-muted" />
+                    <Input id="email" value={user.email || ""} disabled className="bg-muted" />
                     <FieldDescription>
                       Email cannot be changed. Contact support if you need to update your email.
                     </FieldDescription>

@@ -411,6 +411,7 @@ export const agentInstance = pgTable(
     className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
+    routingKey: t.text().unique(), // todo: make not null?
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
@@ -424,32 +425,10 @@ export const agentInstance = pgTable(
   ],
 );
 
-export const agentInstanceRelations = relations(agentInstance, ({ one, many }) => ({
+export const agentInstanceRelations = relations(agentInstance, ({ one }) => ({
   estate: one(estate, {
     fields: [agentInstance.estateId],
     references: [estate.id],
-  }),
-  routes: many(agentInstanceRoute),
-}));
-
-export const agentInstanceRoute = pgTable(
-  "agent_instance_route",
-  (t) => ({
-    id: iterateId("ador"),
-    routingKey: t.text().notNull(), // e.g. "slack:{threadTs}"
-    agentInstanceId: t
-      .text()
-      .notNull()
-      .references(() => agentInstance.id, { onDelete: "cascade" }), // This is actually the `id` column
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.routingKey, t.agentInstanceId)],
-);
-
-export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one }) => ({
-  agentInstance: one(agentInstance, {
-    fields: [agentInstanceRoute.agentInstanceId],
-    references: [agentInstance.id],
   }),
 }));
 
@@ -518,7 +497,7 @@ export const builds = pgTable("builds", (t) => ({
     .notNull()
     .references(() => estate.id, { onDelete: "cascade" }),
   completedAt: t.timestamp(),
-  output: t.jsonb().$type<{ stdout?: string; stderr?: string; exitCode?: number }>(),
+  failureReason: t.text(),
   ...withTimestamps,
 }));
 

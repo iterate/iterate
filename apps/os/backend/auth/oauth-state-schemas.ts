@@ -3,7 +3,6 @@ import { z } from "zod";
 export const DynamicClientInfo = z.looseObject({
   client_id: z.string(),
   client_secret: z.string().optional(),
-  token_endpoint: z.string().optional(),
 });
 
 export type DynamicClientInfo = z.infer<typeof DynamicClientInfo>;

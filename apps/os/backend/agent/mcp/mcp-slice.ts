@@ -190,6 +190,24 @@ export const MCPOAuthRequiredEvent = z.object({
   ...mcpOAuthRequiredFields,
 });
 
+const mcpTokenUpdatedFields = {
+  type: z.literal("MCP:TOKENS_UPDATED"),
+  data: z.object({
+    serverUrl: z.string(),
+    userId: z.string(),
+    estateId: z.string(),
+    clientId: z.string().optional(),
+    integrationSlug: z.string(),
+    hasRefreshToken: z.boolean(),
+    tokenExpiresIn: z.number().nullable(),
+  }),
+};
+
+export const MCPTokenUpdatedEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...mcpTokenUpdatedFields,
+});
+
 const mcpParamsRequiredFields = {
   type: z.literal("MCP:PARAMS_REQUIRED"),
   data: z.object({
@@ -218,6 +236,7 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPToolsChanged,
   MCPConnectionErrorEvent,
   MCPOAuthRequiredEvent,
+  MCPTokenUpdatedEvent,
   MCPParamsRequiredEvent,
 ]);
 
@@ -228,6 +247,7 @@ export type MCPDisconnectRequestEvent = z.infer<typeof MCPDisconnectRequestEvent
 export type MCPConnectionEstablishedEvent = z.infer<typeof MCPConnectionEstablishedEvent>;
 export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
+export type MCPTokenUpdatedEvent = z.infer<typeof MCPTokenUpdatedEvent>;
 export type MCPParamsRequiredEvent = z.infer<typeof MCPParamsRequiredEvent>;
 
 export type MCPEvent = z.infer<typeof MCPEvent>;
