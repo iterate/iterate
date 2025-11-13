@@ -404,13 +404,10 @@ export class IterateAgent<
         return {
           eval: async (code) => {
             const evalerUrl = `http://localhost:7001`;
-            const fullCode = [...preamble, "\n\n", code].join("\n");
+            const fullCode = [...preamble, "\n", code].join("\n");
             let res: Response;
             try {
-              res = await fetch(evalerUrl, {
-                method: "post",
-                body: fullCode,
-              });
+              res = await fetch(evalerUrl, { method: "post", body: fullCode });
 
               const contentType = res.headers.get("content-type");
               if (!contentType?.includes("application/json")) {
