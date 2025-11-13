@@ -48,6 +48,7 @@ export class TagLogger {
    */
   static consoleLogFn(console: TagLogger.ConsoleImplementation): TagLogger.LogFn {
     return function consoleLog({ level, args }) {
+      args = JSON.parse(JSON.stringify(args, (_, value) => errorToPOJO(value)));
       if (Object.keys(this.tags).length) console[level](this.tagsString(), ...args);
       else console[level](...args);
     };
@@ -235,9 +236,20 @@ export class TagLogger {
 
 // #region: utils, could be moved to a separate file if needed
 
+/** checks if value is error-like and swaps it out for a plain object which can be serialized to JSON, and has a `rootCause` property */
 function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
   if (error instanceof Error) {
-    const plain: { class: string } & { [K in keyof Error]: Error[K] } = {
+    type PlainError = {
+      class: string;
+      toString: () => string;
+      rootCause: string;
+    } & {
+      [K in keyof Error]: Error[K];
+    };
+
+    const plain: PlainError = {
+      rootCause: `${error.constructor.name}: ${error.message}`,
+      toString: () => error.message,
       class: error.constructor.name,
       name: error.name,
       message: error.message,
@@ -246,7 +258,11 @@ function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
 
     // Include cause if present (recursively serialize it)
     if ("cause" in error) {
-      plain.cause = errorToPOJO(error.cause);
+      const plainCause = errorToPOJO(error.cause) as PlainError;
+      plain.cause = plainCause;
+      if ("rootCause" in plainCause) {
+        plain.rootCause = `${plain.rootCause}\n$👆 ${plainCause.rootCause}`;
+      }
     }
 
     // Include any additional enumerable properties

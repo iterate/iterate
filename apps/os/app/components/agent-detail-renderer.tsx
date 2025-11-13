@@ -396,6 +396,7 @@ function MetaEventWrapper({
               className="flex items-center gap-2 cursor-pointer group py-0.5 px-1 rounded hover:bg-muted/30 hover:text-muted-foreground"
               onClick={() => onEventClick?.(event.eventIndex ?? 0)}
             >
+              #{index}
               {index > 0 && (
                 <span
                   title={`${msSinceLast}ms since previous event`}
@@ -826,9 +827,13 @@ function CoreEventRenderer({
 
       const toolState = isSuccess ? "output-available" : "output-error";
 
+      const type: Parameters<typeof ToolHeader>[0]["type"] =
+        "statusIndicatorText" in parsedArguments
+          ? `tool-${call.name} (${parsedArguments.statusIndicatorText})`
+          : `tool-${call.name}`;
       return (
         <Tool defaultOpen={false}>
-          <ToolHeader type={`tool-${call.name}`} state={toolState} />
+          <ToolHeader type={type} state={toolState} />
           <ToolContent>
             <ToolInput input={parsedArguments} />
             <ToolOutput
