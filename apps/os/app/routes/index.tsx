@@ -1,6 +1,7 @@
-import { redirect } from "react-router";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { getRequestHeader, getRequestUrl } from "@tanstack/react-start/server";
 import { waitUntil } from "../../env.ts";
 import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
@@ -11,9 +12,8 @@ import {
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { DB } from "../../backend/db/client.ts";
-import { ReactRouterServerContext } from "../context.ts";
+import { authenticatedServerFn } from "../lib/auth-middleware.ts";
 import { appendEstatePath } from "./append-estate-path.ts";
-import type { Route } from "./+types/index.ts";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath({
@@ -22,7 +22,7 @@ async function determineRedirectPath({
   db,
 }: {
   userId: string;
-  cookieHeader: string | null;
+  cookieHeader?: string;
   db: DB;
 }) {
   // Get user's estates from the database (excluding external orgs)
@@ -243,37 +243,34 @@ async function determineRedirectPath({
   }
 
   // Fallback (shouldn't happen)
-  throw new Response(
-    "Failed to determine redirect path, please contact support if this persists.",
-    { status: 500 },
-  );
+  throw new Error("Failed to determine redirect path, please contact support if this persists.");
 }
 
-// Server-side loader that handles all the redirect logic
-export async function loader({ request, context }: Route.LoaderArgs) {
-  const { session, db } = context.get(ReactRouterServerContext).variables;
+const handleRedirect = authenticatedServerFn.handler(async ({ context }) => {
+  const { session, db } = context.variables;
 
-  if (!session?.user?.id) {
-    throw redirect("/login");
-  }
+  const cookies = getRequestHeader("Cookie");
 
-  // Determine where to redirect based on user's estates
   let redirectPath = await determineRedirectPath({
     userId: session.user.id,
-    cookieHeader: request.headers.get("Cookie"),
+    cookieHeader: cookies,
     db,
   });
 
+  const requestUrl = getRequestUrl();
+
   if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
-    const estatePath = new URL(request.url).searchParams.get("estate_path");
+    const estatePath = requestUrl.searchParams.get("estate_path");
     if (estatePath) {
       redirectPath = appendEstatePath(redirectPath, estatePath);
     }
   }
 
-  throw redirect(redirectPath);
-}
+  throw redirect({
+    to: redirectPath,
+  });
+});
 
-export default function RootIndex() {
-  return null;
-}
+export const Route = createFileRoute("/_auth.layout/")({
+  beforeLoad: () => handleRedirect(),
+});

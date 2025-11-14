@@ -1,10 +1,10 @@
-import { useRouteLoaderData } from "react-router";
 import { useQuery } from "@tanstack/react-query";
-import type { loader as rootLoader } from "../root.tsx";
+import { getRouteApi } from "@tanstack/react-router";
 import { useTRPC } from "../lib/trpc.ts";
 
+const routeApi = getRouteApi("__root__");
 export function useSessionUser() {
-  const initialSessionData = useRouteLoaderData<typeof rootLoader>("root");
+  const initialSessionData = routeApi.useLoaderData();
   if (!initialSessionData?.session)
     throw new Error(
       "Session data not found, `useSessionUser` must be used when valid session is guaranteed to exist",

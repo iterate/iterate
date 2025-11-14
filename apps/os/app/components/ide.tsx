@@ -23,8 +23,8 @@ import {
   X,
   Plus,
 } from "lucide-react";
-import { useSearchParams } from "react-router";
 import { formatDate } from "date-fns";
+import { useQueryState } from "nuqs";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "../hooks/use-estate.ts";
@@ -311,16 +311,8 @@ export function IDE() {
   const trpc = useTRPC();
   const estateId = useEstateId();
 
-  const [searchParams, setSearchParams] = useSearchParams();
-  const selectedFile = searchParams.get("file");
-  const setSelectedFile = useCallback(
-    (file: string | null) => {
-      const newParams = Object.fromEntries(searchParams);
-      if (typeof file === "string") newParams.file = file;
-      setSearchParams(new URLSearchParams(newParams));
-    },
-    [searchParams, setSearchParams],
-  );
+  const [selectedFile, setSelectedFile] = useQueryState("file", { defaultValue: "" });
+
   const [currentPrBranch, setCurrentPrBranch, removeCurrentPrBranch] = useLocalStorage<string>(
     "iterate-pr-branch",
     () => `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm-ss")}`,

@@ -1,8 +1,7 @@
 import { ChevronsUpDown, Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useRouteLoaderData } from "react-router";
+import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useTRPC } from "../lib/trpc.ts";
-import type { loader as orgLoader } from "../routes/org/layout.tsx";
 import { useSessionUser } from "../hooks/use-session-user.ts";
 import {
   DropdownMenu,
@@ -13,10 +12,11 @@ import {
 } from "./ui/dropdown-menu.tsx";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
 
+const orgRoute = getRouteApi("/_auth.layout/$organizationId");
 export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
+  const loaderData = orgRoute.useLoaderData();
   const organizationsQuery = useQuery(
     trpc.organization.list.queryOptions(void 0, {
       initialData: loaderData?.organizations ?? [],
@@ -37,7 +37,7 @@ export function OrganizationSwitcher() {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton size="lg" onClick={() => navigate("/new-organization")}>
+          <SidebarMenuButton size="lg" onClick={() => navigate({ to: "/new-organization" })}>
             <div className="flex aspect-square size-8 items-center justify-center rounded-lg border border-dashed">
               <Plus className="size-4" />
             </div>
@@ -53,7 +53,7 @@ export function OrganizationSwitcher() {
 
   const handleOrganizationSwitch = (organizationId: string) => {
     // Navigate to the organization page (which will redirect to first estate)
-    navigate(`/${organizationId}`);
+    navigate({ to: `/$organizationId`, params: { organizationId } });
   };
 
   return (
@@ -103,7 +103,7 @@ export function OrganizationSwitcher() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 p-2"
-                  onClick={() => navigate("/new-organization")}
+                  onClick={() => navigate({ to: "/new-organization" })}
                 >
                   <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
                     <Plus className="size-4" />

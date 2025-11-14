@@ -1,8 +1,9 @@
 import { useState, Suspense } from "react";
 import { Save, ArrowLeft } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { createFileRoute } from "@tanstack/react-router";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { authClient } from "../lib/auth-client.ts";
@@ -38,20 +39,28 @@ import {
   AlertDialogTrigger,
 } from "../components/ui/alert-dialog.tsx";
 import { useSessionUser } from "../hooks/use-session-user.ts";
-import type { Route } from "./+types/user-settings";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "User Settings - Iterate" },
-    { name: "description", content: "Manage your user profile and preferences" },
-  ];
-}
+export const Route = createFileRoute("/_auth.layout/user-settings")({
+  component: UserSettings,
+  head: () => ({
+    meta: [
+      {
+        title: "User Settings - Iterate",
+      },
+      {
+        name: "description",
+        content: "Manage your profile information and account preferences",
+      },
+    ],
+  }),
+});
 
 function UserSettingsContent() {
   const trpc = useTRPC();
   const navigate = useNavigate();
   const user = useSessionUser();
   const queryClient = useQueryClient();
+  const router = useRouter();
 
   const [userName, setUserName] = useState(user.name);
   const [debugMode, setDebugMode] = useState(user.debugMode);
@@ -149,10 +158,10 @@ function UserSettingsContent() {
 
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
-    if (window.history.length > 1) {
-      navigate(-1);
+    if (router.history.canGoBack()) {
+      router.history.back();
     } else {
-      navigate("/");
+      navigate({ to: "/" });
     }
   };
 
@@ -330,15 +339,16 @@ function UserSettingsContent() {
   );
 }
 
-export default function UserSettings() {
+function UserSettings() {
   const navigate = useNavigate();
+  const router = useRouter();
 
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
-    if (window.history.length > 1) {
-      navigate(-1);
+    if (router.history.canGoBack()) {
+      router.history.back();
     } else {
-      navigate("/");
+      navigate({ to: "/" });
     }
   };
 

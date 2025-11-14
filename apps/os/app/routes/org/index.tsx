@@ -1,30 +1,35 @@
-import { redirect } from "react-router";
+import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { asc, eq } from "drizzle-orm";
+import { z } from "zod";
 import { estate } from "../../../backend/db/schema.ts";
-import { ReactRouterServerContext } from "../../context.ts";
 import { isValidTypeID } from "../../../backend/utils/utils.ts";
-import type { Route } from "./+types/index.ts";
+import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
 
-// Server-side loader that redirects to the first estate
-export async function loader({ params, context }: Route.LoaderArgs) {
-  const { db } = context.get(ReactRouterServerContext).variables;
-  const { organizationId } = params;
+const orgIndexRedirect = authenticatedServerFn
+  .inputValidator(z.object({ organizationId: z.string() }))
+  .handler(async ({ context, data }) => {
+    const { organizationId } = data;
+    const { db } = context.variables;
 
-  if (!isValidTypeID(organizationId, "org")) {
-    throw new Response("Not found", { status: 404 });
-  }
+    if (!isValidTypeID(organizationId, "org")) {
+      throw notFound();
+    }
 
-  // Get the first estate for this organization
-  const firstEstate = await db.query.estate.findFirst({
-    where: eq(estate.organizationId, organizationId),
-    orderBy: asc(estate.createdAt),
+    const firstEstate = await db.query.estate.findFirst({
+      where: eq(estate.organizationId, organizationId),
+      orderBy: asc(estate.createdAt),
+    });
+    if (!firstEstate) {
+      throw new Error(
+        `The organization ${organizationId} has no estates, this should never happen.`,
+      );
+    }
+    throw redirect({
+      to: `/$organizationId/$estateId`,
+      params: { organizationId, estateId: firstEstate.id },
+    });
   });
-  if (!firstEstate) {
-    throw new Error(`The organization ${organizationId} has no estates, this should never happen.`);
-  }
-  throw redirect(`/${organizationId}/${firstEstate.id}`);
-}
 
-export default function OrgIndex() {
-  return null;
-}
+export const Route = createFileRoute("/_auth.layout/$organizationId/")({
+  loader: ({ params }) => orgIndexRedirect({ data: params }),
+});
