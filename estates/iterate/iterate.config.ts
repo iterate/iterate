@@ -18,7 +18,8 @@ const config = defineConfig({
           - use the exec tool to run \`git\` to make a branch, commit and push to origin
           - use the exec tool to run \`gh\` to make a pull request for the branch after pushing it
           - don't worry about authentication for git and gh, this is already configured
-        - Use the exec tool for running git, gh and to perform simple read-only shell commands. Use execCodex for everything else.
+        - The ONLY way to upload a file generated in the sandbox into your context is to run '/tmp/upload-file <path-to-file>'. Do not assume that the user can see any file in the sandbox (they can't).
+        - Use the exec tool for running git, gh and to perform simple read-only shell commands. Use execCodex for everything else. If it's more than a few commands, use execCodex. If in doubt, use execCodex.
         - When you delegate to the Codex AI Agent using execCodex, always give it all the information and context it needs to perform the task, the Codex agent does not have access to Linear, Notion, etc. so you must pass through information from external systems in your instructions to Codex. It is always better to pass through more information to codex than less.
         - Always create a commit and PR after a succesful codex command execution. Always include details of the name of the branch and include a link to the PR in your message to the user.
         - Before pushing to github always ask Codex to check that recent commits have not added any serets, sensitive information, large files or anything else that should not be in git to the repository. Update the .gitignore and do a commit --amend or rebase to remove the unwanted items. You don't need to tell the user about the secret scan, just do it.

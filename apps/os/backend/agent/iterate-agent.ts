@@ -1876,10 +1876,15 @@ export class IterateAgent<
   async execCodex(input: Inputs["execCodex"]) {
     const instructions: string = input.command;
     const instructionsFilePath = `/tmp/instructions-${Math.floor(Math.random() * 1e6)}.txt`;
+    // Precompute a signed upload URL for this agent so the sandbox CLI can upload files
+    const uploadUrl = await this.getSignedAgentUploadUrl();
     const execInput: Inputs["exec"] = {
       command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
       files: [{ path: instructionsFilePath, content: instructions }],
-      env: { CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY") },
+      env: {
+        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
+        ITERATE_AGENT_UPLOAD_URL: uploadUrl,
+      },
     };
     return await this.runExecWithOptions(execInput, {
       formatOutput: (stdout) => formatCodexOutput(stdout),
@@ -1969,7 +1974,7 @@ export class IterateAgent<
         }
       }
 
-      let sandboxSession: ReturnType<typeof sandbox.createSession>;
+      let sandboxSession: Awaited<ReturnType<typeof sandbox.createSession>>;
       try {
         // Create an isolated session
         sandboxSession = await sandbox.createSession({
@@ -2052,8 +2057,7 @@ export class IterateAgent<
         };
       } finally {
         // TODO: uncomment when cloudflare sandbox is fixed
-        // await sandbox.deleteSession(sessionId);
-        logger.info(`TODO: delete session ${sessionId}`);
+        //await sandbox.deleteSession(sessionId);
       }
     };
 
@@ -2085,11 +2089,29 @@ export class IterateAgent<
     }
 
     logger.info("Exec background task started");
+    (sandbox as any)[Symbol.dispose]?.();
     return resultExec;
   }
 
   async exec(input: Inputs["exec"]) {
-    return await this.runExecWithOptions(input);
+    // Provide sandbox with a signed upload URL so it can use /tmp/upload-file
+    const uploadUrl = await this.getSignedAgentUploadUrl();
+    return await this.runExecWithOptions({
+      ...input,
+      env: {
+        ...(input.env || {}),
+        ITERATE_AGENT_UPLOAD_URL: uploadUrl,
+      },
+    });
+  }
+
+  private async getSignedAgentUploadUrl(): Promise<string> {
+    let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+    if (baseUrl.includes("localhost")) {
+      baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
+    }
+    const unsignedUpload = `${baseUrl}/api/estate/${this.databaseRecord.estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/files`;
+    return await signUrl(unsignedUpload, this.env.EXPIRING_URLS_SIGNING_KEY, 60 * 60);
   }
 
   async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
@@ -2344,10 +2366,16 @@ export class IterateAgent<
       lastSeq = 0;
     }
 
+    // Heartbeat-only: no logs provided. Do not emit progress for heartbeats.
+    if (logs.length === 0) {
+      return { lastSeq };
+    }
+
     // Insert new logs idempotently
     const sorted = logs
       .filter((l) => typeof l.seq === "number" && l.seq > lastSeq)
       .sort((a, b) => a.seq - b.seq);
+    let insertedAny = false;
     for (const entry of sorted) {
       try {
         this.ctx.storage.sql.exec(
@@ -2360,6 +2388,7 @@ export class IterateAgent<
           entry.event ?? null,
         );
         lastSeq = entry.seq;
+        insertedAny = true;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes("UNIQUE") || msg.includes("constraint")) {
@@ -2367,6 +2396,11 @@ export class IterateAgent<
         }
         throw err;
       }
+    }
+
+    // If nothing new was inserted, skip emitting another progress event.
+    if (!insertedAny) {
+      return { lastSeq };
     }
 
     // Aggregate complete logs for this process
@@ -2390,13 +2424,25 @@ export class IterateAgent<
     let fullOutput = "";
     let complete = false;
     let failed = false;
+    // Aggregate complete stdout/stderr across all rows for final message reconstruction
+    let aggregatedStdout = "";
     for (const r of rows) {
       fullOutput += String(r.message ?? "");
-      if ((r.stream as string) === "stderr") stderr += String(r.message ?? "");
-      else stdout += String(r.message ?? "");
+      if ((r.stream as string) === "stdout") aggregatedStdout += String(r.message ?? "");
       if (r.event && (r.event.includes("SUCCEEDED") || r.event.includes("FAILED"))) {
         complete = true;
         if (r.event.includes("FAILED")) failed = true;
+      }
+    }
+    // Only include the latest log line in progress event payload
+    const last = rows.length > 0 ? rows[rows.length - 1] : undefined;
+    if (last) {
+      if ((last.stream as string) === "stderr") {
+        stderr = String(last.message ?? "");
+        stdout = "";
+      } else {
+        stdout = String(last.message ?? "");
+        stderr = "";
       }
     }
 
@@ -2428,7 +2474,10 @@ export class IterateAgent<
           formatterFn = (s: string) => formatCodexOutput(s);
         }
       } catch {}
-      const stream = failed ? fullOutput : stdout;
+      // Reconstruct WHOLE event output from the rows we already have
+      // - On failure: include both stdout and stderr
+      // - On success: include stdout
+      const stream = failed ? `${fullOutput}` : aggregatedStdout;
       const formatted = formatterFn ? formatterFn(stream) : truncateLongString(stream, 5_000);
       try {
         this.ctx.storage.sql.exec("DELETE FROM bg_processes WHERE process_id = ?", processId);

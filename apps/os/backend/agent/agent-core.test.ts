@@ -42,6 +42,105 @@ describe("AgentCore", () => {
     await h.waitUntilNotThinking();
   });
 
+  createAgentCoreTest([])(
+    "aggregates BACKGROUND_TASK_PROGRESS by processId and maintains single dev message",
+    async ({ h }) => {
+      await h.initializeAgent();
+
+      // 1) First progress with seq=1 appends stdout
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_1", stdout: "A", stderr: "", lastSeq: 1, complete: false },
+      });
+
+      // 2) Duplicate seq=1 should NOT append
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_1", stdout: "A-dup", stderr: "", lastSeq: 1, complete: false },
+      });
+
+      // 3) Next seq=2 should append
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_1", stdout: "B", stderr: "", lastSeq: 2, complete: false },
+      });
+
+      // 4) Append to stderr on seq=3
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_1", stdout: "", stderr: "E", lastSeq: 3, complete: false },
+      });
+
+      // 5) Invalid processId (empty string) should be ignored
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        // zod allows empty string, but reducer should guard and ignore
+        data: { processId: "", stdout: "IGNORED", stderr: "", lastSeq: 999, complete: false },
+      });
+
+      const state = h.agentCore.state as any;
+      const logsByProcess = state.metadata.backgroundTaskLogs || {};
+
+      // Aggregation assertions
+      expect(logsByProcess["proc_1"]).toBeDefined();
+      expect(logsByProcess["proc_1"].stdout).toBe("AB"); // A + B, no A-dup
+      expect(logsByProcess["proc_1"].stderr).toBe("E");
+      expect(logsByProcess[""]).toBeUndefined(); // invalid processId ignored
+
+      // Should maintain exactly one developer message per process
+      const devMessages = state.inputItems
+        .filter((i: any) => i.type === "message" && i.role === "developer")
+        .map((m: any) => m.content?.[0]?.text || null)
+        .filter(Boolean);
+
+      // Only one developer message for proc_1 progress
+      expect(devMessages.length).toBe(1);
+      expect(devMessages[0]).toContain("Background task proc_1 progress");
+      expect(devMessages[0]).toContain("STDOUT:\nAB");
+      expect(devMessages[0]).toContain("STDERR:\nE");
+      expect(devMessages[0]).not.toContain("A-dup"); // duplicate seq ignored
+
+      // 6) Add a second process and ensure multiplexing works (separate aggregation and dev message)
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_2", stdout: "X", stderr: "", lastSeq: 1, complete: false },
+      });
+      await h.agentCore.addEvent({
+        type: "CORE:BACKGROUND_TASK_PROGRESS",
+        data: { processId: "proc_2", stdout: "", stderr: "Y", lastSeq: 2, complete: false },
+      });
+
+      const state2 = h.agentCore.state as any;
+      const logsByProcess2 = state2.metadata.backgroundTaskLogs || {};
+      expect(logsByProcess2["proc_2"]).toBeDefined();
+      expect(logsByProcess2["proc_2"].stdout).toBe("X");
+      expect(logsByProcess2["proc_2"].stderr).toBe("Y");
+
+      // Ensure proc_1 aggregations remain intact
+      expect(logsByProcess2["proc_1"].stdout).toBe("AB");
+      expect(logsByProcess2["proc_1"].stderr).toBe("E");
+
+      // Now there should be exactly one dev message per process
+      const devMessages2 = state2.inputItems
+        .filter((i: any) => i.type === "message" && i.role === "developer")
+        .map((m: any) => m.content?.[0]?.text || null)
+        .filter(Boolean);
+      expect(devMessages2.length).toBe(2);
+      // Verify both process-specific prefixes are present
+      expect(
+        devMessages2.some((t: string) => t.startsWith("Background task proc_1 progress")),
+      ).toBe(true);
+      expect(
+        devMessages2.some((t: string) => t.startsWith("Background task proc_2 progress")),
+      ).toBe(true);
+      // Spot-check aggregated content appears in the respective messages
+      expect(devMessages2.join("\n")).toContain("STDOUT:\nAB");
+      expect(devMessages2.join("\n")).toContain("STDERR:\nE");
+      expect(devMessages2.join("\n")).toContain("STDOUT:\nX");
+      expect(devMessages2.join("\n")).toContain("STDERR:\nY");
+    },
+  );
+
   createAgentCoreTest([])("merges metadata", async ({ h }) => {
     await h.initializeAgent();
 
