@@ -1346,10 +1346,6 @@ export class IterateAgent<
     };
   }
 
-  async replaceCommas(input: string) {
-    return input.replaceAll(",", ";");
-  }
-
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
