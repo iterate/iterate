@@ -139,7 +139,11 @@ export interface AgentCoreDeps {
     eval: (
       code: string,
       statusIndicatorText: string,
-    ) => Promise<{ dynamicWorkerCode: string; result: unknown }>;
+    ) => Promise<{
+      dynamicWorkerCode: string;
+      result: unknown;
+      toolCalls: { tool: string; input: unknown; output: unknown }[];
+    }>;
     [Symbol.dispose]: () => Promise<void>;
   };
   /** Persist the full event array whenever it changes – safe to store by ref */
@@ -373,6 +377,13 @@ export class AgentCore<
     const toolTypes = generateTypes(state.runtimeTools, {
       blocklist:
         codemodeGrouped.normal?.flatMap((tool) => ("name" in tool && tool.name) || []) || [],
+      outputSamples:
+        state.recordedToolCalls &&
+        R.pipe(
+          state.recordedToolCalls,
+          R.groupBy((call) => call.tool),
+          R.mapValues((calls) => calls.map((call) => call.output)),
+        ),
     });
     const codemodeTool: (typeof state.runtimeTools)[number] = {
       type: "function",
@@ -421,6 +432,9 @@ export class AgentCore<
 
         using cm = this.deps.setupCodemode(functions);
         const output = await cm.eval(functionCode, statusIndicatorText);
+        this.addEvents(
+          output.toolCalls.map((call) => ({ type: "CORE:CODEMODE_TOOL_CALL", data: call })),
+        );
         const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
         return {
           ...result,
@@ -908,6 +922,11 @@ export class AgentCore<
     }
 
     switch (event.type) {
+      case "CORE:CODEMODE_TOOL_CALL": {
+        next.recordedToolCalls ||= [];
+        next.recordedToolCalls.push(event.data);
+        break;
+      }
       case "CORE:SET_SYSTEM_PROMPT":
         next.systemPrompt = event.data.prompt;
         break;

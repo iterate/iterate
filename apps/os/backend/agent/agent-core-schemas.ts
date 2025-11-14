@@ -471,6 +471,16 @@ export const BackgroundTaskProgressEvent = z.object({
   ...backgroundTaskProgressEventFields,
 });
 
+export const CodemodeToolCallEvent = z.object({
+  ...agentCoreBaseEventFields,
+  type: z.literal("CORE:CODEMODE_TOOL_CALL"),
+  data: z.object({
+    tool: z.string(),
+    input: z.unknown(),
+    output: z.unknown(),
+  }),
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const agentCoreEventSchemasUndiscriminated = [
@@ -498,6 +508,7 @@ export const agentCoreEventSchemasUndiscriminated = [
   ParticipantLeftEvent,
   ParticipantMentionedEvent,
   BackgroundTaskProgressEvent,
+  CodemodeToolCallEvent,
 ] as const;
 
 export const AgentCoreEvent = z.discriminatedUnion("type", agentCoreEventSchemasUndiscriminated);
@@ -653,6 +664,8 @@ with the agent.
    * Tracks users who have been mentioned but haven't actively participated.
    */
   mentionedParticipants: Record<string, Participant>;
+
+  recordedToolCalls?: Array<{ tool: string; input: unknown; output: unknown }>;
 }
 
 export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
