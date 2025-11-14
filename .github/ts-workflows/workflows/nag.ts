@@ -164,7 +164,7 @@ export default {
                   }
                 } else {
                   const message = await slack.chat.postMessage({
-                    channel: slackChannelIds["#building"],
+                    channel: slackChannelIds["#misha-test"],
                     text: `<${pr.html_url}|#${pr.number} ${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
                   });
                   if (message.ts) {
