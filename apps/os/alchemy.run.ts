@@ -326,8 +326,6 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
-  const WORKER_LOADER = WorkerLoader();
-
   return {
     ITERATE_AGENT,
     SLACK_AGENT,
@@ -336,7 +334,6 @@ async function setupDurableObjects() {
     SANDBOX,
     ADVISORY_LOCKER,
     ESTATE_BUILDS: ESTATE_BUILD_TRACKER,
-    WORKER_LOADER,
   };
 }
 
@@ -374,6 +371,7 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
+      WORKER_LOADER: WorkerLoader(),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains,
