@@ -297,7 +297,7 @@ app.all("*", (c) => {
     context: {
       cloudflare: {
         env: c.env,
-        ctx: c.executionCtx,
+        ctx: c.executionCtx as ExecutionContext<unknown>,
       },
       variables: c.var,
     },
