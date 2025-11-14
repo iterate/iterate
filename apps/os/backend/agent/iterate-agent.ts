@@ -390,22 +390,27 @@ export class IterateAgent<
             `
               .replace("__tool_call_functions__", toolCallFunctions.replaceAll("\n", "\n    "))
               .replace("__function_code__", functionCode.replaceAll("\n", "\n    "));
-            const dynamicWorker = this.env.LOADER.get(`debug-url-${Date.now()}`, async () => {
-              return {
-                compatibilityDate: "2025-06-01",
-                mainModule: "index.js",
-                modules: {
-                  "index.js": dynamicWorkerCode,
-                },
-                env: {
-                  AGENT_CALLER: this.ctx.exports.default({ props: {} }),
-                  // there's gotta be a better way to do this
-                  AGENT_BINDING_NAME: R.toSnakeCase(this.databaseRecord.className).toUpperCase(),
-                  AGENT_NAME: this.databaseRecord.durableObjectName,
-                  CODEMODE_CALLER_ID: codemodeCallerId,
-                },
-              };
-            });
+
+            const hash = createHash("md5").update(dynamicWorkerCode).digest("hex");
+            const dynamicWorker = this.env.LOADER.get(
+              `codemode-${codemodeCallerId}-${hash}`,
+              async () => {
+                return {
+                  compatibilityDate: "2025-06-01",
+                  mainModule: "index.js",
+                  modules: {
+                    "index.js": dynamicWorkerCode,
+                  },
+                  env: {
+                    AGENT_CALLER: this.ctx.exports.default({ props: {} }),
+                    // there's gotta be a better way to do this
+                    AGENT_BINDING_NAME: R.toSnakeCase(this.databaseRecord.className).toUpperCase(),
+                    AGENT_NAME: this.databaseRecord.durableObjectName,
+                    CODEMODE_CALLER_ID: codemodeCallerId,
+                  },
+                };
+              },
+            );
 
             const entrypoint = dynamicWorker.getEntrypoint();
 
