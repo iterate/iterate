@@ -392,7 +392,7 @@ export class IterateAgent<
               .replace("__function_code__", functionCode.replaceAll("\n", "\n    "));
 
             const hash = createHash("md5").update(dynamicWorkerCode).digest("hex");
-            const dynamicWorker = this.env.LOADER.get(
+            const dynamicWorker = this.env.WORKER_LOADER.get(
               `codemode-${codemodeCallerId}-${hash}`,
               async () => {
                 return {

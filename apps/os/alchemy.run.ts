@@ -326,7 +326,7 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
-  const LOADER = WorkerLoader();
+  const WORKER_LOADER = WorkerLoader();
 
   return {
     ITERATE_AGENT,
@@ -336,7 +336,7 @@ async function setupDurableObjects() {
     SANDBOX,
     ADVISORY_LOCKER,
     ESTATE_BUILDS: ESTATE_BUILD_TRACKER,
-    LOADER,
+    WORKER_LOADER,
   };
 }
 
