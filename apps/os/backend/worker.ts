@@ -285,7 +285,7 @@ const requestHandler = createRequestHandler(
 app.all("*", (c) => {
   const contextProvider = new RouterContextProvider();
   contextProvider.set(ReactRouterServerContext, {
-    cloudflare: { env: c.env, ctx: c.executionCtx },
+    cloudflare: { env: c.env, ctx: c.executionCtx as never },
     variables: c.var,
   });
   return requestHandler(c.req.raw, contextProvider);
