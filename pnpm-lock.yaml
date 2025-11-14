@@ -802,8 +802,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
-  packages/evaler: {}
-
   packages/ngrok: {}
 
   packages/sdk:

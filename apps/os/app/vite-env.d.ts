@@ -14,3 +14,9 @@ interface ImportMetaEnv extends ViteEnv {}
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+declare namespace Cloudflare {
+  interface GlobalProps {
+    mainModule: typeof import("../backend/worker");
+  }
+}

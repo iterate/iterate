@@ -7,6 +7,7 @@ import {
   Container,
   DurableObjectNamespace,
   TanStackStart,
+  WorkerLoader,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -370,6 +371,7 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
+      WORKER_LOADER: WorkerLoader(),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains,

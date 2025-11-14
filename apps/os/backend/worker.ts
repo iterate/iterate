@@ -297,7 +297,7 @@ app.all("*", (c) => {
     context: {
       cloudflare: {
         env: c.env,
-        ctx: c.executionCtx,
+        ctx: c.executionCtx as ExecutionContext<unknown>,
       },
       variables: c.var,
     },
@@ -310,6 +310,21 @@ app.all("*", (c) => {
 // This is only really needed when we have multiple workers, though. I just ported it over because I mistakenly
 // thought we need it sooner
 export default class extends WorkerEntrypoint {
+  declare env: CloudflareEnv;
+
+  callMyAgent(params: {
+    bindingName: string;
+    durableObjectName: string;
+    methodName: string;
+    args: unknown[];
+  }) {
+    // cast the bindingName, methodName and args to example values to make sure types are roughly correct
+    // this is called from dynamic workers, not typescript anyway
+    const binding = this.env[params.bindingName as "ITERATE_AGENT"];
+    const agent = binding.getByName(params.durableObjectName);
+    return agent[params.methodName as "doNothing"](...(params.args as []));
+  }
+
   fetch(request: Request) {
     return app.fetch(request, this.env, this.ctx);
   }

@@ -355,83 +355,69 @@ export class IterateAgent<
     const baseDeps: AgentCoreDeps = {
       setupCodemode: (functions) => {
         const codemodeCallerId = this.createCodemodeCaller(functions);
-        const baseUrl = this.env.VITE_PUBLIC_URL;
-        const baseFetchProps = {
-          estateId: this.databaseRecord.estateId,
-          agentInstanceName: this.databaseRecord.durableObjectName,
-          agentClassName: this.constructor.name,
-          codemodeCallerId,
-        };
-        const preamble = [
-          "// #region: helper functions - these are deterministically written by the system and cannot be changed by the agent",
-        ];
-        const addVar = (name: string, value: unknown) => {
-          preamble.push(`const ${name} = ${JSON.stringify(value, null, 2)};\n`);
-        };
-        addVar("baseUrl", baseUrl);
-        addVar("baseFetchProps", baseFetchProps);
-        async function callCodemodeCallbackOnDO(functionName: string, input: unknown) {
-          const res = await fetch(`${baseUrl}/api/trpc/agents.callCodemodeCallback`, {
-            method: "post",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ ...baseFetchProps, functionName, input }),
-          });
-          const json = await res.json<any>();
-          if (!res.ok) {
-            const errorMessage = json.error?.message || "Request failed";
-            const errorCode = json.error?.data?.code || res.status;
-            throw new Error(`${errorCode}: ${errorMessage}`);
-          }
-
-          if (!json.result || !("data" in json.result)) {
-            throw new Error("Invalid tRPC response format");
-          }
-
-          return json.result.data;
-        }
-        const fnString = callCodemodeCallbackOnDO.toString();
-        const indent = fnString.split("\n").at(-1)?.slice(0, -1) || "";
-        preamble.push(fnString.replaceAll(indent, ""));
-
-        preamble.push("// #endregion: helper functions");
-        for (const [name] of Object.entries(functions)) {
-          preamble.push(
-            `const ${toolNameToJsIdentifier(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`,
-          );
-        }
-
-        const preambleCode = preamble.join("\n");
         return {
-          eval: async (code) => {
-            const evalerUrl = `http://localhost:7001`;
-            const fullCode = [...preamble, "\n", code].join("\n");
-            let res: Response;
-            try {
-              res = await fetch(evalerUrl, { method: "post", body: fullCode });
+          eval: async (functionCode) => {
+            const toolCallFunctions = Object.keys(functions)
+              .map((name) => {
+                return `const ${toolNameToJsIdentifier(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`;
+              })
+              .join("\n");
+            const dynamicWorkerCode = dedent`
+              export default {
+                async fetch(request, env, ctx) {
+                  const callMethodOnDO = (methodName, args) => {
+                    return env.AGENT_CALLER.callMyAgent({
+                      bindingName: env.AGENT_BINDING_NAME,
+                      durableObjectName: env.AGENT_NAME,
+                      methodName,
+                      args,
+                    })
+                  }
 
-              const contentType = res.headers.get("content-type");
-              if (!contentType?.includes("application/json")) {
-                throw new Error(`Expected JSON response from ${evalerUrl}, got ${contentType}`);
+                  const callCodemodeCallbackOnDO = (functionName, input) => {
+                    return callMethodOnDO("callCodemodeCallback", [env.CODEMODE_CALLER_ID, functionName, input]);
+                  }
+
+                  __tool_call_functions__
+
+                  __function_code__
+
+                  const result = await codemode()
+
+                  return new Response(JSON.stringify(result));
+                }
               }
-            } catch (err) {
-              throw new Error(`Failed to eval code: ${String(err)}\n\nCode:\n${code}`.trim(), {
-                cause: err,
-              });
-            }
+            `
+              .replace("__tool_call_functions__", toolCallFunctions.replaceAll("\n", "\n    "))
+              .replace("__function_code__", functionCode.replaceAll("\n", "\n    "));
 
-            if (!res.ok) {
-              const error = await res.text();
-              const json = error.startsWith("{") ? JSON.parse(error) : { message: error };
-              const message = String(json.error?.message || error);
-              if (res.status < 500)
-                throw new Error(`Error evaluating code:\n${message}\n\nCode:\n${fullCode}`, {
-                  cause: error,
-                });
-              throw new Error(`${res.status} hitting ${evalerUrl}:\n${message}`, { cause: error });
-            }
+            const hash = createHash("md5").update(dynamicWorkerCode).digest("hex");
+            const dynamicWorker = this.env.WORKER_LOADER.get(
+              `codemode-${codemodeCallerId}-${hash}`,
+              async () => {
+                return {
+                  compatibilityDate: "2025-06-01",
+                  mainModule: "index.js",
+                  modules: {
+                    "index.js": dynamicWorkerCode,
+                  },
+                  env: {
+                    AGENT_CALLER: this.ctx.exports.default({ props: {} }),
+                    // there's gotta be a better way to do this
+                    AGENT_BINDING_NAME: R.toSnakeCase(this.databaseRecord.className).toUpperCase(),
+                    AGENT_NAME: this.databaseRecord.durableObjectName,
+                    CODEMODE_CALLER_ID: codemodeCallerId,
+                  },
+                };
+              },
+            );
+
+            const entrypoint = dynamicWorker.getEntrypoint();
+
+            const res = await entrypoint.fetch("http://iterate-dynamic-worker");
 
             const result = await res.json<unknown>();
-            return { preamble: preambleCode, result };
+            return { result, dynamicWorkerCode };
           },
           [Symbol.dispose]: async () => {
             // for some reason `using cm = ...` was disposing too early, so dispose after plenty of time has passed
@@ -1359,6 +1345,7 @@ export class IterateAgent<
       name: this.estate.name,
     };
   }
+
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
