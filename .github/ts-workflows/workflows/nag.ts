@@ -34,6 +34,7 @@ export default {
                 ...context.repo,
                 pull_number: pr.number,
               });
+
               const { data: rawComments } = await github.rest.issues.listComments({
                 ...context.repo,
                 issue_number: pr.number,
