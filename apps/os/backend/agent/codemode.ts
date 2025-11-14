@@ -28,15 +28,6 @@ function makeJsonSchemaJsonSchemaToTypescriptFriendly<T>(jsonSchema: T) {
   ) as T;
 }
 
-function hashCode(string: string): number {
-  let hash = 0;
-  for (let i = 0; i < string.length; i++) {
-    hash = (hash << 5) - hash + string.charCodeAt(i);
-    hash = hash & hash;
-  }
-  return hash;
-}
-
 function jsonSchemaToInlineTypescript(generatedName: string, jsonSchema: {}) {
   const originalSchema = jsonSchema;
 
