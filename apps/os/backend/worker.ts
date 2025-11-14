@@ -297,6 +297,20 @@ app.all("*", (c) => {
 // This is only really needed when we have multiple workers, though. I just ported it over because I mistakenly
 // thought we need it sooner
 export default class extends WorkerEntrypoint {
+  declare env: CloudflareEnv;
+
+  callMyAgent(params: {
+    bindingName: string;
+    durableObjectName: string;
+    methodName: string;
+    args: unknown[];
+  }) {
+    const agent = this.env[params.bindingName as "ITERATE_AGENT"].getByName(
+      params.durableObjectName,
+    ) as {} as Record<string, unknown>;
+    return (agent[params.methodName] as Function)(...params.args);
+  }
+
   fetch(request: Request) {
     return app.fetch(request, this.env, this.ctx);
   }

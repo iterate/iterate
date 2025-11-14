@@ -7,6 +7,7 @@ import {
   Container,
   DurableObjectNamespace,
   ReactRouter,
+  WorkerLoader,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -325,6 +326,8 @@ async function setupDurableObjects() {
     sqlite: true,
   });
 
+  const LOADER = WorkerLoader();
+
   return {
     ITERATE_AGENT,
     SLACK_AGENT,
@@ -333,6 +336,7 @@ async function setupDurableObjects() {
     SANDBOX,
     ADVISORY_LOCKER,
     ESTATE_BUILDS: ESTATE_BUILD_TRACKER,
+    LOADER,
   };
 }
 

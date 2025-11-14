@@ -1224,7 +1224,59 @@ export class IterateAgent<
       name: this.estate.name,
     };
   }
+
+  async replaceCommas(input: string) {
+    return input.replaceAll(",", ";");
+  }
+
   async getAgentDebugURL() {
+    const dynamicWorker = this.env.LOADER.get(`debug-url-${Date.now()}`, async () => {
+      return {
+        compatibilityDate: "2025-06-01",
+        mainModule: "index.js",
+        modules: {
+          "index.js": dedent`
+            export default {
+              async fetch(request, env, ctx) {
+                const callMethodOnDO = (methodName, args) => {
+                  return env.AGENT_CALLER.callMyAgent({
+                    bindingName: env.AGENT_BINDING_NAME,
+                    durableObjectName: env.AGENT_NAME,
+                    methodName,
+                    args,
+                  })
+                }
+                const result = await callMethodOnDO("replaceCommas", ["xx,yy,zz"]).catch(String);
+                return new Response(JSON.stringify({
+                  hello: true,
+                  result,
+                }));
+              }
+            }
+          `,
+        },
+        env: {
+          STR: "hiiii",
+          // there's gotta be a better way to do this
+          AGENT_BINDING_NAME: R.toSnakeCase(this.databaseRecord.className).toUpperCase(),
+          AGENT_NAME: this.databaseRecord.durableObjectName,
+          AGENT_CALLER: this.ctx.exports.default({ props: {} }),
+        },
+      };
+    });
+
+    const entrypoint = dynamicWorker.getEntrypoint();
+    const x = await entrypoint.fetch("http://iterate-dynamic-worker").catch(String);
+
+    console.log(
+      { x },
+      typeof x === "object" && (await x.text()),
+      this.ctx,
+      111,
+      this.ctx.exports,
+      222,
+    );
+
     const estate = await this.getEstate();
     return {
       debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
