@@ -142,7 +142,11 @@ export interface AgentCoreDeps {
     ) => Promise<{
       dynamicWorkerCode: string;
       result: unknown;
-      toolCalls: { tool: string; input: unknown; output: unknown }[];
+      toolCalls: {
+        tool: string;
+        input: unknown;
+        output: Awaited<ReturnType<typeof executeLocalFunctionTool>>;
+      }[];
     }>;
     [Symbol.dispose]: () => Promise<void>;
   };
@@ -432,17 +436,28 @@ export class AgentCore<
 
         using cm = this.deps.setupCodemode(functions);
         const output = await cm.eval(functionCode, statusIndicatorText);
-        this.addEvents(
-          output.toolCalls.map((call) => ({ type: "CORE:CODEMODE_TOOL_CALL", data: call })),
+        const triggerLLMRequestValues = output.toolCalls.flatMap((call) =>
+          "triggerLLMRequest" in call.output ? call.output.triggerLLMRequest : [],
         );
-        const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
+        const triggerLLMRequest =
+          triggerLLMRequestValues.find(Boolean) ?? // if any are true, we need to trigger
+          triggerLLMRequestValues.find((v) => typeof v === "boolean"); // try to faithfully report `false` rather than `undefined` if some tool call specified `false`
         return {
-          ...result,
           type: "function_call_output",
           call_id: "codemode",
           output,
-          toolCallResult: result?.toolCallResult ?? result,
-          triggerLLMRequest: result?.triggerLLMRequest,
+          toolCallResult: output.result,
+          triggerLLMRequest,
+          addEvents: [
+            {
+              type: "CORE:CODEMODE_TOOL_CALLS",
+              data: output.toolCalls.map((call) => ({
+                ...call,
+                output: call.output.toolCallResult,
+              })),
+            },
+            ...output.toolCalls.flatMap((call) => call.output.addEvents ?? []),
+          ],
         };
       },
     };
@@ -922,9 +937,9 @@ export class AgentCore<
     }
 
     switch (event.type) {
-      case "CORE:CODEMODE_TOOL_CALL": {
+      case "CORE:CODEMODE_TOOL_CALLS": {
         next.recordedToolCalls ||= [];
-        next.recordedToolCalls.push(event.data);
+        next.recordedToolCalls.push(...event.data);
         break;
       }
       case "CORE:SET_SYSTEM_PROMPT":

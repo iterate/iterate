@@ -473,12 +473,14 @@ export const BackgroundTaskProgressEvent = z.object({
 
 export const CodemodeToolCallEvent = z.object({
   ...agentCoreBaseEventFields,
-  type: z.literal("CORE:CODEMODE_TOOL_CALL"),
-  data: z.object({
-    tool: z.string(),
-    input: z.unknown(),
-    output: z.unknown(),
-  }),
+  type: z.literal("CORE:CODEMODE_TOOL_CALLS"),
+  data: z.array(
+    z.object({
+      tool: z.string(),
+      input: z.unknown(),
+      output: z.unknown(),
+    }),
+  ),
 });
 
 // ------------------------- Discriminated Unions -------------------------

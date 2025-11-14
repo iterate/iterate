@@ -49,6 +49,7 @@ import {
   AgentCore,
   type AgentCoreDeps,
   type AgentCoreSlice,
+  type executeLocalFunctionTool,
   type MergedDepsForSlices,
   type MergedEventForSlices,
   type MergedStateForSlices,
@@ -372,22 +373,22 @@ export class IterateAgent<
                       durableObjectName: env.AGENT_NAME,
                       methodName,
                       args,
-                    })
-                  }
+                    });
+                  };
 
                   const callCodemodeCallbackOnDO = async (functionName, input) => {
                     const output = await callMethodOnDO("callCodemodeCallback", [env.CODEMODE_CALLER_ID, functionName, input]);
-                    toolCalls.push({tool: functionName, input, output})
-                    return output
-                  }
+                    toolCalls.push({tool: functionName, input, output});
+                    return output.toolCallResult;
+                  };
 
                   __tool_call_functions__
 
                   __function_code__
 
-                  const result = await codemode()
+                  const result = await codemode();
 
-                  return new Response(JSON.stringify({result, toolCalls}));
+                  return new Response(JSON.stringify({ result, toolCalls }));
                 }
               }
             `
@@ -422,7 +423,11 @@ export class IterateAgent<
 
               const { result, toolCalls } = await res.json<{
                 result: unknown;
-                toolCalls: { tool: string; input: unknown; output: unknown }[];
+                toolCalls: {
+                  tool: string;
+                  input: unknown;
+                  output: Awaited<ReturnType<typeof executeLocalFunctionTool>>;
+                }[];
               }>();
               return { result, dynamicWorkerCode, toolCalls };
             } catch (error) {

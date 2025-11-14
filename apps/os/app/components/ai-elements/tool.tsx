@@ -104,7 +104,13 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
   if (typeof output === "object") {
     Output = <SerializedObjectCodeBlock data={output} />;
   } else if (typeof output === "string") {
-    Output = <SerializedObjectCodeBlock data={JSON.parse(output)} />;
+    let data;
+    try {
+      data = JSON.parse(output);
+    } catch {
+      data = { output };
+    }
+    Output = <SerializedObjectCodeBlock data={data} />;
   }
 
   return (
