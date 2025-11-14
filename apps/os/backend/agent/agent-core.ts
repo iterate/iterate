@@ -136,7 +136,10 @@ export type CheckDepsConflict<T> =
 
 export interface AgentCoreDeps {
   setupCodemode: (functions: Record<string, Function>) => {
-    eval: (code: string, status: string) => Promise<{ dynamicWorkerCode: string; result: unknown }>;
+    eval: (
+      code: string,
+      statusIndicatorText: string,
+    ) => Promise<{ dynamicWorkerCode: string; result: unknown }>;
     [Symbol.dispose]: () => Promise<void>;
   };
   /** Persist the full event array whenever it changes – safe to store by ref */
