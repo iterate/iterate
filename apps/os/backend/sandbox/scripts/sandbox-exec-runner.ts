@@ -104,8 +104,7 @@ async function start() {
       event: exitCode === 0 ? "COMMAND_SUCCEEDED" : "COMMAND_FAILED",
       complete: true,
     });
-    await logStreamer.flush();
-    process.exit(exitCode);
+    return exitCode;
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
     logStreamer.enqueue({
@@ -114,8 +113,7 @@ async function start() {
       event: "COMMAND_FAILED",
       complete: true,
     });
-    await logStreamer.flush();
-    process.exit(1);
+    return 1;
   } finally {
     await logStreamer.stop();
   }
@@ -124,7 +122,8 @@ async function start() {
 async function main() {
   const sub = process.argv[2];
   if (sub !== "start") throw new Error("Unknown subcommand");
-  await start();
+  const code = await start();
+  process.exit(code);
 }
 
 main().catch((err) => {

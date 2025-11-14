@@ -81,8 +81,9 @@ async function main() {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    const attemptedUrl = url.toString();
     console.error(
-      `Upload to ${process.env.ITERATE_AGENT_UPLOAD_URL} failed: ${res.status} ${res.statusText}${text ? ` - ${text}` : ""}`,
+      `Upload to ${attemptedUrl} failed: ${res.status} ${res.statusText}${text ? ` - ${text}` : ""}`,
     );
     process.exit(res.status || 1);
   }
@@ -96,7 +97,7 @@ async function main() {
 
   if (json && json.id) {
     // Print a concise, machine-readable line first for easy parsing
-    console.log(`OK iterateFileId=${json.id} openAIFileId=${json.openAIFileId || ""}`);
+    console.log(`OK iterateFileId=${json.id}`);
     // Also print the full JSON response for human readability
     console.log(JSON.stringify(json, null, 2));
   } else {

@@ -164,6 +164,7 @@ export const uploadFileForAgentHandler = async (
     await agent.addEvents([
       {
         type: "CORE:FILE_SHARED",
+        triggerLLMRequest: true,
         data: {
           direction: "from-agent-to-user",
           iterateFileId: fileRecord.id,

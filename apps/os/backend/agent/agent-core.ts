@@ -1319,9 +1319,79 @@ export class AgentCore<
       case "CORE:INTERNAL_ERROR":
       case "CORE:INITIALIZED_WITH_EVENTS":
       case "CORE:LOG":
-      case "CORE:BACKGROUND_TASK_PROGRESS":
-        // Just log, no state change needed
+      case "CORE:BACKGROUND_TASK_PROGRESS": {
+        // Maintain one developer message per processId with COMPLETE aggregated stdout/stderr
+        const {
+          processId,
+          stdout: latestStdout = "",
+          stderr: latestStderr = "",
+          lastSeq,
+          complete,
+        } = event.data as {
+          processId: string;
+          stdout?: string;
+          stderr?: string;
+          lastSeq?: number;
+          complete?: boolean;
+        };
+        // Guard against malformed events; don't add 'undefined' process entries
+        if (!processId || typeof processId !== "string") {
+          break;
+        }
+        type BackgroundTaskLogsMetadata = Record<
+          string,
+          { stdout: string; stderr: string; lastSeq?: number; complete?: boolean }
+        >;
+        const prevAll =
+          (next.metadata.backgroundTaskLogs as BackgroundTaskLogsMetadata | undefined) || {};
+        const prev = prevAll[processId] || {
+          stdout: "",
+          stderr: "",
+          lastSeq: undefined,
+          complete: false,
+        };
+        const prevLast = typeof prev.lastSeq === "number" ? prev.lastSeq : -1;
+        const incomingLast = typeof lastSeq === "number" ? lastSeq : prevLast;
+        const hasNewSeq = incomingLast > prevLast;
+        const agg: BackgroundTaskLogsMetadata[string] = hasNewSeq
+          ? {
+              stdout: `${prev.stdout}${latestStdout || ""}`,
+              stderr: `${prev.stderr}${latestStderr || ""}`,
+              lastSeq: incomingLast,
+              complete: Boolean(complete ?? prev.complete),
+            }
+          : {
+              // No new sequence; keep prior aggregates to avoid duplicating lines
+              stdout: prev.stdout,
+              stderr: prev.stderr,
+              lastSeq: prev.lastSeq,
+              complete: Boolean(complete ?? prev.complete),
+            };
+        const updatedAll: BackgroundTaskLogsMetadata = { ...prevAll, [processId]: agg };
+        next.metadata = { ...next.metadata, backgroundTaskLogs: updatedAll };
+
+        // Ensure only ONE developer message per processId by removing prior progress message
+        const progressPrefix = `Background task ${processId} progress`;
+        next.inputItems = next.inputItems.filter((item) => {
+          if (item.type !== "message" || item.role !== "developer") return true;
+          const maybeText = (item.content as any)?.find?.((c: any) => c?.type === "input_text");
+          const text: string | undefined = maybeText?.text;
+          return !(typeof text === "string" && text.startsWith(progressPrefix));
+        });
+
+        // Add updated progress developer message with truncated aggregates,
+        // only if we have a process entry
+        const messageText =
+          `${progressPrefix}.\n\n` +
+          `STDOUT:\n${truncateLongString(agg.stdout, 1_000)}\n\n` +
+          `STDERR:\n${truncateLongString(agg.stderr, 1_000)}`;
+        next.inputItems.push({
+          type: "message" as const,
+          role: "developer" as const,
+          content: [{ type: "input_text" as const, text: messageText }],
+        });
         break;
+      }
 
       default:
         event satisfies never;
@@ -1751,6 +1821,13 @@ export class AgentCore<
   }): Promise<string | undefined> {
     return this.deps.getFinalRedirectUrl?.(payload);
   }
+}
+
+function truncateLongString(str: unknown, maxLength = 1000): string {
+  const s = typeof str === "string" ? str : JSON.stringify(str);
+  if (s.length <= maxLength) return s;
+  const showChars = Math.floor(maxLength / 2);
+  return s.slice(0, showChars) + "...[truncated]..." + s.slice(-showChars);
 }
 
 /**

@@ -60,9 +60,9 @@ export function createBatchLogStreamer<E extends string | undefined = string>(
     isFlushing = true;
     currentFlushPromise = (async () => {
       try {
-        // Always send heartbeats on interval even if there are no logs
+        // Send heartbeat only when there are no pending logs and the interval has elapsed.
         const now = Date.now();
-        if (now - lastHeartbeatAt >= heartbeatIntervalMs) {
+        if (pending.length === 0 && now - lastHeartbeatAt > heartbeatIntervalMs) {
           try {
             await fetch(url, {
               method: "POST",
@@ -75,13 +75,10 @@ export function createBatchLogStreamer<E extends string | undefined = string>(
           }
         }
 
-        // Drain all pending batches until queue is empty.
-        // New enqueues during the send loop will be picked up by reiteration.
-        // Preserve order by sending the oldest enqueued first.
-
-        while (true) {
-          const batch = pending;
-          if (batch.length === 0) break;
+        // Send at most one batch per flush call. If new logs arrive during the
+        // in-flight request, they will be sent on the next scheduled flush.
+        const batch = pending;
+        if (batch.length > 0) {
           pending = [];
           try {
             const res = await fetch(url, {
@@ -92,18 +89,19 @@ export function createBatchLogStreamer<E extends string | undefined = string>(
             if (!res.ok) {
               // requeue at the front to preserve order
               pending = batch.concat(pending);
-              break; // avoid tight loop on repeated failures
-            }
-            // best-effort: read json to keep connection clean
-            try {
-              await res.json();
-            } catch {
-              // ignore parse errors
+            } else {
+              // best-effort: read json to keep connection clean
+              try {
+                await res.json();
+              } catch {
+                // ignore parse errors
+              }
+              // Treat a successful logs send as activity that resets the heartbeat timer.
+              lastHeartbeatAt = Date.now();
             }
           } catch {
             // put back to queue on error (front to preserve order)
             pending = batch.concat(pending);
-            break;
           }
         }
       } finally {
