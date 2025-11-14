@@ -712,7 +712,7 @@ function OnboardingHero({ estateId }: { estateId: string }) {
   return (
     <div className="space-y-2">
       <div className="text-lg font-semibold">Onboarding Data</div>
-      <SerializedObjectCodeBlock data={results} initialFormat="yaml" className="h-64" />
+      <SerializedObjectCodeBlock data={results} className="h-64" />
     </div>
   );
 }

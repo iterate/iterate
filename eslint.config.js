@@ -232,7 +232,9 @@ export default defineConfig([
                 );
               }
               return {
-                "VariableDeclarator[init.callee.object.name='z']": ({ id }) => {
+                "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
+                  if (init.callee.property.name === "toJSONSchema") return;
+
                   const actualName = id.name;
                   const expectedName = getExpectedName(actualName);
 

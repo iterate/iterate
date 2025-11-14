@@ -234,6 +234,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
+      setupCodemode: (functions) => {
+        const base = deps.setupCodemode(functions);
+        return {
+          ...base,
+          eval: async (code, statusIndicatorText) => {
+            waitUntil(this.updateSlackThreadStatus({ status: `🛠️ ${statusIndicatorText}...` }));
+            return base.eval(code, statusIndicatorText);
+          },
+        };
+      },
       onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
         deps?.onLLMStreamResponseStreamingChunk?.(chunk);
         // console.log(chunk.type);
@@ -242,9 +252,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             switch (chunk.item.type) {
               case "function_call": {
                 const toolName = chunk.item.name;
+                if (
+                  toolName === "codemode" ||
+                  this.agentCore.state.codemodeEnabledTools.includes(toolName)
+                ) {
+                  // codemode tool call status indicators handled separately
+                  break;
+                }
                 const tool = this.agentCore.state.runtimeTools.find(
                   (t) => t.type === "function" && t.name === toolName,
                 );
+
                 const statusText =
                   tool && tool.type === "function" && tool.statusIndicatorText
                     ? tool.statusIndicatorText
@@ -272,6 +290,22 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
         const event = payload.event as MergedEventForSlices<SlackAgentSlices>;
         switch (event.type) {
+          case "CORE:PAUSE_LLM_REQUESTS": {
+            const reason = event.data?.reason;
+            if (reason) {
+              waitUntil(
+                Promise.resolve().then(async () => {
+                  const debug = await this.getAgentDebugURL().catch((error) => {
+                    return { error, debugURL: import.meta.env.VITE_PUBLIC_URL };
+                  });
+                  const text = `🚫 LLM requests will be paused: ${reason}. <${debug.debugURL}|Debug URL>`;
+                  await this.sendSlackMessage({ text });
+                  if ("error" in debug) throw debug.error;
+                }),
+              );
+            }
+            break;
+          }
           case "CORE:LLM_REQUEST_START":
             this.updateSlackThreadStatus({ status: "🧠 thinking" });
             break;
