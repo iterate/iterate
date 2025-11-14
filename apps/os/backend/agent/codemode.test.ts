@@ -131,15 +131,6 @@ test("quicktype string", () => {
     "type Queries = string;
     "
   `);
-
-  // const target = "src/types.ts";
-  // const result = typescript.lines.join("\n");
-  // expect(result).toMatchInlineSnapshot(`
-  //   "export interface Queries {
-  //       foo: string;
-  //   }
-  //   "
-  // `);
 });
 
 test("zod.toJSONSchema", () => {
