@@ -122,17 +122,14 @@ export function generateTypes(
         "Input",
         tool.unfiddledInputJSONSchema?.() || tool.parameters || {},
       ).cleanedUp;
+
       let outputTypes = jsonSchemaToInlineTypescript(
         "Output",
         tool.unfiddledOutputJSONSchema?.() || {},
       ).cleanedUp;
+
       if (!outputTypes.includes("\n") && tool.name in outputSamples) {
         const jsonInput = quicktype.jsonInputForTargetLanguage("typescript");
-        if (!(tool.name in outputSamples)) {
-          throw new Error(
-            `No output samples for tool ${tool.name} ${JSON.stringify(outputSamples)}`,
-          );
-        }
         jsonInput.addSourceSync({
           name: "Output",
           samples: outputSamples[tool.name].map((sample) => JSON.stringify(sample)),

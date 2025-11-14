@@ -151,6 +151,7 @@ export function SerializedObjectCodeBlock({
     keymap.of(searchKeymap),
     EditorView.editable.of(false), // This is enough for readonly
     EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcutss
+    EditorView.lineWrapping,
   ];
 
   return (
@@ -306,8 +307,13 @@ export function YamlCodeBlock({
 }
 
 function foldPromptBlocks() {
-  return foldService.of((state, from, to) => {
-    const line = state.doc.lineAt(from);
+  return foldService.of((state, lineStart, lineEnd) => {
+    const line = state.doc.lineAt(lineStart);
+
+    const collapseTo = (otherLine: typeof line) => {
+      const indent = otherLine.text.split(/\S/)[0];
+      return { from: lineEnd, to: otherLine.from + indent.length };
+    };
 
     if (line.text.match(/^\s*<\S+>$/)) {
       const closeTag = line.text.replace("<", "</"); // must be a perfect match including indent
@@ -315,7 +321,7 @@ function foldPromptBlocks() {
         const nextLine = state.doc.line(i);
 
         if (nextLine.text === closeTag) {
-          return { from: to, to: nextLine.from - 1 };
+          return collapseTo(nextLine);
         }
       }
     }
@@ -326,7 +332,7 @@ function foldPromptBlocks() {
         const nextLine = state.doc.line(i);
 
         if (nextLine.text === closeTag) {
-          return { from: to, to: nextLine.from - 1 };
+          return collapseTo(nextLine);
         }
       }
     }
@@ -339,7 +345,33 @@ function foldPromptBlocks() {
         const lessIndentedThanStart = text.trim() && !text.startsWith(startIndent);
 
         if (markdownHeadingRegex.test(text) || lessIndentedThanStart || i === state.doc.lines) {
-          return { from: to, to: state.doc.line(i - 1).from - 1 };
+          return { from: lineEnd, to: state.doc.line(i - 1).from - 1 };
+        }
+      }
+    }
+
+    if (line.text.endsWith("/**")) {
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+        if (nextLine.text.includes("*/")) {
+          return collapseTo(nextLine);
+        }
+      }
+    }
+
+    if (line.text.trim().endsWith("{")) {
+      let depth = 1;
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+        for (const char of nextLine.text.split("")) {
+          if (char === "{") {
+            depth++;
+          } else if (char === "}") {
+            depth--;
+            if (depth === 0) {
+              return collapseTo(nextLine);
+            }
+          }
         }
       }
     }
