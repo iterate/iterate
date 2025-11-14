@@ -9,8 +9,6 @@ export const makeQueryClient = () =>
     defaultOptions: {
       queries: {
         retry: false,
-        // We don't want to immediately refetch data on client when SSR provided the initial data
-        staleTime: 60 * 1000,
       },
       mutations: {
         onError: (error) => {
