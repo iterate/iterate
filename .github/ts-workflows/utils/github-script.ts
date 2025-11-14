@@ -169,12 +169,11 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
   return {
     read: () => {
       const annotator = markdownAnnotator(currentBody, label);
-      const previousContents = annotator.current || `<!-- {} -->`;
-      const s = previousContents
-        .replaceAll("\n", " ")
-        .trim()
-        .match(/^<!-- *(.*) *-->$/)?.[1];
-      if (!s) throw new Error(`Invalid previous contents: ${JSON.stringify(previousContents)}`);
+      const previousContents = annotator.current?.trim() || `<!-- {} -->`;
+      if (!previousContents.startsWith("<!-- ") || !previousContents.endsWith(" -->")) {
+        throw new Error(`Invalid previous contents: ${JSON.stringify(previousContents)}`);
+      }
+      const s = previousContents.slice("<!-- ".length, -1 * " -->".length).trim();
       return parser.parse(s) as Partial<State>;
     },
     write: (state: State) => {
