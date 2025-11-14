@@ -6,7 +6,7 @@ import {
   R2Bucket,
   Container,
   DurableObjectNamespace,
-  ReactRouter,
+  TanStackStart,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -364,7 +364,7 @@ const domains = [
 ];
 
 async function deployWorker() {
-  const worker = await ReactRouter("os", {
+  const worker = await TanStackStart("os", {
     bindings: {
       ...(await setupDatabase()),
       ...(await setupStorage()),
@@ -374,7 +374,9 @@ async function deployWorker() {
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     domains,
     compatibilityFlags: ["enable_ctx_exports"],
-    main: "./backend/worker.ts",
+    wrangler: {
+      main: "./backend/worker.ts",
+    },
     crons: ["0 0 * * *"],
     adopt: true,
     build: {

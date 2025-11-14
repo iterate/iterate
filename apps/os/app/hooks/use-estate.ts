@@ -1,4 +1,4 @@
-import { useParams } from "react-router";
+import { useParams } from "@tanstack/react-router";
 
 export interface EstateParams {
   organizationId: string;
@@ -8,7 +8,7 @@ export interface EstateParams {
 // Simple hook to get estate params from URL
 // Access checking is now done in the loader
 export function useEstate(): EstateParams | null {
-  const params = useParams();
+  const params = useParams({ strict: false });
 
   const organizationId = params.organizationId;
   const estateId = params.estateId;
@@ -25,7 +25,7 @@ export function useEstate(): EstateParams | null {
 
 // Hook to get just the estate ID (for backward compatibility)
 export function useEstateId(): string {
-  const params = useParams();
+  const params = useParams({ strict: false });
   const estateId = params.estateId;
 
   if (!estateId) {
@@ -38,7 +38,7 @@ export function useEstateId(): string {
 }
 
 export function useOrganizationId(): string {
-  const params = useParams();
+  const params = useParams({ strict: false });
   const organizationId = params.organizationId;
 
   if (!organizationId) {
@@ -52,7 +52,7 @@ export function useOrganizationId(): string {
 
 // Hook to format navigation URLs with current org/estate
 export function useEstateUrl() {
-  const params = useParams();
+  const params = useParams({ strict: false });
   const organizationId = params.organizationId;
   const estateId = params.estateId;
 

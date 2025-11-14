@@ -124,6 +124,7 @@ export function makeJSONSchemaOpenAICompatible(obj: any) {
   }
 
   if (typeof obj === "object" && Object.keys(obj).length === 0) {
+    obj.$original = "empty_schema";
     obj.additionalProperties = false;
     obj.type = "string";
     obj.description = "The value can be a string containing a JSON object";

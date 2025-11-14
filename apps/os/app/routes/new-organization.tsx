@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Spinner } from "../components/ui/spinner.tsx";
@@ -15,16 +15,18 @@ import {
   CardTitle,
 } from "../components/ui/card.tsx";
 import { useSessionUser } from "../hooks/use-session-user.ts";
-import type { Route } from "./+types/new-organization";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Create Organization - Iterate" },
-    { name: "description", content: "Create a new organization" },
-  ];
-}
+export const Route = createFileRoute("/_auth.layout/new-organization")({
+  component: NewOrganization,
+  head: () => ({
+    meta: [
+      { title: "Create Organization - Iterate" },
+      { name: "description", content: "Create a new organization" },
+    ],
+  }),
+});
 
-export default function NewOrganization() {
+function NewOrganization() {
   const navigate = useNavigate();
   const trpc = useTRPC();
   const user = useSessionUser();
@@ -34,7 +36,7 @@ export default function NewOrganization() {
     trpc.organization.create.mutationOptions({
       onSuccess: (data) => {
         // Navigate to the new organization's first estate
-        navigate(`/${data.organization.id}/${data.estate.id}`);
+        navigate({ to: `/${data.organization.id}/${data.estate.id}` });
       },
       onError: (error) => {
         toast.error(error.message);
@@ -65,7 +67,7 @@ export default function NewOrganization() {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <Button onClick={() => navigate("/")} className="w-full">
+            <Button onClick={() => navigate({ to: "/" })} className="w-full">
               Go Back
             </Button>
           </CardContent>

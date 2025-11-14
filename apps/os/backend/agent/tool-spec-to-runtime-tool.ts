@@ -117,15 +117,17 @@ export function toolSpecsToImplementations(params: {
       }
       const def = toolDefinitions[methodName] as unknown as DOToolDef<{}, any>;
       const doToolRuntimeJsonSchema = doToolToRuntimeJsonSchema(def);
-      const inputJsonSchema = fiddleWithJsonSchema(
-        spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema,
-        spec,
-      );
+      const unfiddled = spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema;
+      const inputJsonSchema = fiddleWithJsonSchema(unfiddled, spec);
       const tool: RuntimeTool = {
         name: spec.overrideName || sanitizeToolName(spec.methodName),
         type: "function",
         metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
+        unfiddledInputJSONSchema: () => unfiddled,
+        unfiddledOutputJSONSchema:
+          doToolRuntimeJsonSchema.outputJsonSchema &&
+          (() => doToolRuntimeJsonSchema.outputJsonSchema!),
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,
         description: spec.overrideDescription || def?.description || null,

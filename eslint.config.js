@@ -13,6 +13,7 @@ import eslintRisky from "eslint/use-at-your-own-risk";
 import globals from "globals";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
 import codegen from "eslint-plugin-codegen";
+import pluginRouter from "@tanstack/eslint-plugin-router";
 
 /** @param {string} name */
 const getBuiltinRule = (name) => {
@@ -186,6 +187,7 @@ export default defineConfig([
       "react-refresh/only-export-components": "off",
     },
   },
+  ...pluginRouter.configs["flat/recommended"],
   // custom iterate-internal rules
   {
     name: "iterate-plugin",
@@ -239,7 +241,9 @@ export default defineConfig([
                 );
               }
               return {
-                "VariableDeclarator[init.callee.object.name='z']": ({ id }) => {
+                "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
+                  if (init.callee.property.name === "toJSONSchema") return;
+
                   const actualName = id.name;
                   const expectedName = getExpectedName(actualName);
 

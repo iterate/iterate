@@ -606,6 +606,7 @@ describe("zodToOpenAISchema", () => {
               "type": "string",
             },
             "payload": {
+              "$original": "empty_schema",
               "additionalProperties": false,
               "description": "The value can be a string containing a JSON object",
               "type": "string",
@@ -657,6 +658,7 @@ describe("zodToOpenAISchema", () => {
               "type": "string",
             },
             "output": {
+              "$original": "empty_schema",
               "additionalProperties": false,
               "description": "The value can be a string containing a JSON object",
               "type": "string",
@@ -888,16 +890,19 @@ describe("zodToOpenAISchema", () => {
           "additionalProperties": false,
           "properties": {
             "data": {
+              "$original": "empty_schema",
               "additionalProperties": false,
               "description": "The value can be a string containing a JSON object",
               "type": "string",
             },
             "output": {
+              "$original": "empty_schema",
               "additionalProperties": false,
               "description": "The value can be a string containing a JSON object",
               "type": "string",
             },
             "payload": {
+              "$original": "empty_schema",
               "additionalProperties": false,
               "description": "The value can be a string containing a JSON object",
               "type": "string",
@@ -931,6 +936,7 @@ describe("zodToOpenAISchema", () => {
           "properties": {
             "args": {
               "items": {
+                "$original": "empty_schema",
                 "additionalProperties": false,
                 "description": "The value can be a string containing a JSON object",
                 "type": "string",
@@ -1018,6 +1024,7 @@ describe("zodToOpenAISchema", () => {
                   "type": "string",
                 },
                 "result": {
+                  "$original": "empty_schema",
                   "additionalProperties": false,
                   "description": "The value can be a string containing a JSON object",
                   "type": "string",
@@ -1078,6 +1085,7 @@ describe("zodToOpenAISchema", () => {
           "properties": {
             "args": {
               "items": {
+                "$original": "empty_schema",
                 "additionalProperties": false,
                 "description": "The value can be a string containing a JSON object",
                 "type": "string",
@@ -1289,6 +1297,7 @@ describe("zodToOpenAISchema", () => {
                   "type": "number",
                 },
                 {
+                  "$original": "empty_schema",
                   "additionalProperties": false,
                   "description": "The value can be a string containing a JSON object",
                   "type": "string",
@@ -2092,6 +2101,7 @@ describe("zodToOpenAISchema", () => {
                   "additionalProperties": false,
                   "properties": {
                     "data": {
+                      "$original": "empty_schema",
                       "additionalProperties": false,
                       "description": "The value can be a string containing a JSON object",
                       "type": "string",

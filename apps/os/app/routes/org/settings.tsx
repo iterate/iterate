@@ -1,8 +1,8 @@
 import { useState, Suspense } from "react";
 import { Save, Info } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useRouteLoaderData } from "react-router";
 import { toast } from "sonner";
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -17,19 +17,12 @@ import {
   FieldLegend,
   FieldSet,
 } from "../../components/ui/field.tsx";
-import type { Route } from "./+types/settings.ts";
-import type { loader as orgLoader } from "./layout.tsx";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Organization Settings - Iterate" },
-    { name: "description", content: "Manage your organization settings" },
-  ];
-}
+const orgLayoutRoute = getRouteApi("/_auth.layout/$organizationId");
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
+  const loaderData = orgLayoutRoute.useLoaderData();
   const { data: organization } = useQuery(
     trpc.organization.get.queryOptions(
       { organizationId },
@@ -146,8 +139,23 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
   );
 }
 
-export default function OrganizationSettings({ params }: Route.ComponentProps) {
-  const { organizationId } = params;
+export const Route = createFileRoute("/_auth.layout/$organizationId/settings")({
+  component: OrganizationSettings,
+  head: () => ({
+    meta: [
+      {
+        title: "Organization Settings - Iterate",
+      },
+      {
+        name: "description",
+        content: "Manage your organization settings",
+      },
+    ],
+  }),
+});
+
+function OrganizationSettings() {
+  const { organizationId } = Route.useParams();
 
   if (!organizationId) {
     return (

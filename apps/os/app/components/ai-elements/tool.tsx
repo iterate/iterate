@@ -84,7 +84,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
       Parameters
     </h4>
     <div className="rounded-md bg-muted/50">
-      <SerializedObjectCodeBlock data={input} initialFormat="json" />
+      <SerializedObjectCodeBlock data={input} />
     </div>
   </div>
 );
@@ -102,9 +102,9 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
   let Output = <div>{output as ReactNode}</div>;
 
   if (typeof output === "object") {
-    Output = <SerializedObjectCodeBlock data={output} initialFormat="json" />;
+    Output = <SerializedObjectCodeBlock data={output} />;
   } else if (typeof output === "string") {
-    Output = <SerializedObjectCodeBlock data={JSON.parse(output)} initialFormat="json" />;
+    Output = <SerializedObjectCodeBlock data={JSON.parse(output)} />;
   }
 
   return (
@@ -118,7 +118,7 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
           errorText ? "bg-destructive/10 text-destructive" : "bg-muted/50 text-foreground",
         )}
       >
-        {errorText && <div>{errorText}</div>}
+        {errorText && <pre>{errorText}</pre>}
         {Output}
       </div>
     </div>

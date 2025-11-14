@@ -15,6 +15,7 @@ minimumReleaseAgeExclude:
   - '@cloudflare/sandbox'
   - alchemy
   - '@mmkal/jsonata'
+  - '@mmkal/json-schema-to-typescript'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'

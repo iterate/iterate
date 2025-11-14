@@ -1,5 +1,5 @@
 import { useState, useRef } from "react";
-import { Link } from "react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, Upload, Link as LinkIcon, Info } from "lucide-react";
 import * as fflate from "fflate/browser";
 import { Button } from "../components/ui/button.tsx";
@@ -194,7 +194,11 @@ function ArchiveUploader({
   );
 }
 
-export default function OfflineAgentDetailPage() {
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/agents/offline")({
+  component: OfflineAgentDetailPage,
+});
+
+function OfflineAgentDetailPage() {
   const [archiveData, setArchiveData] = useState<ParsedArchiveData | null>(null);
   const getEstateUrl = useEstateUrl();
 
