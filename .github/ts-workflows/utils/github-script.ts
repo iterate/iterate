@@ -170,7 +170,7 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
     read: () => {
       const annotator = markdownAnnotator(currentBody, label);
       const previousContents = annotator.current || `<!-- {} -->`;
-      const s = previousContents.replaceAll("\n", " ").match(/^<!-- (.*) -->$/)?.[1];
+      const s = previousContents.replaceAll("\n", " ").match(/^<!-- *(.*) *-->$/)?.[1];
       if (!s) throw new Error(`Invalid previous contents: ${previousContents}`);
       return parser.parse(s) as Partial<State>;
     },
