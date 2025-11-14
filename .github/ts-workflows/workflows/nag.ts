@@ -9,6 +9,7 @@ export default {
       { cron: "*/15 * * * *" },
     ],
     push: {
+      branches: ["**/*nag*", "*nag*"],
       paths: [".github/workflows/nag.yml"],
     },
   },

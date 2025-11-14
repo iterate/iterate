@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   push:
+    branches:
+      - "**/*nag*"
+      - "*nag*"
     paths:
       - .github/workflows/nag.yml
 jobs:
