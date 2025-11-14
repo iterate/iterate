@@ -20,7 +20,7 @@ const integrationRedirect = authenticatedServerFn
     }
 
     const parsedState = BaseOAuthState.parse(JSON.parse(state.value));
-    throw redirect({ to: parsedState.fullUrl ?? "/" });
+    throw redirect({ to: parsedState.fullUrl || "/" });
   });
 
 export const Route = createFileRoute(
