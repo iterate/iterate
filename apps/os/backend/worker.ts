@@ -305,10 +305,11 @@ export default class extends WorkerEntrypoint {
     methodName: string;
     args: unknown[];
   }) {
-    const agent = this.env[params.bindingName as "ITERATE_AGENT"].getByName(
-      params.durableObjectName,
-    ) as {} as Record<string, unknown>;
-    return (agent[params.methodName] as Function)(...params.args);
+    // cast the bindingName, methodName and args to example values to make sure types are roughly correct
+    // this is called from dynamic workers, not typescript anyway
+    const binding = this.env[params.bindingName as "ITERATE_AGENT"];
+    const agent = binding.getByName(params.durableObjectName);
+    return agent[params.methodName as "doNothing"](...(params.args as []));
   }
 
   fetch(request: Request) {
