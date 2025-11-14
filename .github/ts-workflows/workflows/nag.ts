@@ -177,7 +177,7 @@ export default {
                   pull_number: pr.number,
                   body: state.write({
                     nags: [
-                      ...(state.read().nags || []), //
+                      ...(state.read().nags || []), // break
                       newNag,
                     ],
                   }),

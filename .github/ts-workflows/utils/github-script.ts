@@ -160,7 +160,7 @@ export const markdownAnnotator = (body: string, label: string) => {
   return {
     current: previousContents,
     udpate: (contents: string) =>
-      `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd).trimStart()}`,
+      `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd + endMarker.length).trimStart()}`,
   };
 };
 

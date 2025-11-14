@@ -225,7 +225,7 @@ jobs:
                     pull_number: pr.number,
 
                     body: state.write({
-                      nags: [//
+                      nags: [// break
                       ...(state.read().nags || []), newNag],
                     }),
                   });
