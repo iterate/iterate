@@ -18,13 +18,5 @@ interface ImportMeta {
 declare namespace Cloudflare {
   interface GlobalProps {
     mainModule: typeof import("../backend/worker");
-    durableNamespaces: "IterateAgent";
   }
-}
-declare namespace Cloudflare {
-  interface GlobalProps {
-    mainModule: typeof import("./src/index");
-    durableNamespaces: "ClientDO";
-  }
-  interface Env {}
 }
