@@ -1,7 +1,0 @@
-{
-  "name": "@iterate-com/evaler",
-  "type": "module",
-  "scripts": {
-    "dev": "node --watch server.ts"
-  }
-}
