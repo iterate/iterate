@@ -149,7 +149,7 @@ export const markdownAnnotator = (body: string, label: string) => {
   if (existingSectionStart === -1 || existingSectionEnd === -1) {
     return {
       current: null,
-      udpate: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
+      update: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
     };
   }
 
@@ -159,7 +159,7 @@ export const markdownAnnotator = (body: string, label: string) => {
 
   return {
     current: previousContents,
-    udpate: (contents: string) =>
+    update: (contents: string) =>
       `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd + endMarker.length).trimStart()}`,
   };
 };
@@ -176,7 +176,7 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
     },
     write: (state: State) => {
       const newContents = `<!-- ${parser.stringify(state, null, 2)} -->`;
-      return (currentBody = markdownAnnotator(currentBody, label).udpate(newContents));
+      return (currentBody = markdownAnnotator(currentBody, label).update(newContents));
     },
   };
 };

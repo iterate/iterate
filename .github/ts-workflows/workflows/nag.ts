@@ -155,7 +155,7 @@ export default {
                     .join(" ");
 
                   const followup = await slack.chat.postMessage({
-                    channel: slackChannelIds["#building"],
+                    channel: slackChannelIds["#misha-test"],
                     thread_ts: lastNag.message_ts,
                     text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                   });
