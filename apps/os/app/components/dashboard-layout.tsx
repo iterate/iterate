@@ -1,4 +1,4 @@
-import { Link, useLocation, useParams, useRouteLoaderData } from "react-router";
+import { ClientOnly, getRouteApi, Link, useLocation, useParams } from "@tanstack/react-router";
 import {
   Home as HomeIcon,
   Settings,
@@ -18,7 +18,7 @@ import { useMemo, useState } from "react";
 import { fromString } from "typeid-js";
 import { toast } from "sonner";
 import { authClient } from "../lib/auth-client.ts";
-import { trpcClient, useTRPC } from "../lib/trpc.ts";
+import { useTRPC, useTRPCClient, type TRPCClient } from "../lib/trpc.ts";
 import { useOrganizationId } from "../hooks/use-estate.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
@@ -49,7 +49,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { useDebounce } from "../hooks/use-debounced.ts";
 import { cn } from "../lib/utils.ts";
 import { useSessionUser } from "../hooks/use-session-user.ts";
-import type { loader as orgLoader } from "../routes/org/layout.tsx";
 import { OrganizationSwitcher } from "./organization-switcher.tsx";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs.tsx";
 import { Input } from "./ui/input.tsx";
@@ -259,7 +258,11 @@ function ImpersonationDialog({
   );
 }
 
-async function resolveImpersonation(type: "email" | "user_id" | "estate_id", value: string) {
+async function resolveImpersonation(
+  trpcClient: TRPCClient,
+  type: "email" | "user_id" | "estate_id",
+  value: string,
+) {
   if (type === "email") {
     const user = await trpcClient.admin.findUserByEmail.query({ email: value });
     if (!user) {
@@ -289,10 +292,11 @@ function UserSwitcher() {
       initialData: {},
     }),
   );
+  const trpcClient = useTRPCClient();
 
   const startImpersonation = useMutation({
     mutationFn: async (params: { type: "email" | "user_id" | "estate_id"; value: string }) => {
-      const userId = await resolveImpersonation(params.type, params.value);
+      const userId = await resolveImpersonation(trpcClient, params.type, params.value);
       await authClient.admin.impersonateUser({ userId });
     },
     onSuccess: () => {
@@ -429,13 +433,15 @@ interface DashboardLayoutProps {
   children: React.ReactNode;
 }
 
+const orgRoute = getRouteApi("/_auth.layout/$organizationId");
+
 export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
-  const params = useParams();
+  const params = useParams({ strict: false });
   const organizationId = useOrganizationId();
   const currentEstateId = params.estateId;
   const trpc = useTRPC();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/layout");
+  const loaderData = orgRoute.useLoaderData();
 
   const estatesQuery = useQuery(
     trpc.estates.list.queryOptions(
@@ -573,7 +579,9 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
                 DEBUG MODE
               </Badge>
             )}
-            <ThemeSwitcher />
+            <ClientOnly>
+              <ThemeSwitcher />
+            </ClientOnly>
             <UserSwitcher />
           </SidebarFooter>
         </Sidebar>

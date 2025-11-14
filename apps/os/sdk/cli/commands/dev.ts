@@ -93,7 +93,7 @@ const start = t.procedure
 
     await runBootstrap(providedConfigPath);
 
-    const result = await exec("doppler", ["run", "--", "react-router", "dev"], {
+    const result = await exec("doppler", ["run", "--", "vite", "dev"], {
       nodeOptions: {
         stdio: "inherit",
         cwd: process.cwd(),

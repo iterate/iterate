@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { createRequestHandler, RouterContextProvider } from "react-router";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
@@ -7,8 +6,8 @@ import { cors } from "hono/cors";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { z } from "zod/v4";
+import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
-import { ReactRouterServerContext } from "../app/context.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -277,18 +276,32 @@ app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async
   return c.json({ ok: true, lastSeq });
 });
 
-const requestHandler = createRequestHandler(
-  () => import("virtual:react-router/server-build"),
-  import.meta.env.MODE,
-);
+export type RequestContext = {
+  cloudflare: {
+    env: CloudflareEnv;
+    ctx: ExecutionContext;
+  };
+  variables: Variables;
+};
+
+declare module "@tanstack/react-start" {
+  interface Register {
+    server: {
+      requestContext: RequestContext;
+    };
+  }
+}
 
 app.all("*", (c) => {
-  const contextProvider = new RouterContextProvider();
-  contextProvider.set(ReactRouterServerContext, {
-    cloudflare: { env: c.env, ctx: c.executionCtx },
-    variables: c.var,
+  return tanstackStartServerEntry.fetch(c.req.raw, {
+    context: {
+      cloudflare: {
+        env: c.env,
+        ctx: c.executionCtx,
+      },
+      variables: c.var,
+    },
   });
-  return requestHandler(c.req.raw, contextProvider);
 });
 
 // In order to use cloudflare's fancy RPC system, we need to export a WorkerEntrypoint subclass.

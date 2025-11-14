@@ -1,4 +1,4 @@
-import { Link, Outlet, useLocation } from "react-router";
+import { createFileRoute, Link, notFound, Outlet, useLocation } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Shield, MessageSquare, Info, ArrowLeft, Database, Building2, Server } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
@@ -17,8 +17,12 @@ import {
   SidebarGroupLabel,
   SidebarGroupContent,
 } from "../../components/ui/sidebar.tsx";
-import { ReactRouterServerContext } from "../../context.ts";
-import type { Route } from "./+types/layout.ts";
+import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
+
+const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
+  const session = context.variables.session;
+  if (session?.user.role !== "admin") throw notFound();
+});
 
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
@@ -28,7 +32,12 @@ const adminLinks = [
   { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
 ];
 
-export default function AdminLayout() {
+export const Route = createFileRoute("/_auth.layout/admin")({
+  component: AdminLayout,
+  loader: () => assertIsAdmin(),
+});
+
+function AdminLayout() {
   const location = useLocation();
   const trpc = useTRPC();
   const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
@@ -106,10 +115,3 @@ export default function AdminLayout() {
     </SidebarProvider>
   );
 }
-
-export const middleware: Route.MiddlewareFunction[] = [
-  ({ context }) => {
-    const session = context.get(ReactRouterServerContext).variables.session;
-    if (session?.user.role !== "admin") throw new Response("Not found", { status: 404 });
-  },
-];

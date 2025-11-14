@@ -1,14 +1,20 @@
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle } from "lucide-react";
-import { useTRPC, trpcClient } from "../../lib/trpc.ts";
+import { useTRPC, useTRPCClient } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
 import { Input } from "../../components/ui/input.tsx";
 import { Label } from "../../components/ui/label.tsx";
 import { Alert, AlertDescription } from "../../components/ui/alert.tsx";
 
-export default function AdminDBToolsPage() {
+export const Route = createFileRoute("/_auth.layout/admin/db-tools")({
+  component: AdminDBToolsPage,
+});
+
+function AdminDBToolsPage() {
   const trpc = useTRPC();
+  const trpcClient = useTRPCClient();
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{

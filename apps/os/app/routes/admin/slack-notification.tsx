@@ -1,3 +1,4 @@
+import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -7,7 +8,11 @@ import { Input } from "../../components/ui/input.tsx";
 import { Textarea } from "../../components/ui/textarea.tsx";
 import { Label } from "../../components/ui/label.tsx";
 
-export default function SlackNotificationPage() {
+export const Route = createFileRoute("/_auth.layout/admin/slack-notification")({
+  component: SlackNotificationPage,
+});
+
+function SlackNotificationPage() {
   const trpcClient = useTRPCClient();
   const [channel, setChannel] = useState("#test-blank");
   const [message, setMessage] = useState("Test message from admin panel");

@@ -4,6 +4,9 @@ node_modules
 
 # React Router
 .react-router
+
+# TanStack
+.tanstack
 build
 dist
 
