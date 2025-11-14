@@ -130,21 +130,27 @@ const prettyPrint = (script: string) => {
  * Adds/updates a comment block to a markdown string. Looks for an existing comment block with the given label, returns the previous
  * contents of it, as well as the updated body with the new contents.
  * Useful for keeping part of a PR body up to date even while the rest of the body is updated elsewhere (e.g. manually in the GitHub UI)
+ *
+ * Copies cursor bugbot's syntax:
+ * ```
+ * hi i am a hand-written PR body
+ *
+ * <!-- CURSOR_SUMMARY -->
+ * hi i am a message from cursor bugbot
+ * <!-- /CURSOR_SUMMARY -->
+ * ```
  */
-export const annotateMarkdown = (body: string, label: string, contents = "") => {
-  const startMarker = `<!-- #region ${label} -->`;
-  const endMarker = `<!-- endregion -->`;
+export const markdownAnnotator = (body: string, label: string) => {
+  const startMarker = `<!-- ${label} -->`;
+  const endMarker = `<!-- /${label} -->`;
   const existingSectionStart = body.indexOf(startMarker);
-  if (existingSectionStart === -1) {
-    return {
-      previousContents: null,
-      newBody: `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
-    };
-  }
+  const existingSectionEnd = body.indexOf(endMarker, existingSectionStart);
 
-  let existingSectionEnd = body.indexOf(endMarker, existingSectionStart);
-  if (existingSectionEnd === -1) {
-    existingSectionEnd = body.length;
+  if (existingSectionStart === -1 || existingSectionEnd === -1) {
+    return {
+      current: null,
+      udpate: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
+    };
   }
 
   const previousContents = body
@@ -152,8 +158,9 @@ export const annotateMarkdown = (body: string, label: string, contents = "") => 
     .trim();
 
   return {
-    previousContents,
-    newBody: `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd).trimStart()}`,
+    current: previousContents,
+    udpate: (contents: string) =>
+      `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd).trimStart()}`,
   };
 };
 
@@ -161,15 +168,15 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
   let currentBody = body;
   return {
     read: () => {
-      const parsed = annotateMarkdown(currentBody, label);
-      const previousContents = parsed.previousContents || `<!-- {} -->`;
+      const annotator = markdownAnnotator(currentBody, label);
+      const previousContents = annotator.current || `<!-- {} -->`;
       const s = previousContents.replaceAll("\n", " ").match(/^<!-- (.*) -->$/)?.[1];
       if (!s) throw new Error(`Invalid previous contents: ${previousContents}`);
       return parser.parse(s) as Partial<State>;
     },
     write: (state: State) => {
       const newContents = `<!-- ${parser.stringify(state, null, 2)} -->`;
-      return (currentBody = annotateMarkdown(currentBody, label, newContents).newBody);
+      return (currentBody = markdownAnnotator(currentBody, label).udpate(newContents));
     },
   };
 };
