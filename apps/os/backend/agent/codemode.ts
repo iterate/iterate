@@ -171,7 +171,7 @@ export function generateTypes(
       if (namespaceParts.length > 0) {
         return prettyPrint(`
           /** Namespace for the ${namespaceParts.map(([name]) => name).join(" and ")} types for the ${identifierToolName} tool. */
-          declare module ${identifierToolName} {
+          declare namespace ${identifierToolName} {
             ${namespaceParts.map((e) => e[1]).join("\n\n")}
           }
           ${fnCode}

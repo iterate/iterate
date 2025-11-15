@@ -297,7 +297,7 @@ test("connectMCPServer", () => {
   const { typescript } = generateTypes(runtimeTools);
   expect(typescript()).toMatchInlineSnapshot(`
     "/** Namespace for the input types for the connectMCPServer tool. */
-    declare module connectMCPServer {
+    declare namespace connectMCPServer {
       export interface Input {
         /**
          * The URL of the MCP server
@@ -380,7 +380,7 @@ test("tool with sample output", () => {
   });
   expect(typescript()).toMatchInlineSnapshot(`
     "/** Namespace for the input and output types for the remindMyselfLater tool. */
-    declare module remindMyselfLater {
+    declare namespace remindMyselfLater {
       export interface Input {
         /**
          * The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.
@@ -407,7 +407,7 @@ test("tool with sample output", () => {
     declare function remindMyselfLater(input: remindMyselfLater.Input): Promise<remindMyselfLater.Output>
 
     /** Namespace for the output types for the listMyReminders tool. */
-    declare module listMyReminders {
+    declare namespace listMyReminders {
       export interface Output {
         reminders: Reminder[];
       }
@@ -449,7 +449,7 @@ test("iterate agent tools", async () => {
 
   expect(typescript()).toMatchInlineSnapshot(`
     "/** Namespace for the input types for the doNothing tool. */
-    declare module doNothing {
+    declare namespace doNothing {
       export interface Input {
         /**
          * Very short reason for why you are not responding. For example 'User X and Y are talking amongst themselves' or 'the conversation has moved on to a tangent i can't help with'
@@ -468,7 +468,7 @@ test("iterate agent tools", async () => {
     declare function doNothing(input: doNothing.Input): Promise<unknown>
 
     /** Namespace for the input types for the connectMCPServer tool. */
-    declare module connectMCPServer {
+    declare namespace connectMCPServer {
       export interface Input {
         /**
          * The URL of the MCP server
@@ -517,7 +517,7 @@ test("iterate agent tools", async () => {
     declare function getAgentDebugURL(input: {}): Promise<unknown>
 
     /** Namespace for the input types for the remindMyselfLater tool. */
-    declare module remindMyselfLater {
+    declare namespace remindMyselfLater {
       export interface Input {
         /**
          * The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.
@@ -545,7 +545,7 @@ test("iterate agent tools", async () => {
     declare function listMyReminders(input: {}): Promise<unknown>
 
     /** Namespace for the input types for the cancelReminder tool. */
-    declare module cancelReminder {
+    declare namespace cancelReminder {
       export interface Input {
         iterateReminderId: string;
       }
@@ -557,7 +557,7 @@ test("iterate agent tools", async () => {
     declare function cancelReminder(input: cancelReminder.Input): Promise<unknown>
 
     /** Namespace for the input types for the stopRespondingUntilMentioned tool. */
-    declare module stopRespondingUntilMentioned {
+    declare namespace stopRespondingUntilMentioned {
       export interface Input {
         /**
          * Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'
@@ -572,7 +572,7 @@ test("iterate agent tools", async () => {
     declare function stopRespondingUntilMentioned(input: stopRespondingUntilMentioned.Input): Promise<unknown>
 
     /** Namespace for the input types for the addSlackReaction tool. */
-    declare module addSlackReaction {
+    declare namespace addSlackReaction {
       export interface Input {
         /**
          * The ts of the message to react to
@@ -591,7 +591,7 @@ test("iterate agent tools", async () => {
     declare function addSlackReaction(input: addSlackReaction.Input): Promise<unknown>
 
     /** Namespace for the input types for the removeSlackReaction tool. */
-    declare module removeSlackReaction {
+    declare namespace removeSlackReaction {
       export interface Input {
         /**
          * The ts of the message to remove reaction from
@@ -610,7 +610,7 @@ test("iterate agent tools", async () => {
     declare function removeSlackReaction(input: removeSlackReaction.Input): Promise<unknown>
 
     /** Namespace for the input types for the updateSlackMessage tool. */
-    declare module updateSlackMessage {
+    declare namespace updateSlackMessage {
       export interface Input {
         /**
          * The timestamp of the message to update
@@ -629,7 +629,7 @@ test("iterate agent tools", async () => {
     declare function updateSlackMessage(input: updateSlackMessage.Input): Promise<unknown>
 
     /** Namespace for the input types for the getURLContent tool. */
-    declare module getURLContent {
+    declare namespace getURLContent {
       export interface Input {
         url: string;
         /**
@@ -649,7 +649,7 @@ test("iterate agent tools", async () => {
     declare function getURLContent(input: getURLContent.Input): Promise<unknown>
 
     /** Namespace for the input types for the searchWeb tool. */
-    declare module searchWeb {
+    declare namespace searchWeb {
       export interface Input {
         /**
          * The search query string for finding relevant web content
@@ -664,7 +664,7 @@ test("iterate agent tools", async () => {
     declare function searchWeb(input: searchWeb.Input): Promise<unknown>
 
     /** Namespace for the input types for the generateImage tool. */
-    declare module generateImage {
+    declare namespace generateImage {
       export interface Input {
         prompt: string;
         inputImages?: string[];
@@ -686,7 +686,7 @@ test("iterate agent tools", async () => {
     declare function generateImage(input: generateImage.Input): Promise<unknown>
 
     /** Namespace for the input types for the generateVideo tool. */
-    declare module generateVideo {
+    declare namespace generateVideo {
       export interface Input {
         /**
          * Text prompt that describes the video to generate
@@ -717,7 +717,7 @@ test("iterate agent tools", async () => {
     declare function generateVideo(input: generateVideo.Input): Promise<unknown>
 
     /** Namespace for the input types for the sendSlackMessage tool. */
-    declare module sendSlackMessage {
+    declare namespace sendSlackMessage {
       export interface Input {
         /**
          * The message text (required if blocks not provided)
@@ -755,7 +755,7 @@ test("generateTypes", async () => {
   const { typescript } = generateTypes(getSampleTools());
   expect(typescript()).toMatchInlineSnapshot(`
     "/** Namespace for the input types for the add tool. */
-    declare module add {
+    declare namespace add {
       export interface Input {
         left: number;
         right: number;
@@ -768,7 +768,7 @@ test("generateTypes", async () => {
     declare function add(input: add.Input): Promise<unknown>
 
     /** Namespace for the input types for the subtract tool. */
-    declare module subtract {
+    declare namespace subtract {
       /**
        */
       export type Input = [number, number];
