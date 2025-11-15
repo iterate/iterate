@@ -49,7 +49,7 @@
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react-hooks": "^6.1.1",
     "eslint-plugin-react-refresh": "^0.4.24",
-    "eslint-plugin-unicorn": "^62.0.0",
+    "eslint-plugin-unicorn": "github:mmkal/eslint-plugin-unicorn#4b6340834f94ebb53a1aee5b91dd5c0e103249b3",
     "globals": "^16.4.0",
     "husky": "9.1.7",
     "is-ci": "4.1.0",

@@ -125,3 +125,70 @@ const prettyPrint = (script: string) => {
     );
   }
 };
+
+/**
+ * Adds/updates a comment block to a markdown string. Looks for an existing comment block with the given label, returns the previous
+ * contents of it, as well as the updated body with the new contents.
+ * Useful for keeping part of a PR body up to date even while the rest of the body is updated elsewhere (e.g. manually in the GitHub UI)
+ *
+ * Copies cursor bugbot's syntax:
+ * ```
+ * hi i am a hand-written PR body
+ *
+ * <!-- CURSOR_SUMMARY -->
+ * hi i am a message from cursor bugbot
+ * <!-- /CURSOR_SUMMARY -->
+ * ```
+ */
+export const markdownAnnotator = (body: string, label: string) => {
+  const startMarker = `<!-- ${label} -->`;
+  const endMarker = `<!-- /${label} -->`;
+
+  const lines = body.split("\n");
+
+  const startLine = lines.findIndex((line) => line.trim() === startMarker);
+  const endLine = lines.findIndex((line, i) => i > startLine && line.trim() === endMarker);
+
+  if (startLine === -1 || endLine === -1) {
+    return {
+      current: null,
+      update: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
+    };
+  }
+
+  const currentContents = lines.slice(startLine + 1, endLine).join("\n");
+
+  return {
+    current: currentContents,
+    update: (contents: string) => {
+      return [
+        ...lines.slice(0, startLine),
+        startMarker,
+        contents,
+        endMarker,
+        ...lines.slice(endLine + 1),
+      ].join("\n");
+    },
+  };
+};
+
+export const prState = <State>(body: string, label: string, { parser = JSON } = {}) => {
+  let currentBody = body;
+  return {
+    read: () => {
+      const annotator = markdownAnnotator(currentBody, label);
+      const currentContents = annotator.current?.trim() || `<!-- {} -->`;
+      if (!currentContents.startsWith("<!-- ") || !currentContents.endsWith(" -->")) {
+        throw new Error(
+          `Invalid current contents:\n\n${annotator.current}\n\nWhole body:\n\n${currentBody}`,
+        );
+      }
+      const s = currentContents.slice("<!-- ".length, -1 * " -->".length).trim();
+      return parser.parse(s) as Partial<State>;
+    },
+    write: (state: State) => {
+      const newContents = `<!-- ${parser.stringify(state, null, 2)} -->`;
+      return (currentBody = markdownAnnotator(currentBody, label).update(newContents));
+    },
+  };
+};
