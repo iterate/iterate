@@ -10,7 +10,7 @@ export default {
     ],
     push: {
       branches: ["**/*nag*", "*nag*"],
-      paths: [".github/workflows/nag.yml"],
+      // paths: [".github/workflows/nag.yml"],
     },
   },
   jobs: {
