@@ -153,14 +153,13 @@ export const markdownAnnotator = (body: string, label: string) => {
     };
   }
 
-  const previousContents = body
-    .slice(existingSectionStart + startMarker.length, existingSectionEnd)
-    .trim();
+  const previousContents = body.split(startMarker)[1].split(endMarker)[0].trim();
+  const afterEndMarkerIndex = existingSectionEnd + endMarker.length;
 
   return {
     current: previousContents,
     update: (contents: string) =>
-      `${body.slice(0, existingSectionStart)}${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(existingSectionEnd + endMarker.length).trimStart()}`,
+      `${body.slice(0, existingSectionStart).trim()}\n\n${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(afterEndMarkerIndex).trim()}`.trim(),
   };
 };
 
@@ -171,7 +170,9 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
       const annotator = markdownAnnotator(currentBody, label);
       const previousContents = annotator.current?.trim() || `<!-- {} -->`;
       if (!previousContents.startsWith("<!-- ") || !previousContents.endsWith(" -->")) {
-        throw new Error(`Invalid previous contents: ${JSON.stringify(previousContents)}`);
+        throw new Error(
+          `Invalid previous contents:\n\n${previousContents}\n\nWhole body:\n\n${body}`,
+        );
       }
       const s = previousContents.slice("<!-- ".length, -1 * " -->".length).trim();
       return parser.parse(s) as Partial<State>;
