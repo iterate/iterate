@@ -28,3 +28,4 @@ overrides:
   # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
   'agents>x402': '-'
   'agents>viem': '-'
+  'quicktype-core>readable-stream': 'npm:vite-compatible-readable-stream@3.6.1'
