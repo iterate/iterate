@@ -172,7 +172,7 @@ export const markdownAnnotator = (body: string, label: string) => {
   };
 };
 
-export const prState = <State>(body: string, label: string, parser = JSON) => {
+export const prState = <State>(body: string, label: string, { parser = JSON } = {}) => {
   let currentBody = body;
   return {
     read: () => {
@@ -180,7 +180,7 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
       const currentContents = annotator.current?.trim() || `<!-- {} -->`;
       if (!currentContents.startsWith("<!-- ") || !currentContents.endsWith(" -->")) {
         throw new Error(
-          `Invalid current contents:\n\n${currentContents}\n\nWhole body:\n\n${body}`,
+          `Invalid current contents:\n\n${annotator.current}\n\nWhole body:\n\n${currentBody}`,
         );
       }
       const s = currentContents.slice("<!-- ".length, -1 * " -->".length).trim();
