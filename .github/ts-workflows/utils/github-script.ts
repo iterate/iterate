@@ -143,23 +143,32 @@ const prettyPrint = (script: string) => {
 export const markdownAnnotator = (body: string, label: string) => {
   const startMarker = `<!-- ${label} -->`;
   const endMarker = `<!-- /${label} -->`;
-  const existingSectionStart = body.indexOf(startMarker);
-  const existingSectionEnd = body.indexOf(endMarker, existingSectionStart);
 
-  if (existingSectionStart === -1 || existingSectionEnd === -1) {
+  const lines = body.split("\n");
+
+  const startLine = lines.findIndex((line) => line.trim() === startMarker);
+  const endLine = lines.findIndex((line, i) => i > startLine && line.trim() === endMarker);
+
+  if (startLine === -1 || endLine === -1) {
     return {
       current: null,
       update: (contents: string) => `${body.trim()}\n\n${startMarker}\n${contents}\n${endMarker}`,
     };
   }
 
-  const previousContents = body.split(startMarker)[1].split(endMarker)[0].trim();
-  const afterEndMarkerIndex = existingSectionEnd + endMarker.length;
+  const currentContents = lines.slice(startLine + 1, endLine).join("\n");
 
   return {
-    current: previousContents,
-    update: (contents: string) =>
-      `${body.slice(0, existingSectionStart).trim()}\n\n${startMarker}\n${contents}\n${endMarker}\n\n${body.slice(afterEndMarkerIndex).trim()}`.trim(),
+    current: currentContents,
+    update: (contents: string) => {
+      return [
+        ...lines.slice(0, startLine),
+        startMarker,
+        contents,
+        endMarker,
+        ...lines.slice(endLine + 1),
+      ].join("\n");
+    },
   };
 };
 
@@ -168,13 +177,13 @@ export const prState = <State>(body: string, label: string, parser = JSON) => {
   return {
     read: () => {
       const annotator = markdownAnnotator(currentBody, label);
-      const previousContents = annotator.current?.trim() || `<!-- {} -->`;
-      if (!previousContents.startsWith("<!-- ") || !previousContents.endsWith(" -->")) {
+      const currentContents = annotator.current?.trim() || `<!-- {} -->`;
+      if (!currentContents.startsWith("<!-- ") || !currentContents.endsWith(" -->")) {
         throw new Error(
-          `Invalid previous contents:\n\n${previousContents}\n\nWhole body:\n\n${body}`,
+          `Invalid current contents:\n\n${currentContents}\n\nWhole body:\n\n${body}`,
         );
       }
-      const s = previousContents.slice("<!-- ".length, -1 * " -->".length).trim();
+      const s = currentContents.slice("<!-- ".length, -1 * " -->".length).trim();
       return parser.parse(s) as Partial<State>;
     },
     write: (state: State) => {
