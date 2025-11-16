@@ -161,7 +161,7 @@ export default {
                     ...params,
                     ...(isTest && {
                       channel: slackChannelIds["#misha-test"],
-                      text: params.text.replaceAll("@", "\\@"),
+                      text: params.text.replaceAll("<@U", "<...U"),
                     }),
                   });
                 };
