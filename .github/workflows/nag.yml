@@ -205,7 +205,7 @@ jobs:
                   }
 
                   if (lastNag?.message_ts) {
-                    const othersMentions = slackUsers.filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase()).filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now()).map((u) => `<@${u.id}>`).join(" ").replace("@", isTest ? "..." : "@");
+                    const othersMentions = slackUsers.filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase()).filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now()).map((u) => `<@${u.id}>`).join(" ").replaceAll("@", isTest ? "..." : "@");
 
                     const followup = await slack.chat.postMessage({
                       channel: slackChannelIds[isTest ? "#misha-test" : "#building"],

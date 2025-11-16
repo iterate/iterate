@@ -161,7 +161,7 @@ export default {
                     .filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now())
                     .map((u) => `<@${u.id}>`)
                     .join(" ")
-                    .replace("@", isTest ? "..." : "@");
+                    .replaceAll("@", isTest ? "..." : "@");
 
                   const followup = await slack.chat.postMessage({
                     channel: slackChannelIds[isTest ? "#misha-test" : "#building"],
