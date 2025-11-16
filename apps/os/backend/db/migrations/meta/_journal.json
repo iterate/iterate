@@ -169,6 +169,13 @@
       "when": 1762444823046,
       "tag": "0023_first_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1763334348882,
+      "tag": "0024_pgmq",
+      "breakpoints": true
     }
   ]
 }

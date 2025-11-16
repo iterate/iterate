@@ -219,6 +219,7 @@ const inlineType = (namedType: string) => {
   if (namedType.includes("\n")) {
     throw new Error(`Type too complicated to inline, this is a dumb function:\n\n${namedType}`);
   }
+
   return namedType
     .replace(/^export /, "")
     .replace(/^type \w+ = /, "")
