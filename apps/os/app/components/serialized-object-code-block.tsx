@@ -359,18 +359,15 @@ function foldPromptBlocks() {
       }
     }
 
-    if (line.text.trim().endsWith("{")) {
-      let depth = 1;
-      for (let i = line.number + 1; i <= state.doc.lines; i++) {
-        const nextLine = state.doc.line(i);
-        for (const char of nextLine.text.split("")) {
-          if (char === "{") {
-            depth++;
-          } else if (char === "}") {
-            depth--;
-            if (depth === 0) {
-              return collapseTo(nextLine);
-            }
+    const pairs = ["{}", "[]"];
+    for (const pair of pairs) {
+      // very basic block folding - assumes you have correct indentation etc.
+      if (line.text.trimEnd().endsWith(pair[0])) {
+        const indent = line.text.match(/^\s*/)?.[0] || "";
+        for (let i = line.number + 1; i <= state.doc.lines; i++) {
+          const nextLine = state.doc.line(i);
+          if (nextLine.text === indent + pair[1]) {
+            return collapseTo(nextLine);
           }
         }
       }
