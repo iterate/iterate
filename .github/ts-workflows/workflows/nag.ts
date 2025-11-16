@@ -17,11 +17,13 @@ export default {
     run: {
       ...utils.runsOnUbuntuLatest,
       steps: [
+        { run: `echo 'github var: \${{ toJson(github) }}'` },
         ...utils.setupRepo,
         utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
           async function doit({ github, context }) {
+            console.log("context:", JSON.stringify(context, null, 2));
             const { data: openPRs } = await github.rest.pulls.list({
               ...context.repo,
               state: "open",

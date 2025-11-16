@@ -12,6 +12,7 @@ jobs:
   run:
     runs-on: ubuntu-latest
     steps:
+      - run: "echo 'github var: ${{ toJson(github) }}'"
       - name: Checkout code
         uses: actions/checkout@v4
       - name: Setup pnpm
@@ -61,6 +62,8 @@ jobs:
                 context,
               },
             ) {
+              console.log("context:", JSON.stringify(context, null, 2));
+
               const {
                 data: openPRs,
               } = await github.rest.pulls.list({
