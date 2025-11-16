@@ -155,16 +155,25 @@ export default {
                   return;
                 }
 
+                const postMessage = (params: { text: string; thread_ts?: string }) => {
+                  return slack.chat.postMessage({
+                    channel: slackChannelIds["#building"],
+                    ...params,
+                    ...(isTest && {
+                      channel: slackChannelIds["#misha-test"],
+                      text: params.text.replaceAll("@", "\\@"),
+                    }),
+                  });
+                };
+
                 if (lastNag?.message_ts) {
                   const othersMentions = slackUsers
                     .filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase())
                     .filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now())
                     .map((u) => `<@${u.id}>`)
-                    .join(" ")
-                    .replaceAll("@", isTest ? "..." : "@");
+                    .join(" ");
 
-                  const followup = await slack.chat.postMessage({
-                    channel: slackChannelIds[isTest ? "#misha-test" : "#building"],
+                  const followup = await postMessage({
                     thread_ts: lastNag.message_ts,
                     text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                   });
@@ -172,8 +181,7 @@ export default {
                     newNag.followup_message_ts = followup.ts;
                   }
                 } else {
-                  const message = await slack.chat.postMessage({
-                    channel: slackChannelIds["#misha-test"],
+                  const message = await postMessage({
                     text: `<${pr.html_url}|#${pr.number} ${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
                   });
                   if (message.ts) {
