@@ -17,13 +17,11 @@ export default {
     run: {
       ...utils.runsOnUbuntuLatest,
       steps: [
-        { run: `echo 'github var: \${{ toJson(github) }}'` },
         ...utils.setupRepo,
         utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
           async function doit({ github, context }) {
-            console.log("context:", JSON.stringify(context, null, 2));
             const { data: openPRs } = await github.rest.pulls.list({
               ...context.repo,
               state: "open",
@@ -110,10 +108,17 @@ export default {
                 return timeAgo(d).pretty;
               };
 
-              const workingHours = (now: Date) => {
+              const isTest = context.eventName === "push" && context.actor === "mmkal";
+
+              const realWorkingHours = (now: Date) => {
                 const [hour, day] = [now.getHours(), now.getDay()];
                 return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
               };
+              const testWorkingHours: typeof realWorkingHours = () => {
+                return true;
+              };
+              const workingHours = isTest ? testWorkingHours : realWorkingHours;
+
               const lastNagTime = state.read().nags?.at(-1)?.time;
 
               const reasonsToNag = {
@@ -155,10 +160,11 @@ export default {
                     .filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase())
                     .filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now())
                     .map((u) => `<@${u.id}>`)
-                    .join(" ");
+                    .join(" ")
+                    .replace("@", isTest ? "..." : "@");
 
                   const followup = await slack.chat.postMessage({
-                    channel: slackChannelIds["#misha-test"],
+                    channel: slackChannelIds[isTest ? "#misha-test" : "#building"],
                     thread_ts: lastNag.message_ts,
                     text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                   });
