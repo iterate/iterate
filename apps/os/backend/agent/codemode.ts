@@ -153,24 +153,25 @@ export function generateTypes(
 
       if (!inputTypes.includes("\n")) {
         // single line input type, probably something like `export type Input = unknown` or `export interface Input {}`, let's inline it
-        const inline = inlineType(inputTypes, "Input");
-        fnCode = fnCode.replace(`input: ${identifierToolName}.Input`, `input: ${inline}`);
+        const inline = inlineType(inputTypes);
+        fnCode = fnCode.replace(`(input: ${identifierToolName}.Input)`, `(input: ${inline})`);
       } else {
         namespaceCodeParts.input = inputTypes;
       }
 
-      if (outputTypes.split("\n").length === 1) {
+      if (!outputTypes.includes("\n")) {
         // single line output type, probably something like `export type Output = unknown` or `export interface Output {}`, let's inline it
-        const inline = inlineType(outputTypes, "Output");
-        fnCode = fnCode.replace(`Promise<${identifierToolName}.Output>`, `Promise<${inline}>`);
+        const inline = inlineType(outputTypes);
+        fnCode = fnCode.replace(`: Promise<${identifierToolName}.Output>`, `: Promise<${inline}>`);
       } else {
         namespaceCodeParts.output = outputTypes;
       }
 
       const namespaceParts = Object.entries(namespaceCodeParts);
       if (namespaceParts.length > 0) {
+        const s = namespaceParts.length > 1 ? "s" : "";
         return prettyPrint(`
-          /** Namespace for the ${namespaceParts.map(([name]) => name).join(" and ")} types for the ${identifierToolName} tool. */
+          /** Namespace containing the ${namespaceParts.map(([name]) => name).join(" and ")} type${s} for the ${identifierToolName} tool. */
           declare namespace ${identifierToolName} {
             ${namespaceParts.map((e) => e[1]).join("\n\n")}
           }
@@ -196,7 +197,7 @@ export const prettyPrint = (script: string) => {
   try {
     // use recast instead of prettier because it's synchronous and we don't really care all that much about how it looks as long as it's readable
     const ast = recast.parse(script, { parser: tsParser });
-    const { code: recastPrettyPrinted } = recast.prettyPrint(ast, {
+    const pretty = recast.prettyPrint(ast, {
       quote: "double",
       tabWidth: 2,
       useTabs: false,
@@ -206,7 +207,7 @@ export const prettyPrint = (script: string) => {
       arrayBracketSpacing: false,
       arrowParensAlways: true,
     });
-    return fixJsDocIndent(recastPrettyPrinted);
+    return fixJsDocIndent(pretty.code);
   } catch (error) {
     throw new Error(
       `Error pretty printing script: ${error instanceof Error ? error.message : String(error)}. Script:\n\n${script}`,
@@ -214,14 +215,14 @@ export const prettyPrint = (script: string) => {
   }
 };
 
-const inlineType = (namedType: string, name: string) => {
+const inlineType = (namedType: string) => {
+  if (namedType.includes("\n")) {
+    throw new Error(`Type too complicated to inline, this is a dumb function:\n\n${namedType}`);
+  }
   return namedType
-    .split(` ${name} `)
-    .slice(1)
-    .join(name)
-    .trim()
-    .replace(/^= /, "")
-    .replace(/;$/, "");
+    .replace(/^export /, "")
+    .replace(/^type \w+ = /, "")
+    .replace(/^interface \w+ /, "");
 };
 
 // recast messes with the indentation of jsdoc comments. it bugs me so maybe it bugs LLMs too

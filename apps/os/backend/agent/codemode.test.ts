@@ -296,7 +296,7 @@ test("connectMCPServer", () => {
   `);
   const { typescript } = generateTypes(runtimeTools);
   expect(typescript()).toMatchInlineSnapshot(`
-    "/** Namespace for the input types for the connectMCPServer tool. */
+    "/** Namespace containing the input type for the connectMCPServer tool. */
     declare namespace connectMCPServer {
       export interface Input {
         /**
@@ -379,7 +379,7 @@ test("tool with sample output", () => {
     },
   });
   expect(typescript()).toMatchInlineSnapshot(`
-    "/** Namespace for the input and output types for the remindMyselfLater tool. */
+    "/** Namespace containing the input and output types for the remindMyselfLater tool. */
     declare namespace remindMyselfLater {
       export interface Input {
         /**
@@ -406,7 +406,7 @@ test("tool with sample output", () => {
      */
     declare function remindMyselfLater(input: remindMyselfLater.Input): Promise<remindMyselfLater.Output>
 
-    /** Namespace for the output types for the listMyReminders tool. */
+    /** Namespace containing the output type for the listMyReminders tool. */
     declare namespace listMyReminders {
       export interface Output {
         reminders: Reminder[];
@@ -448,7 +448,7 @@ test("iterate agent tools", async () => {
   const { typescript } = generateTypes(runtimeTools);
 
   expect(typescript()).toMatchInlineSnapshot(`
-    "/** Namespace for the input types for the doNothing tool. */
+    "/** Namespace containing the input type for the doNothing tool. */
     declare namespace doNothing {
       export interface Input {
         /**
@@ -467,7 +467,7 @@ test("iterate agent tools", async () => {
      */
     declare function doNothing(input: doNothing.Input): Promise<unknown>
 
-    /** Namespace for the input types for the connectMCPServer tool. */
+    /** Namespace containing the input type for the connectMCPServer tool. */
     declare namespace connectMCPServer {
       export interface Input {
         /**
@@ -516,7 +516,7 @@ test("iterate agent tools", async () => {
      */
     declare function getAgentDebugURL(input: {}): Promise<unknown>
 
-    /** Namespace for the input types for the remindMyselfLater tool. */
+    /** Namespace containing the input type for the remindMyselfLater tool. */
     declare namespace remindMyselfLater {
       export interface Input {
         /**
@@ -544,7 +544,7 @@ test("iterate agent tools", async () => {
      */
     declare function listMyReminders(input: {}): Promise<unknown>
 
-    /** Namespace for the input types for the cancelReminder tool. */
+    /** Namespace containing the input type for the cancelReminder tool. */
     declare namespace cancelReminder {
       export interface Input {
         iterateReminderId: string;
@@ -556,7 +556,7 @@ test("iterate agent tools", async () => {
      */
     declare function cancelReminder(input: cancelReminder.Input): Promise<unknown>
 
-    /** Namespace for the input types for the stopRespondingUntilMentioned tool. */
+    /** Namespace containing the input type for the stopRespondingUntilMentioned tool. */
     declare namespace stopRespondingUntilMentioned {
       export interface Input {
         /**
@@ -571,7 +571,7 @@ test("iterate agent tools", async () => {
      */
     declare function stopRespondingUntilMentioned(input: stopRespondingUntilMentioned.Input): Promise<unknown>
 
-    /** Namespace for the input types for the addSlackReaction tool. */
+    /** Namespace containing the input type for the addSlackReaction tool. */
     declare namespace addSlackReaction {
       export interface Input {
         /**
@@ -590,7 +590,7 @@ test("iterate agent tools", async () => {
      */
     declare function addSlackReaction(input: addSlackReaction.Input): Promise<unknown>
 
-    /** Namespace for the input types for the removeSlackReaction tool. */
+    /** Namespace containing the input type for the removeSlackReaction tool. */
     declare namespace removeSlackReaction {
       export interface Input {
         /**
@@ -609,7 +609,7 @@ test("iterate agent tools", async () => {
      */
     declare function removeSlackReaction(input: removeSlackReaction.Input): Promise<unknown>
 
-    /** Namespace for the input types for the updateSlackMessage tool. */
+    /** Namespace containing the input type for the updateSlackMessage tool. */
     declare namespace updateSlackMessage {
       export interface Input {
         /**
@@ -628,7 +628,7 @@ test("iterate agent tools", async () => {
      */
     declare function updateSlackMessage(input: updateSlackMessage.Input): Promise<unknown>
 
-    /** Namespace for the input types for the getURLContent tool. */
+    /** Namespace containing the input type for the getURLContent tool. */
     declare namespace getURLContent {
       export interface Input {
         url: string;
@@ -648,7 +648,7 @@ test("iterate agent tools", async () => {
      */
     declare function getURLContent(input: getURLContent.Input): Promise<unknown>
 
-    /** Namespace for the input types for the searchWeb tool. */
+    /** Namespace containing the input type for the searchWeb tool. */
     declare namespace searchWeb {
       export interface Input {
         /**
@@ -663,7 +663,7 @@ test("iterate agent tools", async () => {
      */
     declare function searchWeb(input: searchWeb.Input): Promise<unknown>
 
-    /** Namespace for the input types for the generateImage tool. */
+    /** Namespace containing the input type for the generateImage tool. */
     declare namespace generateImage {
       export interface Input {
         prompt: string;
@@ -685,7 +685,7 @@ test("iterate agent tools", async () => {
      */
     declare function generateImage(input: generateImage.Input): Promise<unknown>
 
-    /** Namespace for the input types for the generateVideo tool. */
+    /** Namespace containing the input type for the generateVideo tool. */
     declare namespace generateVideo {
       export interface Input {
         /**
@@ -716,7 +716,7 @@ test("iterate agent tools", async () => {
      */
     declare function generateVideo(input: generateVideo.Input): Promise<unknown>
 
-    /** Namespace for the input types for the sendSlackMessage tool. */
+    /** Namespace containing the input type for the sendSlackMessage tool. */
     declare namespace sendSlackMessage {
       export interface Input {
         /**
@@ -754,7 +754,7 @@ test("iterate agent tools", async () => {
 test("generateTypes", async () => {
   const { typescript } = generateTypes(getSampleTools());
   expect(typescript()).toMatchInlineSnapshot(`
-    "/** Namespace for the input types for the add tool. */
+    "/** Namespace containing the input type for the add tool. */
     declare namespace add {
       export interface Input {
         left: number;
@@ -767,7 +767,7 @@ test("generateTypes", async () => {
      */
     declare function add(input: add.Input): Promise<unknown>
 
-    /** Namespace for the input types for the subtract tool. */
+    /** Namespace containing the input type for the subtract tool. */
     declare namespace subtract {
       /**
        */
