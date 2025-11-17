@@ -1,8 +1,9 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { z } from "zod/v4";
@@ -44,6 +45,21 @@ export type Variables = {
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
 
+app.use(
+  cors({
+    origin: (origin, c: Context<{ Bindings: CloudflareEnv }>) => {
+      if (import.meta.env.DEV) return origin;
+      if (!origin || !URL.canParse(origin)) return null;
+      const domain = new URL(origin).hostname;
+      return c.env.ALLOWED_DOMAINS.split(",").includes(domain) ? origin : null;
+    },
+    credentials: true,
+    allowMethods: ["*"],
+    maxAge: 600,
+  }),
+  secureHeaders(),
+);
+
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
@@ -66,14 +82,6 @@ app.use("*", async (c, next) => {
   };
   return logger.run(requestTags, () => next());
 });
-
-app.use(
-  "*",
-  cors({
-    credentials: true,
-    origin: (c) => c,
-  }),
-);
 
 // Error tracking with PostHog
 app.onError((err, c) => {
