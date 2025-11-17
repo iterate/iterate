@@ -107,7 +107,9 @@ export function toolSpecsToImplementations(params: {
     if (spec.type === "agent_durable_object_tool") {
       const { methodName, passThroughArgs } = spec;
       if (typeof (params.theDO as any)[methodName] !== "function") {
-        throw new Error(`methodName ${methodName} is not a function on the Durable Object`);
+        throw new Error(
+          `methodName ${methodName} is not a function on the Durable Object. ${params.theDO?.constructor?.name}`,
+        );
       }
 
       spec = { ...spec, overrideName: spec.overrideName || spec.methodName };
