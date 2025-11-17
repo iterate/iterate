@@ -139,7 +139,15 @@ export interface AgentCoreDeps {
     eval: (
       code: string,
       statusIndicatorText: string,
-    ) => Promise<{ dynamicWorkerCode: string; result: unknown }>;
+    ) => Promise<{
+      dynamicWorkerCode: string;
+      result: unknown;
+      toolCalls: {
+        tool: string;
+        input: unknown;
+        output: Awaited<ReturnType<typeof executeLocalFunctionTool>>;
+      }[];
+    }>;
     [Symbol.dispose]: () => Promise<void>;
   };
   /** Persist the full event array whenever it changes – safe to store by ref */
@@ -373,6 +381,11 @@ export class AgentCore<
     const toolTypes = generateTypes(state.runtimeTools, {
       blocklist:
         codemodeGrouped.normal?.flatMap((tool) => ("name" in tool && tool.name) || []) || [],
+      outputSamples: R.pipe(
+        state.recordedToolCalls || [],
+        R.groupBy((call) => call.tool),
+        R.mapValues((calls) => calls.map((call) => call.output)),
+      ),
     });
     const codemodeTool: (typeof state.runtimeTools)[number] = {
       type: "function",
@@ -421,14 +434,28 @@ export class AgentCore<
 
         using cm = this.deps.setupCodemode(functions);
         const output = await cm.eval(functionCode, statusIndicatorText);
-        const result = output.result as { toolCallResult: {}; triggerLLMRequest?: boolean };
+        const triggerLLMRequestValues = output.toolCalls.flatMap((call) =>
+          "triggerLLMRequest" in call.output ? call.output.triggerLLMRequest : [],
+        );
+        const triggerLLMRequest =
+          triggerLLMRequestValues.find(Boolean) ?? // if any are true, we need to trigger
+          triggerLLMRequestValues.find((v) => typeof v === "boolean"); // try to faithfully report `false` rather than `undefined` if some tool call specified `false`
         return {
-          ...result,
           type: "function_call_output",
           call_id: "codemode",
           output,
-          toolCallResult: result?.toolCallResult ?? result,
-          triggerLLMRequest: result?.triggerLLMRequest,
+          toolCallResult: output.result,
+          triggerLLMRequest,
+          addEvents: [
+            {
+              type: "CORE:CODEMODE_TOOL_CALLS",
+              data: output.toolCalls.map((call) => ({
+                ...call,
+                output: call.output.toolCallResult,
+              })),
+            },
+            ...output.toolCalls.flatMap((call) => call.output.addEvents ?? []),
+          ],
         };
       },
     };
@@ -908,6 +935,11 @@ export class AgentCore<
     }
 
     switch (event.type) {
+      case "CORE:CODEMODE_TOOL_CALLS": {
+        next.recordedToolCalls ||= [];
+        next.recordedToolCalls.push(...event.data);
+        break;
+      }
       case "CORE:SET_SYSTEM_PROMPT":
         next.systemPrompt = event.data.prompt;
         break;

@@ -49,6 +49,7 @@ import {
   AgentCore,
   type AgentCoreDeps,
   type AgentCoreSlice,
+  type executeLocalFunctionTool,
   type MergedDepsForSlices,
   type MergedEventForSlices,
   type MergedStateForSlices,
@@ -365,26 +366,29 @@ export class IterateAgent<
             const dynamicWorkerCode = dedent`
               export default {
                 async fetch(request, env, ctx) {
+                  const toolCalls = [];
                   const callMethodOnDO = (methodName, args) => {
                     return env.AGENT_CALLER.callMyAgent({
                       bindingName: env.AGENT_BINDING_NAME,
                       durableObjectName: env.AGENT_NAME,
                       methodName,
                       args,
-                    })
-                  }
+                    });
+                  };
 
-                  const callCodemodeCallbackOnDO = (functionName, input) => {
-                    return callMethodOnDO("callCodemodeCallback", [env.CODEMODE_CALLER_ID, functionName, input]);
-                  }
+                  const callCodemodeCallbackOnDO = async (functionName, input) => {
+                    const output = await callMethodOnDO("callCodemodeCallback", [env.CODEMODE_CALLER_ID, functionName, input]);
+                    toolCalls.push({tool: functionName, input, output});
+                    return output.toolCallResult;
+                  };
 
                   __tool_call_functions__
 
                   __function_code__
 
-                  const result = await codemode()
+                  const result = await codemode();
 
-                  return new Response(JSON.stringify(result));
+                  return new Response(JSON.stringify({ result, toolCalls }));
                 }
               }
             `
@@ -414,10 +418,24 @@ export class IterateAgent<
 
             const entrypoint = dynamicWorker.getEntrypoint();
 
-            const res = await entrypoint.fetch("http://iterate-dynamic-worker");
+            try {
+              const res = await entrypoint.fetch("http://iterate-dynamic-worker");
 
-            const result = await res.json<unknown>();
-            return { result, dynamicWorkerCode };
+              const { result, toolCalls } = await res.json<{
+                result: unknown;
+                toolCalls: {
+                  tool: string;
+                  input: unknown;
+                  output: Awaited<ReturnType<typeof executeLocalFunctionTool>>;
+                }[];
+              }>();
+              return { result, dynamicWorkerCode, toolCalls };
+            } catch (error) {
+              throw new Error(
+                `Failed to executed codemode.\n\nMessage: ${error}\n\nWorker code:\n\n${dynamicWorkerCode}`,
+                { cause: error },
+              );
+            }
           },
           [Symbol.dispose]: async () => {
             // for some reason `using cm = ...` was disposing too early, so dispose after plenty of time has passed
