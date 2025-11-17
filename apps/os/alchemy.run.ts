@@ -14,8 +14,8 @@ import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import z from "zod";
-import { addSuperAdminUser } from "./sdk/cli/commands/admin.ts";
 import dedent from "dedent";
+import { addSuperAdminUser } from "./sdk/cli/commands/admin.ts";
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -378,9 +378,9 @@ async function deployWorker() {
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {
       _headers: dedent`
-      /assets/*
-         !Cache-Control
-         Cache-Control: public, max-age=31536000, immutable
+        /assets/*
+           !Cache-Control
+           Cache-Control: public, max-age=31536000, immutable
       `,
     },
     domains,
