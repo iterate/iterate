@@ -9,7 +9,8 @@ export default {
       { cron: "*/15 * * * *" },
     ],
     push: {
-      paths: [".github/workflows/nag.yml"],
+      branches: ["**/*nag*", "*nag*"],
+      // paths: [".github/workflows/nag.yml"],
     },
   },
   jobs: {
@@ -37,6 +38,7 @@ export default {
                 ...context.repo,
                 issue_number: pr.number,
               });
+
               const reviews = rawReviews
                 .filter((r) => r.user?.type !== "Bot")
                 .sort((a, b) => (a.submitted_at || "").localeCompare(b.submitted_at || ""));
@@ -48,16 +50,11 @@ export default {
 
               const approval = reviews.find((review) => review.state === "APPROVED");
 
-              const oldNagInfo = pr.body
-                ?.split("\n")
-                .flatMap((line) => {
-                  const maybeParams = new URLSearchParams(
-                    line.split(" ").find((p) => p.includes("=")),
-                  );
-                  const found = maybeParams.get("last_nag_time");
-                  return found ? [maybeParams] : [];
-                })
-                .findLast(Boolean); // find nag info, since we append every couple of days
+              type NagInfo = { time: string; message_ts?: string; followup_message_ts?: string };
+
+              const { prState } = await import("../utils/github-script.ts");
+
+              const state = prState<{ nags: Array<NagInfo> }>(pr.body || "", "nag_info");
 
               const nodeIds = comments.map((c) => c.node_id).filter(Boolean);
 
@@ -111,11 +108,18 @@ export default {
                 return timeAgo(d).pretty;
               };
 
-              const workingHours = (now: Date) => {
+              const isTest = context.eventName === "push" && context.actor === "mmkal";
+
+              const realWorkingHours = (now: Date) => {
                 const [hour, day] = [now.getHours(), now.getDay()];
                 return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
               };
-              const lastNagTime = oldNagInfo?.get("last_nag_time");
+              const testWorkingHours: typeof realWorkingHours = () => {
+                return true;
+              };
+              const workingHours = isTest ? testWorkingHours : realWorkingHours;
+
+              const lastNagTime = state.read().nags?.at(-1)?.time;
 
               const reasonsToNag = {
                 automerge: `${!!pr.auto_merge}: <-- automerge-status`,
@@ -123,7 +127,6 @@ export default {
                 unresolvedComments: `${unresolvedComments?.length === 0}: ${unresolvedComments?.length} unresolved comments`,
                 noActivityForAWhile: `${timeAgo(lastActive).minutes > 60}: last active ${when(lastActive)}`,
                 noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
-                lastNagWasIgnored: `${lastActive < new Date(lastNagTime || Date.now())}: (also true if nag hasn't happened yet)`,
                 workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
               } as Record<string, `${boolean}: ${string}`>;
 
@@ -131,57 +134,70 @@ export default {
 
               console.log(`PR #${pr.number}`, pr.title, pr.html_url, { reasonsToNag, shouldNag });
 
-              const nagOrGiveUp = async () => {
-                const newNagInfo: Record<string, string> = {
-                  last_nag_time: new Date().toISOString(),
-                };
-                const { getSlackClient, slackChannelIds, slackUsers } = await import(
-                  "../utils/slack.ts"
-                );
-                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-                const slackUser = slackUsers.find(
-                  (u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase(),
-                );
-                const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
-                const threadTs = oldNagInfo?.get("nag_message_ts");
-                const followupTs = oldNagInfo?.get("followup_message_ts");
+              const { getSlackClient, slackChannelIds, slackUsers } = await import(
+                "../utils/slack.ts"
+              );
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const slackUser = slackUsers.find(
+                (u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase(),
+              );
+              const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
 
-                if (threadTs) {
-                  if (followupTs) {
-                    console.log(`Followup message already exists, giving up.`);
-                    return;
-                  }
+              const nagOrGiveUp = async () => {
+                const newNag: NagInfo = {
+                  time: new Date().toISOString(),
+                };
+
+                const lastNag = state.read().nags?.at(-1);
+
+                if (lastNag?.followup_message_ts) {
+                  console.log(`Followup message already exists, giving up.`);
+                  return;
+                }
+
+                const postMessage = (params: { text: string; thread_ts?: string }) => {
+                  return slack.chat.postMessage({
+                    channel: slackChannelIds["#building"],
+                    ...params,
+                    ...(isTest && {
+                      channel: slackChannelIds["#misha-test"],
+                      text: params.text.replaceAll("<@U", "<...U"),
+                    }),
+                  });
+                };
+
+                if (lastNag?.message_ts) {
                   const othersMentions = slackUsers
                     .filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase())
                     .filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now())
                     .map((u) => `<@${u.id}>`)
                     .join(" ");
 
-                  const followup = await slack.chat.postMessage({
-                    channel: slackChannelIds["#building"],
-                    thread_ts: threadTs,
+                  const followup = await postMessage({
+                    thread_ts: lastNag.message_ts,
                     text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                   });
                   if (followup.ts) {
-                    newNagInfo.followup_message_ts = followup.ts;
+                    newNag.followup_message_ts = followup.ts;
                   }
                 } else {
-                  const message = await slack.chat.postMessage({
-                    channel: slackChannelIds["#building"],
+                  const message = await postMessage({
                     text: `<${pr.html_url}|#${pr.number} ${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
                   });
                   if (message.ts) {
-                    newNagInfo.nag_message_ts = message.ts;
+                    newNag.message_ts = message.ts;
                   }
                 }
 
                 await github.rest.pulls.update({
                   ...context.repo,
                   pull_number: pr.number,
-                  body: [
-                    pr.body, //
-                    `${new URLSearchParams(newNagInfo)}`,
-                  ].join("\n"),
+                  body: state.write({
+                    nags: [
+                      ...(state.read().nags || []), // break
+                      newNag,
+                    ],
+                  }),
                 });
               };
 
@@ -200,14 +216,15 @@ export default {
 
               for (const comment of incorrectlyMinimizedComments) {
                 console.info(`comment ${comment.html_url} needs to be re-minimized as RESOLVED`);
+                const dedent = String;
                 await github.graphql(
-                  `
-                        mutation($id: ID!) {
-                        minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
-                            minimizedComment { id }
-                        }
-                        }
-                    `,
+                  dedent`
+                    mutation($id: ID!) {
+                      minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
+                          minimizedComment { id }
+                      }
+                    }
+                  `,
                   { id: comment.node_id },
                 );
                 console.info(`Re-minimized as RESOLVED: ${comment.node_id} on PR #${pr.number}`);

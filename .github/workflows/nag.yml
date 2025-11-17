@@ -5,8 +5,9 @@ on:
   schedule:
     - cron: "*/15 * * * *"
   push:
-    paths:
-      - .github/workflows/nag.yml
+    branches:
+      - "**/*nag*"
+      - "*nag*"
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -32,6 +33,12 @@ jobs:
               ...console,
               debug: () => {},
             };
+
+            // write a shimmed module of "../utils/github-script.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs",
+              "module.exports.load = () => require(\"tsx/esm/api\").tsImport(\"../utils/github-script.ts\", __filename);",
+            );
 
             // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
             require("fs").writeFileSync(
@@ -83,12 +90,13 @@ jobs:
                 console.log(pr.number, pr.title, reviews, comments);
                 const approval = reviews.find((review) => review.state === "APPROVED");
 
-                const oldNagInfo = pr.body?.split("\n").flatMap((line) => {
-                  const maybeParams = new URLSearchParams(line.split(" ").find((p) => p.includes("=")));
-                  const found = maybeParams.get("last_nag_time");
-                  return found ? [maybeParams] : [];
-                }).findLast(Boolean); // find nag info, since we append every couple of days
+                const {
+                  prState,
+                } = await require(
+                  ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs" /* <-- shimmed module of "../utils/github-script.ts" that actions/github-script can require */,
+                ).load();
 
+                const state = prState(pr.body || "", "nag_info");
                 const nodeIds = comments.map((c) => c.node_id).filter(Boolean);
 
                 const res = await github.graphql(`
@@ -142,12 +150,19 @@ jobs:
                   return timeAgo(d).pretty;
                 };
 
-                const workingHours = (now) => {
+                const isTest = context.eventName === "push" && context.actor === "mmkal";
+
+                const realWorkingHours = (now) => {
                   const [hour, day] = [now.getHours(), now.getDay()];
                   return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
                 };
 
-                const lastNagTime = oldNagInfo?.get("last_nag_time");
+                const testWorkingHours = () => {
+                  return true;
+                };
+
+                const workingHours = isTest ? testWorkingHours : realWorkingHours;
+                const lastNagTime = state.read().nags?.at(-1)?.time;
 
                 const reasonsToNag = {
                   automerge: `${!!pr.auto_merge}: <-- automerge-status`,
@@ -155,7 +170,6 @@ jobs:
                   unresolvedComments: `${unresolvedComments?.length === 0}: ${unresolvedComments?.length} unresolved comments`,
                   noActivityForAWhile: `${timeAgo(lastActive).minutes > 60}: last active ${when(lastActive)}`,
                   noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
-                  lastNagWasIgnored: `${lastActive < new Date(lastNagTime || Date.now())}: (also true if nag hasn't happened yet)`,
                   workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
                 };
 
@@ -166,50 +180,60 @@ jobs:
                   shouldNag,
                 });
 
+                const {
+                  getSlackClient,
+                  slackChannelIds,
+                  slackUsers,
+                } = await require(
+                  ".github/ts-workflows/workflows/nag.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
+                ).load();
+
+                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                const slackUser = slackUsers.find((u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase());
+                const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
+
                 const nagOrGiveUp = async () => {
-                  const newNagInfo = {
-                    last_nag_time: new Date().toISOString(),
+                  const newNag = {
+                    time: new Date().toISOString(),
                   };
 
-                  const {
-                    getSlackClient,
-                    slackChannelIds,
-                    slackUsers,
-                  } = await require(
-                    ".github/ts-workflows/workflows/nag.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
-                  ).load();
+                  const lastNag = state.read().nags?.at(-1);
 
-                  const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-                  const slackUser = slackUsers.find((u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase());
-                  const authorMention = slackUser ? `<@${slackUser.id}>` : pr.user?.login;
-                  const threadTs = oldNagInfo?.get("nag_message_ts");
-                  const followupTs = oldNagInfo?.get("followup_message_ts");
+                  if (lastNag?.followup_message_ts) {
+                    console.log(`Followup message already exists, giving up.`);
+                    return;
+                  }
 
-                  if (threadTs) {
-                    if (followupTs) {
-                      console.log(`Followup message already exists, giving up.`);
-                      return;
-                    }
+                  const postMessage = (params) => {
+                    return slack.chat.postMessage({
+                      channel: slackChannelIds["#building"],
+                      ...params,
 
+                      ...(isTest && {
+                        channel: slackChannelIds["#misha-test"],
+                        text: params.text.replaceAll("<@U", "<...U"),
+                      }),
+                    });
+                  };
+
+                  if (lastNag?.message_ts) {
                     const othersMentions = slackUsers.filter((u) => u.github.toLowerCase() !== pr.user?.login?.toLowerCase()).filter((u) => new Date(u.oooUntil || 0).getTime() < Date.now()).map((u) => `<@${u.id}>`).join(" ");
 
-                    const followup = await slack.chat.postMessage({
-                      channel: slackChannelIds["#building"],
-                      thread_ts: threadTs,
+                    const followup = await postMessage({
+                      thread_ts: lastNag.message_ts,
                       text: `C'mon ${othersMentions}, poor ${authorMention} is waiting for your review on <${pr.html_url}|#${pr.number} ${pr.title}>`,
                     });
 
                     if (followup.ts) {
-                      newNagInfo.followup_message_ts = followup.ts;
+                      newNag.followup_message_ts = followup.ts;
                     }
                   } else {
-                    const message = await slack.chat.postMessage({
-                      channel: slackChannelIds["#building"],
+                    const message = await postMessage({
                       text: `<${pr.html_url}|#${pr.number} ${pr.title}> by ${authorMention} is set to auto-merge, but needs review.`,
                     });
 
                     if (message.ts) {
-                      newNagInfo.nag_message_ts = message.ts;
+                      newNag.message_ts = message.ts;
                     }
                   }
 
@@ -217,8 +241,10 @@ jobs:
                     ...context.repo,
                     pull_number: pr.number,
 
-                    body: [//
-                    pr.body, `${new URLSearchParams(newNagInfo)}`].join("\n"),
+                    body: state.write({
+                      nags: [// break
+                      ...(state.read().nags || []), newNag],
+                    }),
                   });
                 };
 
@@ -239,14 +265,15 @@ jobs:
 
                 for (const comment of incorrectlyMinimizedComments) {
                   console.info(`comment ${comment.html_url} needs to be re-minimized as RESOLVED`);
+                  const dedent = String;
 
-                  await github.graphql(`
-                                    mutation($id: ID!) {
-                                    minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
-                                        minimizedComment { id }
-                                    }
-                                    }
-                                `, {
+                  await github.graphql(dedent`
+                                mutation($id: ID!) {
+                                  minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
+                                      minimizedComment { id }
+                                  }
+                                }
+                              `, {
                     id: comment.node_id,
                   });
 
