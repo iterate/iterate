@@ -109,7 +109,6 @@ export function toolSpecsToImplementations(params: {
       if (typeof (params.theDO as any)[methodName] !== "function") {
         throw new Error(
           `methodName ${methodName} is not a function on the Durable Object. ${params.theDO?.constructor?.name}`,
-          { cause: params.theDO },
         );
       }
 
