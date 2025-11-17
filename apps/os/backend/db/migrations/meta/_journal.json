@@ -176,6 +176,13 @@
       "when": 1763334348882,
       "tag": "0024_pgmq",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1763335688190,
+      "tag": "0025_careful_boom_boom",
+      "breakpoints": true
     }
   ]
 }

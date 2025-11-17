@@ -578,3 +578,11 @@ export const systemTasks = pgTable(
   }),
   (t) => [index().on(t.processedAt), index().on(t.aggregateType), index().on(t.aggregateId)],
 );
+
+// Estate events (append-only, immutable)
+export const outboxEvent = pgTable("outbox_event", (t) => ({
+  id: iterateId("outbox"),
+  name: t.text().notNull(),
+  payload: jsonb().$type<Record<string, unknown>>().notNull(),
+  ...withTimestamps,
+}));
