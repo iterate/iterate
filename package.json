@@ -32,6 +32,7 @@
     "db:query:file": "docker exec -i postgres-iterate psql -U postgres -d iterate -f",
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
+    "workflows": "cd .github/ts-workflows && pnpm generate",
     "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
     "postinstall": "is-ci || pnpm /postinstall:/"
