@@ -1,6 +1,5 @@
-import { dirname, join, resolve } from "path";
-import { readFileSync, accessSync, globSync } from "fs";
-import { fileURLToPath } from "url";
+import * as path from "path";
+import { readFileSync, globSync } from "fs";
 import jsonataLib from "@mmkal/jsonata/sync";
 import { parse as parseYaml } from "yaml";
 import type {
@@ -437,7 +436,7 @@ export function contextRulesFromFiles(
   try {
     const files = globSync(pattern, { cwd });
     return files.map((filePath) => {
-      const fileContent = readFileSync(join(cwd, filePath), "utf-8");
+      const fileContent = readFileSync(path.join(cwd, filePath), "utf-8");
       const { frontMatter, body } = parseFrontMatter(fileContent);
 
       const defaultKey = filePath.replace(/\.md$/, "");
