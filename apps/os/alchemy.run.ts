@@ -394,7 +394,7 @@ async function deployWorker() {
       command: "pnpm build && pnpm posthog:sourcemaps:inject",
     },
     dev: {
-      command: "pnpm iterate dev start",
+      command: "pnpm iterate dev start --config ./estates/iterate/iterate.config.ts",
     },
   });
 

@@ -10,7 +10,7 @@ import {
 const config = defineConfig({
   contextRules: [
     ...defaultContextRules,
-    ...contextRulesFromFiles("rules/**/*.md"),
+    ...contextRulesFromFiles("rules/**/*.md", { cwd: import.meta.dirname }),
     {
       key: "estate-repository-agent",
       prompt: dedent`

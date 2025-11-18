@@ -295,12 +295,13 @@ When Gmail tools are available:
 Use `contextRulesFromFiles()` to automatically load rules from markdown files:
 
 ```typescript
-import { defineConfig, contextRulesFromFiles } from "@iterate-com/sdk";
+import { defineConfig, defaultContextRules, contextRulesFromFiles } from "@iterate-com/sdk";
 
 const config = defineConfig({
   contextRules: [
+    ...defaultContextRules, // the iterate team's recommended context rules - feel free to add/remove/edit!
     // Load all .md files from rules directory
-    ...contextRulesFromFiles("rules/**/*.md"),
+    ...contextRulesFromFiles("rules/**/*.md", { cwd: import.meta.dirname }),
 
     // Add programmatic rules
     myCustomRule,

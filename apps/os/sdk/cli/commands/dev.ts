@@ -88,8 +88,7 @@ const start = t.procedure
     }),
   )
   .mutation(async ({ input }) => {
-    // Support both command-line flag and environment variable
-    const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
+    const providedConfigPath = input.config;
 
     await runBootstrap(providedConfigPath);
 

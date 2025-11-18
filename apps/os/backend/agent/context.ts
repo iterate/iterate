@@ -430,15 +430,14 @@ export function parseFrontMatter(content: string): {
  * Each file becomes a context rule with slug derived from filename and prompt from file content.
  * Supports YAML front matter for overriding context rule properties.
  */
-export function contextRulesFromFiles(pattern: string, overrides: Partial<ContextRule> = {}) {
+export function contextRulesFromFiles(
+  pattern: string,
+  { cwd = process.cwd(), overrides = {} as Partial<ContextRule> } = {},
+) {
   try {
-    const configDir = findIterateConfig();
-    if (!configDir) {
-      throw new Error("iterate.config.ts not found");
-    }
-    const files = globSync(pattern, { cwd: configDir });
+    const files = globSync(pattern, { cwd });
     return files.map((filePath) => {
-      const fileContent = readFileSync(join(configDir, filePath), "utf-8");
+      const fileContent = readFileSync(join(cwd, filePath), "utf-8");
       const { frontMatter, body } = parseFrontMatter(fileContent);
 
       const defaultKey = filePath.replace(/\.md$/, "");
@@ -456,71 +455,3 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     return [];
   }
 }
-
-const findIterateConfig = (root: string = process.cwd()): string | null => {
-  // 1) If provided, honor explicit env var path
-  const envPath = process.env.ITERATE_CONFIG_PATH;
-  if (envPath) {
-    const candidates = [
-      resolve(root, envPath),
-      // common when running from apps/os and providing repo-root-relative path
-      resolve(root, "..", "..", envPath),
-    ];
-    for (const candidate of candidates) {
-      try {
-        accessSync(candidate);
-        return dirname(candidate);
-      } catch {
-        // try next candidate
-      }
-    }
-  }
-
-  // 2) Try to infer from the call stack (works when called from iterate.config.ts)
-  try {
-    const stack = new Error().stack ?? "";
-    const lines = stack.split("\n");
-    for (const line of lines) {
-      if (!line.includes("iterate.config.ts")) continue;
-
-      // file URL form
-      const fileUrlMatch = line.match(/(file:\/\/[^^\s)]+?\/iterate\.config\.ts)/);
-      if (fileUrlMatch) {
-        const abs = fileURLToPath(fileUrlMatch[1]);
-        return dirname(resolve(abs));
-      }
-
-      // POSIX absolute path
-      const posixMatch = line.match(/(\/[^^\s)]+?\/iterate\.config\.ts)/);
-      if (posixMatch) {
-        return dirname(resolve(posixMatch[1]));
-      }
-
-      // Windows absolute path
-      const winMatch = line.match(/([A-Za-z]:\\[^\s)]+?\\iterate\.config\.ts)/);
-      if (winMatch) {
-        return dirname(resolve(winMatch[1]));
-      }
-    }
-  } catch {
-    // ignore call stack parsing errors
-  }
-
-  // 3) Fallback: walk upwards from cwd (works if cwd is the estate dir)
-  let currentDir = resolve(root);
-  const rootDir = resolve("/");
-  while (currentDir !== rootDir) {
-    const configPath = join(currentDir, "iterate.config.ts");
-    try {
-      accessSync(configPath);
-      return currentDir;
-    } catch {
-      const parentDir = dirname(currentDir);
-      if (parentDir === currentDir) break;
-      currentDir = parentDir;
-    }
-  }
-
-  // 4) Not found
-  return null;
-};
