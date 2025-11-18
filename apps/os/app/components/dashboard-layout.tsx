@@ -13,7 +13,7 @@ import {
   Bug,
   Puzzle,
 } from "lucide-react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { fromString } from "typeid-js";
 import { toast } from "sonner";
@@ -294,7 +294,7 @@ function UserSwitcher() {
     }),
   );
   const trpcClient = useTRPCClient();
-
+  const queryClient = useQueryClient();
   const startImpersonation = useMutation({
     mutationFn: async (params: { type: "email" | "user_id" | "estate_id"; value: string }) => {
       const userId = await resolveImpersonation(trpcClient, params.type, params.value);
@@ -334,6 +334,7 @@ function UserSwitcher() {
       await authClient.signOut({
         fetchOptions: {
           onSuccess: () => {
+            queryClient.clear();
             window.location.href = "/login";
           },
         },
