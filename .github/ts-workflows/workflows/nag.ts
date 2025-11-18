@@ -18,6 +18,10 @@ export default {
   },
   jobs: {
     run: {
+      concurrency: {
+        group: "global-nag-concurrency-group",
+        "cancel-in-progress": false,
+      },
       ...utils.runsOnUbuntuLatest,
       steps: [
         ...utils.setupRepo,
@@ -165,6 +169,14 @@ export default {
                 noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
                 workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
               } as Record<string, `${boolean}: ${string}`>;
+
+              if (
+                context.eventName === "pull_request" &&
+                context.payload.action === "auto_merge_enabled" &&
+                pr.number === context.payload.pull_request?.number
+              ) {
+                delete reasonsToNag.noActivityForAWhile; // automerge was just enabled, let's assume the "recent activity" is the author enabling automerge
+              }
 
               const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
 
