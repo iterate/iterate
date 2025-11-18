@@ -5,10 +5,6 @@ import type { TanstackRouterContext } from "../router.tsx";
 
 export const Route = createRootRouteWithContext<TanstackRouterContext>()({
   component: RootLayout,
-  loader: async ({ context }) => {
-    await context.queryClient.ensureQueryData(context.trpc.user.me.queryOptions());
-    await context.queryClient.ensureQueryData(context.trpc.admin.impersonationInfo.queryOptions());
-  },
   wrapInSuspense: true,
 });
 
