@@ -8,6 +8,10 @@ on:
     branches:
       - "**/*nag*"
       - "*nag*"
+  pull_request:
+    types:
+      - closed
+      - auto_merge_enabled
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -61,6 +65,8 @@ jobs:
                 context,
               },
             ) {
+              console.log(`context`, JSON.stringify(context, null, 2));
+
               const {
                 data: openPRs,
               } = await github.rest.pulls.list({

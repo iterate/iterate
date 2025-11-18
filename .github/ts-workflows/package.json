@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "generate": "node cli.ts from-ts",
     "build": "tsc"
   },
   "dependencies": {

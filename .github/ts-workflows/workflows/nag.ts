@@ -12,6 +12,9 @@ export default {
       branches: ["**/*nag*", "*nag*"],
       // paths: [".github/workflows/nag.yml"],
     },
+    pull_request: {
+      types: ["closed", "auto_merge_enabled"],
+    },
   },
   jobs: {
     run: {
@@ -22,6 +25,7 @@ export default {
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
           async function doit({ github, context }) {
+            console.log(`context`, JSON.stringify(context, null, 2));
             const { data: openPRs } = await github.rest.pulls.list({
               ...context.repo,
               state: "open",
