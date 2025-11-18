@@ -18,14 +18,56 @@ export default {
   },
   jobs: {
     run: {
+      concurrency: {
+        group: "global-nag-concurrency-group",
+        "cancel-in-progress": false,
+      },
       ...utils.runsOnUbuntuLatest,
       steps: [
         ...utils.setupRepo,
         utils.githubScript(
           import.meta,
           { "github-token": "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}" },
-          async function doit({ github, context }) {
+          async function doit({ github, context: _context }) {
+            // todo: consider contributing a union like this to jlarky/gha-ts?
+            type ContextUnion =
+              | { eventName: "pull_request"; payload: { action: "closed" | "auto_merge_enabled" } }
+              | { eventName: "push"; payload: { ref: string } }
+              | { eventName: "schedule" };
+
+            const context = _context as typeof _context & ContextUnion;
             console.log(`context`, JSON.stringify(context, null, 2));
+
+            const isTest = context.eventName === "push" && context.actor === "mmkal";
+
+            type NagInfo = {
+              time: string;
+              channel: string;
+              message_ts?: string;
+              followup_message_ts?: string;
+            };
+            const { prState } = await import("../utils/github-script.ts");
+
+            if (context.eventName === "pull_request" && context.payload.action === "closed") {
+              const state = prState<{ nags: Array<NagInfo> }>(
+                context.payload.pull_request?.body || "",
+                "nag_info",
+              );
+
+              const nags = state.read().nags?.filter((n) => n.message_ts) || [];
+              for (const nag of nags) {
+                const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+                const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                const reaction = context.payload.pull_request?.merged ? "merged" : "x";
+                await slack.reactions.add({
+                  channel: nag.channel || slackChannelIds["#building"],
+                  timestamp: nag.message_ts!,
+                  name: reaction,
+                });
+              }
+              return;
+            }
+
             const { data: openPRs } = await github.rest.pulls.list({
               ...context.repo,
               state: "open",
@@ -53,10 +95,6 @@ export default {
               console.log(pr.number, pr.title, reviews, comments);
 
               const approval = reviews.find((review) => review.state === "APPROVED");
-
-              type NagInfo = { time: string; message_ts?: string; followup_message_ts?: string };
-
-              const { prState } = await import("../utils/github-script.ts");
 
               const state = prState<{ nags: Array<NagInfo> }>(pr.body || "", "nag_info");
 
@@ -112,8 +150,6 @@ export default {
                 return timeAgo(d).pretty;
               };
 
-              const isTest = context.eventName === "push" && context.actor === "mmkal";
-
               const realWorkingHours = (now: Date) => {
                 const [hour, day] = [now.getHours(), now.getDay()];
                 return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
@@ -134,6 +170,14 @@ export default {
                 workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
               } as Record<string, `${boolean}: ${string}`>;
 
+              if (
+                context.eventName === "pull_request" &&
+                context.payload.action === "auto_merge_enabled" &&
+                pr.number === context.payload.pull_request?.number
+              ) {
+                delete reasonsToNag.noActivityForAWhile; // automerge was just enabled, let's assume the "recent activity" is the author enabling automerge
+              }
+
               const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
 
               console.log(`PR #${pr.number}`, pr.title, pr.html_url, { reasonsToNag, shouldNag });
@@ -150,6 +194,7 @@ export default {
               const nagOrGiveUp = async () => {
                 const newNag: NagInfo = {
                   time: new Date().toISOString(),
+                  channel: isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#building"],
                 };
 
                 const lastNag = state.read().nags?.at(-1);
@@ -161,12 +206,9 @@ export default {
 
                 const postMessage = (params: { text: string; thread_ts?: string }) => {
                   return slack.chat.postMessage({
-                    channel: slackChannelIds["#building"],
+                    channel: newNag.channel,
                     ...params,
-                    ...(isTest && {
-                      channel: slackChannelIds["#misha-test"],
-                      text: params.text.replaceAll("<@U", "<...U"),
-                    }),
+                    ...(isTest && { text: params.text.replaceAll("<@U", "<...U") }),
                   });
                 };
 
