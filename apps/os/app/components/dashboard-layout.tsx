@@ -290,6 +290,7 @@ function UserSwitcher() {
   const impersonationInfoQuery = useQuery(
     trpc.admin.impersonationInfo.queryOptions(void 0, {
       initialData: {},
+      staleTime: 1000 * 60 * 5,
     }),
   );
   const trpcClient = useTRPCClient();
