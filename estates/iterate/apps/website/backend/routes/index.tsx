@@ -71,7 +71,7 @@ export default function Home() {
                   onClick={() => setIsCalendarOpen(true)}
                   className="underline hover:text-gray-700"
                 >
-                  book a call with our founder
+                  book a call with our team
                 </button>
               </p>
             </div>
