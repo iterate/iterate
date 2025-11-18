@@ -14,6 +14,9 @@ on:
       - auto_merge_enabled
 jobs:
   run:
+    concurrency:
+      group: global-nag-concurrency-group
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -62,10 +65,50 @@ jobs:
             const __handler = async function doit(
               {
                 github,
-                context,
+                context: _context,
               },
             ) {
+              // todo: consider contributing a union like this to jlarky/gha-ts?
+
+
+
+
+
+              const context = _context;
+
               console.log(`context`, JSON.stringify(context, null, 2));
+              const isTest = context.eventName === "push" && context.actor === "mmkal";
+
+              const {
+                prState,
+              } = await require(
+                ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs" /* <-- shimmed module of "../utils/github-script.ts" that actions/github-script can require */,
+              ).load();
+
+              if (context.eventName === "pull_request" && context.payload.action === "closed") {
+                const state = prState(context.payload.pull_request?.body || "", "nag_info");
+                const nags = state.read().nags?.filter((n) => n.message_ts) || [];
+
+                for (const nag of nags) {
+                  const {
+                    getSlackClient,
+                    slackChannelIds,
+                  } = await require(
+                    ".github/ts-workflows/workflows/nag.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
+                  ).load();
+
+                  const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+                  const reaction = context.payload.pull_request?.merged ? "merged" : "x";
+
+                  await slack.reactions.add({
+                    channel: nag.channel || slackChannelIds["#building"],
+                    timestamp: nag.message_ts,
+                    name: reaction,
+                  });
+                }
+
+                return;
+              }
 
               const {
                 data: openPRs,
@@ -95,13 +138,6 @@ jobs:
                 const comments = rawComments.filter((c) => c.user?.type !== "Bot").sort((a, b) => a.created_at.localeCompare(b.created_at));
                 console.log(pr.number, pr.title, reviews, comments);
                 const approval = reviews.find((review) => review.state === "APPROVED");
-
-                const {
-                  prState,
-                } = await require(
-                  ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs" /* <-- shimmed module of "../utils/github-script.ts" that actions/github-script can require */,
-                ).load();
-
                 const state = prState(pr.body || "", "nag_info");
                 const nodeIds = comments.map((c) => c.node_id).filter(Boolean);
 
@@ -156,8 +192,6 @@ jobs:
                   return timeAgo(d).pretty;
                 };
 
-                const isTest = context.eventName === "push" && context.actor === "mmkal";
-
                 const realWorkingHours = (now) => {
                   const [hour, day] = [now.getHours(), now.getDay()];
                   return hour >= 9 && hour < 18 && day !== 0 && day !== 6;
@@ -178,6 +212,10 @@ jobs:
                   noNagForAWhile: `${timeAgo(lastNagTime || 0).hours > 2}: last nag ${when(lastNagTime)}`,
                   workingHours: `${workingHours(new Date())}: is working hours: ${workingHours.toString().match(/return (.*?);/)?.[1]}`,
                 };
+
+                if (context.eventName === "pull_request" && context.payload.action === "auto_merge_enabled" && pr.number === context.payload.pull_request?.number) {
+                  delete reasonsToNag.noActivityForAWhile; // automerge was just enabled, let's assume the "recent activity" is the author enabling automerge
+                }
 
                 const shouldNag = Object.values(reasonsToNag).every((v) => v.startsWith("true"));
 
@@ -201,6 +239,7 @@ jobs:
                 const nagOrGiveUp = async () => {
                   const newNag = {
                     time: new Date().toISOString(),
+                    channel: isTest ? slackChannelIds["#misha-test"] : slackChannelIds["#building"],
                   };
 
                   const lastNag = state.read().nags?.at(-1);
@@ -212,11 +251,10 @@ jobs:
 
                   const postMessage = (params) => {
                     return slack.chat.postMessage({
-                      channel: slackChannelIds["#building"],
+                      channel: newNag.channel,
                       ...params,
 
                       ...(isTest && {
-                        channel: slackChannelIds["#misha-test"],
                         text: params.text.replaceAll("<@U", "<...U"),
                       }),
                     });
@@ -256,34 +294,6 @@ jobs:
 
                 if (shouldNag) {
                   await nagOrGiveUp();
-                }
-
-                // annoyingly "all comments must be resolved" in a ruleset doesn't let automerge happen for hidden comments, and cursor bugbot loves to hide comments
-                const incorrectlyMinimizedComments = comments.filter((c) => {
-                  const node = res.nodes?.find(
-                    (n) => n?.id === c.node_id && n?.minimizedReason?.toLowerCase() !== "resolved",
-                  );
-
-                  return node?.isMinimized;
-                });
-
-                console.info(`Incorrectly minimized comments`, incorrectlyMinimizedComments);
-
-                for (const comment of incorrectlyMinimizedComments) {
-                  console.info(`comment ${comment.html_url} needs to be re-minimized as RESOLVED`);
-                  const dedent = String;
-
-                  await github.graphql(dedent`
-                                mutation($id: ID!) {
-                                  minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
-                                      minimizedComment { id }
-                                  }
-                                }
-                              `, {
-                    id: comment.node_id,
-                  });
-
-                  console.info(`Re-minimized as RESOLVED: ${comment.node_id} on PR #${pr.number}`);
                 }
               }
             };
