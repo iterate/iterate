@@ -1,12 +1,21 @@
-import { defineConfig, contextRulesFromFiles, tools, matchers, dedent } from "@iterate-com/sdk";
+import {
+  defineConfig,
+  contextRulesFromFiles,
+  tools,
+  matchers,
+  dedent,
+  defaultContextRules,
+} from "@iterate-com/sdk";
 
 const config = defineConfig({
   contextRules: [
+    ...defaultContextRules,
     ...contextRulesFromFiles("rules/**/*.md"),
     {
       key: "estate-repository-agent",
       prompt: dedent`
-          ### Estate repository agent
+        ### Estate repository agent
+
         - One of your most important skills is to update your own estate repo
         - You have access to a coding agent which has a copy of your "estate repository" checked out
         - You can instruct the coding agent to make changes to the estate repository and you must create PRs for those changes

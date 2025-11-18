@@ -13,6 +13,8 @@ export { defineConfig } from "./iterate-config.ts";
 export { f } from "../backend/agent/prompt-fragments.ts";
 export { dedent };
 
+export { defaultContextRules } from "../backend/agent/default-context-rules.ts";
+
 export type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 export type { PromptFragment } from "../backend/agent/prompt-fragments.ts";
 export type { ContextRule } from "../backend/agent/context.ts";

@@ -70,7 +70,6 @@ import { openAIProvider } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
-import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
@@ -875,7 +874,6 @@ export class IterateAgent<
     //   fallback: () => logger.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
     const rules = [
-      ...defaultContextRules,
       // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
       // That means we want to pull in the tutorial rules
       ...(this.iterateConfig?.contextRules || []),
