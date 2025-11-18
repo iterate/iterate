@@ -1,3 +1,4 @@
+import * as quicktype from "quicktype-core";
 import * as jsonSchemaToTypescript from "@mmkal/json-schema-to-typescript";
 import * as tsParser from "recast/parsers/typescript.js";
 import * as recast from "recast";
@@ -27,31 +28,21 @@ function makeJsonSchemaJsonSchemaToTypescriptFriendly<T>(jsonSchema: T) {
   ) as T;
 }
 
-function hashCode(string: string): number {
-  let hash = 0;
-  for (let i = 0; i < string.length; i++) {
-    hash = (hash << 5) - hash + string.charCodeAt(i);
-    hash = hash & hash;
-  }
-  return hash;
-}
-
-function jsonSchemaToInlineTypescript(jsonSchema: {}) {
+function jsonSchemaToInlineTypescript(generatedName: string, jsonSchema: {}) {
   const originalSchema = jsonSchema;
-  const generatedName = `Type_${Date.now()}_${Math.abs(hashCode(JSON.stringify(originalSchema)))}`;
+
   jsonSchema = makeJsonSchemaJsonSchemaToTypescriptFriendly(originalSchema);
   const uglyRaw = jsonSchemaToTypescript.compileSync(jsonSchema, generatedName, {
     bannerComment: "",
     additionalProperties: false,
   });
-  const raw = prettyPrint(uglyRaw);
-  const [beforeName, afterName] = raw.split(generatedName);
-  if (!afterName) throw new Error(`Expected to find ${generatedName} in code:\n\n${raw}`);
-  const inline = afterName.trim().replace(/^=/, "").trim().replace(/;$/, "");
-  const rawJsdoc = beforeName
-    .trim()
-    .replace(/export \w+$/, "")
-    .trim();
+  let raw = prettyPrint(uglyRaw).trim();
+
+  if (Object.keys(originalSchema).filter((key) => key !== "$schema").length === 0) {
+    raw = `export type ${generatedName} = unknown`;
+  }
+
+  const rawJsdoc = raw.split(/\nexport \w+$/)[0].trim();
   const usefulJsdocLines = rawJsdoc.split("\n").filter((line) => {
     const trimmed = line.trim();
     const isMinOrMaxItems = trimmed.startsWith("* @minItems") || trimmed.startsWith("* @maxItems");
@@ -84,23 +75,18 @@ function jsonSchemaToInlineTypescript(jsonSchema: {}) {
     ? usefulJsdocLines.join("\n").trim()
     : "";
 
-  const asDef = (name: string, options: { export?: boolean; interface?: boolean } = {}) => {
-    let ts = inline;
-    if (options.interface && inline.startsWith("{")) ts = `interface ${name} ${ts}`;
-    else ts = `type ${name} = ${ts}`;
-
-    if (options.export) ts = `export ${ts}`;
-    if (usefulJsdoc) ts = `${usefulJsdoc}\n${ts}`;
-
-    return ts;
+  return {
+    raw,
+    cleanedUp: raw.replace(rawJsdoc, usefulJsdoc).trim(),
+    rawJsdoc,
+    usefulJsdoc,
+    description,
   };
-
-  return { raw, inlineType: inline, rawJsdoc, usefulJsdoc, asDef, description };
 }
 
 export function generateTypes(
   tools: AugmentedCoreReducedState["runtimeTools"],
-  { blocklist = [] as string[] } = {},
+  { blocklist = [] as string[], outputSamples = {} as Record<string, unknown[]> } = {},
 ) {
   const available: Array<Extract<(typeof tools)[number], { name: string }>> = [];
   const unavailable: typeof tools = [];
@@ -117,24 +103,7 @@ export function generateTypes(
     const identifierToolName = toolNameToJsIdentifier(rawToolName);
 
     toolFunctions.push(() => {
-      const inputCode = jsonSchemaToInlineTypescript(
-        tool.unfiddledInputJSONSchema?.() || tool.parameters || {},
-      );
-      const outputCode = tool.unfiddledOutputJSONSchema
-        ? jsonSchemaToInlineTypescript(tool.unfiddledOutputJSONSchema()).inlineType
-        : "unknown";
-      const placeholderArgs = "/* placeholder args */ ...args: unknown[]";
-      const placeholderReturnType = "/* placeholder return type */ unknown";
-
-      let fnCode = `declare function ${identifierToolName}(${placeholderArgs}): Promise<${placeholderReturnType}>`;
-
-      if (tool.parameters?.$original === "empty_schema" || inputCode.inlineType === "{}") {
-        fnCode = fnCode.replace(placeholderArgs, "");
-      } else {
-        fnCode = fnCode.replace(placeholderArgs, `input: ${inputCode.inlineType}`);
-      }
-
-      fnCode = fnCode.replace(placeholderReturnType, outputCode);
+      let fnCode = `declare function ${identifierToolName}(input: ${identifierToolName}.Input): Promise<${identifierToolName}.Output>`;
 
       if (tool.description) {
         fnCode = [
@@ -148,7 +117,72 @@ export function generateTypes(
           fnCode,
         ].join("\n");
       }
-      return fnCode;
+
+      const inputTypes = jsonSchemaToInlineTypescript(
+        "Input",
+        tool.unfiddledInputJSONSchema?.() || tool.parameters || {},
+      ).cleanedUp;
+
+      let outputTypes = jsonSchemaToInlineTypescript(
+        "Output",
+        tool.unfiddledOutputJSONSchema?.() || {},
+      ).cleanedUp;
+
+      const isTypeMissingDetail = !outputTypes.includes("\n");
+      if (isTypeMissingDetail && tool.name in outputSamples) {
+        // no newline, maybe something like `unknown`, `{}`, `any`, `never`, `Record<string, unknown>` etc.
+        // use quicktype to generate a more specific type based on the samples
+        const jsonInput = quicktype.jsonInputForTargetLanguage("typescript");
+        jsonInput.addSourceSync({
+          name: "Output",
+          samples: outputSamples[tool.name].map((sample) => JSON.stringify(sample)),
+        });
+        const inputData = new quicktype.InputData();
+        inputData.addInput(jsonInput);
+        const generation = quicktype.quicktypeMultiFileSync({
+          inputData,
+          lang: "typescript",
+          rendererOptions: {
+            "just-types": true,
+            "prefer-unions": true,
+            module: true,
+          },
+        });
+        const result = generation.get("stdout")?.lines.join("\n").trim();
+        if (result) outputTypes = result;
+      }
+
+      const namespaceCodeParts: Record<string, string> = {};
+
+      if (!inputTypes.includes("\n")) {
+        // single line input type, probably something like `export type Input = unknown` or `export interface Input {}`, let's inline it
+        const inline = inlineType(inputTypes);
+        fnCode = fnCode.replace(`(input: ${identifierToolName}.Input)`, `(input: ${inline})`);
+      } else {
+        namespaceCodeParts.input = inputTypes;
+      }
+
+      if (!outputTypes.includes("\n")) {
+        // single line output type, probably something like `export type Output = unknown` or `export interface Output {}`, let's inline it
+        const inline = inlineType(outputTypes);
+        fnCode = fnCode.replace(`: Promise<${identifierToolName}.Output>`, `: Promise<${inline}>`);
+      } else {
+        namespaceCodeParts.output = outputTypes;
+      }
+
+      const namespaceParts = Object.entries(namespaceCodeParts);
+      if (namespaceParts.length > 0) {
+        const s = namespaceParts.length > 1 ? "s" : "";
+        return prettyPrint(`
+          /** Namespace containing the ${namespaceParts.map(([name]) => name).join(" and ")} type${s} for the ${identifierToolName} tool. */
+          declare namespace ${identifierToolName} {
+            ${namespaceParts.map((e) => e[1]).join("\n\n")}
+          }
+          ${fnCode}
+        `);
+      }
+
+      return prettyPrint(fnCode);
     });
   }
 
@@ -162,11 +196,11 @@ export function generateTypes(
   };
 }
 
-const prettyPrint = (script: string) => {
+export const prettyPrint = (script: string) => {
   try {
     // use recast instead of prettier because it's synchronous and we don't really care all that much about how it looks as long as it's readable
     const ast = recast.parse(script, { parser: tsParser });
-    return recast.prettyPrint(ast, {
+    const pretty = recast.prettyPrint(ast, {
       quote: "double",
       tabWidth: 2,
       useTabs: false,
@@ -175,10 +209,38 @@ const prettyPrint = (script: string) => {
       flowObjectCommas: true,
       arrayBracketSpacing: false,
       arrowParensAlways: true,
-    }).code;
+    });
+    return fixJsDocIndent(pretty.code);
   } catch (error) {
     throw new Error(
       `Error pretty printing script: ${error instanceof Error ? error.message : String(error)}. Script:\n\n${script}`,
     );
   }
+};
+
+const inlineType = (namedType: string) => {
+  if (namedType.includes("\n")) {
+    throw new Error(`Type too complicated to inline, this is a dumb function:\n\n${namedType}`);
+  }
+  return namedType
+    .replace(/^export /, "")
+    .replace(/^type \w+ = /, "")
+    .replace(/^interface \w+ /, "");
+};
+
+// recast messes with the indentation of jsdoc comments. it bugs me so maybe it bugs LLMs too
+const fixJsDocIndent = (code: string) => {
+  const lines = code.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "/**") {
+      const indent = line.split("/**")[0];
+      i++;
+      while (lines[i]?.trim().startsWith("*")) {
+        lines[i] = indent + " " + lines[i].trimStart();
+        i++;
+      }
+    }
+  }
+  return lines.join("\n");
 };
