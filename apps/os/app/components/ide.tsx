@@ -418,18 +418,6 @@ export function IDE() {
     },
   });
 
-  const dts = useQuery(
-    trpc.estate.getDTS.queryOptions(
-      {
-        packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
-      },
-      {
-        enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
-        staleTime: Infinity,
-      },
-    ),
-  );
-
   const {
     filesystem,
     sha,
@@ -447,6 +435,21 @@ export function IDE() {
     defaultBranch: "main",
   };
   const repoName = repoData?.full_name?.split("/")[1] || "repository";
+
+  const dts = useQuery(
+    trpc.estate.getDTS.queryOptions(
+      {
+        packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
+        overrides: {
+          "@iterate-com/sdk@workspace:*": `https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@${sha || actualBranch || defaultBranch}`,
+        },
+      },
+      {
+        enabled: !!getRepoFileSystemQuery.data?.filesystem["package.json"],
+        staleTime: Infinity,
+      },
+    ),
+  );
 
   // Derive file contents by merging filesystem with local edits, excluding deleted files
   const fileContents = useMemo(() => {

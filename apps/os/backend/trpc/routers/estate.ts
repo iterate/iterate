@@ -535,6 +535,7 @@ export const estateRouter = router({
           dependencies: z.record(z.string(), z.string()).optional(),
           devDependencies: z.record(z.string(), z.string()).optional(),
         }),
+        overrides: z.record(z.string(), z.string()).optional(),
       }),
     )
     .query(async ({ input }) => {
@@ -574,7 +575,10 @@ export const estateRouter = router({
         }
 
         let url: string;
-        if (specifier?.match(/^https?:/)) {
+        if (`${name}@${specifier}` in (input.overrides || {})) {
+          const override = input.overrides![`${name}@${specifier}`];
+          url = override;
+        } else if (specifier?.match(/^https?:/)) {
           url = specifier;
         } else if (semver.validRange(specifier)) {
           const packageInfo: { versions: Record<string, {}> } = await fetch(
