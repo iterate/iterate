@@ -115,7 +115,7 @@ export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type })
 });
 
 // Protected procedure that requires authentication
-export const protectedProcedureWithNoEstateRestrictions = t.procedure
+export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });

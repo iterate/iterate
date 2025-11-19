@@ -8,10 +8,11 @@ const cc = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer)
 export const registerConsumers = () => {
   cc.registerConsumer({
     name: "logGreeting",
-    on: "testing.testEventable",
+    on: "admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
     handler: (params) => {
-      logger.info(`GOT: ${params.eventName} greeting: ${params.payload.output.greeting}`, params);
+      logger.info(`GOT: ${params.eventName}, server reply: ${params.payload.output.reply}`, params);
+      return "logged it";
     },
   });
 };

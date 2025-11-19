@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, eq, desc, like } from "drizzle-orm";
+import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
@@ -603,6 +603,19 @@ export const adminRouter = router({
     }),
 
   outbox: {
+    poke: adminProcedure
+      .meta({
+        description:
+          "Emit a meaningless message into the outbox queue. Note that consumers are defined separately, so may or may not choose to subscribe to this mutation.",
+      })
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.db.transaction(async (tx) => {
+          const dbtime = await tx.execute(sql`select now()`);
+          const reply = `You used ${input.message.split(" ").length} words, well done.`;
+          return ctx.sendToOutbox(tx, { dbtime, reply });
+        });
+      }),
     peek: adminProcedure
       .meta({
         description:

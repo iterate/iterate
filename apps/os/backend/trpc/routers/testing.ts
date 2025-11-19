@@ -71,15 +71,7 @@ const setUserRole = testingProcedure
     return { success: true, result };
   });
 
-const testEventable = publicProcedure
-  .input(z.object({ message: z.string() }))
-  .mutation(async ({ input, ctx }) => {
-    return ctx.db.transaction(async (tx) => {
-      return ctx.sendToOutbox(tx, { greeting: `Hello, ${input.message}!` });
-    });
-  });
-
 /** At compile time, this router will be usable, but if you try to use it in production the procedures just won't exist (`as never`) */
 export const testingRouter = testAdminUser.enabled
-  ? router({ createAdminUser, setUserRole, testEventable })
+  ? router({ createAdminUser, setUserRole })
   : (router({}) as never);
