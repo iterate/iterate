@@ -954,7 +954,9 @@ export class IterateAgent<
     });
 
     if (!targetRecord) {
-      throw new Error(`Agent instance ${name} not found in estate ${this.databaseRecord.estateId}`);
+      throw new Error(
+        `Agent instance ${agentName} not found in estate ${this.databaseRecord.estateId}`,
+      );
     }
 
     const stub = await getAgentStubByName(toAgentClassName(targetRecord.className), {
