@@ -12,6 +12,9 @@ export default {
     push: {
       branches: ["main", "mmkal/25/10/29/slackclientinworkflows"],
     },
+    pull_request: {
+      types: ["opened", "synchronize", "edited"],
+    },
     workflow_dispatch: {
       inputs: {
         stage: {
@@ -40,6 +43,8 @@ export default {
      */
     variables: {
       ...utils.runsOnUbuntuLatest,
+      // run if it's not a pull request or if the body contains "- [x] run_ci"
+      if: `github.event_name != "pull_request" || contains(format('\\n{0}\\n', github.event.pull_request.body), "- [x] run_ci")`,
       steps: [
         {
           id: "get_env",

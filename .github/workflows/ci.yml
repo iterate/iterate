@@ -9,6 +9,11 @@ on:
     branches:
       - main
       - mmkal/25/10/29/slackclientinworkflows
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - edited
   workflow_dispatch:
     inputs:
       stage:
@@ -19,6 +24,7 @@ on:
 jobs:
   variables:
     runs-on: ubuntu-latest
+    if: github.event_name != "pull_request" || contains(format('\n{0}\n', github.event.pull_request.body), "- [x] run_ci")
     steps:
       - id: get_env
         name: Get environment variables
