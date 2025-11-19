@@ -26,13 +26,17 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { EstateBuildTracker } from "./durable-objects/estate-build-tracker.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
-import { getUserEstateAccess } from "./trpc/trpc.ts";
+import { getUserEstateAccess, queuer } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
+import { registerConsumers } from "./trpc/consumers.ts";
+import * as workerConfig from "./worker-config.ts";
+
+registerConsumers();
 
 type TrpcCaller = ReturnType<typeof appRouter.createCaller>;
 export type Variables = {
@@ -320,6 +324,7 @@ app.all("*", (c) => {
 export default class extends WorkerEntrypoint {
   declare env: CloudflareEnv;
 
+  /** rpc method for codemode to call back to the agent running the codemode tool */
   callMyAgent(params: {
     bindingName: string;
     durableObjectName: string;
@@ -339,18 +344,19 @@ export default class extends WorkerEntrypoint {
 
   async scheduled(controller: ScheduledController) {
     const db = getDb();
-    switch (controller.cron) {
-      case "*/1 * * * *": {
+    const cron = controller.cron as workerConfig.WorkerCronExpression;
+    switch (cron) {
+      case workerConfig.workerCrons.processSystemTasks: {
         try {
-          logger.info("Running scheduled onboarding tasks");
+          logger.info("Running scheduled system tasks");
           const result = await processSystemTasks(db);
-          logger.info("Onboarding tasks completed", result);
+          logger.info("System tasks completed", result);
         } catch (error) {
-          logger.error("Onboarding tasks failed:", error);
+          logger.error("System tasks failed:", error);
         }
         break;
       }
-      case "0 0 * * *": {
+      case workerConfig.workerCrons.slackSync: {
         try {
           logger.info("Running scheduled Slack sync for all estates");
           const result = await syncSlackForAllEstatesHelper(db);
@@ -364,8 +370,20 @@ export default class extends WorkerEntrypoint {
         }
         break;
       }
-      default:
-        logger.error("Unknown cron pattern:", controller.cron);
+      case workerConfig.workerCrons.processOutboxQueue: {
+        try {
+          logger.info("Running scheduled outbox queue processing");
+          const result = await queuer.processQueue(db);
+          logger.info("Scheduled outbox queue processing completed", result);
+        } catch (error) {
+          logger.error("Scheduled outbox queue processing failed:", error);
+        }
+        break;
+      }
+      default: {
+        cron satisfies never;
+        logger.error("Unknown cron pattern:", controller);
+      }
     }
   }
 }
