@@ -72,7 +72,6 @@ export interface Queuer<DBConnection> {
 
   /** Process some or all messages in the queue. Call this periodically or when you've just added events. */
   processQueue: (db: DBConnection) => Promise<string>;
-  purgeQueue: (db: DBConnection) => Promise<void>;
   peekQueue: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
   peekArchive: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
   // todo: allow requeueing of messages by moving from archive to main queue directly
@@ -87,7 +86,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     const jobQueueMessages = await db.execute<{}>(
       sql`
         select * from pgmq.read(
-          queue_name => 'consumer_job_queue',
+          queue_name => ${queueName}::text,
           vt         => 30,
           qty        => 2
         )
@@ -137,7 +136,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             where msg_id = ${job.msg_id}::bigint
           `);
           await db.execute(sql`
-            select pgmq.archive(queue_name => 'consumer_job_queue', msg_id => ${job.msg_id}::bigint)
+            select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
           `);
           logger.info(`DONE. Result: ${result}`);
         } catch (e) {
@@ -157,7 +156,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
               `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + read_ct>5`,
             );
             const [archived] = await db.execute(sql`
-              select * from pgmq.archive(queue_name => 'consumer_job_queue', msg_id => ${job.msg_id}::bigint)
+              select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
             `);
             if (!archived) throw new Error(`Failed to archive message ${job.msg_id}`);
           } else {
@@ -165,7 +164,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             logger.info(`setting to visible in ${vt} seconds`);
             // useful reference https://github.com/Muhammad-Magdi/pgmq-js/blob/8b041fe7f3cd30aff1c71d00dd88abebfeb31ce7/src/msg-manager/index.ts#L68
             await db.execute(sql`
-              select pgmq.set_vt(queue_name => 'consumer_job_queue', msg_id => ${job.msg_id}::bigint, vt => ${vt}::integer)
+              select pgmq.set_vt(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint, vt => ${vt}::integer)
             `);
           }
         }
@@ -199,7 +198,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     for (const consumer of filteredConsumers) {
       await db.execute(sql`
         select from pgmq.send(
-          queue_name  => 'consumer_job_queue'::text,
+          queue_name  => ${queueName}::text,
           msg         => ${JSON.stringify({
             consumer_name: consumer.name,
             event_name: params.name,
@@ -216,19 +215,11 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     return { eventId: eventInsertion.id, matchedConsumers: filteredConsumers.length };
   };
 
-  const purgeQueue: Queuer<DBLike>["purgeQueue"] = async (db) => {
-    await db.execute(sql`
-      select pgmq.drop_queue('consumer_job_queue');
-      select pgmq.create('consumer_job_queue');
-    `);
-  };
-
   return {
     $types: { db: {} as DBLike },
     consumers,
     addToQueue,
     processQueue: (db) => logger.run("processQueue", () => processQueue(db)),
-    purgeQueue,
     peekQueue: async (db, options) => {
       // just a basic query, go to drizzle studio to filter based on read count, visibility time, event name, consumer name, etc.
       const rows = await db.execute(sql`
