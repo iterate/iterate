@@ -21,6 +21,8 @@ const TestEnv = z.object({
   MOCK_MCP_SERVER_URL: z.string().url().default("https://mock.iterate.com/oauth/mcp"),
 });
 
+const AGENT_CLASS_NAME = "SlackAgent";
+
 type TestEnv = z.infer<typeof TestEnv>;
 
 // ============================================================================
@@ -174,7 +176,7 @@ async function createAgentInstance(
   const { info } = await userTrpc.agents.getOrCreateAgent.mutate({
     estateId,
     route: agentRoutingKey,
-    agentClassName: "IterateAgent",
+    agentClassName: AGENT_CLASS_NAME,
     reason: "E2E Mock MCP OAuth Test",
   });
 
@@ -206,7 +208,7 @@ async function initiateMCPConnection(
   await userTrpc.agents.addEvents.mutate({
     estateId,
     agentInstanceName,
-    agentClassName: "IterateAgent",
+    agentClassName: AGENT_CLASS_NAME,
     events: [event],
   });
 
@@ -229,7 +231,7 @@ async function waitForOAuthUrl(
         const state = await userTrpc.agents.getState.query({
           estateId,
           agentInstanceName,
-          agentClassName: "IterateAgent",
+          agentClassName: AGENT_CLASS_NAME,
         });
 
         const oauthEvent = state.events.find(
@@ -354,7 +356,7 @@ async function waitForConnectionEstablished(
         const state = await userTrpc.agents.getState.query({
           estateId,
           agentInstanceName,
-          agentClassName: "IterateAgent",
+          agentClassName: AGENT_CLASS_NAME,
         });
 
         const connectedEvent = state.events.find(
@@ -387,7 +389,7 @@ async function addMcpNotesToolCallEvents(
   await userTrpc.agents.injectToolCall.mutate({
     agentInstanceName,
     estateId,
-    agentClassName: "IterateAgent",
+    agentClassName: AGENT_CLASS_NAME,
     toolName: "mock_mcp_server_with_oauth_mock_create_note",
     args: { title: note, content: "", impersonateUserId: userId },
   });
@@ -406,7 +408,7 @@ async function addGetNotesToolCallEvents(
   await userTrpc.agents.injectToolCall.mutate({
     agentInstanceName,
     estateId,
-    agentClassName: "IterateAgent",
+    agentClassName: AGENT_CLASS_NAME,
     toolName: "mock_mcp_server_with_oauth_mock_list_notes",
     args: { impersonateUserId: userId },
   });
@@ -512,7 +514,7 @@ test(
             const state = await userTrpc.agents.getState.query({
               estateId: estate.id,
               agentInstanceName,
-              agentClassName: "IterateAgent",
+              agentClassName: AGENT_CLASS_NAME,
             });
 
             const toolCallEvents = state.events.find(
@@ -537,7 +539,7 @@ test(
       const state = await userTrpc.agents.getState.query({
         estateId: estate.id,
         agentInstanceName,
-        agentClassName: "IterateAgent",
+        agentClassName: AGENT_CLASS_NAME,
       });
 
       // Check for connection events
