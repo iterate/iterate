@@ -2589,12 +2589,8 @@ function hashSessionId(sessionId: string): string {
 
 /**
  * Truncates a long string to show first N and last N characters with a truncation marker in between.
- * @param str The string to truncate
- * @param maxLength The maximum length before truncation (default: 100)
- * @param showChars The number of characters to show from start and end (default: 50)
- * @returns The original string if short enough, or truncated version with "...[truncated]..." in the middle
  */
-function truncateLongString(str: string, maxLength = 100): string {
+function truncateLongString(str: string, maxLength = 500): string {
   const showChars = Math.floor(maxLength / 2);
 
   if (typeof str !== "string") {
