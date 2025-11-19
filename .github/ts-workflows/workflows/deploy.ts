@@ -54,6 +54,8 @@ export default {
       needs: ["notify_start", "deploy-os"],
       if: `always()`,
       steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
         utils.githubScript(import.meta, async function slack_notify_ended() {
           const { getSlackClient } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
