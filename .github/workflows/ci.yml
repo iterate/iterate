@@ -24,7 +24,7 @@ on:
 jobs:
   variables:
     runs-on: ubuntu-latest
-    if: github.event_name != "pull_request" || contains(format('\n{0}\n', github.event.pull_request.body), "- [x] run_ci")
+    if: ${{ github.event_name != "pull_request" || contains(format('\n{0}\n', github.event.pull_request.body), "- [x] run_ci") }}
     steps:
       - id: get_env
         name: Get environment variables
