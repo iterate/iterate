@@ -9,6 +9,7 @@
   "license": "ISC",
   "packageManager": "pnpm@10.18.2",
   "dependencies": {
-    "esbuild": "^0.25.12"
+    "esbuild": "^0.25.12",
+    "dedent": "^1.7.0"
   }
 }
