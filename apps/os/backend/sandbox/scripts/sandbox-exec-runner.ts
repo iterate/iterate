@@ -2,6 +2,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import fs from "node:fs";
+import dedent from "dedent";
 import { createBatchLogStreamer } from "./batch-http-log-streaming.ts";
 import { setupRepo } from "./shared-sandbox-helpers.ts";
 
@@ -107,10 +108,13 @@ async function start() {
     await logStreamer.flush();
     process.exit(exitCode);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
     logStreamer.enqueue({
       stream: "stderr",
-      message: `<command> Error running command ${args.command}: ${msg} (this should never happen) </command>`,
+      message: dedent`
+        <command>${args.command}</command>
+        <error>${error}</error>
+        <hotTake>This should never happen</hotTake>
+      `,
       event: "COMMAND_FAILED",
       complete: true,
     });
