@@ -93,7 +93,8 @@ jobs:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     needs:
       - notify_start
-    if: always() && needs.notify_start.outputs.slack_message_ts
+      - deploy-os
+    if: always()
     steps:
       - name: slack_notify_ended
         id: slack_notify_ended
@@ -128,7 +129,7 @@ jobs:
               ).load();
 
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-              const succeeded = "${{ success() }}".includes("true");
+              const succeeded = "${{ contains(needs.*.result, 'failure') }}".includes("false");
 
               await slack.chat.postMessage({
                 channel: "${{ needs.notify_start.outputs.slack_channel }}",

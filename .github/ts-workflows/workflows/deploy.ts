@@ -51,13 +51,13 @@ export default {
     },
     notify_end: {
       ...utils.runsOn,
-      needs: ["notify_start"],
-      if: "always() && needs.notify_start.outputs.slack_message_ts",
+      needs: ["notify_start", "deploy-os"],
+      if: `always()`,
       steps: [
         utils.githubScript(import.meta, async function slack_notify_ended() {
           const { getSlackClient } = await import("../utils/slack.ts");
           const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
-          const succeeded = "${{ success() }}".includes("true");
+          const succeeded = "${{ contains(needs.*.result, 'failure') }}".includes("false");
           await slack.chat.postMessage({
             channel: "${{ needs.notify_start.outputs.slack_channel }}",
             thread_ts: "${{ needs.notify_start.outputs.slack_message_ts }}",
