@@ -90,7 +90,7 @@ async function start() {
     await logStreamer.flush();
     process.exit(0);
   } catch (error) {
-    const msg = error instanceof Error ? error.message : String(error);
+    const msg = String(error);
     logStreamer.enqueue({ stream: "stderr", message: `ERROR: ${msg}` });
     logStreamer.enqueue({
       stream: "stdout",
