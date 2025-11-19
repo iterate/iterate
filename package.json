@@ -19,7 +19,6 @@
     "test": "pnpm -r --parallel test",
     "test:onboarding": "pnpm -r --parallel test:onboarding",
     "test:onboarding:production": "pnpm -r --parallel test:onboarding:production",
-    "test:watch": "pnpm -r --parallel test:watch",
     "docker:up": "docker compose up -d postgres",
     "docker:down": "docker compose down",
     "docker:clean": "docker compose down -v",

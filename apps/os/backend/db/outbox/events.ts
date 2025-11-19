@@ -7,8 +7,8 @@ import { logger } from "../../tag-logger.ts";
 export const ConsumerEvent = z.object({
   event_name: z.string(),
   consumer_name: z.string(),
-  event_id: z.string(),
-  event_payload: z.object({}).passthrough(),
+  event_id: z.number(),
+  event_payload: z.looseObject({}),
   event_context: z.unknown(),
   processing_results: z.array(z.unknown()),
   environment: z.string(),
@@ -45,12 +45,9 @@ export type ConsumersForEvent = Record<
     /** handler function */
     handler: (params: {
       eventName: string;
-      eventId: string;
+      eventId: number;
       payload: { input: unknown; output: unknown };
-      job: {
-        id: number | string;
-        attempt: number;
-      };
+      job: { id: number | string; attempt: number };
     }) => Promise<void | string>;
   }
 >;
@@ -72,8 +69,8 @@ export interface Queuer<DBConnection> {
 
   /** Process some or all messages in the queue. Call this periodically or when you've just added events. */
   processQueue: (db: DBConnection) => Promise<string>;
-  peekQueue: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
-  peekArchive: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
+  peekQueue: (db: DBConnection, options?: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
+  peekArchive: (db: DBConnection, options?: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
   // todo: allow requeueing of messages by moving from archive to main queue directly
   // requeue: (db: DBConnection, msgIds: number[]) => Promise<void>;
 }
@@ -202,7 +199,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           msg         => ${JSON.stringify({
             consumer_name: consumer.name,
             event_name: params.name,
-            event_id: eventInsertion.id,
+            event_id: Number(eventInsertion.id satisfies string), // todo: make drizzle return a number? according to https://orm.drizzle.team/docs/column-types/pg#bigserial that's fine?
             event_payload: params.payload,
             event_context: {},
             processing_results: [],
@@ -220,7 +217,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
     consumers,
     addToQueue,
     processQueue: (db) => logger.run("processQueue", () => processQueue(db)),
-    peekQueue: async (db, options) => {
+    peekQueue: async (db, options = {}) => {
       // just a basic query, go to drizzle studio to filter based on read count, visibility time, event name, consumer name, etc.
       const rows = await db.execute(sql`
         select * from pgmq.${sql.identifier(pgmqQueueTableName)}
@@ -231,7 +228,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       `);
       return ConsumerJobQueueMessage.array().parse(rows);
     },
-    peekArchive: async (db, options) => {
+    peekArchive: async (db, options = {}) => {
       const rows = await db.execute(sql`
         select * from pgmq.${sql.identifier(pgmqArchiveTableName)}
         where read_ct >= ${options.minReadCount || 0}
@@ -384,7 +381,7 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
     delay?: DelayFn<ProcedureTypes<P>>;
     handler: (params: {
       eventName: P;
-      eventId: string;
+      eventId: number;
       payload: ProcedureTypes<P>;
       job: { id: string | number; attempt: number };
     }) => void | string | Promise<void | string>;
@@ -398,7 +395,7 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
       when: (options.when as WhenFn<{ input: unknown; output: unknown }>) ?? (() => true),
       delay: (options.delay as DelayFn<{ input: unknown; output: unknown }>) ?? (() => 0),
       handler: async (params) => {
-        return logger.run({ consumer: options.name, eventId: params.eventId }, async () => {
+        return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
           return options.handler({
             eventName: options.on,
             eventId: params.eventId,

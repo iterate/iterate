@@ -1,4 +1,3 @@
-import dedent from "dedent";
 import { uses, workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 
@@ -68,10 +67,7 @@ export default workflow({
             timeout_minutes: 15,
             max_attempts: 3,
             retry_wait_seconds: 30,
-            command: dedent`
-              cd apps/os
-              doppler run --config \${{ inputs.stage }} -- pnpm vitest --config vitest.e2e.config.ts
-            `,
+            command: "doppler run --config ${{ inputs.stage }} -- pnpm os e2e",
           },
           env: {
             WORKER_URL: "${{ inputs.worker_url }}",
