@@ -260,50 +260,50 @@ export type ConsumerPluginCtx = {
 /**
  example usage:
 
- ```ts
- const t = initTRPC.context<MyContext>().create();
+```ts
+const t = initTRPC.context<MyContext>().create();
 
- const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
+const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 
- // `concat`-ing the plugin just injects a `sendToOutbox` helper function into the context, which is used to send events to the outbox
- // note that you should always use this helper function on the return value of the procedure, otherwise you won't be able to subscribe to the event
- const publicProcedure = t.procedure.concat(
-   createPostProcedureConsumerPlugin(queuer, {
-     waitUntil: cloudflareWorkers.waitUntil, // can use `import {waitUntil} from 'cloudflare:workers'` or `import {after} from 'next/server'` or whatever
-   }),
- );
+// `concat`-ing the plugin just injects a `sendToOutbox` helper function into the context, which is used to send events to the outbox
+// note that you should always use this helper function on the return value of the procedure, otherwise you won't be able to subscribe to the event
+const publicProcedure = t.procedure.concat(
+  createPostProcedureConsumerPlugin(queuer, {
+    waitUntil: cloudflareWorkers.waitUntil, // can use `import {waitUntil} from 'cloudflare:workers'` or `import {after} from 'next/server'` or whatever
+  }),
+);
 
- const appRouter = t.router({
-   users: {
-     createUser: publicProcedure
-      .input(z.object({ name: z.string() }))
-      .mutation(async ({ input, ctx }) => {
-        return ctx.db.transaction(async tx => {
-          const [user] = await tx
-            .insert(schema.user)
-            .values({ name: input.name })
-            .returning();
+const appRouter = t.router({
+  users: {
+    createUser: publicProcedure
+    .input(z.object({ name: z.string() }))
+    .mutation(async ({ input, ctx }) => {
+      return ctx.db.transaction(async tx => {
+        const [user] = await tx
+          .insert(schema.user)
+          .values({ name: input.name })
+          .returning();
 
-          return ctx.sendToOutbox(tx, { user });
-        });
-      }),
-   }
- })
+        return ctx.sendToOutbox(tx, { user });
+      });
+    }),
+  }
+})
 
- const consumer = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+const consumer = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
 
- consumer.registerConsumer({
-  name: "sendWelcomeEmail",
-  on: "users.createUser",
-  handler: async ({ eventName, eventId, payload, job }) => {
-     await myEmailService.sendEmail({
-       subject: "Welcome to our app",
-       body: "We think you will like it here",
-       to: payload.user.email,
-     });
-  },
- });
- ```
+consumer.registerConsumer({
+name: "sendWelcomeEmail",
+on: "users.createUser",
+handler: async ({ eventName, eventId, payload, job }) => {
+    await myEmailService.sendEmail({
+      to: payload.input.user.email,
+      subject: "Welcome to our app",
+      body: "We think you will like it here",
+    });
+},
+});
+```
  */
 export const createPostProcedureConsumerPlugin = <DBConnection>(
   queuer: Queuer<DBConnection>,
