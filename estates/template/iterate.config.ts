@@ -1,7 +1,13 @@
-import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";
+import {
+  contextRulesFromFiles,
+  defaultContextRules,
+  defineConfig,
+  matchers,
+} from "@iterate-com/sdk";
 
 const config = defineConfig({
   contextRules: [
+    ...defaultContextRules,
     // You can use "matchers" to conditionally apply rules
     // For example to only be active when certain MCP connections are present
     {
