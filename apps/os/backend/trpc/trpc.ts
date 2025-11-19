@@ -70,7 +70,7 @@ const t = initTRPC.context<Context>().create({
   },
 });
 
-export const queuer = createPgmqQueuer();
+export const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, {
   waitUntil,
 });

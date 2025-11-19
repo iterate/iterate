@@ -608,9 +608,30 @@ export const adminRouter = router({
         description:
           "Peek at the outbox queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
       })
-      .input(z.object({ limit: z.number().optional(), offset: z.number().optional() }))
+      .input(
+        z.object({
+          limit: z.number().optional(),
+          offset: z.number().optional(),
+          minReadCount: z.number().optional(),
+        }),
+      )
       .mutation(async ({ ctx, input }) => {
         return await queuer.peekQueue(ctx.db, input);
+      }),
+    peekArchive: adminProcedure
+      .meta({
+        description:
+          "Peek at the outbox archive queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
+      })
+      .input(
+        z.object({
+          limit: z.number().optional(),
+          offset: z.number().optional(),
+          minReadCount: z.number().optional(),
+        }),
+      )
+      .mutation(async ({ ctx, input }) => {
+        return await queuer.peekArchive(ctx.db, input);
       }),
     process: adminProcedure
       .meta({

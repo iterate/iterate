@@ -23,6 +23,7 @@ export const ConsumerJobQueueMessage = z.object({
   read_ct: z.number(),
   message: ConsumerEvent,
 });
+export type ConsumerJobQueueMessage = z.infer<typeof ConsumerJobQueueMessage>;
 
 export const InsertedEvent = z.looseObject({
   id: z.string(),
@@ -56,6 +57,8 @@ export type ConsumersForEvent = Record<
 
 export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
+export type QueuePeekOptions = { limit?: number; offset?: number; minReadCount?: number };
+
 export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
@@ -70,15 +73,16 @@ export interface Queuer<DBConnection> {
   /** Process some or all messages in the queue. Call this periodically or when you've just added events. */
   processQueue: (db: DBConnection) => Promise<string>;
   purgeQueue: (db: DBConnection) => Promise<void>;
-  peekQueue: (
-    db: DBConnection,
-    options: { limit?: number; offset?: number },
-  ) => Promise<z.infer<typeof ConsumerJobQueueMessage>[]>;
+  peekQueue: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
+  peekArchive: (db: DBConnection, options: QueuePeekOptions) => Promise<ConsumerJobQueueMessage[]>;
   // todo: allow requeueing of messages by moving from archive to main queue directly
   // requeue: (db: DBConnection, msgIds: number[]) => Promise<void>;
 }
 
-export const createPgmqQueuer = (): Queuer<DBLike> => {
+export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DBLike> => {
+  const { queueName } = queueOptions;
+  const pgmqQueueTableName = `q_${queueName}`;
+  const pgmqArchiveTableName = `a_${queueName}`;
   const processQueue: Queuer<DBLike>["processQueue"] = async (db) => {
     const jobQueueMessages = await db.execute<{}>(
       sql`
@@ -124,7 +128,7 @@ export const createPgmqQueuer = (): Queuer<DBLike> => {
           });
           results.push(result);
           await db.execute(sql`
-            update pgmq.q_consumer_job_queue
+            update pgmq.${sql.identifier(pgmqQueueTableName)}
             set message = jsonb_set(
               message,
               '{processing_results}',
@@ -140,7 +144,7 @@ export const createPgmqQueuer = (): Queuer<DBLike> => {
           logger.error(`FAILED`, e);
           // bit of a hack - put stringified error into processing_errors array as a hint for debugging
           await db.execute(sql`
-            update pgmq.q_consumer_job_queue
+            update pgmq.${sql.identifier(pgmqQueueTableName)}
             set message = jsonb_set(
               message,
               '{processing_results}',
@@ -228,7 +232,19 @@ export const createPgmqQueuer = (): Queuer<DBLike> => {
     peekQueue: async (db, options) => {
       // just a basic query, go to drizzle studio to filter based on read count, visibility time, event name, consumer name, etc.
       const rows = await db.execute(sql`
-        select * from pgmq.q_consumer_job_queue
+        select * from pgmq.${sql.identifier(pgmqQueueTableName)}
+        where read_ct >= ${options.minReadCount || 0}
+        order by enqueued_at desc
+        limit ${options.limit || 10}
+        offset ${options.offset || 0}
+      `);
+      return ConsumerJobQueueMessage.array().parse(rows);
+    },
+    peekArchive: async (db, options) => {
+      const rows = await db.execute(sql`
+        select * from pgmq.${sql.identifier(pgmqArchiveTableName)}
+        where read_ct >= ${options.minReadCount || 0}
+        order by archived_at desc
         limit ${options.limit || 10}
         offset ${options.offset || 0}
       `);
@@ -247,7 +263,7 @@ export type ConsumerPluginCtx = {
  ```ts
  const t = initTRPC.context<MyContext>().create();
 
- const queuer = createPgmqQueuer<MyDBConnectionType>();
+ const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 
  // `concat`-ing the plugin just injects a `sendToOutbox` helper function into the context, which is used to send events to the outbox
  // note that you should always use this helper function on the return value of the procedure, otherwise you won't be able to subscribe to the event
@@ -263,9 +279,10 @@ export type ConsumerPluginCtx = {
       .input(z.object({ name: z.string() }))
       .mutation(async ({ input, ctx }) => {
         return ctx.db.transaction(async tx => {
-          const [user] = await tx.insert(schema.user).values({
-            name: input.name,
-          }).returning();
+          const [user] = await tx
+            .insert(schema.user)
+            .values({ name: input.name })
+            .returning();
 
           return ctx.sendToOutbox(tx, { user });
         });
