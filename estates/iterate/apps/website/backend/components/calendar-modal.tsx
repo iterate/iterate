@@ -6,6 +6,8 @@ interface CalendarModalProps {
   onClose: () => void;
 }
 
+const bookingLink = "https://calendar.app.google/LE7mJ4eK1rbLFT539";
+
 export default function CalendarModal({
   isOpen,
   onClose,
@@ -32,6 +34,12 @@ export default function CalendarModal({
       return () => window.removeEventListener("keydown", handleEscape);
     }
   }, [isOpen, onClose]);
+
+  useEffect(() => {
+    if (bookingLink.startsWith("https://calendar.app.google")) {
+      window.location.href = bookingLink;
+    }
+  }, []);
 
   return (
     <AnimatePresence>
@@ -72,7 +80,7 @@ export default function CalendarModal({
             </div>
             <div className="flex-1 overflow-auto">
               <iframe
-                src="https://calendar.app.google/LE7mJ4eK1rbLFT539"
+                src={bookingLink}
                 style={{ border: 0 }}
                 width="100%"
                 height="100%"
