@@ -30,7 +30,22 @@ async function runBootstrap(configPath?: string) {
 
   // Path resolution strategy:
   // Try multiple possible locations for the config file
-  const repoRoot = resolve(process.cwd(), "../..");
+  let repoRoot: string | undefined = process.cwd();
+  const isRoot = (path: string) => {
+    return (
+      existsSync(resolve(path, ".git")) ||
+      existsSync(resolve(path, "pnpm-workspace.yaml")) ||
+      existsSync(resolve(path, "bun.lockb")) ||
+      existsSync(resolve(path, "bun.lock")) ||
+      existsSync(resolve(path, "package-lock.json")) ||
+      existsSync(resolve(path, "pnpm-lock.yaml"))
+    );
+  };
+  while (repoRoot && !isRoot(repoRoot)) {
+    repoRoot = repoRoot === "/" ? undefined : resolve(repoRoot, "..");
+  }
+  repoRoot ||= process.cwd();
+
   const possiblePaths = [
     resolve(process.cwd(), configPath),
     resolve(process.cwd(), configPath, "iterate.config.ts"),
@@ -88,8 +103,7 @@ const start = t.procedure
     }),
   )
   .mutation(async ({ input }) => {
-    // Support both command-line flag and environment variable
-    const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
+    const providedConfigPath = input.config;
 
     await runBootstrap(providedConfigPath);
 
