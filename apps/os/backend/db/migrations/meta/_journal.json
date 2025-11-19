@@ -183,6 +183,13 @@
       "when": 1763575440002,
       "tag": "0025_pgmq",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1763575783786,
+      "tag": "0026_consumer_job_queue",
+      "breakpoints": true
     }
   ]
 }
