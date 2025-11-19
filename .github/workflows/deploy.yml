@@ -148,10 +148,10 @@ jobs:
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
               const succeeded = "${{ contains(needs.*.result, 'failure') }}".includes("false");
 
-              await slack.chat.postMessage({
+              await slack.reactions.add({
                 channel: "${{ needs.notify_start.outputs.slack_channel }}",
-                thread_ts: "${{ needs.notify_start.outputs.slack_message_ts }}",
-                text: succeeded ? "Deploy completed" : "Deploy failed",
+                timestamp: "${{ needs.notify_start.outputs.slack_message_ts }}",
+                name: succeeded ? "white_tick" : "x",
               });
             };
 
