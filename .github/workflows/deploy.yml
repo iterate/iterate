@@ -16,6 +16,128 @@ permissions:
   contents: read
   deployments: write
 jobs:
+  notify_start:
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    if: inputs.stage == 'prd' || inputs.stage == 'stg'
+    outputs:
+      slack_message_ts: ${{ steps.slack_notify_started.outputs.slack_message_ts }}
+      slack_channel: ${{ steps.slack_notify_started.outputs.slack_channel }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install
+      - name: Install Doppler CLI
+        uses: dopplerhq/cli-action@v2
+      - name: Setup Doppler
+        run: doppler setup --config ${{ inputs.stage }} --project os
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: slack_notify_started
+        id: slack_notify_started
+        uses: actions/github-script@v7
+        with:
+          script: |-
+            github.log = {
+              ...console,
+              debug: () => {},
+            };
+
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/deploy.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              "module.exports.load = () => require(\"tsx/esm/api\").tsImport(\"../utils/slack.ts\", __filename);",
+            );
+
+            const vars = {
+              github,
+              context,
+              core,
+              glob,
+              io,
+              require,
+            };
+
+            const __handler = async function slack_notify_started(
+              {
+                core,
+              },
+            ) {
+              const {
+                getSlackClient,
+                slackChannelIds,
+              } = await require(
+                ".github/ts-workflows/workflows/deploy.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
+              ).load();
+
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+
+              const message = await slack.chat.postMessage({
+                channel: slackChannelIds["#building"],
+                text: "${{ inputs.stage }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|deploy started>.",
+              });
+
+              core.setOutput("slack_channel", message.channel);
+              core.setOutput("slack_message_ts", message.ts);
+            };
+
+            return __handler(vars);
+  notify_end:
+    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    needs:
+      - notify_start
+    if: always() && needs.notify_start.outputs.slack_message_ts
+    steps:
+      - name: slack_notify_ended
+        id: slack_notify_ended
+        uses: actions/github-script@v7
+        with:
+          script: |-
+            github.log = {
+              ...console,
+              debug: () => {},
+            };
+
+            // write a shimmed module of "../utils/slack.ts" that actions/github-script can require (see https://github.com/actions/github-script?tab=readme-ov-file#this-action)
+            require("fs").writeFileSync(
+              ".github/ts-workflows/workflows/deploy.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs",
+              "module.exports.load = () => require(\"tsx/esm/api\").tsImport(\"../utils/slack.ts\", __filename);",
+            );
+
+            const vars = {
+              github,
+              context,
+              core,
+              glob,
+              io,
+              require,
+            };
+
+            const __handler = async function slack_notify_ended() {
+              const {
+                getSlackClient,
+              } = await require(
+                ".github/ts-workflows/workflows/deploy.ts.utilsslackts-64e60416ee9563c2f22509a2a7a4ac68-tsx-shim.cjs" /* <-- shimmed module of "../utils/slack.ts" that actions/github-script can require */,
+              ).load();
+
+              const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+              const succeeded = "${{ success() }}".includes("true");
+
+              await slack.chat.postMessage({
+                channel: "${{ needs.notify_start.outputs.slack_channel }}",
+                thread_ts: "${{ needs.notify_start.outputs.slack_message_ts }}",
+                text: succeeded ? "Deploy completed" : "Deploy failed",
+              });
+            };
+
+            return __handler(vars);
   deploy-os:
     timeout-minutes: 15
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
