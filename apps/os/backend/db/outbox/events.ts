@@ -117,10 +117,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             eventId: job.message.event_id,
             eventName: job.message.event_name,
             payload: job.message.event_payload as { input: unknown; output: unknown },
-            job: {
-              id: job.msg_id,
-              attempt: job.read_ct,
-            },
+            job: { id: job.msg_id, attempt: job.read_ct },
           });
           results.push(result);
           await db.execute(sql`
@@ -128,7 +125,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             set message = jsonb_set(
               message,
               '{processing_results}',
-              message->'processing_results' || jsonb_build_array(${`success: ${String(result)}`}::text)
+              message->'processing_results' || jsonb_build_array(${`#${job.read_ct} success: ${String(result)}`}::text)
             )
             where msg_id = ${job.msg_id}::bigint
           `);
@@ -144,7 +141,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             set message = jsonb_set(
               message,
               '{processing_results}',
-              message->'processing_results' || jsonb_build_array(${`error: ${String(e)}`}::text)
+              message->'processing_results' || jsonb_build_array(${`#${job.read_ct} error: ${String(e)}`}::text)
             )
             where msg_id = ${job.msg_id}::bigint
           `);
@@ -161,7 +158,11 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             logger.info(`setting to visible in ${vt} seconds`);
             // useful reference https://github.com/Muhammad-Magdi/pgmq-js/blob/8b041fe7f3cd30aff1c71d00dd88abebfeb31ce7/src/msg-manager/index.ts#L68
             await db.execute(sql`
-              select pgmq.set_vt(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint, vt => ${vt}::integer)
+              select pgmq.set_vt(
+                queue_name => ${queueName}::text,
+                msg_id => ${job.msg_id}::bigint,
+                vt => ${vt}::integer
+              )
             `);
           }
         }

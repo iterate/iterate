@@ -611,7 +611,7 @@ export const adminRouter = router({
       .input(z.object({ message: z.string() }))
       .mutation(async ({ ctx, input }) => {
         return ctx.db.transaction(async (tx) => {
-          const dbtime = await tx.execute(sql`select now()`);
+          const [{ now: dbtime }] = await tx.execute(sql`select now()`);
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
           return ctx.sendToOutbox(tx, { dbtime, reply });
         });
@@ -622,13 +622,15 @@ export const adminRouter = router({
           "Peek at the outbox queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
       })
       .input(
-        z.object({
-          limit: z.number().optional(),
-          offset: z.number().optional(),
-          minReadCount: z.number().optional(),
-        }),
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
       )
-      .mutation(async ({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         return await queuer.peekQueue(ctx.db, input);
       }),
     peekArchive: adminProcedure
@@ -637,13 +639,15 @@ export const adminRouter = router({
           "Peek at the outbox archive queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
       })
       .input(
-        z.object({
-          limit: z.number().optional(),
-          offset: z.number().optional(),
-          minReadCount: z.number().optional(),
-        }),
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
       )
-      .mutation(async ({ ctx, input }) => {
+      .query(async ({ ctx, input }) => {
         return await queuer.peekArchive(ctx.db, input);
       }),
     process: adminProcedure
