@@ -313,7 +313,7 @@ export const createPostProcedureConsumerPlugin = <DBConnection>(
             const input = await getRawInput();
             const payload = { input, output };
             return logger.run({ consumerPlugin: "true", path }, async () => {
-              const queueResult = await queuer.addToQueue(db, { name: path, payload });
+              const queueResult = await queuer.addToQueue(db, { name: `trpc:${path}`, payload });
 
               if (queueResult.matchedConsumers > 0) {
                 waitUntil(
@@ -377,11 +377,11 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
 
   const registerConsumer = <P extends EventableProcedureName>(options: {
     name: string;
-    on: P;
+    on: `trpc:${P}`;
     when?: WhenFn<ProcedureTypes<P>>;
     delay?: DelayFn<ProcedureTypes<P>>;
     handler: (params: {
-      eventName: P;
+      eventName: `trpc:${P}`;
       eventId: number;
       payload: ProcedureTypes<P>;
       job: { id: string | number; attempt: number };

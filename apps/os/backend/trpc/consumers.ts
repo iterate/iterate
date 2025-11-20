@@ -13,7 +13,7 @@ export const registerConsumers = () => {
 function registerTestConsumers() {
   cc.registerConsumer({
     name: "logGreeting",
-    on: "admin.outbox.poke",
+    on: "trpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("hi"),
     handler: (params) => {
       logger.info(`GOT: ${params.eventName}, server reply: ${params.payload.output.reply}`, params);
@@ -23,7 +23,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "unstableConsumer",
-    on: "admin.outbox.poke",
+    on: "trpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("unstable"),
     handler: (params) => {
       if (params.job.attempt > 2) {
@@ -35,7 +35,7 @@ function registerTestConsumers() {
 
   cc.registerConsumer({
     name: "badConsumer",
-    on: "admin.outbox.poke",
+    on: "trpc:admin.outbox.poke",
     when: (params) => params.payload.input.message.includes("fail"),
     handler: (params) => {
       throw new Error(`Attempt ${params.job.attempt} failed ${Math.random()}`);
