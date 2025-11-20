@@ -372,9 +372,9 @@ export default class extends WorkerEntrypoint {
       }
       case workerConfig.workerCrons.processOutboxQueue: {
         try {
-          logger.info("Running scheduled outbox queue processing");
           const result = await queuer.processQueue(db);
-          logger.info("Scheduled outbox queue processing completed", result);
+          if (result !== "0 messages processed")
+            logger.info("Scheduled outbox queue processing completed", result);
         } catch (error) {
           logger.error("Scheduled outbox queue processing failed:", error);
         }
