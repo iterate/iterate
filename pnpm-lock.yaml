@@ -59,6 +59,9 @@ importers:
       eslint-plugin-unicorn:
         specifier: github:mmkal/eslint-plugin-unicorn#4b6340834f94ebb53a1aee5b91dd5c0e103249b3
         version: https://codeload.github.com/mmkal/eslint-plugin-unicorn/tar.gz/4b6340834f94ebb53a1aee5b91dd5c0e103249b3(eslint@9.38.0(jiti@2.6.1))
+      esquery:
+        specifier: 1.6.0
+        version: 1.6.0
       globals:
         specifier: ^16.4.0
         version: 16.4.0
