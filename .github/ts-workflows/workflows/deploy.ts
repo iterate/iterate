@@ -27,6 +27,47 @@ export default {
     deployments: "write",
   },
   jobs: {
+    notify_start: {
+      ...utils.runsOn,
+      if: "inputs.stage == 'prd' || inputs.stage == 'stg'", // todo: rm stg once we've seen this working, it'll be too much noise
+      outputs: {
+        slack_message_ts: "${{ steps.slack_notify_started.outputs.slack_message_ts }}",
+        slack_channel: "${{ steps.slack_notify_started.outputs.slack_channel }}",
+      },
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        utils.githubScript(import.meta, async function slack_notify_started({ core }) {
+          const { getSlackClient, slackChannelIds } = await import("../utils/slack.ts");
+          const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+          const message = await slack.chat.postMessage({
+            channel: slackChannelIds["#building"],
+            text: "${{ inputs.stage }} <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|deploy started>.",
+          });
+          core.setOutput("slack_channel", message.channel);
+          core.setOutput("slack_message_ts", message.ts);
+        }),
+      ],
+    },
+    notify_end: {
+      ...utils.runsOn,
+      needs: ["notify_start", "deploy-os"],
+      if: `always()`,
+      steps: [
+        ...utils.setupRepo,
+        ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),
+        utils.githubScript(import.meta, async function slack_notify_ended() {
+          const { getSlackClient } = await import("../utils/slack.ts");
+          const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
+          const succeeded = "${{ contains(needs.*.result, 'failure') }}".includes("false");
+          await slack.reactions.add({
+            channel: "${{ needs.notify_start.outputs.slack_channel }}",
+            timestamp: "${{ needs.notify_start.outputs.slack_message_ts }}",
+            name: succeeded ? "white_tick" : "x",
+          });
+        }),
+      ],
+    },
     "deploy-os": {
       "timeout-minutes": 15,
       ...utils.runsOn,
