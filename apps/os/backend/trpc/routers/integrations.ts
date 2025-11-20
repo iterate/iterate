@@ -1065,7 +1065,6 @@ export const integrationsRouter = router({
 
       const iterateTeamId = ctx.env.SLACK_ITERATE_TEAM_ID;
 
-      // 1. Get iterate's Slack workspace estate
       const { getIterateSlackEstateId } = await import("../../utils/trial-channel-setup.ts");
       const iterateEstateId = await getIterateSlackEstateId(ctx.db);
       if (!iterateEstateId) {
@@ -1075,61 +1074,46 @@ export const integrationsRouter = router({
         });
       }
 
-      // 2. Get iterate's bot account and token
       const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
       if (!iterateBotAccount) {
         throw new Error("Iterate Slack bot account not found");
       }
 
-      // 3. Link current estate to iterate's bot account
-      await ctx.db
-        .insert(schema.estateAccountsPermissions)
-        .values({
-          accountId: iterateBotAccount.accountId,
+      return ctx.db.transaction(async (tx) => {
+        await tx
+          .insert(schema.estateAccountsPermissions)
+          .values({
+            accountId: iterateBotAccount.accountId,
+            estateId: ctx.estate.id,
+          })
+          .onConflictDoNothing();
+
+        logger.info(`Linked estate ${ctx.estate.id} to iterate's bot account`);
+
+        await tx
+          .insert(schema.providerEstateMapping)
+          .values({
+            internalEstateId: ctx.estate.id,
+            externalId: iterateTeamId,
+            providerId: "slack-bot",
+            providerMetadata: {
+              isTrial: true,
+              createdVia: "trial_signup",
+            },
+          })
+          .onConflictDoNothing();
+
+        logger.info(`Created provider estate mapping for estate ${ctx.estate.id}`);
+
+        return ctx.sendToOutbox(tx, {
+          success: true,
           estateId: ctx.estate.id,
-        })
-        .onConflictDoNothing();
-
-      logger.info(`Linked estate ${ctx.estate.id} to iterate's bot account`);
-
-      // 4. Create provider estate mapping to link current estate to iterate's Slack workspace
-      await ctx.db
-        .insert(schema.providerEstateMapping)
-        .values({
-          internalEstateId: ctx.estate.id,
-          externalId: iterateTeamId,
-          providerId: "slack-bot",
-          providerMetadata: {
-            isTrial: true,
-            createdVia: "trial_signup",
-          },
-        })
-        .onConflictDoNothing();
-
-      logger.info(`Created provider estate mapping for estate ${ctx.estate.id}`);
-
-      // 5. Create trial channel and send invite
-      const { createTrialSlackConnectChannel } = await import("../../utils/trial-channel-setup.ts");
-      const result = await createTrialSlackConnectChannel({
-        db: ctx.db,
-        userEstateId: ctx.estate.id,
-        userEmail,
-        userName,
-        iterateTeamId,
-        iterateBotToken: iterateBotAccount.accessToken,
+          organizationId: ctx.estate.organizationId,
+          userEmail,
+          userName,
+          iterateTeamId,
+        });
       });
-
-      logger.info(
-        `Set up trial for ${userEmail}: channel ${result.channelName} → estate ${ctx.estate.id}`,
-      );
-
-      return {
-        success: true,
-        estateId: ctx.estate.id,
-        organizationId: ctx.estate.organizationId,
-        channelId: result.channelId,
-        channelName: result.channelName,
-      };
     }),
 
   /**

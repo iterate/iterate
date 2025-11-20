@@ -30,8 +30,6 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
   const [trialData, setTrialData] = useState<{
     estateId: string;
     organizationId: string;
-    channelName: string;
-    channelId: string;
   } | null>(null);
   const user = useSessionUser();
 
@@ -55,8 +53,6 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
       setTrialData({
         estateId: data.estateId,
         organizationId: data.organizationId,
-        channelName: "channelName" in data ? data.channelName : "",
-        channelId: "channelId" in data ? data.channelId : "",
       });
       setView("trial-success");
       // Notify parent that Slack onboarding is complete so it can mark overall onboarding complete
@@ -120,13 +116,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
                   <ol className="list-decimal list-inside space-y-1.5 text-left max-w-md mx-auto">
                     <li>Check your email for a Slack invite</li>
                     <li>
-                      Accept the invite to join{" "}
-                      <code className="text-xs bg-muted px-1 py-0.5 rounded">
-                        #{trialData?.channelName}
-                      </code>
-                    </li>
-                    <li>
-                      Start chatting with{" "}
+                      Accept the invite to start chatting with{" "}
                       <span
                         className="px-1 py-0.5 rounded text-xs"
                         style={{ backgroundColor: "#4A154B1A", color: "#4A154B" }}
