@@ -72,7 +72,9 @@ export default function CalendarModal({
             </div>
             <div className="flex-1 overflow-auto">
               <iframe
-                src="https://calendar.app.google/LE7mJ4eK1rbLFT539"
+                src={
+                  "https://calendar.google.com/calendar/u/0/appointments/schedules/AcZssZ1b-RsdazbxPoEFuoIHjs85BUK7PSI2LOQi0psgoqqIx9G6-U5jPKmphuBGs-b1xqA5VX2Qdjee" satisfies `https://calendar.google.com/${string}`
+                }
                 style={{ border: 0 }}
                 width="100%"
                 height="100%"
