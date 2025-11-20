@@ -1,8 +1,12 @@
+import { WebClient } from "@slack/web-api";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { getDb } from "../db/client.ts";
 import { createTrpcConsumer } from "../db/outbox/events.ts";
 import { logger } from "../tag-logger.ts";
-import { createTrialSlackConnectChannel } from "../utils/trial-channel-setup.ts";
+import {
+  createTrialSlackConnectChannel,
+  getIterateSlackEstateId,
+} from "../utils/trial-channel-setup.ts";
 import type { appRouter } from "./root.ts";
 import { queuer } from "./trpc.ts";
 
@@ -30,6 +34,26 @@ export const registerConsumers = () => {
       });
 
       return `Set up trial for ${output.userName}: channel ${result.channelName} → estate ${input.estateId}`;
+    },
+  });
+
+  cc.registerConsumer({
+    name: "sendSlackMessageOnUpgrade",
+    on: "trpc:integrations.upgradeTrialToFullInstallation",
+    handler: async (params) => {
+      const ctx = { db: getDb() };
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
+      if (!iterateEstateId) throw new Error("Iterate Slack workspace estate not found");
+
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
+
+      const slackAPI = new WebClient(iterateBotAccount.accessToken);
+
+      await slackAPI.chat.postMessage({
+        channel: params.payload.output.trialChannelId,
+        text: `You've now installed me in your own workspace - please chat to me there, I won't respond here anymore.`,
+      });
     },
   });
 };
