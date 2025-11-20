@@ -31,6 +31,7 @@
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.preferences.importModuleSpecifierEnding": "js",
   "typescript.preferences.preferTypeOnlyAutoImports": true,
+  // "typescript.experimental.useTsgo": true,
   "search.exclude": {
     "**/node_modules": true,
     "**/dist": true,

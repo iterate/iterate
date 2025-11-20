@@ -5,6 +5,8 @@ import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import { logger } from "../tag-logger.ts";
+import { createPostProcedureConsumerPlugin, createPgmqQueuer } from "../db/outbox/events.ts";
+import { waitUntil } from "../../env.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -68,10 +70,14 @@ const t = initTRPC.context<Context>().create({
   },
 });
 
+export const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
+export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, {
+  waitUntil,
+});
+
 // Base router and procedure helpers
 export const router = t.router;
-export const publicProcedure = t.procedure;
-
+export const publicProcedure = t.procedure.concat(eventsProcedure);
 // Type for authenticated context
 type AuthenticatedContext = Context & {
   user: NonNullable<Context["user"]>;
@@ -109,7 +115,7 @@ export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type })
 });
 
 // Protected procedure that requires authentication
-export const protectedProcedureWithNoEstateRestrictions = t.procedure
+export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });

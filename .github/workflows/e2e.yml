@@ -44,9 +44,7 @@ jobs:
           timeout_minutes: 15
           max_attempts: 3
           retry_wait_seconds: 30
-          command: |-
-            cd apps/os
-            doppler run --config ${{ inputs.stage }} -- pnpm vitest --config vitest.e2e.config.ts
+          command: doppler run --config ${{ inputs.stage }} -- pnpm os e2e
         env:
           WORKER_URL: ${{ inputs.worker_url }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}

@@ -7,6 +7,7 @@ import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
 import { createDb } from "../cli-db.ts";
+import { workerCrons } from "../../../backend/worker-config.ts";
 import { addSuperAdminUser } from "./admin.ts";
 
 async function runBootstrap(configPath?: string) {
@@ -92,6 +93,12 @@ const start = t.procedure
     const providedConfigPath = input.config || process.env.ITERATE_CONFIG_PATH;
 
     await runBootstrap(providedConfigPath);
+
+    setInterval(() => {
+      const params = new URLSearchParams({ cron: workerCrons.processOutboxQueue });
+      const url = `http://localhost:5173/cdn-cgi/handler/scheduled?${params.toString()}`;
+      fetch(url).catch();
+    }, 60_000);
 
     const result = await exec("doppler", ["run", "--", "vite", "dev"], {
       nodeOptions: {
