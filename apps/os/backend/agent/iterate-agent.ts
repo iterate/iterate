@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { basename } from "node:path";
 import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
 import { formatDistanceToNow } from "date-fns";
@@ -1893,6 +1894,51 @@ export class IterateAgent<
     });
   }
 
+  async uploadFile(input: Inputs["uploadFile"]) {
+    const estateId = this.databaseRecord.estateId;
+    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
+
+    logger.info("Uploading file from sandbox", { sandboxId, path: input.path });
+
+    // WARNING: This buffers the entire file in memory, so it may fail on large files.
+    const fileInfo = await sandbox.readFile(input.path);
+    const encoding = (fileInfo as any).encoding || "utf-8";
+    const detectedMime = (fileInfo as any).mimeType;
+    const filename = basename(input.path);
+    const contentType = detectedMime || "application/octet-stream";
+
+    let bytes: Uint8Array;
+    if (encoding === "base64") {
+      bytes = new Uint8Array(Buffer.from((fileInfo as any).content, "base64"));
+    } else {
+      bytes = new TextEncoder().encode((fileInfo as any).content as string);
+    }
+
+    const fileRecord = await uploadFile({
+      stream: bytes,
+      filename,
+      contentType,
+      estateId,
+      db: this.db,
+    });
+
+    // Emit a CORE:FILE_SHARED event so downstream agents (e.g., SlackAgent) can act on it
+    this.agentCore.addEvent({
+      type: "CORE:FILE_SHARED",
+      data: {
+        direction: "from-agent-to-user",
+        iterateFileId: fileRecord.id,
+        originalFilename: fileRecord.filename ?? undefined,
+        size: fileRecord.fileSize ?? undefined,
+        mimeType: fileRecord.mimeType ?? undefined,
+        openAIFileId: fileRecord.openAIFileId ?? undefined,
+      },
+      triggerLLMRequest: false,
+    });
+
+    return { iterateFileId: fileRecord.id, openAIFileId: fileRecord.openAIFileId };
+  }
+
   async execCodex(input: Inputs["execCodex"]) {
     const instructions: string = input.command;
     const instructionsFilePath = `/tmp/instructions-${Math.floor(Math.random() * 1e6)}.txt`;
@@ -1905,6 +1951,16 @@ export class IterateAgent<
       formatOutput: (stdout) => formatCodexOutput(stdout),
       formatterKey: "codex",
     });
+  }
+
+  /**
+   * Return sandbox and id for this agent instance/estate combination.
+   */
+  private async getAgentSandbox(estateId: string) {
+    const { getSandbox } = await import("@cloudflare/sandbox");
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
+    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+    return { sandbox, sandboxId };
   }
 
   private async runExecWithOptions(
@@ -1960,11 +2016,7 @@ export class IterateAgent<
     // ------------------------------------------------------------------------
 
     // Retrieve the sandbox
-    const { getSandbox } = await import("@cloudflare/sandbox");
-
-    // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
-    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
 
     const execInSandbox = async () => {
       const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
@@ -1989,7 +2041,7 @@ export class IterateAgent<
         }
       }
 
-      let sandboxSession: ReturnType<typeof sandbox.createSession>;
+      let sandboxSession: Awaited<ReturnType<typeof sandbox.createSession>>;
       try {
         // Create an isolated session
         sandboxSession = await sandbox.createSession({

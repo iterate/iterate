@@ -201,6 +201,14 @@ export const iterateAgentTools = defineDOTools({
       command: z.string(),
     }),
   },
+  uploadFile: {
+    description:
+      "Upload a file from the sandbox to iterate. Returns the file id, which you can then use to share via slack or other means.",
+    statusIndicatorText: "📂 uploading file",
+    input: z.object({
+      path: z.string().describe("The absolute path to the file in the sandbox."),
+    }),
+  },
   generateVideo: {
     description:
       "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
