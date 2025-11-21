@@ -1,0 +1,17 @@
+{
+  "name": "@iterate-com/os-build-manager",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch ./src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@hono/zod-validator": "^0.7.4",
+    "hono": "^4.10.6",
+    "tinyexec": "^1.0.1",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "tsx": "^4.20.6"
+  }
+}
