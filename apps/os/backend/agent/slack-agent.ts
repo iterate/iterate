@@ -310,21 +310,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             this.updateSlackThreadStatus({ status: "🧠 thinking" });
             break;
 
-          case "CORE:FILE_SHARED": {
-            const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
-            if (fileSharedEvent.data.direction === "from-agent-to-user") {
-              void this.shareFileWithSlack({
-                iterateFileId: fileSharedEvent.data.iterateFileId,
-                originalFilename: fileSharedEvent.data.originalFilename,
-              }).catch((error) => {
-                logger.warn(
-                  `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
-                  error,
-                );
-              });
-            }
+          case "CORE:FILE_SHARED":
+            // no-op: files are not auto-shared; use the shareFileWithSlack tool explicitly
             break;
-          }
           case "CORE:INTERNAL_ERROR": {
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";

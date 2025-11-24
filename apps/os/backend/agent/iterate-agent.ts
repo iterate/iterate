@@ -1953,6 +1953,11 @@ export class IterateAgent<
     });
   }
 
+  // Default implementation – overridden by SlackAgent. This throws for non-Slack agents.
+  async shareFileWithSlack(_input: Inputs["shareFileWithSlack"]) {
+    throw new Error("shareFileWithSlack is only supported in SlackAgent");
+  }
+
   /**
    * Return sandbox and id for this agent instance/estate combination.
    */

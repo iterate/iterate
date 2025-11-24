@@ -10,6 +10,15 @@ export const iterateAgentTools = defineDOTools({
     description: "Simple ping method that returns a pong response",
     statusIndicatorText: "🏓 pinging",
   },
+  shareFileWithSlack: {
+    description:
+      "Share an iterate file in the current Slack thread. Use after uploading or generating a file.",
+    statusIndicatorText: "📎 sharing file",
+    input: z.object({
+      iterateFileId: z.string().describe("The iterate file id to share"),
+      originalFilename: z.string().optional(),
+    }),
+  },
   flexibleTestTool: {
     description:
       "Flexible testing tool that can simulate slow responses, errors, or return secrets based on behaviour",
