@@ -169,6 +169,27 @@
       "when": 1762444823046,
       "tag": "0023_first_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1763575304982,
+      "tag": "0024_eager_arachne",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1763575440002,
+      "tag": "0025_pgmq",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1763575783786,
+      "tag": "0026_consumer_job_queue",
+      "breakpoints": true
     }
   ]
 }

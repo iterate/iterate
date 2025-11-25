@@ -16,6 +16,7 @@ import { Exec } from "alchemy/os";
 import z from "zod";
 import dedent from "dedent";
 import { addSuperAdminUser } from "./sdk/cli/commands/admin.ts";
+import { workerCrons } from "./backend/worker-config.ts";
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -388,7 +389,7 @@ async function deployWorker() {
     wrangler: {
       main: "./backend/worker.ts",
     },
-    crons: ["0 0 * * *"],
+    crons: Object.values(workerCrons),
     adopt: true,
     build: {
       command: "pnpm build && pnpm posthog:sourcemaps:inject",

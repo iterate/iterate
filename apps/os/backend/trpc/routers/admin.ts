@@ -1,9 +1,14 @@
 import { z } from "zod";
-import { and, eq, desc, like } from "drizzle-orm";
+import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
+import {
+  protectedProcedure,
+  protectedProcedureWithNoEstateRestrictions,
+  queuer,
+  router,
+} from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
@@ -596,6 +601,64 @@ export const adminRouter = router({
         channelName: result.channelName,
       };
     }),
+
+  outbox: {
+    poke: adminProcedure
+      .meta({
+        description:
+          "Emit a meaningless message into the outbox queue. Note that consumers are defined separately, so may or may not choose to subscribe to this mutation.",
+      })
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.db.transaction(async (tx) => {
+          const [{ now: dbtime }] = await tx.execute(sql`select now()`);
+          const reply = `You used ${input.message.split(" ").length} words, well done.`;
+          return ctx.sendToOutbox(tx, { dbtime, reply });
+        });
+      }),
+    peek: adminProcedure
+      .meta({
+        description:
+          "Peek at the outbox queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
+      })
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekQueue(ctx.db, input);
+      }),
+    peekArchive: adminProcedure
+      .meta({
+        description:
+          "Peek at the outbox archive queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
+      })
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekArchive(ctx.db, input);
+      }),
+    process: adminProcedure
+      .meta({
+        description:
+          "Process the outbox queue. This *shoulud* be happening automatically after events are added, and in a cron job",
+      })
+      .mutation(async ({ ctx }) => {
+        return await queuer.processQueue(ctx.db);
+      }),
+  },
 });
 
 /**

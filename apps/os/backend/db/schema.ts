@@ -578,3 +578,10 @@ export const systemTasks = pgTable(
   }),
   (t) => [index().on(t.processedAt), index().on(t.aggregateType), index().on(t.aggregateId)],
 );
+
+export const outboxEvent = pgTable("outbox_event", (t) => ({
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  name: t.text().notNull(),
+  payload: jsonb().$type<Record<string, unknown>>().notNull(),
+  ...withTimestamps,
+}));
