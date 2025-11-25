@@ -1,4 +1,4 @@
-FROM docker.io/cloudflare/sandbox:0.4.4 AS builder
+FROM docker.io/cloudflare/sandbox:0.5.1 AS builder
 COPY scripts/package.json /tmp/package.json
 RUN npm install -g pnpm@10
 RUN cd /tmp && pnpm install

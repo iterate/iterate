@@ -467,6 +467,22 @@ test("iterate agent tools", async () => {
      */
     declare function doNothing(input: doNothing.Input): Promise<unknown>
 
+    /** Namespace containing the input type for the shareFileWithSlack tool. */
+    declare namespace shareFileWithSlack {
+      export interface Input {
+        /**
+         * The iterate file id to share
+         */
+        iterateFileId: string;
+        originalFilename?: string;
+      }
+    }
+
+    /**
+     * Share an iterate file in the current Slack thread. Use after uploading or generating a file.
+     */
+    declare function shareFileWithSlack(input: shareFileWithSlack.Input): Promise<unknown>
+
     /** Namespace containing the input type for the connectMCPServer tool. */
     declare namespace connectMCPServer {
       export interface Input {
