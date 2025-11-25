@@ -121,7 +121,7 @@ export default workflow({
             if git diff --staged --quiet; then
               echo "No changes to sync"
             else
-              git commit -m "[iterate/iterate] $(commit_message)" -m "original commit log: $(commit_log)"
+              git commit -m "[iterate/iterate] $commit_message" -m "original commit log: $commit_log"
               git push
             fi
           `,
