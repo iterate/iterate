@@ -188,8 +188,8 @@ importers:
         specifier: ^0.11.0
         version: 0.11.0
       '@cloudflare/sandbox':
-        specifier: 0.4.4
-        version: 0.4.4
+        specifier: 0.5.1
+        version: 0.5.1
       '@codemirror/lang-javascript':
         specifier: ^6.2.4
         version: 6.2.4
@@ -1211,15 +1211,15 @@ packages:
   '@clack/prompts@0.11.0':
     resolution: {integrity: sha512-pMN5FcrEw9hUkZA4f+zLlzivQSeQf5dRGJjSUbvVYDLvpKCdQx5OaknvKzgbtXOizhP+SJJJjqEbOe55uKKfAw==}
 
-  '@cloudflare/containers@0.0.28':
-    resolution: {integrity: sha512-wzR9UWcGvZ9znd4elkXklilPcHX6srncsjSkx696SZRZyTygNbWsLlHegvc1C+e9gn28HRZU3dLiAzXiC9IY1w==}
+  '@cloudflare/containers@0.0.30':
+    resolution: {integrity: sha512-i148xBgmyn/pje82ZIyuTr/Ae0BT/YWwa1/GTJcw6DxEjUHAzZLaBCiX446U9OeuJ2rBh/L/9FIzxX5iYNt1AQ==}
 
   '@cloudflare/kv-asset-handler@0.4.0':
     resolution: {integrity: sha512-+tv3z+SPp+gqTIcImN9o0hqE9xyfQjI1XD9pL6NuKjua9B1y7mNYv0S9cP+QEbA4ppVgGZEmKOvHX5G5Ei1CVA==}
     engines: {node: '>=18.0.0'}
 
-  '@cloudflare/sandbox@0.4.4':
-    resolution: {integrity: sha512-aO2JZnNzWE7Flr8pMaNQeddg9RWraFU2QWCj45oHl9KhDin3GQqiQCREFR4qmz6sDlv7OfPbQ+IApAqk9jmUfQ==}
+  '@cloudflare/sandbox@0.5.1':
+    resolution: {integrity: sha512-SL8d3koirGqBt6YrIvR5RWV+0rgDw7FG7Ga9CY27jBKkwDFeOtXe0PZkYOu1dWoXmoLj9YwgD/CiP1ymVKNJuw==}
 
   '@cloudflare/unenv-preset@2.7.7':
     resolution: {integrity: sha512-HtZuh166y0Olbj9bqqySckz0Rw9uHjggJeoGbDx5x+sgezBXlxO6tQSig2RZw5tgObF8mWI8zaPvQMkQZtAODw==}
@@ -10643,15 +10643,15 @@ snapshots:
       picocolors: 1.1.1
       sisteransi: 1.0.5
 
-  '@cloudflare/containers@0.0.28': {}
+  '@cloudflare/containers@0.0.30': {}
 
   '@cloudflare/kv-asset-handler@0.4.0':
     dependencies:
       mime: 3.0.0
 
-  '@cloudflare/sandbox@0.4.4':
+  '@cloudflare/sandbox@0.5.1':
     dependencies:
-      '@cloudflare/containers': 0.0.28
+      '@cloudflare/containers': 0.0.30
 
   '@cloudflare/unenv-preset@2.7.7(unenv@2.0.0-rc.21)(workerd@1.20251011.0)':
     dependencies:

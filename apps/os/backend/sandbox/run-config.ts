@@ -72,7 +72,7 @@ async function runConfigInSandboxInternal(
   await sandbox.mkdir(sessionDir, { recursive: true });
 
   // Create an isolated session
-  let sandboxSession: ReturnType<typeof sandbox.createSession>;
+  let sandboxSession: Awaited<ReturnType<typeof sandbox.createSession>>;
   try {
     sandboxSession = await sandbox.createSession({
       id: sessionId,

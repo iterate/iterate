@@ -54,8 +54,8 @@ const defaultSlackAgentPrompt_withoutCodemode = dedent`
      - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.
      - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.
    - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.
-   - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.
-   - When you generate or obtain a file that should be shared back to Slack, you do not need to call a tool. As soon as a CORE:FILE_SHARED event is emitted with direction "from-agent-to-user", the file will automatically be uploaded and shared in the current thread.
+  - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.
+  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.
 
    Example: tool call in parallel with sendSlackMessage
    First LLM response in agent turn: (parallel tool calls)
@@ -85,6 +85,17 @@ const defaultSlackAgentPrompt_withoutCodemode = dedent`
    // Something you can't help with 
    // user: "pick up some groceries on the way home"
    sendSlackMessage({ text: "I can't pick up groceries directly, would you like me to setup a reminder for you?", endTurn: true })
+   \`\`\`
+
+   ### Examples: sharing files in Slack
+   \`\`\`
+   // Example 1: After generating an image, share it
+   tool: generateImage
+   parameters: { prompt: "a cute robot sticker" }
+   ---
+   // Next LLM response after generation completes
+   tool: shareFileWithSlack
+   parameters: { iterateFileId: "<iterateFileId of the generated image>" }
    \`\`\`
 
    ### Communication Rules:
@@ -170,7 +181,7 @@ const defaultSlackAgentPrompt_withoutCodemode = dedent`
    - If you're asked to generate or edit an image of "me" or another Slack participant (e.g the users asks "give me a mustache") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. 
      - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.
   - For emojis or logos: use a transparent background unless the user has specified otherwise. 
-  - You do not need to share a link to the generated image with the user. It'll be shared as a side-effect of calling generateImage
+  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.
 
   # Capabilities
   - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. 
@@ -222,7 +233,7 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
 
   - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.
   - Do not make up tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.
-  - When you generate or obtain a file that should be shared back to Slack, you do not need to call a tool. As soon as a CORE:FILE_SHARED event is emitted with direction "from-agent-to-user", the file will automatically be uploaded and shared in the current thread.
+  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.
 
   Example: tool use with codemode:
 
@@ -300,6 +311,22 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
     "text": "I can't pick up groceries directly, would you like me to setup a reminder for you?",
     "endTurn": true
   }
+  \`\`\`
+
+  ### Examples: sharing files in Slack
+  \`\`\`js
+  // Example 1: Generate a file with codex, upload, then share
+  await execCodex({ command: "Create an image of a green rectangle in /tmp/green-rectangle.png using imagemagick" })
+  const { iterateFileId } = await uploadFile({ path: "/tmp/green-rectangle.png" })
+  await shareFileWithSlack({ iterateFileId })
+
+  // Example 2: Upload a report generated in the sandbox and share it
+  const { iterateFileId: reportFileId } = await uploadFile({ path: "/tmp/output/report.txt" })
+  await shareFileWithSlack({ iterateFileId: reportFileId })
+
+  // Example 3: After creating a screenshot file locally, upload and share
+  const { iterateFileId: screenshotFileId } = await uploadFile({ path: "/tmp/screenshot.png" })
+  await shareFileWithSlack({ iterateFileId: screenshotFileId })
   \`\`\`
 
   ### Communication Rules:
@@ -406,6 +433,7 @@ export const defaultContextRules = defineRules([
     tools: [
       // IterateAgent DO tools
       iterateAgentTool.doNothing(),
+      iterateAgentTool.shareFileWithSlack(),
       iterateAgentTool.connectMCPServer(),
       iterateAgentTool.getAgentDebugURL(),
       iterateAgentTool.remindMyselfLater(),
