@@ -2,8 +2,8 @@ import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk"
 
 const config = defineConfig({
   contextRules: [
-    // You can use "matchers" to conditionally apply rules
-    // For example to only be active when certain MCP connections are present
+    // You can use "matchers" to conditionally apply rules.
+    // For example to only be active when certain MCP connections are present.
     {
       key: "how-we-use-linear",
       prompt: "Tag any new issues with the label `iterate-tutorial`",
