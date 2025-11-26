@@ -312,18 +312,21 @@ export class EstateBuildManager extends Container {
 
       const { promise, resolve } = Promise.withResolvers<void>();
 
-      (async () => {
-        const reader = res.body?.getReader();
-        if (!reader) return;
-        // wait till sse stream is closed
-        while (true) {
-          const { done } = await reader.read();
-          if (done) {
-            resolve();
-            break;
+      // for error reporting, wrapping in waitUntil
+      waitUntil(
+        (async () => {
+          const reader = res.body?.getReader();
+          if (!reader) return;
+          // wait till sse stream is closed
+          while (true) {
+            const { done } = await reader.read();
+            if (done) {
+              resolve();
+              break;
+            }
           }
-        }
-      })();
+        })(),
+      );
 
       this.buildWaiters.set(build.id, promise);
       promise.finally(async () => {

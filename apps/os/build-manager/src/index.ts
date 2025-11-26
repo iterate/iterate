@@ -209,10 +209,14 @@ app.get("/wait-for-build", zValidator("query", z.object({ buildId: z.string() })
         api.writeSSE({ event: "ping", data: "ping" });
       }, 1000);
 
-      runningBuilds.get(buildId)?.then((result) => {
-        clearInterval(timer);
-        resolve(result);
-      });
+      runningBuilds
+        .get(buildId)
+        ?.then((result) => {
+          resolve(result);
+        })
+        ?.finally(() => {
+          clearInterval(timer);
+        });
 
       await promise;
     });
@@ -263,6 +267,7 @@ app.get(
           // Close SSE stream when build is complete or failed
           if (log.event === "complete" || log.event === "error") {
             await api.close();
+            rl.close();
             resolve(null);
           }
         });
@@ -271,6 +276,7 @@ app.get(
           console.error(`Error reading log file`, error);
           await api.writeSSE({ event: "error", data: String(error) });
           await api.close();
+          rl.close();
           reject(error);
         });
         await promise;
