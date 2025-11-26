@@ -1,4 +1,4 @@
-export function renderHomePage(origin: string): string {
+export function renderHomePage(origin: string, hasBearerAuth: boolean): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -247,6 +247,22 @@ export function renderHomePage(origin: string): string {
         <li>stateful CRUD: note management</li>
       </ul>
     </div>
+
+    ${hasBearerAuth ? `
+    <div class="section">
+      <h2>bearer auth mode</h2>
+      <p>Protect the no-auth endpoint with a simple Bearer token header.</p>
+
+      <div class="label">endpoint</div>
+      <div class="url">${origin}/mcp</div>
+
+      <div class="label">required header</div>
+      <div class="url">Authorization: Bearer &lt;token&gt;</div>
+
+      <div class="label">example</div>
+      <div class="url">curl -H "Authorization: Bearer &lt;token&gt;" ${origin}/mcp</div>
+    </div>
+    ` : ``}
 
     <div class="section">
       <h2>oauth mode</h2>
