@@ -189,11 +189,8 @@ function betterAwait(
   const ctx = durableObject["ctx"];
 
   const exportsNs = (ctx as any).exports;
-  if (!exportsNs) {
-    throw new Error(
-      'No exports on DurableObject context. You must enable exports by adding the compatibility flag "enable_ctx_exports" (see https://developers.cloudflare.com/workers/configuration/compatibility-flags/).',
-    );
-  }
+  if (!exportsNs) throw new Error("No exports on DurableObject context.");
+
   const className: string = durableObject.constructor?.name ?? "";
   const durableObjectNamespace = exportsNs[className] as DurableObjectNamespace;
   if (!durableObjectNamespace) {
