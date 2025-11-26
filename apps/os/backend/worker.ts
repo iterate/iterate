@@ -8,6 +8,7 @@ import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { z } from "zod/v4";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
+import { getContainer } from "@cloudflare/containers";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
@@ -24,7 +25,7 @@ import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { EstateBuildTracker } from "./durable-objects/estate-build-tracker.ts";
+import { EstateBuildManager } from "./durable-objects/estate-build-manager.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
 import { getUserEstateAccess, queuer } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
@@ -195,7 +196,7 @@ app.get("/api/ws/:organizationId", async (c) => {
 });
 
 // Watch logs (admin UI) → DO (requires user session + estate access)
-app.get("/api/estate/:estateId/builds/:buildId/ws", async (c) => {
+app.get("/api/estate/:estateId/builds/:buildId/sse", async (c) => {
   const estateId = c.req.param("estateId");
   const buildId = c.req.param("buildId");
 
@@ -204,47 +205,10 @@ app.get("/api/estate/:estateId/builds/:buildId/ws", async (c) => {
   const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
   if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
 
-  const id = c.env.ESTATE_BUILDS.idFromName(estateId);
-  const stub = c.env.ESTATE_BUILDS.get(id);
+  const container = getContainer(c.env.ESTATE_BUILD_MANAGER, estateId);
 
-  const url = new URL(c.req.url);
-  url.pathname = "/ws";
-  url.searchParams.set("estateId", estateId);
-  url.searchParams.set("buildId", buildId);
-  return stub.fetch(
-    new Request(url.toString(), {
-      method: c.req.method,
-      headers: c.req.raw.headers,
-      body: c.req.raw.body,
-    }),
-  );
-});
-
-// Ingest logs via HTTP from container (signed URL required)
-app.post("/api/builds/:estateId/:buildId/ingest", async (c) => {
-  const estateId = c.req.param("estateId");
-  const buildId = c.req.param("buildId");
-
-  const id = c.env.ESTATE_BUILDS.idFromName(estateId);
-  const stub = c.env.ESTATE_BUILDS.get(id);
-
-  const url = new URL(c.req.url);
-  const hasSignature = !!url.searchParams.get("signature");
-  if (!hasSignature) return c.json({ error: "Signature required" }, 401);
-  const valid = await verifySignedUrl(c.req.url, c.env.EXPIRING_URLS_SIGNING_KEY);
-  if (!valid) return c.json({ error: "Invalid or expired signature" }, 401);
-
-  url.pathname = "/ingest";
-  url.searchParams.set("estateId", estateId);
-  url.searchParams.set("buildId", buildId);
-
-  return stub.fetch(
-    new Request(url.toString(), {
-      method: "POST",
-      headers: c.req.raw.headers,
-      body: c.req.raw.body,
-    }),
-  );
+  const logs = await container.getSSELogStream(buildId);
+  return logs;
 });
 
 // Ingest agent background task logs (from sandbox/codex), batched every ~10s
@@ -394,6 +358,6 @@ export {
   SlackAgent,
   OrganizationWebSocket,
   AdvisoryLocker,
-  EstateBuildTracker,
+  EstateBuildManager,
 };
 export { Sandbox } from "@cloudflare/sandbox";

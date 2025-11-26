@@ -149,7 +149,7 @@ importers:
         version: 0.78.0(@cloudflare/vite-plugin@1.13.12(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(bufferutil@4.0.9)(drizzle-orm@0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7))(stripe@19.2.0(@types/node@24.9.2))(utf-8-validate@5.0.10)(vite@7.1.12(@types/node@24.9.2)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.20.6)(yaml@2.8.1))(workerd@1.20251011.0)(wrangler@4.45.3(@cloudflare/workers-types@4.20251014.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       hono:
         specifier: ^4.10.1
-        version: 4.10.4
+        version: 4.10.6
       zod:
         specifier: ^3.23.8
         version: 3.25.76
@@ -184,6 +184,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
+      '@cloudflare/containers':
+        specifier: ^0.0.30
+        version: 0.0.30
       '@cloudflare/sandbox':
         specifier: 0.5.1
         version: 0.5.1
@@ -213,13 +216,16 @@ importers:
         version: 6.2.2(@codemirror/language@6.11.3)(@codemirror/state@6.5.2)(@codemirror/view@6.38.6)(@lezer/highlight@1.2.3)
       '@hono/zod-validator':
         specifier: ^0.7.4
-        version: 0.7.4(hono@4.10.4)(zod@4.1.12)
+        version: 0.7.4(hono@4.10.6)(zod@4.1.12)
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.65.0(react@19.2.0))
       '@libsql/client':
         specifier: ^0.15.15
         version: 0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@microsoft/fetch-event-source':
+        specifier: ^2.0.1
+        version: 2.0.1
       '@mmkal/json-schema-to-typescript':
         specifier: ^15.0.3
         version: 15.0.3
@@ -330,13 +336,16 @@ importers:
         version: 11.0.3
       hono:
         specifier: ^4.10.4
-        version: 4.10.4
+        version: 4.10.6
       input-otp:
         specifier: ^1.4.2
         version: 1.4.2(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
       isbot:
         specifier: ^5.1.31
         version: 5.1.31
+      itty-time:
+        specifier: ^2.0.2
+        version: 2.0.2
       jose:
         specifier: ^6.1.0
         version: 6.1.0
@@ -567,6 +576,31 @@ importers:
         specifier: ^0.25.12
         version: 0.25.12
 
+  apps/os/build-manager:
+    dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.6
+        version: 1.19.6(hono@4.10.6)
+      '@hono/zod-validator':
+        specifier: ^0.7.4
+        version: 0.7.4(hono@4.10.6)(zod@4.1.12)
+      '@logdna/tail-file':
+        specifier: ^4.0.2
+        version: 4.0.2
+      hono:
+        specifier: ^4.10.6
+        version: 4.10.6
+      tinyexec:
+        specifier: ^1.0.1
+        version: 1.0.1
+      zod:
+        specifier: ^4.1.12
+        version: 4.1.12
+    devDependencies:
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
+
   estates/garple:
     dependencies:
       '@radix-ui/react-select':
@@ -601,7 +635,7 @@ importers:
         version: 0.44.7(@cloudflare/workers-types@4.20251014.0)(@libsql/client@0.15.15(bufferutil@4.0.9)(utf-8-validate@5.0.10))(@opentelemetry/api@1.9.0)(@types/better-sqlite3@7.6.13)(better-sqlite3@12.4.1)(kysely@0.28.8)(postgres@3.4.7)
       hono:
         specifier: ^4.10.4
-        version: 4.10.4
+        version: 4.10.6
       lucide-react:
         specifier: 0.546.0
         version: 0.546.0(react@19.2.0)
@@ -2113,6 +2147,12 @@ packages:
   '@hexagon/base64@1.1.28':
     resolution: {integrity: sha512-lhqDEAvWixy3bZ+UOYbPwUbBkwBq5C1LAJ/xPC8Oi+lL54oyakv/npbA0aU2hgCsx/1NUd4IBvV03+aUBWxerw==}
 
+  '@hono/node-server@1.19.6':
+    resolution: {integrity: sha512-Shz/KjlIeAhfiuE93NDKVdZ7HdBVLQAfdbaXEaoAVO3ic9ibRSLGIQGkcBbFyuLr+7/1D5ZCINM8B+6IvXeMtw==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: ^4
+
   '@hono/zod-validator@0.7.4':
     resolution: {integrity: sha512-biKGn3BRJVaftZlIPMyK+HCe/UHAjJ6sH0UyXe3+v0OcgVr9xfImDROTJFLtn9e3XEEAHGZIM9U6evu85abm8Q==}
     peerDependencies:
@@ -2442,12 +2482,19 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@logdna/tail-file@4.0.2':
+    resolution: {integrity: sha512-aEZF3LanJoewsQ9J1CRk5wvOqvQvw4lhxitSMXz3sQPgfezamzwW+pGvKXxvht7EvJEYSlYPxfSjL6T2bDSEkg==}
+    engines: {node: '>= 18'}
+
   '@lukeed/ms@2.0.2':
     resolution: {integrity: sha512-9I2Zn6+NJLfaGoz9jN3lpwDgAYvfGeNYdbAIjJOqzs4Tpc+VU3Jqq4IofSUBKajiDS8k9fZIg18/z13mpk1bsA==}
     engines: {node: '>=8'}
 
   '@marijn/find-cluster-break@1.0.2':
     resolution: {integrity: sha512-l0h88YhZFyKdXIFNfSWpyjStDjGHwZ/U7iobcK1cQQD8sejsONdQtTVU+1wVN1PBw40PiiHB1vA5S7VTfQiP9g==}
+
+  '@microsoft/fetch-event-source@2.0.1':
+    resolution: {integrity: sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA==}
 
   '@mjackson/node-fetch-server@0.2.0':
     resolution: {integrity: sha512-EMlH1e30yzmTpGLQjlFmaDAjyOeZhng1/XCd7DExR8PNAnG/G1tyruZxEoUe11ClnwGhGrtsdnyyUx1frSzjng==}
@@ -6554,6 +6601,10 @@ packages:
     resolution: {integrity: sha512-YG/fo7zlU3KwrBL5vDpWKisLYiM+nVstBQqfr7gCPbSYURnNEP9BDxEMz8KfsDR9JX0lJWDRNc6nXX31v7ZEyg==}
     engines: {node: '>=16.9.0'}
 
+  hono@4.10.6:
+    resolution: {integrity: sha512-BIdolzGpDO9MQ4nu3AUuDwHZZ+KViNm+EZ75Ae55eMXMqLVhDFqEMXxtUe9Qh8hjL+pIna/frs2j6Y2yD5Ua/g==}
+    engines: {node: '>=16.9.0'}
+
   hookable@5.5.3:
     resolution: {integrity: sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ==}
 
@@ -6907,6 +6958,9 @@ packages:
 
   isexe@2.0.0:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
+
+  itty-time@2.0.2:
+    resolution: {integrity: sha512-95U9Xo3Qggz/e82ewZQJw8x76HgiMvbrijzoPy6nCTae4FZEwbcVJgrB57Kvddf8Q5pQdgJKTX6euFJpDr6Low==}
 
   jackspeak@3.4.3:
     resolution: {integrity: sha512-OGlZQpz2yfahA/Rd1Y8Cd9SIEsqvXkLVoSw/cgwhnhFMDbsQFeZYoJJ7bIZBS9BcamUW96asq/npPWugM+RQBw==}
@@ -11357,9 +11411,13 @@ snapshots:
 
   '@hexagon/base64@1.1.28': {}
 
-  '@hono/zod-validator@0.7.4(hono@4.10.4)(zod@4.1.12)':
+  '@hono/node-server@1.19.6(hono@4.10.6)':
     dependencies:
-      hono: 4.10.4
+      hono: 4.10.6
+
+  '@hono/zod-validator@0.7.4(hono@4.10.6)(zod@4.1.12)':
+    dependencies:
+      hono: 4.10.6
       zod: 4.1.12
 
   '@hookform/resolvers@5.2.2(react-hook-form@7.65.0(react@19.2.0))':
@@ -11668,9 +11726,13 @@ snapshots:
   '@libsql/win32-x64-msvc@0.5.22':
     optional: true
 
+  '@logdna/tail-file@4.0.2': {}
+
   '@lukeed/ms@2.0.2': {}
 
   '@marijn/find-cluster-break@1.0.2': {}
+
+  '@microsoft/fetch-event-source@2.0.1': {}
 
   '@mjackson/node-fetch-server@0.2.0': {}
 
@@ -16473,6 +16535,8 @@ snapshots:
 
   hono@4.10.4: {}
 
+  hono@4.10.6: {}
+
   hookable@5.5.3: {}
 
   hosted-git-info@2.8.9: {}
@@ -16788,6 +16852,8 @@ snapshots:
   isbot@5.1.31: {}
 
   isexe@2.0.0: {}
+
+  itty-time@2.0.2: {}
 
   jackspeak@3.4.3:
     dependencies:
