@@ -248,7 +248,9 @@ export function renderHomePage(origin: string, hasBearerAuth: boolean): string {
       </ul>
     </div>
 
-    ${hasBearerAuth ? `
+    ${
+      hasBearerAuth
+        ? `
     <div class="section">
       <h2>bearer auth mode</h2>
       <p>Protect the no-auth endpoint with a simple Bearer token header.</p>
@@ -262,7 +264,9 @@ export function renderHomePage(origin: string, hasBearerAuth: boolean): string {
       <div class="label">example</div>
       <div class="url">curl -H "Authorization: Bearer &lt;token&gt;" ${origin}/mcp</div>
     </div>
-    ` : ``}
+    `
+        : ``
+    }
 
     <div class="section">
       <h2>oauth mode</h2>

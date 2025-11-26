@@ -49,15 +49,18 @@ export default {
           header: "Authorization: Bearer <token>",
         };
       }
-      return new Response(JSON.stringify({
-        name: "Mock MCP Server for E2E Testing",
-        version: "1.0.0",
-        status: "healthy",
-        documentation: "/guide",
-        modes,
-      }), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({
+          name: "Mock MCP Server for E2E Testing",
+          version: "1.0.0",
+          status: "healthy",
+          documentation: "/guide",
+          modes,
+        }),
+        {
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     }
 
     if (url.pathname === "/mcp") {

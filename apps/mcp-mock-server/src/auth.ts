@@ -20,5 +20,3 @@ export function verifyBearerAuth(request: Request, expectedToken?: string): Resp
   }
   return null;
 }
-
-

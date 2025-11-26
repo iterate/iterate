@@ -17,5 +17,3 @@ describe("bearer auth for /mcp", () => {
     expect(res.headers.get("WWW-Authenticate")).toContain("invalid_token");
   });
 });
-
-
