@@ -310,8 +310,9 @@ export class EstateBuildManager extends Container {
       );
       if (!res.ok) continue;
 
-      // eslint-disable-next-line no-async-promise-executor -- this is fine
-      const promise = new Promise<void>(async (resolve) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+
+      (async () => {
         const reader = res.body?.getReader();
         if (!reader) return;
         // wait till sse stream is closed
@@ -322,7 +323,7 @@ export class EstateBuildManager extends Container {
             break;
           }
         }
-      });
+      })();
 
       this.buildWaiters.set(build.id, promise);
       promise.finally(async () => {
