@@ -819,6 +819,11 @@ export class IterateAgent<
    */
   async onStart(): Promise<void> {
     const event = this.getEvents();
+    if (event.length > 0) {
+      logger.info(
+        `[IterateAgent] Loading ${event.length} events for agent ${this.databaseRecord.durableObjectName} (${this.databaseRecord.className})`,
+      );
+    }
     if (event.length === 0) {
       // new agent, fetch initial context rules, along with tool schemas etc.
       event.push(await this.getAddContextRulesEvent());

@@ -580,6 +580,13 @@ export class AgentCore<
 
       logger.debug(`[AgentCore] Initializing with ${existing.length} existing events`);
 
+      // Log memory warning if loading many events
+      if (existing.length > 1000) {
+        logger.warn(
+          `[AgentCore] Loading ${existing.length} events - this may cause memory issues. Consider implementing event windowing.`,
+        );
+      }
+
       // Clear current state
       this._events = [];
       this._state = { ...CORE_INITIAL_REDUCED_STATE } as typeof this._state;
@@ -729,6 +736,13 @@ export class AgentCore<
 
           // Add to _events for now in case that is used in a reducer - but if any errors occur, we'll roll it back
           this._events.push(parsed);
+
+          // Warn if events array is getting large (potential memory issue)
+          if (this._events.length > 0 && this._events.length % 1000 === 0) {
+            logger.warn(
+              `[AgentCore] Event count reached ${this._events.length}. Consider implementing event windowing to prevent memory issues.`,
+            );
+          }
 
           // run core reducer and all slice reducers in sequence to update the state
           this._state = this.runReducersOnSingleEvent(this._state, parsed);
