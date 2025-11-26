@@ -27,35 +27,8 @@ export const Route = createFileRoute(
     serverUrl: z.string(),
     mode: z.enum(["personal", "company"]),
     connectionKey: z.string(),
-    requiredParams: z.preprocess((val) => {
-      if (Array.isArray(val)) return val;
-      if (typeof val === "string" && val) {
-        try {
-          return JSON.parse(val);
-        } catch {
-          try {
-            return JSON.parse(decodeURIComponent(val));
-          } catch {
-            return [];
-          }
-        }
-      }
-      return [];
-    }, z.array(MCPParam)),
-    agentDurableObject: z.preprocess((val) => {
-      if (typeof val === "string" && val) {
-        try {
-          return JSON.parse(val);
-        } catch {
-          try {
-            return JSON.parse(decodeURIComponent(val));
-          } catch {
-            return undefined;
-          }
-        }
-      }
-      return val;
-    }, AgentDurableObjectInfo.optional()),
+    requiredParams: z.array(MCPParam),
+    agentDurableObject: AgentDurableObjectInfo.optional(),
     integrationSlug: z.string(),
     finalRedirectUrl: z.string().optional(),
   }),
