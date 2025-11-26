@@ -2,7 +2,7 @@ import { Container } from "@cloudflare/containers";
 import { ms } from "itty-time";
 import { typeid } from "typeid-js";
 import { and, eq, lt } from "drizzle-orm";
-import type { CloudflareEnv } from "../../env.ts";
+import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import { intoImmediateSSEResponse } from "../utils/sse-utils.ts";
 import { getDb } from "../db/client.ts";
 import * as schemas from "../db/schema.ts";
@@ -55,7 +55,7 @@ export class EstateBuildManager extends Container {
         );
     `);
 
-    this.ctx.waitUntil(
+    waitUntil(
       (async () => {
         // Sync logs for all ongoing builds
         await this.syncLogsForAllOngoingBuilds();
@@ -111,7 +111,7 @@ export class EstateBuildManager extends Container {
     const res = await response.text();
 
     // Attach build waiters to the ongoing builds to wait for the builds to complete
-    this.ctx.waitUntil(this.attachBuildWaiters());
+    waitUntil(this.attachBuildWaiters());
 
     return {
       success: true,
@@ -121,7 +121,7 @@ export class EstateBuildManager extends Container {
   }
 
   public async getSSELogStream(buildId: string) {
-    this.ctx.waitUntil(this.syncLogsForAllOngoingBuilds());
+    waitUntil(this.syncLogsForAllOngoingBuilds());
 
     if (this.ctx.container?.running && !this.stopRequested) {
       const logsRes = await Promise.race([
@@ -235,7 +235,7 @@ export class EstateBuildManager extends Container {
     const ongoingBuilds = this._sql
       .exec<{
         id: string;
-        updated_at: number;
+        updated_at: string;
       }>("SELECT id, updated_at FROM builds WHERE status = 'in_progress'")
       .toArray();
 
@@ -245,10 +245,12 @@ export class EstateBuildManager extends Container {
 
     const allLogs = ongoingBuilds.map((build) => ({
       buildId: build.id,
+      // SQLite CURRENT_TIMESTAMP is stored as a sortable text value ("YYYY-MM-DD HH:MM:SS"),
+      // so we can safely use lexicographical comparison to find the newest build.
       updatedAt: build.updated_at,
       logs: this.getLogsFromDatabase(build.id),
     }));
-    const newestTriggeredBuild = allLogs.sort((a, b) => b.updatedAt - a.updatedAt)[0]!;
+    const newestTriggeredBuild = allLogs.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]!;
 
     await Promise.all(
       allLogs.map(async ({ buildId, logs }) => {
@@ -332,13 +334,22 @@ export class EstateBuildManager extends Container {
   }
 
   private async housekeeping() {
+    const retentionThreshold = new Date(Date.now() - RETENTION_TIME)
+      .toISOString()
+      .slice(0, 19)
+      .replace("T", " ");
+    const timeoutThreshold = new Date(Date.now() - TIMEOUT_TIME)
+      .toISOString()
+      .slice(0, 19)
+      .replace("T", " ");
+
     // Delete old build logs
-    this._sql.exec(`DELETE FROM build_logs WHERE created_at < ?`, Date.now() - RETENTION_TIME);
+    this._sql.exec(`DELETE FROM build_logs WHERE created_at < ?`, retentionThreshold);
 
     // Timeout in-progress builds that have been running for too long
     this._sql.exec(
       "UPDATE builds SET status = 'failed' WHERE status = 'in_progress' AND updated_at < ?",
-      Date.now() - TIMEOUT_TIME,
+      timeoutThreshold,
     );
 
     await this.db

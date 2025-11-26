@@ -12,7 +12,7 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
 ENV CI=1
 
 COPY . .
-RUN npm install -g pnpm tsx
+RUN npm install -g pnpm@10.23.0 tsx@4.20.6
 
 RUN pnpm install --no-frozen-lockfile
 

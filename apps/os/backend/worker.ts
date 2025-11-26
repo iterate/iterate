@@ -207,7 +207,7 @@ app.get("/api/estate/:estateId/builds/:buildId/sse", async (c) => {
 
   const container = getContainer(c.env.ESTATE_BUILD_MANAGER, estateId);
 
-  using logs = await container.getSSELogStream(buildId);
+  const logs = await container.getSSELogStream(buildId);
   return logs;
 });
 
