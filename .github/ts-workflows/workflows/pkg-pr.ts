@@ -106,9 +106,11 @@ export default workflow({
         {
           name: "Commit and push changes",
           run: dedent`
-            cd target-repo
+            commit_hash="\${{ github.sha }}"
+            commit_message=$(git log -1 $commit_hash --pretty=%B)
+            commit_log=$(git log -n 1 $commit_hash)
 
-            COMMIT_HASH="\${{ github.sha }}"
+            cd target-repo
 
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -119,7 +121,7 @@ export default workflow({
             if git diff --staged --quiet; then
               echo "No changes to sync"
             else
-              git commit -m "Sync from iterate/iterate@$COMMIT_HASH"
+              git commit -m "[iterate/iterate] $commit_message" -m "original commit log: $commit_log"
               git push
             fi
           `,

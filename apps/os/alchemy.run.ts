@@ -385,7 +385,6 @@ async function deployWorker() {
       `,
     },
     domains,
-    compatibilityFlags: ["enable_ctx_exports"],
     wrangler: {
       main: "./backend/worker.ts",
     },
