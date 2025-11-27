@@ -1,6 +1,8 @@
 import { AlertCircle, Home } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 import { useEffect, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { authClient } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
 import { Card, CardContent } from "./ui/card.tsx";
 
@@ -15,6 +17,11 @@ export function ErrorRenderer({ message, details, stack, actions }: ErrorRendere
   useEffect(() => {
     console.error({ message, details, stack });
   }, [message, details, stack]);
+
+  const authSesssionQuery = useQuery({
+    queryKey: ["error-renderer-auth-session"],
+    queryFn: () => authClient.getSession(),
+  });
 
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
@@ -52,6 +59,21 @@ export function ErrorRenderer({ message, details, stack, actions }: ErrorRendere
                     Back to Dashboard
                   </Button>
                 </Link>
+                {authSesssionQuery.data?.session && (
+                  <Button
+                    onClick={() =>
+                      authClient.signOut({
+                        fetchOptions: {
+                          onSuccess: () => {
+                            window.location.href = "/login";
+                          },
+                        },
+                      })
+                    }
+                  >
+                    Sign Out
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>

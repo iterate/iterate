@@ -1,11 +1,11 @@
 import { createPrivateKey } from "crypto";
 import { eq, and } from "drizzle-orm";
 import { App, Octokit } from "octokit";
-import { waitUntil, env } from "../../../env.ts";
+import { getContainer } from "@cloudflare/containers";
+import { env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schemas from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
-import { runConfigInSandbox } from "../../sandbox/run-config.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 
 const privateKey = createPrivateKey({
@@ -154,17 +154,14 @@ export async function triggerGithubBuild(params: {
     });
   }
 
-  const buildPromise = runConfigInSandbox(env, {
-    githubRepoUrl: repoUrl,
-    githubToken: installationToken,
-    commitHash,
-    branch,
-    connectedRepoPath: connectedRepoPath || "/",
+  const container = getContainer(env.ESTATE_BUILD_MANAGER, estateId);
+  using _res = await container.build({
     buildId: build.id,
-    estateId,
+    repo: repoUrl,
+    branch: branch || "main",
+    path: connectedRepoPath || "/",
+    authToken: installationToken,
   });
-
-  waitUntil(buildPromise);
 
   return build;
 }

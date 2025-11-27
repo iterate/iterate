@@ -17,7 +17,6 @@ import {
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
-import { useWebSocket } from "partysocket/react";
 import { z } from "zod/v4";
 import { createFileRoute } from "@tanstack/react-router";
 import { Spinner } from "../../../components/ui/spinner.tsx";
@@ -86,6 +85,7 @@ import {
   getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
+import { useSSE, type UseSSEOptions } from "../../../hooks/use-sse.ts";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -1105,100 +1105,50 @@ export default function ManageEstate() {
   return <EstateContent installationStatus={installationStatus} />;
 }
 
-// ========== Build Logs Viewer ==========
-const BroadcastMessage = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("CONNECTED"), buildId: z.string() }),
-  z.object({
-    type: z.literal("LOG"),
-    buildId: z.string(),
-    stream: z.enum(["stdout", "stderr"]),
-    message: z.string(),
-    ts: z.number(),
-  }),
-  z.object({
-    type: z.literal("STATUS"),
-    buildId: z.string(),
-    status: z.enum(["in_progress", "complete", "failed"]),
-    ts: z.number(),
-  }),
-]);
-
-type BroadcastMessage = z.infer<typeof BroadcastMessage>;
-
 function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }) {
   const [lines, setLines] = useState<
     Array<{
       ts: number;
-      stream: "stdout" | "stderr";
+      stream: "stdout" | "stderr" | (string & {});
       message: string;
     }>
   >([]);
   const [showStdout, setShowStdout] = useState(true);
   const [showStderr, setShowStderr] = useState(true);
   const [follow, setFollow] = useState(true);
+  const [connectionState, setConnectionState] = useState<
+    "connecting" | "open" | "closed" | "error"
+  >("connecting");
   const scrollerRef = useRef<HTMLDivElement | null>(null);
 
-  const wsUrl = useMemo(() => {
-    const base = import.meta.env.SSR
-      ? import.meta.env.VITE_PUBLIC_URL
-      : globalThis.location?.origin;
-    if (!base) return "";
-    const url = new URL(base);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    url.pathname = `/api/estate/${estateId}/builds/${build.id}/ws`;
-    return url.toString();
-  }, [estateId, build.id]);
+  const options = useMemo(
+    () =>
+      ({
+        async onopen() {
+          setConnectionState("open");
+        },
+        onerror(err) {
+          console.error(err);
+          setConnectionState("error");
+        },
+        onclose() {
+          setConnectionState("closed");
+        },
+        onmessage(ev) {
+          setLines((prev) => [
+            ...prev,
+            {
+              ts: Date.now(),
+              stream: ev.event,
+              message: ev.data,
+            },
+          ]);
+        },
+      }) satisfies UseSSEOptions,
+    [],
+  );
 
-  const onMessage = (event: MessageEvent) => {
-    try {
-      const label = parseMessage(event);
-      if (label) toast.success(label);
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : String(error));
-    }
-  };
-
-  function parseMessage(event: MessageEvent): string | null {
-    if (typeof event.data !== "string") {
-      throw new Error("Non-string WebSocket data");
-    }
-    let raw: unknown;
-    try {
-      raw = JSON.parse(event.data);
-    } catch {
-      throw new Error("Invalid JSON from WebSocket");
-    }
-    const parsed = BroadcastMessage.parse(raw);
-    if (parsed.buildId !== build.id) {
-      return null;
-    }
-    if (parsed.type === "LOG") {
-      setLines((prev) => {
-        const next = [...prev, { ts: parsed.ts, stream: parsed.stream, message: parsed.message }];
-        return next.length > 5000 ? next.slice(-5000) : next;
-      });
-      return null;
-    }
-    if (parsed.type === "STATUS") {
-      if (parsed.status === "complete") return "Build completed";
-      if (parsed.status === "failed") throw new Error("Build failed");
-      return null;
-    }
-    // CONNECTED and any other types: no-op
-    return null;
-  }
-
-  const ws = useWebSocket(wsUrl, [], {
-    maxReconnectionDelay: 10000,
-    minReconnectionDelay: 1000,
-    reconnectionDelayGrowFactor: 1.3,
-    connectionTimeout: 4000,
-    maxRetries: Infinity,
-    minUptime: 2000,
-    onMessage,
-  });
-
-  // Rely on useWebSocket to manage lifecycle (closes on unmount and URL changes)
+  useSSE(`/api/estate/${estateId}/builds/${build.id}/sse`, options);
 
   React.useEffect(() => {
     if (!follow) return;
@@ -1232,8 +1182,12 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
         <Button variant="outline" size="sm" onClick={() => setLines([])}>
           Clear
         </Button>
-        {ws.readyState === 1 ? (
+        {connectionState === "open" ? (
           <span className="text-xs text-green-600 dark:text-green-400">Connected</span>
+        ) : connectionState === "error" ? (
+          <span className="text-xs text-red-600 dark:text-red-400">Error</span>
+        ) : connectionState === "closed" ? (
+          <span className="text-xs text-muted-foreground">Closed</span>
         ) : (
           <span className="text-xs text-muted-foreground">Connecting…</span>
         )}
@@ -1252,6 +1206,9 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
               <span>{l.message}</span>
             </div>
           ))}
+          {filtered.length === 0 && (
+            <div className="text-xs text-muted-foreground">No logs found</div>
+          )}
         </pre>
       </div>
     </div>
