@@ -113,7 +113,7 @@ async function getMCPParamsCollectionURL(params: {
   }
 
   const url = new URL(
-    `${process.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
+    `${import.meta.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
   );
   url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);

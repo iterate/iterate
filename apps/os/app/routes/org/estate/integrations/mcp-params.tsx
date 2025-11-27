@@ -24,12 +24,12 @@ export const Route = createFileRoute(
 )({
   component: MCPParams,
   validateSearch: z.object({
-    serverUrl: z.string().catch(""),
-    mode: z.enum(["personal", "company"]).catch("personal"),
-    connectionKey: z.string().catch(""),
-    requiredParams: z.string().catch("[]"),
-    agentDurableObject: z.string().catch(""),
-    integrationSlug: z.string().catch(""),
+    serverUrl: z.string(),
+    mode: z.enum(["personal", "company"]),
+    connectionKey: z.string(),
+    requiredParams: z.array(MCPParam),
+    agentDurableObject: AgentDurableObjectInfo.optional(),
+    integrationSlug: z.string(),
     finalRedirectUrl: z.string().optional(),
   }),
   head: () => ({
@@ -51,26 +51,14 @@ function MCPParams() {
     serverUrl,
     mode,
     connectionKey,
-    requiredParams: requiredParamsStr,
-    agentDurableObject: agentDurableObjectStr,
+    requiredParams,
+    agentDurableObject: durableObject,
     integrationSlug,
     finalRedirectUrl,
   } = Route.useSearch();
   const estateId = useEstateId();
   const trpc = useTRPC();
   const router = useRouter();
-
-  const requiredParams = useMemo(
-    () => z.array(MCPParam).parse(JSON.parse(requiredParamsStr)),
-    [requiredParamsStr],
-  );
-  const durableObject = useMemo(
-    () =>
-      agentDurableObjectStr
-        ? AgentDurableObjectInfo.parse(JSON.parse(agentDurableObjectStr))
-        : null,
-    [agentDurableObjectStr],
-  );
 
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};
