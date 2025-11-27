@@ -93,7 +93,7 @@ type _Build = RouterOutputs["estate"]["getBuilds"][0];
 type BuildStatus = _Build["status"] | "timed_out";
 type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
-export const estateRepoLoader = authenticatedServerFn
+const estateRepoLoader = authenticatedServerFn
   .inputValidator(z.object({ estateId: z.string() }))
   .handler(async ({ context, data }) => {
     const { estateId } = data;
