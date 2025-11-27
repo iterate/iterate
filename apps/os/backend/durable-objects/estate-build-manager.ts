@@ -7,6 +7,7 @@ import { intoImmediateSSEResponse } from "../utils/sse-utils.ts";
 import { getDb } from "../db/client.ts";
 import * as schemas from "../db/schema.ts";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
+import { logger } from "../tag-logger.ts";
 
 const RETENTION_TIME = ms("30 days");
 const TIMEOUT_TIME = ms("10 minutes");
@@ -17,6 +18,7 @@ type BuildInput = {
   branch: string;
   path: string;
   authToken?: string;
+  isRetry?: boolean;
 };
 
 export type Log = {
@@ -57,6 +59,8 @@ export class EstateBuildManager extends Container {
 
     waitUntil(
       (async () => {
+        // Handle retries
+        await this.handleRetries();
         // Sync logs for all ongoing builds
         await this.syncLogsForAllOngoingBuilds();
         // Act on the synced logs to update the build status and iterate config
@@ -69,55 +73,76 @@ export class EstateBuildManager extends Container {
     );
   }
 
-  public async build({ buildId, repo, branch, path, authToken }: BuildInput) {
-    this._sql.exec(
-      `INSERT INTO builds (id, status, repo_meta) VALUES (?, ?, ?)`,
-      buildId,
-      "in_progress",
-      JSON.stringify({ repo, branch, path, authToken }),
-    );
-    const logId = typeid("build_log").toString();
-    this._sql.exec(
-      `INSERT INTO build_logs (id, build_id, log_lines) VALUES (?, ?, ?)`,
-      logId,
-      buildId,
-      JSON.stringify([]),
-    );
-
-    await this.startAndWaitForPorts({
-      startOptions: {
-        enableInternet: true,
-      },
-      ports: [3000],
-    });
-
-    const request = new Request(`http://localhost:3000/trigger-build`, {
-      method: "POST",
-      body: JSON.stringify({
+  public async build({ buildId, repo, branch, path, authToken, isRetry = false }: BuildInput) {
+    if (!isRetry) {
+      this._sql.exec(
+        `INSERT INTO builds (id, status, repo_meta) VALUES (?, ?, ?)`,
         buildId,
-        repo,
-        branch,
-        path,
-        authToken,
-      }),
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+        "in_progress",
+        JSON.stringify({ repo, branch, path, authToken }),
+      );
+      const logId = typeid("build_log").toString();
+      this._sql.exec(
+        `INSERT INTO build_logs (id, build_id, log_lines) VALUES (?, ?, ?)`,
+        logId,
+        buildId,
+        JSON.stringify([]),
+      );
+    }
 
-    const response = await this.containerFetch(request, 3000);
-    if (!response.ok || !response.body)
-      throw new Error(`Failed to run config: ${response.statusText} ${await response.text()}`);
-    const res = await response.text();
+    try {
+      await this.startAndWaitForPorts({
+        startOptions: {
+          enableInternet: true,
+        },
+        ports: [3000],
+      });
 
-    // Attach build waiters to the ongoing builds to wait for the builds to complete
-    waitUntil(this.attachBuildWaiters());
+      const request = new Request(`http://localhost:3000/trigger-build`, {
+        method: "POST",
+        body: JSON.stringify({
+          buildId,
+          repo,
+          branch,
+          path,
+          authToken,
+        }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
 
-    return {
-      success: true,
-      message: res,
-      buildId,
-    };
+      const response = await this.containerFetch(request, 3000);
+      if (!response.ok || !response.body)
+        throw new Error(`Failed to run config: ${response.statusText} ${await response.text()}`);
+      const res = await response.text();
+
+      // Attach build waiters to the ongoing builds to wait for the builds to complete
+      waitUntil(this.attachBuildWaiters());
+
+      return {
+        success: true,
+        message: res,
+        buildId,
+      };
+    } catch (error) {
+      // don't retry if this is a retry
+      if (isRetry) throw error;
+
+      logger.error(`Error Triggering Build`, error);
+      const existingRetries =
+        this.ctx.storage.kv.get<{ buildInput: BuildInput }[]>(`build-retries`) || [];
+      this.ctx.storage.kv.put<{ buildInput: BuildInput }[]>(`build-retries`, [
+        ...existingRetries,
+        { buildInput: { buildId, repo, branch, path, authToken } },
+      ]);
+      return {
+        // Lets just say it succeeded, so that the caller can retry the build
+        success: true,
+        message: `Error triggering build: ${String(error)}, build will be retried after a delay`,
+        buildId,
+      };
+    }
   }
 
   public async getSSELogStream(buildId: string) {
@@ -149,6 +174,8 @@ export class EstateBuildManager extends Container {
   async onActivityExpired() {
     await this.syncLogsForAllOngoingBuilds();
     await this.handleTerminatingLogs();
+    await this.housekeeping();
+    await this.handleRetries();
 
     const buildsInProgress = this._sql
       .exec<{ id: string }>("SELECT id FROM builds WHERE status = 'in_progress'")
@@ -158,6 +185,15 @@ export class EstateBuildManager extends Container {
       // stop the container if there are no in-progress builds
       this.stop();
       this.stopRequested = true;
+    }
+  }
+
+  private async handleRetries() {
+    const retries = this.ctx.storage.kv.get<{ buildInput: BuildInput }[]>(`build-retries`) || [];
+    // retry once only, so delete the entries
+    this.ctx.storage.kv.delete(`build-retries`);
+    for (const { buildInput } of retries) {
+      await this.build({ ...buildInput, isRetry: true });
     }
   }
 
