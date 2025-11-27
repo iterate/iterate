@@ -106,6 +106,18 @@ function MCPParams() {
     }
 
     try {
+      console.log(
+        "SAVING PARAMS",
+        JSON.stringify(
+          requiredParams.map((param) => ({
+            key: param.key,
+            value: formValues[param.key],
+            type: param.type,
+          })),
+          null,
+          2,
+        ),
+      );
       await saveParams({
         estateId,
         connectionKey,
@@ -115,7 +127,8 @@ function MCPParams() {
           type: param.type,
         })),
       });
-
+      console.log("SAVED PARAMS");
+      console.log("durableObject", durableObject);
       if (durableObject) {
         await reconnect({
           estateId,
@@ -125,7 +138,9 @@ function MCPParams() {
           integrationSlug,
           requiresParams: requiredParams,
         });
+        console.log("RECONNECTED");
       }
+      console.log("FINAL REDIRECT URL", finalRedirectUrl);
       if (finalRedirectUrl) {
         window.location.href = finalRedirectUrl;
       } else {

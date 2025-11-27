@@ -850,7 +850,7 @@ export const integrationsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { estateId, connectionKey, params } = input;
-
+      console.log("SAVING PARAMS", JSON.stringify(params, null, 2));
       await ctx.db.transaction(async (tx) => {
         if (params.length > 0) {
           const paramValues = params.map((param) => ({

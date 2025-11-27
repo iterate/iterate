@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, eq, desc, like, sql } from "drizzle-orm";
+import { and, eq, desc, like, sql, isNotNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
@@ -10,6 +10,8 @@ import {
   router,
 } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
+import { account, estateAccountsPermissions, mcpConnectionParam } from "../../db/schema.ts";
+import { getMCPVerificationKey } from "../../agent/mcp/mcp-oauth-provider.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
@@ -44,6 +46,78 @@ const findUserByEmail = adminProcedure
       where: eq(schema.user.email, input.email),
     });
     return user;
+  });
+
+const findUserBySlackAccountId = adminProcedure
+  .input(z.object({ slackUserId: z.string() }))
+  .query(async ({ ctx, input }) => {
+    const acc = await ctx.db.query.account.findFirst({
+      where: and(
+        eq(account.providerId, "slack-bot"),
+        eq(account.accountId, input.slackUserId),
+        isNotNull(account.scope),
+      ),
+      with: {
+        user: true,
+      },
+    });
+    return acc?.user ?? null;
+  });
+
+const disconnectAllPersonalMcpForUser = adminProcedure
+  .input(z.object({ userId: z.string() }))
+  .mutation(async ({ ctx, input }) => {
+    const knownOAuthProviders = ["github-app", "slack-bot", "google", "slack"];
+    // Find all accounts for this user
+    const userAccounts = await ctx.db
+      .select()
+      .from(account)
+      .where(eq(account.userId, input.userId));
+    // Filter to MCP OAuth accounts (providers not in known list)
+    const mcpOauthAccounts = userAccounts.filter(
+      (acc) => acc && !knownOAuthProviders.includes(acc.providerId),
+    );
+
+    let oauthDisconnected = 0;
+    for (const acc of mcpOauthAccounts) {
+      // Remove estate permissions everywhere this account is linked
+      await ctx.db
+        .delete(estateAccountsPermissions)
+        .where(eq(estateAccountsPermissions.accountId, acc.id));
+
+      // Clean dynamic client info and verification if present
+      const clientInfo = await ctx.db.query.dynamicClientInfo.findFirst({
+        where: and(
+          eq(schema.dynamicClientInfo.providerId, acc.providerId),
+          eq(schema.dynamicClientInfo.userId, input.userId),
+        ),
+      });
+      if (clientInfo) {
+        const verificationKey = getMCPVerificationKey(acc.providerId, clientInfo.clientId);
+        await ctx.db
+          .delete(schema.verification)
+          .where(eq(schema.verification.identifier, verificationKey));
+        await ctx.db
+          .delete(schema.dynamicClientInfo)
+          .where(eq(schema.dynamicClientInfo.id, clientInfo.id));
+      }
+
+      // Delete the account itself
+      await ctx.db.delete(account).where(eq(account.id, acc.id));
+      oauthDisconnected++;
+    }
+
+    // Delete all param-based personal MCP connections for this user across estates
+    const deletedParams = await ctx.db
+      .delete(mcpConnectionParam)
+      .where(like(mcpConnectionParam.connectionKey, `%::personal::${input.userId}`))
+      .returning({ id: mcpConnectionParam.id }); // count-like feedback
+
+    return {
+      success: true,
+      oauthDisconnected,
+      paramConnectionsDeleted: deletedParams.length,
+    };
   });
 
 const searchUsersByEmail = adminProcedure
@@ -235,6 +309,8 @@ const allProcedureInputs = adminProcedure.query(async () => {
 
 export const adminRouter = router({
   findUserByEmail,
+  findUserBySlackAccountId,
+  disconnectAllPersonalMcpForUser,
   searchUsersByEmail,
   getEstateOwner,
   deleteUserByEmail,

@@ -237,7 +237,7 @@ export function renderHomePage(origin: string): string {
       <p>Simple MCP connection. No authentication required.</p>
       
       <div class="label">endpoint</div>
-      <div class="url">${origin}/mcp</div>
+      <div class="url">${origin}/no-auth</div>
       
       <div class="label">available tools</div>
       <ul>
@@ -249,23 +249,17 @@ export function renderHomePage(origin: string): string {
     </div>
 
     <div class="section">
-      <h2>bearer auth mode</h2>
-      <p>Test Bearer header authentication without restarting.</p>
-
+      <h2>bearer mode</h2>
+      <p>Bearer token required in Authorization header.</p>
+      
       <div class="label">endpoint</div>
-      <div class="url">${origin}/bearer/mcp</div>
-
-      <div class="label">required header</div>
-      <div class="url">Authorization: Bearer &lt;token&gt;</div>
-
-      <div class="label">options</div>
+      <div class="url">${origin}/bearer</div>
+      
+      <div class="label">how to authenticate</div>
       <ul>
-        <li><code>?expected=your-token</code> — require a specific token for this request</li>
-        <li>If <code>?expected</code> is not set, any Bearer token is accepted</li>
+        <li>Send Authorization header: <code>Bearer &lt;token&gt;</code></li>
+        <li>Optionally enforce a specific token by appending <code>?expected=&lt;token&gt;</code></li>
       </ul>
-
-      <div class="label">example</div>
-      <div class="url">curl -H "Authorization: Bearer test" "${origin}/bearer/mcp?expected=test"</div>
     </div>
 
     <div class="section">
@@ -273,7 +267,7 @@ export function renderHomePage(origin: string): string {
       <p>Full OAuth 2.1 flow with user authentication. Includes all no-auth tools plus user-specific tools.</p>
       
       <div class="label">endpoint</div>
-      <div class="url">${origin}/oauth/mcp</div>
+      <div class="url">${origin}/oauth</div>
       
       <div class="label">how to authorize</div>
       <ul>

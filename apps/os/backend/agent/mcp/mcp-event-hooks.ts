@@ -113,7 +113,7 @@ async function getMCPParamsCollectionURL(params: {
   }
 
   const url = new URL(
-    `${import.meta.env.VITE_PUBLIC_URL || ""}/_auth.layout/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
+    `${import.meta.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
   );
   url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);
@@ -133,6 +133,7 @@ async function getMCPParamsCollectionURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
+  console.log("PARAMS", params);
   const { event, reducedState, agentDurableObject, estateId, mcpConnectionCache } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const db = getDb();
@@ -179,7 +180,6 @@ export async function handleMCPConnectRequest(
 
   let appliedHeaders: Record<string, string> = {};
   let modifiedServerUrl = serverUrl;
-
   const finalRedirectUrl = await params.getFinalRedirectUrl?.({
     durableObjectInstanceName: agentDurableObject.durableObjectName,
   });
@@ -211,6 +211,7 @@ export async function handleMCPConnectRequest(
         integrationSlug: guaranteedIntegrationSlug,
         finalRedirectUrl,
       });
+      console.log("MISSING PARAMS COLLECTION URL", missingParams, requiresParams);
 
       events.push({
         type: "MCP:PARAMS_REQUIRED",
