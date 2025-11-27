@@ -35,8 +35,6 @@ const worker = await Worker("mcp-mock-server", {
     MCP_OAUTH_OBJECT,
     // env.OAUTH_PROVIDER comes by magic from https://github.com/cloudflare/workers-oauth-provider
     OAUTH_KV,
-    // Optional: protect /mcp and /sse with a bearer token
-    MCP_BEARER_TOKEN: process.env.MCP_BEARER_TOKEN,
   },
   domains: isProduction ? ["mock.iterate.com"] : isStaging ? ["mock-staging.iterate.com"] : [],
   adopt: true,

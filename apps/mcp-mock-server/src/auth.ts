@@ -20,3 +20,25 @@ export function verifyBearerAuth(request: Request, expectedToken?: string): Resp
   }
   return null;
 }
+
+export function verifyBearerHeaderPresent(request: Request): Response | null {
+  const authHeader =
+    request.headers.get("authorization") ?? request.headers.get("Authorization") ?? "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length).trim() : "";
+  if (!token) {
+    return new Response(
+      JSON.stringify({
+        error: "unauthorized",
+        message: "Missing Bearer token",
+      }),
+      {
+        status: 401,
+        headers: {
+          "Content-Type": "application/json",
+          "WWW-Authenticate": 'Bearer realm="Mock MCP", error="invalid_token"',
+        },
+      },
+    );
+  }
+  return null;
+}

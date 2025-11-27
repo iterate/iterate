@@ -238,6 +238,10 @@ export const adminRouter = router({
   searchUsersByEmail,
   getEstateOwner,
   deleteUserByEmail,
+  getIterateSlackEstateId: adminProcedure.query(async ({ ctx }) => {
+    const estateId = await getIterateSlackEstateId(ctx.db);
+    return { estateId: estateId ?? null };
+  }),
   setupTestOnboardingUser,
   markTestUserAsOnboarded,
   allProcedureInputs,

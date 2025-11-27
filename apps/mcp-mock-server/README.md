@@ -105,32 +105,30 @@ Stateful CRUD Tools (demonstrates Durable Object storage):
 
 ### 1b. Bearer Header Auth (Simple Protection)
 
-Optionally require a static Bearer token for the non-OAuth endpoints. When enabled, requests to `/mcp` and `/sse` must include:
+Use separate endpoints to test Bearer header auth without restarting or changing env vars.
+
+**Endpoints:**
+
+- `/bearer/mcp` - MCP Streamable-HTTP endpoint (Bearer header required)
+- `/bearer/sse` - MCP SSE endpoint (Bearer header required; deprecated)
+
+**Required Header:**
 
 ```
 Authorization: Bearer <token>
 ```
 
-Enable by setting an environment variable before running or deploying:
+**Token Matching Options:**
+
+- Add `?expected=your-token` to the endpoint to require that exact token for the request
+- If `?expected` is not set, any Bearer token value is accepted
+
+**Examples:**
 
 ```bash
-# Local dev
-MCP_BEARER_TOKEN=dev-secret pnpm dev
-
-# Deploy
-MCP_BEARER_TOKEN=prod-secret STAGE=prd pnpm deploy
+# Require a specific token per request
+curl -H "Authorization: Bearer test" "http://localhost:8789/bearer/mcp?expected=test"
 ```
-
-Example:
-
-```bash
-curl -H "Authorization: Bearer dev-secret" http://localhost:8789/mcp
-```
-
-Notes:
-
-- Health endpoint will show a "bearer" mode when enabled
-- OAuth endpoints are unaffected and continue to validate access tokens as usual
 
 ### 2. OAuth Mode (Authentication Testing)
 

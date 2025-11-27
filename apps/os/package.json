@@ -132,6 +132,7 @@
     "zod-to-ts": "^2.0.0"
   },
   "devDependencies": {
+    "playwright": "^1.48.2",
     "@cloudflare/vite-plugin": "^1.13.12",
     "@cloudflare/workers-types": "^4.20251014.0",
     "@posthog/cli": "^0.5.7",
