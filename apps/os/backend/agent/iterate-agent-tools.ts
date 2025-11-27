@@ -159,6 +159,17 @@ export const iterateAgentTools = defineDOTools({
       numResults: z.number().optional().default(10),
     }),
   },
+  listReplicateModels: {
+    description: "List names and owners of all available Replicate models.",
+    statusIndicatorText: "🔍 listing replicate models",
+    input: z.object({}),
+  },
+  getReplicateModel: {
+    description:
+      "Get information on a Replicate model, after you have found one via listReplicateModels, detailing how to use it.",
+    statusIndicatorText: "🔍 listing replicate models",
+    input: z.object({ owner: z.string(), name: z.string() }),
+  },
   generateImage: {
     description:
       "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",

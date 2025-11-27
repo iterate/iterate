@@ -114,6 +114,6 @@ export function createDOToolFactory<T extends ReturnType<typeof defineDOTools>>(
       toolSpec?: Omit<AgentDurableObjectToolSpec, "type" | "methodName" | "passThroughArgs"> & {
         passThroughArgs?: Partial<z.infer<T[K]["input"]>>;
       },
-    ) => ToolSpec;
+    ) => ToolSpec & { methodName?: K };
   };
 }

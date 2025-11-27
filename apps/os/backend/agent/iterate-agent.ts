@@ -1666,6 +1666,26 @@ export class IterateAgent<
     };
   }
 
+  async listReplicateModels() {
+    const replicate = new Replicate({ auth: env.REPLICATE_API_TOKEN, useFileOutput: false });
+    const { results } = await replicate.models.list();
+    const models = results.map((m) => ({
+      name: m.name,
+      owner: m.owner,
+      description: m.description,
+      url: m.url,
+    }));
+    return {
+      description: `${models.length} Replicate models found. Use the getReplicateModel tool to get information on inthe inputs for a specific model before using it.`,
+      models,
+    };
+  }
+
+  async getReplicateModel(input: Inputs["getReplicateModel"]) {
+    const replicate = new Replicate({ auth: env.REPLICATE_API_TOKEN, useFileOutput: false });
+    return replicate.models.get(input.owner, input.name);
+  }
+
   async generateImage(input: Inputs["generateImage"]) {
     const replicate = new Replicate({ auth: env.REPLICATE_API_TOKEN, useFileOutput: false });
 

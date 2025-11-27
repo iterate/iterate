@@ -7,6 +7,7 @@ import { defineRules, matchers } from "./context.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { createDOToolFactory } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
+import type { ToolSpec } from "./tool-schemas.ts";
 
 const iterateAgentTool = createDOToolFactory(iterateAgentTools);
 const slackAgentTool = createDOToolFactory(slackAgentTools);
@@ -423,48 +424,71 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
 
 const experimentalCodemodeMatcher = matchers.or(
   // testing out codemode in specific channels
-  matchers.slackChannel("misha-test"),
+  // matchers.slackChannel("misha-test"),
   matchers.slackChannel("test-codemode"),
 );
+
+const slackDefaultTools = [
+  iterateAgentTool.doNothing(),
+  iterateAgentTool.shareFileWithSlack(),
+  iterateAgentTool.connectMCPServer(),
+  iterateAgentTool.getAgentDebugURL(),
+  iterateAgentTool.remindMyselfLater(),
+  iterateAgentTool.listMyReminders(),
+  iterateAgentTool.cancelReminder(),
+  slackAgentTool.stopRespondingUntilMentioned(),
+  slackAgentTool.addSlackReaction(),
+  slackAgentTool.removeSlackReaction(),
+  slackAgentTool.updateSlackMessage(),
+  iterateAgentTool.getURLContent(),
+  iterateAgentTool.searchWeb({
+    overrideInputJSONSchema: z.toJSONSchema(
+      SearchRequest.pick({
+        query: true,
+      }),
+    ),
+  }),
+  iterateAgentTool.listReplicateModels(),
+  iterateAgentTool.getReplicateModel(),
+  iterateAgentTool.generateImage(),
+  iterateAgentTool.generateVideo(),
+  slackAgentTool.sendSlackMessage({
+    overrideInputJSONSchema: z.toJSONSchema(
+      slackAgentTools.sendSlackMessage.input.pick({
+        text: true,
+        ephemeral: true,
+        user: true,
+        blocks: true,
+        endTurn: true,
+      }),
+    ),
+  }),
+] as const satisfies ToolSpec[];
+
+type UsedTools = NonNullable<(typeof slackDefaultTools)[number]["methodName"]>;
+
+type AvailableTools = keyof (typeof iterateAgentTools & typeof slackAgentTools);
+type UnusedTools = Exclude<AvailableTools, UsedTools | "$infer">;
+
+// sanity check: you have to either use a tool by default, or specify here that you deliberately didn't use it.
+"" as string as UnusedTools satisfies
+  | "ping"
+  | "reverse"
+  | "flexibleTestTool"
+  | "exec"
+  | "execCodex"
+  | "uploadFile"
+  | "callGoogleAPI"
+  | "sendGmail"
+  | "getGmailMessage"
+  | "addLabel"
+  | "messageAgent"
+  | "uploadAndShareFileInSlack";
 
 export const defaultContextRules = defineRules([
   {
     key: "@iterate-com/slack-default-tools",
-    tools: [
-      // IterateAgent DO tools
-      iterateAgentTool.doNothing(),
-      iterateAgentTool.shareFileWithSlack(),
-      iterateAgentTool.connectMCPServer(),
-      iterateAgentTool.getAgentDebugURL(),
-      iterateAgentTool.remindMyselfLater(),
-      iterateAgentTool.listMyReminders(),
-      iterateAgentTool.cancelReminder(),
-      slackAgentTool.stopRespondingUntilMentioned(),
-      slackAgentTool.addSlackReaction(),
-      slackAgentTool.removeSlackReaction(),
-      slackAgentTool.updateSlackMessage(),
-      iterateAgentTool.getURLContent(),
-      iterateAgentTool.searchWeb({
-        overrideInputJSONSchema: z.toJSONSchema(
-          SearchRequest.pick({
-            query: true,
-          }),
-        ),
-      }),
-      iterateAgentTool.generateImage(),
-      iterateAgentTool.generateVideo(),
-      slackAgentTool.sendSlackMessage({
-        overrideInputJSONSchema: z.toJSONSchema(
-          slackAgentTools.sendSlackMessage.input.pick({
-            text: true,
-            ephemeral: true,
-            user: true,
-            blocks: true,
-            endTurn: true,
-          }),
-        ),
-      }),
-    ],
+    tools: slackDefaultTools,
   },
   {
     key: "@iterate-com/slack-default-context-rules-with-codemode",
