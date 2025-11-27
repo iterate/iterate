@@ -331,6 +331,7 @@ async function setupDurableObjects() {
         dockerfile: "Dockerfile",
         platform: "linux/amd64",
       },
+      maxInstances: 10,
       adopt: true,
     },
   );
