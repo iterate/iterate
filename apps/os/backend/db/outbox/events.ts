@@ -143,7 +143,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           logger.info(`DONE. Result: ${result}`);
         } catch (e) {
           const retry = consumer.retry(job);
-          const retryMessage = `Retrying: ${retry.retry}. Reason: ${retry.reason}. Delay: ${retry.delay}s.`;
+          const retryMessage = Object.entries(retry)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(". ");
           logger.error(`FAILED. ${retryMessage}`, e);
 
           const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
