@@ -13,7 +13,7 @@ export default {
       // paths: [".github/workflows/nag.yml"],
     },
     pull_request: {
-      types: ["closed", "auto_merge_enabled"],
+      types: ["synchronize", "closed", "auto_merge_enabled"],
     },
   },
   jobs: {
@@ -31,7 +31,10 @@ export default {
           async function doit({ github, context: _context }) {
             // todo: consider contributing a union like this to jlarky/gha-ts?
             type ContextUnion =
-              | { eventName: "pull_request"; payload: { action: "closed" | "auto_merge_enabled" } }
+              | {
+                  eventName: "pull_request";
+                  payload: { action: "synchronize" | "closed" | "auto_merge_enabled" };
+                }
               | { eventName: "push"; payload: { ref: string } }
               | { eventName: "schedule" };
 
@@ -46,7 +49,7 @@ export default {
               message_ts?: string;
               followup_message_ts?: string;
             };
-            const { prState } = await import("../utils/github-script.ts");
+            const { prState, hasPRCommand } = await import("../utils/github-script.ts");
 
             if (context.eventName === "pull_request" && context.payload.action === "closed") {
               const state = prState<{ nags: Array<NagInfo> }>(
@@ -76,6 +79,42 @@ export default {
             console.log(`got ${openPRs.length} open PRs`);
 
             for (const pr of openPRs) {
+              if (!pr.auto_merge && hasPRCommand(pr, "/automerge")) {
+                const getPRQuery = `
+                  query($owner: String!, $name: String!, $num: Int!) {
+                    repository(owner: $owner, name: $name) {
+                      pullRequest(number: $num) {
+                        id
+                      }
+                    }
+                  }
+                `;
+                const prResponse = await github.graphql<{
+                  repository: { pullRequest: { id: string } };
+                }>(getPRQuery, {
+                  owner: context.repo.owner,
+                  name: context.repo.repo,
+                  num: pr.number,
+                });
+
+                const enableAutoMergeQuery = `
+                  mutation($pullRequestId: ID!) {
+                    enablePullRequestAutoMerge(input:{pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+                      clientMutationId
+                    }
+                  }
+                `;
+                await github.graphql(enableAutoMergeQuery, {
+                  pullRequestId: prResponse.repository.pullRequest.id,
+                });
+
+                const updateResult = await github.rest.pulls.get({
+                  ...context.repo,
+                  pull_number: pr.number,
+                });
+
+                pr.auto_merge = updateResult.data.auto_merge;
+              }
               const { data: rawReviews } = await github.rest.pulls.listReviews({
                 ...context.repo,
                 pull_number: pr.number,

@@ -10,6 +10,7 @@ on:
       - "*nag*"
   pull_request:
     types:
+      - synchronize
       - closed
       - auto_merge_enabled
 jobs:
@@ -74,6 +75,9 @@ jobs:
 
 
 
+
+
+
               const context = _context;
 
               console.log(`context`, JSON.stringify(context, null, 2));
@@ -81,6 +85,7 @@ jobs:
 
               const {
                 prState,
+                hasPRCommand,
               } = await require(
                 ".github/ts-workflows/workflows/nag.ts.utilsgithubscriptts-65073544fd07df03882caac199eb89dc-tsx-shim.cjs" /* <-- shimmed module of "../utils/github-script.ts" that actions/github-script can require */,
               ).load();
@@ -120,6 +125,43 @@ jobs:
               console.log(`got ${openPRs.length} open PRs`);
 
               for (const pr of openPRs) {
+                if (!pr.auto_merge && hasPRCommand(pr, "/automerge")) {
+                  const getPRQuery = `
+                              query($owner: String!, $name: String!, $num: Int!) {
+                                repository(owner: $owner, name: $name) {
+                                  pullRequest(number: $num) {
+                                    id
+                                  }
+                                }
+                              }
+                            `;
+
+                  const prResponse = await github.graphql(getPRQuery, {
+                    owner: context.repo.owner,
+                    name: context.repo.repo,
+                    num: pr.number,
+                  });
+
+                  const enableAutoMergeQuery = `
+                              mutation($pullRequestId: ID!) {
+                                enablePullRequestAutoMerge(input:{pullRequestId: $pullRequestId, mergeMethod: SQUASH}) {
+                                  clientMutationId
+                                }
+                              }
+                            `;
+
+                  await github.graphql(enableAutoMergeQuery, {
+                    pullRequestId: prResponse.repository.pullRequest.id,
+                  });
+
+                  const updateResult = await github.rest.pulls.get({
+                    ...context.repo,
+                    pull_number: pr.number,
+                  });
+
+                  pr.auto_merge = updateResult.data.auto_merge;
+                }
+
                 const {
                   data: rawReviews,
                 } = await github.rest.pulls.listReviews({

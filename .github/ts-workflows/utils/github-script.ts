@@ -192,3 +192,12 @@ export const prState = <State>(body: string, label: string, { parser = JSON } = 
     },
   };
 };
+
+export const PR_COMMANDS = ["/automerge"] as const;
+
+export const hasPRCommand = (
+  pr: { body: string | null },
+  command: (typeof PR_COMMANDS)[number],
+) => {
+  return `${pr.body}\n`.includes(command + "\n");
+};
