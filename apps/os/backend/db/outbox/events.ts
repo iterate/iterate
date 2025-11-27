@@ -12,6 +12,7 @@ export const ConsumerEvent = z.object({
   event_context: z.unknown(),
   processing_results: z.array(z.unknown()),
   environment: z.string(),
+  status: z.enum(["pending", "success", "retrying", "failed"]).optional(),
 });
 
 export type ConsumerEvent = z.infer<typeof ConsumerEvent>;
@@ -34,6 +35,12 @@ export type DelayFn<Payload> = (params: { payload: Payload }) => number;
 
 export type DBLike = Pick<DB, "execute">;
 
+type RetryFn = (
+  job: ConsumerJobQueueMessage,
+) =>
+  | { retry: false; reason: string; delay?: never }
+  | { retry: true; reason: string; delay: number };
+
 export type ConsumersForEvent = Record<
   `consumerName:${string}`,
   {
@@ -42,6 +49,7 @@ export type ConsumersForEvent = Record<
     when: WhenFn<{ input: unknown; output: unknown }>;
     /** delay before processing in seconds. if not specified, will process immediately */
     delay: DelayFn<{ input: unknown; output: unknown }>;
+    retry: RetryFn;
     /** handler function */
     handler: (params: {
       eventName: string;
@@ -126,7 +134,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
               message,
               '{processing_results}',
               message->'processing_results' || jsonb_build_array(${`#${job.read_ct} success: ${String(result)}`}::text)
-            )
+            ) || '{"status": "success"}'::jsonb
             where msg_id = ${job.msg_id}::bigint
           `);
           await db.execute(sql`
@@ -134,34 +142,38 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           `);
           logger.info(`DONE. Result: ${result}`);
         } catch (e) {
-          logger.error(`FAILED`, e);
+          const retry = consumer.retry(job);
+          const retryMessage = `Retrying: ${retry.retry}. Reason: ${retry.reason}. Delay: ${retry.delay}s.`;
+          logger.error(`FAILED. ${retryMessage}`, e);
+
+          const statusObj = JSON.stringify({ status: retry.retry ? "retrying" : "failed" });
+
           // bit of a hack - put stringified error into processing_errors array as a hint for debugging
           await db.execute(sql`
             update pgmq.${sql.identifier(pgmqQueueTableName)}
             set message = jsonb_set(
               message,
               '{processing_results}',
-              message->'processing_results' || jsonb_build_array(${`#${job.read_ct} error: ${String(e)}`}::text)
-            )
+              message->'processing_results' || jsonb_build_array(${`#${job.read_ct} error: ${String(e)}. ${retryMessage}`}::text)
+            ) || ${statusObj}::jsonb
             where msg_id = ${job.msg_id}::bigint
           `);
-          if (job.read_ct > 5) {
+          if (!retry.retry) {
             logger.warn(
-              `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + read_ct>5`,
+              `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + some filtering`,
             );
             const [archived] = await db.execute(sql`
               select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
             `);
             if (!archived) throw new Error(`Failed to archive message ${job.msg_id}`);
           } else {
-            const vt = 2 ** Math.max(0, job.read_ct - 1);
-            logger.info(`setting to visible in ${vt} seconds`);
+            logger.info(`Setting to visible in ${retry.delay} seconds`);
             // useful reference https://github.com/Muhammad-Magdi/pgmq-js/blob/8b041fe7f3cd30aff1c71d00dd88abebfeb31ce7/src/msg-manager/index.ts#L68
             await db.execute(sql`
               select pgmq.set_vt(
                 queue_name => ${queueName}::text,
                 msg_id => ${job.msg_id}::bigint,
-                vt => ${vt}::integer
+                vt => ${retry.delay}::integer
               )
             `);
           }
@@ -199,6 +211,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           queue_name  => ${queueName}::text,
           msg         => ${JSON.stringify({
             consumer_name: consumer.name,
+            status: "pending",
             event_name: params.name,
             event_id: Number(eventInsertion.id satisfies string), // todo: make drizzle return a number? according to https://orm.drizzle.team/docs/column-types/pg#bigserial that's fine?
             event_payload: params.payload,
@@ -336,6 +349,18 @@ export const createPostProcedureConsumerPlugin = <DBConnection>(
   );
 };
 
+export const defaultRetryFn: RetryFn = (job) => {
+  if (job.read_ct > 5) {
+    return { retry: false, reason: "max retries reached" };
+  }
+  const vt = 2 ** Math.max(0, job.read_ct - 1);
+  return {
+    retry: true,
+    reason: `attempt ${job.read_ct} setting to visible in ${vt} seconds`,
+    delay: vt,
+  };
+};
+
 /** Extract the procedures from a trpc router def (pass in typeof appRouter._def.procedures) */
 export type FlattenProcedures<P, Prefix extends string = ""> =
   ProcUnion<P, Prefix> extends infer U
@@ -380,6 +405,7 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
     on: `trpc:${P}`;
     when?: WhenFn<ProcedureTypes<P>>;
     delay?: DelayFn<ProcedureTypes<P>>;
+    retry?: RetryFn;
     handler: (params: {
       eventName: `trpc:${P}`;
       eventId: number;
@@ -395,6 +421,7 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
       name: options.name,
       when: (options.when as WhenFn<{ input: unknown; output: unknown }>) ?? (() => true),
       delay: (options.delay as DelayFn<{ input: unknown; output: unknown }>) ?? (() => 0),
+      retry: options.retry ?? defaultRetryFn,
       handler: async (params) => {
         return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
           return options.handler({
