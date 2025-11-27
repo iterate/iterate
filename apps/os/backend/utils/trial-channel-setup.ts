@@ -93,13 +93,14 @@ function assertOk<T extends { ok: boolean; error?: string; message?: string }>(
  * @returns Success result with channel info, or error info if email is invalid
  */
 export async function createTrialSlackConnectChannel(params: {
-  db: DB;
+  db: Pick<DB, "insert" | "query">;
   userEstateId: string;
   userEmail: string;
   userName: string;
   iterateTeamId: string;
   iterateBotToken: string;
 }): Promise<{ channelId: string; channelName: string }> {
+  // todo: convert this to a workflow
   const { db, userEstateId, userEmail, userName, iterateTeamId, iterateBotToken } = params;
 
   let channelName = slackChannelNameFromEmail(userEmail);

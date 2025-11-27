@@ -237,7 +237,7 @@ function Integrations() {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {integrations.map((integration) => (
               <Card key={integration.id}>
-                <CardContent>
+                <CardContent className="flex flex-col justify-between h-full">
                   <Item className="p-0 mb-3">
                     <ItemMedia>
                       {integration.icon === "github" ? (

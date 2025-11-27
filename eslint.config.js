@@ -14,6 +14,7 @@ import globals from "globals";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
 import codegen from "eslint-plugin-codegen";
 import pluginRouter from "@tanstack/eslint-plugin-router";
+import esquery from "esquery";
 
 /** @param {string} name */
 const getBuiltinRule = (name) => {
@@ -377,6 +378,7 @@ export default defineConfig([
               hasSuggestions: true,
               fixable: "code",
             },
+            /** @param {import('eslint').Rule.RuleContext} context */
             create: (context) => {
               const dbMutateMethods = ["insert", "update", "delete"];
               /** @type {Record<string, Function>} */
@@ -408,27 +410,25 @@ export default defineConfig([
 
               return {
                 ...dbMutateEnforcementListeners,
+
                 "CallExpression[callee.property.name='transaction']": (node) => {
-                  // @ts-expect-error getScope exists I swear
-                  const nodeScope = context.sourceCode.getScope(node.arguments[0]);
-                  // `through`: "The array of references which could not be resolved in this scope" https://eslint.org/docs/latest/extend/scope-manager-interface#scope-interface
-                  for (const reference of nodeScope.through) {
-                    const { identifier } = reference;
-                    if (identifier.name === node.callee.object?.name) {
-                      const used = identifier.name;
-                      const shouldUse = node.arguments[0].params[0]?.name;
+                  const parentReference = context.sourceCode.getText(node.callee.object);
+                  const shouldUse = node.arguments[0].params[0]?.name;
+                  esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
+                    const used = context.sourceCode.getText(m);
+                    if (m !== node.callee.object && parentReference === used) {
                       context.report({
-                        node: identifier,
+                        node: m,
                         message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
                         suggest: [
                           {
                             desc: `Change \`${used}\` to \`${shouldUse}\``,
-                            fix: (fixer) => fixer.replaceText(identifier, shouldUse),
+                            fix: (fixer) => fixer.replaceText(m, shouldUse),
                           },
                         ],
                       });
                     }
-                  }
+                  });
                 },
               };
             },
