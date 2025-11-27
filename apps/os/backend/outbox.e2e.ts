@@ -11,7 +11,7 @@ const TestEnv = z.object({
   SERVICE_AUTH_TOKEN: z.string(),
 });
 
-test("outbox", { timeout: 15 * 60 * 1000 }, async () => {
+test("outbox basic", { timeout: 15 * 60 * 1000 }, async () => {
   const env = TestEnv.parse({
     WORKER_URL: process.env.WORKER_URL,
     SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
@@ -30,7 +30,7 @@ test("outbox", { timeout: 15 * 60 * 1000 }, async () => {
   await vi.waitUntil(async () => {
     return db.query.outboxEvent.findFirst({
       where: and(
-        eq(schema.outboxEvent.name, "admin.outbox.poke"),
+        eq(schema.outboxEvent.name, "trpc:admin.outbox.poke"),
         ilike(sql`${schema.outboxEvent.payload}::text`, `%bonjour${random}%`),
       ),
     });
@@ -50,7 +50,7 @@ test("outbox", { timeout: 15 * 60 * 1000 }, async () => {
   const hiEvent = await vi.waitUntil(async () => {
     return db.query.outboxEvent.findFirst({
       where: and(
-        eq(schema.outboxEvent.name, "admin.outbox.poke"),
+        eq(schema.outboxEvent.name, "trpc:admin.outbox.poke"),
         ilike(sql`${schema.outboxEvent.payload}::text`, `%hi${random}%`),
       ),
     });
@@ -68,7 +68,7 @@ test("outbox", { timeout: 15 * 60 * 1000 }, async () => {
 
   expect(arvhiedHi).toMatchObject({
     message: {
-      event_name: "admin.outbox.poke",
+      event_name: "trpc:admin.outbox.poke",
       consumer_name: "logGreeting",
       event_id: hiEvent.id,
       event_payload: { input: { message: "hi" + random } },
@@ -92,7 +92,7 @@ test("outbox retries", { timeout: 60_000 }, async () => {
   const event = await vi.waitUntil(async () => {
     return db.query.outboxEvent.findFirst({
       where: and(
-        eq(schema.outboxEvent.name, "admin.outbox.poke"),
+        eq(schema.outboxEvent.name, "trpc:admin.outbox.poke"),
         ilike(sql`${schema.outboxEvent.payload}::text`, `%unstable${secret}%`),
       ),
     });
@@ -112,7 +112,7 @@ test("outbox retries", { timeout: 60_000 }, async () => {
     message: {
       consumer_name: "unstableConsumer",
       event_id: event.id,
-      event_name: "admin.outbox.poke",
+      event_name: "trpc:admin.outbox.poke",
       event_payload: {
         input: {
           message: expect.stringContaining(secret),
@@ -149,7 +149,7 @@ test("outbox give up (DLQ-like behaviour)", { timeout: 2 * 60_000 }, async () =>
   const event = await vi.waitUntil(async () => {
     return db.query.outboxEvent.findFirst({
       where: and(
-        eq(schema.outboxEvent.name, "admin.outbox.poke"),
+        eq(schema.outboxEvent.name, "trpc:admin.outbox.poke"),
         ilike(sql`${schema.outboxEvent.payload}::text`, `%fail${secret}%`),
       ),
     });
@@ -169,7 +169,7 @@ test("outbox give up (DLQ-like behaviour)", { timeout: 2 * 60_000 }, async () =>
     message: {
       consumer_name: "badConsumer",
       event_id: event.id,
-      event_name: "admin.outbox.poke",
+      event_name: "trpc:admin.outbox.poke",
       event_payload: {
         input: {
           message: expect.stringContaining(secret),
