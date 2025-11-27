@@ -1,13 +1,13 @@
 import { inspect } from "util";
 import OAuthProvider from "@cloudflare/workers-oauth-provider";
 import type { ExecutionContext } from "@cloudflare/workers-types";
+import { MCPClientManager } from "agents/mcp/client";
 import { MockMCPAgent } from "./mock-mcp-agent.ts";
 import { MockOAuthMCPAgent } from "./mock-oauth-mcp-agent.ts";
 import { MockOAuthHandler } from "./mock-oauth-handler.ts";
 import type { Env } from "./env.ts";
 import { renderHomePage } from "./pages/home.ts";
 import { verifyBearerAuth, verifyBearerHeaderPresent } from "./auth.ts";
-import { MCPClientManager } from "agents/mcp/client";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

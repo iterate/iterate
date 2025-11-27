@@ -257,7 +257,7 @@ test("connect to mock MCP (bearer) and use echo tool", { timeout: 10 * 60 * 1000
     const effectiveParamsURL = new URL(paramsURL.toString());
     effectiveParamsURL.protocol = appURL.protocol;
     effectiveParamsURL.host = appURL.host;
-    // eslint-disable-next-line no-console
+
     console.log("[MCP E2E DEBUG] effectiveParamsURL:", effectiveParamsURL.toString());
     const allCookiePairs: Array<{ name: string; value: string }> = [...impersonationCookiePairs];
     for (const { name, value } of allCookiePairs) {
@@ -294,17 +294,17 @@ test("connect to mock MCP (bearer) and use echo tool", { timeout: 10 * 60 * 1000
       const debugHeadings = await page.locator('h1, h2, [role="heading"]').allTextContents();
       const debugCookies = await context.cookies(effectiveParamsURL.toString());
       const debugHtml = await page.content();
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] url:", debugUrl);
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] title:", debugTitle);
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] headings:", debugHeadings);
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] buttons:", debugButtons);
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] cookies:", debugCookies.map((c) => c.name).join(", "));
-      // eslint-disable-next-line no-console
+
       console.log("[MCP E2E DEBUG] html(first 2000):", debugHtml.slice(0, 2000));
       await page.screenshot({ path: "ignoreme/mcp-debug.png", fullPage: true }).catch(() => {});
     } catch {}
