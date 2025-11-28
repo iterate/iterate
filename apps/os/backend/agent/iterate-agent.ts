@@ -1981,7 +1981,7 @@ export class IterateAgent<
       with: recentActiveSources,
     });
 
-    const estate = {
+    const estate = _estate && {
       ..._estate,
       sources: undefined,
       connectedRepoId: _estate?.sources?.[0]?.repoId ?? null,
