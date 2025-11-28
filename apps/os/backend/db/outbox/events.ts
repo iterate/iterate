@@ -162,7 +162,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           `);
           if (!retry.retry) {
             logger.warn(
-              `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + some filtering`,
+              `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + status=failed`,
             );
             const [archived] = await db.execute(sql`
               select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
