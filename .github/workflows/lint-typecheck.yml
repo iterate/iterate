@@ -8,16 +8,21 @@ on:
   pull_request: {}
 jobs:
   lint-typecheck:
-    runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
+    runs-on: ${{ github.repository_owner == 'iterate' && 'namespace-profile-ubuntu-default' || 'ubuntu-24.04' }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-      - name: Setup Node
+        uses: namespacelabs/nscloud-checkout-action@v8
+      - name: Setup node
         uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: ""
+      - name: Enable corepack
+        run: corepack enable
+      - name: Use namespace cache
+        if: github.repository_owner == 'iterate'
+        uses: namespacelabs/nscloud-cache-action@v1
+        with:
           cache: pnpm
       - name: Install dependencies
         run: pnpm install

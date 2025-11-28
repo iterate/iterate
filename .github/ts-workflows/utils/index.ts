@@ -6,6 +6,32 @@ export const prTriggerable = {
   on: {} satisfies Workflow["on"],
 };
 
+export type RunProfile = {
+  runsOn: string;
+  setupSteps: Step[];
+};
+
+export const namespaceRunProfile = {
+  runsOn:
+    "${{ github.repository_owner == 'iterate' && 'namespace-profile-ubuntu-default' || 'ubuntu-24.04' }}",
+  setupSteps: [
+    { name: "Checkout code", uses: "namespacelabs/nscloud-checkout-action@v8" },
+    {
+      name: "Setup node",
+      uses: "actions/setup-node@v4",
+      with: { "node-version": 24, cache: "" },
+    },
+    { name: "Enable corepack", run: "corepack enable" },
+    {
+      name: "Use namespace cache",
+      if: "github.repository_owner == 'iterate'",
+      uses: "namespacelabs/nscloud-cache-action@v1",
+      with: { cache: "pnpm" },
+    },
+    { name: "Install dependencies", run: "pnpm install" },
+  ],
+} as const satisfies RunProfile;
+
 export const runsOn = {
   "runs-on": `\${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}`,
 };
