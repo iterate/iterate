@@ -13,6 +13,11 @@ export function registerStatefulCRUDTools(server: McpServer, agent: McpAgent<Env
       updated_at INTEGER NOT NULL
     )
   `;
+  // Helpful index for lookups by title (and most-recent selection)
+  agent.sql`
+    CREATE INDEX IF NOT EXISTS idx_notes_title_created
+    ON notes (title, created_at DESC)
+  `;
 
   server.tool(
     "mock_create_note",
@@ -45,6 +50,44 @@ export function registerStatefulCRUDTools(server: McpServer, agent: McpAgent<Env
               null,
               2,
             ),
+          },
+        ],
+      };
+    },
+  );
+
+  server.tool(
+    "mock_get_note_by_title",
+    "Get the most recently created note that matches the given title",
+    {
+      title: z.string().describe("The title to look up"),
+    },
+    async ({ title }) => {
+      const notes = agent.sql<{
+        id: string;
+        title: string;
+        content: string;
+        created_at: number;
+        updated_at: number;
+      }>`SELECT * FROM notes WHERE title = ${title} ORDER BY created_at DESC LIMIT 1`;
+
+      if (notes.length === 0) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ error: "Note not found", title }, null, 2),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify(notes[0], null, 2),
           },
         ],
       };

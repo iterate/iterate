@@ -237,7 +237,7 @@ export function renderHomePage(origin: string): string {
       <p>Simple MCP connection. No authentication required.</p>
       
       <div class="label">endpoint</div>
-      <div class="url">${origin}/mcp</div>
+      <div class="url">${origin}/no-auth</div>
       
       <div class="label">available tools</div>
       <ul>
@@ -249,11 +249,25 @@ export function renderHomePage(origin: string): string {
     </div>
 
     <div class="section">
+      <h2>bearer mode</h2>
+      <p>Bearer token required in Authorization header.</p>
+      
+      <div class="label">endpoint</div>
+      <div class="url">${origin}/bearer</div>
+      
+      <div class="label">how to authenticate</div>
+      <ul>
+        <li>Send Authorization header: <code>Bearer &lt;token&gt;</code></li>
+        <li>Optionally enforce a specific token by appending <code>?expected=&lt;token&gt;</code></li>
+      </ul>
+    </div>
+
+    <div class="section">
       <h2>oauth mode</h2>
       <p>Full OAuth 2.1 flow with user authentication. Includes all no-auth tools plus user-specific tools.</p>
       
       <div class="label">endpoint</div>
-      <div class="url">${origin}/oauth/mcp</div>
+      <div class="url">${origin}/oauth</div>
       
       <div class="label">how to authorize</div>
       <ul>

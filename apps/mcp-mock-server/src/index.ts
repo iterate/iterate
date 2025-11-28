@@ -6,6 +6,7 @@ import { MockOAuthMCPAgent } from "./mock-oauth-mcp-agent.ts";
 import { MockOAuthHandler } from "./mock-oauth-handler.ts";
 import type { Env } from "./env.ts";
 import { renderHomePage } from "./pages/home.ts";
+import { verifyBearerAuth, verifyBearerHeaderPresent } from "./auth.ts";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -31,14 +32,21 @@ export default {
           modes: {
             "no-auth": {
               endpoints: {
-                mcp: "/mcp",
+                mcp: "/no-auth",
                 sse: "/sse (deprecated)",
               },
               description: "No authentication required",
             },
+            bearer: {
+              endpoints: {
+                mcp: "/bearer",
+                sse: "/sse (deprecated)",
+              },
+              description: "Bearer token required in Authorization header",
+            },
             oauth: {
               endpoints: {
-                mcp: "/oauth/mcp",
+                mcp: "/oauth",
                 sse: "/oauth/sse (deprecated)",
               },
               description: "OAuth 2.1 with flexible authorization modes",
@@ -51,12 +59,23 @@ export default {
       );
     }
 
-    if (url.pathname === "/mcp") {
-      return MockMCPAgent.serve("/mcp", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
+    if (url.pathname === "/no-auth") {
+      return MockMCPAgent.serve("/no-auth", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
     }
 
     if (url.pathname === "/sse") {
       return MockMCPAgent.serveSSE("/sse", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
+    }
+
+    if (url.pathname === "/bearer") {
+      // If an expected token is provided, enforce exact match, otherwise require presence of any Bearer token
+      const expected = url.searchParams.get("expected") || undefined;
+      const authResponse =
+        expected !== undefined
+          ? verifyBearerAuth(request, expected)
+          : verifyBearerHeaderPresent(request);
+      if (authResponse) return authResponse;
+      return MockMCPAgent.serve("/bearer", { binding: "MCP_OBJECT" }).fetch(request, env, ctx);
     }
 
     if (
@@ -73,7 +92,7 @@ export default {
 const oauthProvider = new OAuthProvider({
   apiHandlers: {
     "/oauth/sse": MockOAuthMCPAgent.serveSSE("/oauth/sse", { binding: "MCP_OAUTH_OBJECT" }),
-    "/oauth/mcp": MockOAuthMCPAgent.serve("/oauth/mcp", { binding: "MCP_OAUTH_OBJECT" }),
+    "/oauth": MockOAuthMCPAgent.serve("/oauth", { binding: "MCP_OAUTH_OBJECT" }),
   },
   authorizeEndpoint: "/oauth/authorize",
   tokenEndpoint: "/oauth/token",

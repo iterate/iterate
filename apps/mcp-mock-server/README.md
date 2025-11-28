@@ -37,6 +37,8 @@ curl http://localhost:8789/health
 
 Returns information about available endpoints and modes.
 
+If a bearer token is configured (see below), the health response will include a "bearer" mode entry.
+
 ### Interactive OAuth Guide
 
 Visit `/guide` for an interactive step-by-step OAuth 2.1 walkthrough:
@@ -100,6 +102,33 @@ Stateful CRUD Tools (demonstrates Durable Object storage):
 - `mock_update_note(id, title?, content?)` - Update an existing note
 - `mock_delete_note(id)` - Delete a note
 - `mock_clear_all_notes()` - Delete all notes
+
+### 1b. Bearer Header Auth (Simple Protection)
+
+Use separate endpoints to test Bearer header auth without restarting or changing env vars.
+
+**Endpoints:**
+
+- `/bearer/mcp` - MCP Streamable-HTTP endpoint (Bearer header required)
+- `/bearer/sse` - MCP SSE endpoint (Bearer header required; deprecated)
+
+**Required Header:**
+
+```
+Authorization: Bearer <token>
+```
+
+**Token Matching Options:**
+
+- Add `?expected=your-token` to the endpoint to require that exact token for the request
+- If `?expected` is not set, any Bearer token value is accepted
+
+**Examples:**
+
+```bash
+# Require a specific token per request
+curl -H "Authorization: Bearer test" "http://localhost:8789/bearer/mcp?expected=test"
+```
 
 ### 2. OAuth Mode (Authentication Testing)
 
