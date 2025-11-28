@@ -465,7 +465,7 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
 export const iterateConfigSource = pgTable(
   "iterate_config_source",
   (t) => ({
-    id: iterateId("ecs"),
+    id: iterateId("ics"),
     estateId: t
       .text()
       .notNull()
@@ -529,6 +529,7 @@ export const builds = pgTable("builds", (t) => ({
   commitHash: t.text().notNull(),
   commitMessage: t.text().notNull(),
   files: t.jsonb().$type<{ path: string; content: string }[]>().notNull(),
+  /** note: config *is* nullable because we don't have it until the end of the build */
   config: t.jsonb().$type<{ contextRules?: any[] } | null>(),
   iterateWorkflowRunId: t.text(),
   webhookIterateId: t.text().notNull(),
