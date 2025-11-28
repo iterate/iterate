@@ -355,7 +355,7 @@ export const defaultRetryFn: RetryFn = (job) => {
   if (job.read_ct > 5) {
     return { retry: false, reason: "max retries reached" };
   }
-  const delay = 2 ** Math.max(0, job.read_ct - 1) * (0.9 + Math.random() * 0.2); // add/subtract a random jitter of up to 10%
+  const delay = Math.ceil((2 ** Math.max(0, job.read_ct - 1)) * (0.9 + Math.random() * 0.2)); // add/subtract a random jitter of up to 10%
   return {
     retry: true,
     reason: `attempt ${job.read_ct} setting to visible in ${delay} seconds`,
