@@ -7,6 +7,7 @@ import { type Workflow, type Step } from "@jlarky/gha-ts/workflow-types";
 import * as YAML from "yaml";
 import { initTRPC } from "@trpc/server";
 import type { GithubScriptHandler, GitHubScriptVariables } from "./utils/github-script.ts";
+import { namespaceRunProfile } from "./utils/index.ts";
 
 const t = initTRPC.create();
 
@@ -53,6 +54,29 @@ const workflowsProcedure = t.procedure
     const tsWorkflows = Object.fromEntries(
       tsWorkflowsList.filter((w) => w.workflow.jobs).map((w) => [w.name, w]),
     );
+
+    const convertToNamespaceDotSoFiles = [
+      "test.ts", //
+      // 'pkg-pr.ts',
+    ];
+    Object.values(tsWorkflows).forEach((w) => {
+      const convertToNamespaceDotSo = convertToNamespaceDotSoFiles.some((file) =>
+        w.filename.endsWith(file),
+      );
+      if (!convertToNamespaceDotSo) return;
+      Object.values(w.workflow.jobs).forEach((job) => {
+        if ("runs-on" in job) {
+          job["runs-on"] = namespaceRunProfile.runsOn;
+        }
+        if ("steps" in job) {
+          job.steps = [
+            ...namespaceRunProfile.setupSteps,
+            ...job.steps.slice(job.steps.findIndex((s) => s.run?.startsWith("pnpm install")) + 1),
+          ];
+        }
+      });
+    });
+
     const yamlWorkflows = Object.fromEntries(
       yamlWorkflowsList.filter((w) => w.workflow.jobs).map((w) => [w.name, w]),
     );
