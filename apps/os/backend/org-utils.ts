@@ -49,13 +49,12 @@ async function createOrganizationAndEstateInTransaction(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  const { organizationName, ownerUserId, estateName, connectedRepo } = params;
+  const { organizationName, ownerUserId, estateName } = params;
 
   const [organization] = await tx
     .insert(schema.organization)
@@ -74,9 +73,6 @@ async function createOrganizationAndEstateInTransaction(
     .values({
       name: estateName ?? `${organizationName} Estate`,
       organizationId: organization.id,
-      connectedRepoId: connectedRepo?.id ?? null,
-      connectedRepoRef: connectedRepo?.defaultBranch ?? null,
-      connectedRepoPath: connectedRepo?.path ?? "/",
     })
     .returning();
   if (!estate) throw new Error("Failed to create estate");
@@ -84,7 +80,7 @@ async function createOrganizationAndEstateInTransaction(
   const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
   await tx
     .update(schema.estate)
-    .set({ onboardingAgentName })
+    .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
     .where(eq(schema.estate.id, estate.id));
 
   await initializeOnboardingForEstateInTransaction(tx, {
@@ -102,7 +98,6 @@ export async function createOrganizationAndEstate(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
@@ -148,17 +143,12 @@ export const createUserOrganizationAndEstate = async (
 
   // Create repo first, then centralize DB work via shared helper
   const provisionalOrgName = `${user.email}'s Organization`;
-  // Create the repo optimistically with provisional org name; updated during tx
-  const repo = await createGithubRepoInEstatePool({
-    organizationName: provisionalOrgName,
-    organizationId: "pending",
-  });
+  // todo: create an iterate-estates/ repo in a consumer
 
   const { organization, estate } = await createOrganizationAndEstate(db, {
     organizationName: provisionalOrgName,
     ownerUserId: user.id,
     estateName: `${user.email}'s primary estate`,
-    connectedRepo: { id: repo.id, defaultBranch: repo.default_branch, path: "/" },
   });
 
   const result = { organization, estate };
@@ -182,20 +172,33 @@ export const createUserOrganizationAndEstate = async (
 
 type DBLike = Pick<DB, "insert" | "update" | "query">;
 
+export type SystemTaskUnion =
+  | {
+      taskType: "CreateStripeCustomer";
+      payload: {
+        organizationId: string;
+        estateId: string;
+      };
+    }
+  | {
+      taskType: "WarmOnboardingAgent";
+      payload: {
+        estateId: string;
+        onboardingAgentName: string;
+      };
+    }
+  | {
+      taskType: "CreateGithubRepo";
+      payload: {
+        estateId: string;
+      };
+    };
+
 export type EstateOnboardingEventShape<Op extends "Select" | "Insert" = "Select"> = Omit<
   (typeof schema.systemTasks)[`$infer${Op}`],
   "taskType" | "payload"
 > &
-  (
-    | {
-        taskType: "CreateStripeCustomer";
-        payload: { organizationId: string; estateId: string };
-      }
-    | {
-        taskType: "WarmOnboardingAgent";
-        payload: { estateId: string; onboardingAgentName: string };
-      }
-  );
+  SystemTaskUnion;
 
 export async function initializeOnboardingForEstateInTransaction(
   tx: DBLike,
@@ -226,6 +229,12 @@ export async function initializeOnboardingForEstateInTransaction(
       aggregateId: estateId,
       taskType: "WarmOnboardingAgent",
       payload: { estateId, onboardingAgentName },
+    },
+    {
+      aggregateType: "estate",
+      aggregateId: estateId,
+      taskType: "CreateGithubRepo",
+      payload: { estateId },
     },
   ] satisfies EstateOnboardingEventShape<"Insert">[]);
 }

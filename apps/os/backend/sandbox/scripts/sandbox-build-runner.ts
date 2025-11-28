@@ -42,7 +42,7 @@ async function start() {
   logStreamer.enqueue({ stream: "stdout", message: "[BUILD STARTED]", event: "BUILD_STARTED" });
   try {
     // Setup repo (auth, clone fresh, install)
-    await setupRepo({
+    const { files } = await setupRepo({
       sessionDir: args.sessionDir,
       githubRepoUrl: args.githubRepoUrl,
       githubToken: args.githubToken,
@@ -75,7 +75,11 @@ async function start() {
     const jsonMatch = iterateStdout.match(/\{[\s\S]*\}(?![\s\S]*\{)/);
     if (jsonMatch) {
       const jsonStr = jsonMatch[0];
-      logStreamer.enqueue({ stream: "stdout", message: jsonStr, event: "CONFIG_OUTPUT" });
+      const message = `{
+        "files": ${JSON.stringify(files)},
+        "config": ${jsonStr}
+      }`;
+      logStreamer.enqueue({ stream: "stdout", message, event: "CONFIG_OUTPUT" });
       await logStreamer.flush();
     }
 

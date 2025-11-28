@@ -1,10 +1,15 @@
 import { and, asc, eq, isNull } from "drizzle-orm";
+import { env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "./integrations/stripe/stripe.ts";
 import { getOrCreateAgentStubByRoute } from "./agent/agents/stub-getters.ts";
-import type { EstateOnboardingEventShape } from "./org-utils.ts";
+import {
+  createGithubRepoInEstatePool,
+  type EstateOnboardingEventShape,
+  type SystemTaskUnion,
+} from "./org-utils.ts";
 
 // Append-only event helper
 async function insertEstateOnboardingEvent(
@@ -94,7 +99,8 @@ export async function processSystemTasks(db: DB): Promise<{
 
   for (const task of systemTasks) {
     try {
-      switch (task.taskType) {
+      const taskType = task.taskType as SystemTaskUnion["taskType"];
+      switch (taskType) {
         case "CreateStripeCustomer":
           await handleStripeCustomerCreation(db, task);
           break;
@@ -104,7 +110,33 @@ export async function processSystemTasks(db: DB): Promise<{
             task as Extract<EstateOnboardingEventShape, { taskType: "WarmOnboardingAgent" }>,
           );
           break;
+        case "CreateGithubRepo": {
+          const estate = await db.query.estate.findFirst({
+            where: eq(schema.estate.id, task.aggregateId),
+            with: { organization: true },
+          });
+          if (!estate) throw new Error(`Estate ${task.aggregateId} not found`);
+          const repo = await createGithubRepoInEstatePool({
+            organizationName: estate.organization.name,
+            organizationId: estate.organizationId,
+          });
+          await db.transaction(async (tx) => {
+            await tx
+              .update(schema.iterateConfigSource)
+              .set({ deactivatedAt: new Date() })
+              .where(eq(schema.iterateConfigSource.estateId, estate.id));
+            await tx.insert(schema.iterateConfigSource).values({
+              estateId: estate.id,
+              provider: "github",
+              repoId: repo.id,
+              branch: repo.default_branch,
+              accountId: env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+            });
+          });
+          break;
+        }
         default:
+          taskType satisfies never;
           logger.warn(`Unknown system task type: ${task.taskType} (id=${task.id})`);
       }
       await db
@@ -113,6 +145,7 @@ export async function processSystemTasks(db: DB): Promise<{
         .where(eq(schema.systemTasks.id, task.id as number));
       successful++;
     } catch (err) {
+      logger.error(`Error processing system task: ${task.id}`, err);
       const message = err instanceof Error ? err.message : String(err);
       await db
         .update(schema.systemTasks)

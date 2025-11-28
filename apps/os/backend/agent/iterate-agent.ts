@@ -39,6 +39,7 @@ import {
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
 import type { WithCallMethod } from "../stub-stub.ts";
+import { recentActiveSources } from "../db/helpers.ts";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import {
@@ -915,24 +916,20 @@ export class IterateAgent<
    * Returns true if the user is a guest, false otherwise.
    */
   private async getUserRole(userId: string): Promise<UserRole | undefined> {
-    const result = await this.db
-      .select({
-        role: schema.organizationUserMembership.role,
-      })
-      .from(schema.estate)
-      .innerJoin(
-        schema.organizationUserMembership,
-        eq(schema.estate.organizationId, schema.organizationUserMembership.organizationId),
-      )
-      .where(
-        and(
-          eq(schema.estate.id, this.databaseRecord.estateId),
-          eq(schema.organizationUserMembership.userId, userId),
-        ),
-      )
-      .limit(1);
-
-    return result[0]?.role;
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+      with: {
+        organization: {
+          with: {
+            members: {
+              columns: { role: true },
+              where: eq(schema.organizationUserMembership.userId, userId),
+            },
+          },
+        },
+      },
+    });
+    return estate?.organization.members.at(0)?.role;
   }
 
   addEvent(event: MergedEventForSlices<Slices>): { eventIndex: number }[] {
@@ -1979,9 +1976,18 @@ export class IterateAgent<
     const estateId = this.databaseRecord.estateId;
 
     // Get estate and repo information
-    const estate = await this.db.query.estate.findFirst({
+    const _estate = await this.db.query.estate.findFirst({
       where: eq(schema.estate.id, estateId),
+      with: recentActiveSources,
     });
+
+    const estate = {
+      ..._estate,
+      sources: undefined,
+      connectedRepoId: _estate?.sources?.[0]?.repoId ?? null,
+      connectedRepoRef: _estate?.sources?.[0]?.branch ?? null,
+      connectedRepoPath: _estate?.sources?.[0]?.path ?? null,
+    };
 
     if (!estate) {
       throw new Error(`Estate ${estateId} not found`);

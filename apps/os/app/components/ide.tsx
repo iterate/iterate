@@ -1,8 +1,8 @@
-import Editor from "@monaco-editor/react";
+import Editor, { DiffEditor } from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage, useLocalStorage } from "usehooks-ts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState, useEffect, useRef, useMemo, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback, useImperativeHandle } from "react";
 import { useTheme } from "next-themes";
 import {
   ChevronDown,
@@ -22,6 +22,9 @@ import {
   GitMerge,
   X,
   Plus,
+  GitCompare,
+  FileEdit,
+  AlertTriangle,
 } from "lucide-react";
 import { formatDate } from "date-fns";
 import { useQueryState } from "nuqs";
@@ -56,6 +59,8 @@ import {
   DialogTitle,
 } from "./ui/dialog.tsx";
 import { Input } from "./ui/input.tsx";
+import { Switch } from "./ui/switch.tsx";
+import { Label } from "./ui/label.tsx";
 
 interface FileTreeNode {
   name: string;
@@ -307,23 +312,30 @@ function FileTreeView({
   );
 }
 
-export function IDE() {
+type LocalEditsUpdater = (edits: Record<string, string | null>) => { branch: string };
+
+export type IDEHandle = {
+  updateLocalEdits: LocalEditsUpdater;
+};
+
+export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const trpc = useTRPC();
   const estateId = useEstateId();
 
   const [selectedFile, setSelectedFile] = useQueryState("file", { defaultValue: "" });
 
+  const [mode, setMode] = useLocalStorage<"yolo" | "pr">("iterate-repo-editing-mode", "yolo");
+  const yoloMode = mode === "yolo";
+
+  const [viewMode, setViewMode] = useLocalStorage<"edit" | "diff" | "readonly">(
+    "iterate-ide-view-mode",
+    "edit",
+  );
+
   const [currentPrBranch, setCurrentPrBranch, removeCurrentPrBranch] = useLocalStorage<string>(
     "iterate-pr-branch",
     () => `ide/${formatDate(new Date(), "yyyy-MM-dd-HH-mm-ss")}`,
   );
-
-  // Use localStorage for per-branch local edits
-  const [localEdits, setLocalEdits] = useLocalStorage<Record<string, string | null>>(
-    `iterate-local-edits-${currentPrBranch}`,
-    {},
-  );
-  const [expectedEdits, setExpectedEdits] = useState({} as Record<string, string | null>);
   const [collapsedFoldersRecord, setCollapsedFolders] = useSessionStorage<Record<string, boolean>>(
     "iterate-collapsed-folders",
     {},
@@ -340,33 +352,94 @@ export function IDE() {
     () =>
       trpc.estate.getRepoFilesystem.queryOptions({
         estateId,
-        branch: currentPrBranch,
+        branch: yoloMode ? undefined : currentPrBranch,
       }),
-    [trpc, estateId, currentPrBranch],
+    [trpc, estateId, currentPrBranch, yoloMode],
   );
 
-  const saveFileMutation = useMutation(
-    trpc.estate.updateRepo.mutationOptions({
-      onSuccess: (_data, variables) => {
-        const edited = new Set([
-          ...(variables.commit.fileChanges.additions?.map((addition) => addition.path) || []),
-          ...(variables.commit.fileChanges.deletions?.map((deletion) => deletion.path) || []),
-        ]);
+  const getRepoFileSystemQuery = useQuery({
+    ...getRepoFilesystemQueryOptions,
+    enabled: yoloMode || !!currentPrBranch,
+  });
 
+  const {
+    filesystem: filesFromRepo,
+    sha,
+    repoData,
+    branchExists = true,
+    branch: actualBranch,
+    defaultBranch,
+  } = (getRepoFileSystemQuery.isSuccess && getRepoFileSystemQuery.data) || {
+    filesystem: {},
+    sha: "",
+    repoData: null,
+    branchExists: true,
+    requestedBranch: yoloMode ? undefined : currentPrBranch,
+    branch: yoloMode ? undefined : currentPrBranch,
+    defaultBranch: undefined,
+  };
+  const repoName = repoData?.full_name?.split("/")[1] || "repository";
+
+  // Determine which branch we're pushing to
+  // In yolo mode, always push to defaultBranch; otherwise use currentPrBranch
+  const pushToBranch = useMemo(() => {
+    if (yoloMode && defaultBranch) {
+      return defaultBranch;
+    }
+    return currentPrBranch || defaultBranch || "main";
+  }, [yoloMode, defaultBranch, currentPrBranch]);
+
+  // Use localStorage for per-branch local edits based on pushToBranch
+  const [localEdits, setLocalEdits] = useLocalStorage<Record<string, string | null>>(
+    `iterate-ide-local-edits-${estateId}`,
+    {},
+  );
+
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Expose updateLocalEdits via imperative handle
+  useImperativeHandle(
+    ref,
+    () => ({
+      updateLocalEdits: (edits) => {
+        setLocalEdits(edits);
+        setViewMode("diff");
+        requestAnimationFrame(() => containerRef.current?.scrollIntoView({ behavior: "smooth" }));
+        return { branch: pushToBranch };
+      },
+    }),
+    [setLocalEdits, setViewMode, pushToBranch, containerRef],
+  );
+
+  const updateRepoMutation = useMutation(
+    trpc.estate.updateRepo.mutationOptions({
+      onSuccess: () => {
+        // Invalidate and refetch the repo filesystem query
         queryClient.invalidateQueries(
-          trpc.estate.getRepoFilesystem.queryFilter({ estateId, branch: currentPrBranch }),
+          trpc.estate.getRepoFilesystem.queryFilter({
+            estateId,
+            branch: yoloMode ? undefined : currentPrBranch,
+          }),
         );
-        setExpectedEdits(localEdits || {});
-        setLocalEdits(
-          localEdits &&
-            Object.fromEntries(Object.entries(localEdits).filter(([k]) => !edited.has(k))),
-        );
+        // Also invalidate for pushToBranch if different
+        if (pushToBranch && pushToBranch !== currentPrBranch) {
+          queryClient.invalidateQueries(
+            trpc.estate.getRepoFilesystem.queryFilter({
+              estateId,
+              branch: pushToBranch,
+            }),
+          );
+        }
       },
     }),
   );
 
-  const pullsQuery = useQuery(trpc.estate.listPulls.queryOptions({ estateId, state: "open" }));
+  const pullsQuery = useQuery({
+    ...trpc.estate.listPulls.queryOptions({ estateId, state: "open" }),
+    enabled: !yoloMode,
+  });
   const currentPr = useMemo(() => {
+    if (yoloMode) return null;
     const pr = pullsQuery.data?.find((pr) => pr.head.ref === currentPrBranch);
     if (!pr) return null;
     return {
@@ -375,7 +448,7 @@ export function IDE() {
       headRef: pr.head.ref,
       baseRef: pr.base.ref,
     };
-  }, [pullsQuery.data, currentPrBranch]);
+  }, [pullsQuery.data, currentPrBranch, yoloMode]);
 
   const createPullRequestMutation = useMutation(
     trpc.estate.createPullRequest.mutationOptions({
@@ -404,39 +477,7 @@ export function IDE() {
     }),
   );
 
-  const getRepoFileSystemQuery = useQuery({
-    ...getRepoFilesystemQueryOptions,
-    enabled: !!currentPrBranch,
-    // Only use placeholder data if it's for the same branch
-    placeholderData: (old) => {
-      if (!old) return undefined;
-      // Only use placeholder if it's for the same branch
-      if (old.requestedBranch === currentPrBranch) {
-        return { ...old, filesystem: { ...old.filesystem, ...expectedEdits }, sha: "" };
-      }
-      return undefined;
-    },
-  });
-
-  const {
-    filesystem,
-    sha,
-    repoData,
-    branchExists = true,
-    branch: actualBranch,
-    defaultBranch = "main",
-  } = getRepoFileSystemQuery.data || {
-    filesystem: {},
-    sha: "",
-    repoData: null,
-    branchExists: true,
-    requestedBranch: currentPrBranch,
-    branch: currentPrBranch,
-    defaultBranch: "main",
-  };
-  const repoName = repoData?.full_name?.split("/")[1] || "repository";
-
-  const dts = useQuery(
+  const getDTSQuery = useQuery(
     trpc.estate.getDTS.queryOptions(
       {
         packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
@@ -451,25 +492,26 @@ export function IDE() {
     ),
   );
 
-  // Derive file contents by merging filesystem with local edits, excluding deleted files
-  const fileContents = useMemo(() => {
-    return { ...filesystem, ...localEdits };
-  }, [filesystem, localEdits]);
+  useEffect(() => {
+    if (Object.keys(localEdits).length === 0 && Object.keys(filesFromRepo).length > 0) {
+      setLocalEdits(filesFromRepo);
+    }
+  }, [filesFromRepo, localEdits, setLocalEdits]);
 
   // Derive valid selected file (reset if file no longer exists)
   const validSelectedFile = useMemo(() => {
-    if (selectedFile && selectedFile in fileContents) {
+    if (selectedFile && selectedFile in localEdits) {
       return selectedFile;
     }
-    if ("iterate.config.ts" in fileContents) {
+    if ("iterate.config.ts" in localEdits) {
       return "iterate.config.ts";
     }
     return null;
-  }, [selectedFile, fileContents]);
+  }, [selectedFile, localEdits]);
 
-  // Build file tree from filesystem and wrap in root folder
+  // Build file tree from mergedFiles and wrap in root folder
   const fileTree = useMemo(() => {
-    const tree = buildFileTree(Object.entries(fileContents));
+    const tree = buildFileTree(Object.entries(localEdits));
     // Wrap in root folder based on repo name
     return [
       {
@@ -479,8 +521,8 @@ export function IDE() {
         children: tree,
       },
     ];
-  }, [fileContents, repoName]);
-  const currentContent = validSelectedFile ? fileContents[validSelectedFile] : "";
+  }, [localEdits, repoName]);
+  const currentContent = validSelectedFile ? localEdits[validSelectedFile] : "";
 
   const handleToggleFolder = (path: string) => {
     setCollapsedFolders((prev) => ({ ...prev, [path]: !prev[path] }));
@@ -623,7 +665,7 @@ export function IDE() {
     setLocalEdits((prev) => {
       const updated = { ...prev };
       updated[fileToDelete] = null;
-      for (const otherpath of Object.keys(filesystem)) {
+      for (const otherpath of Object.keys(filesFromRepo)) {
         if (otherpath.startsWith(fileToDelete + "/")) {
           updated[otherpath] = null;
         }
@@ -640,7 +682,7 @@ export function IDE() {
 
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
-    return fileContents[filename] !== (filesystem as Record<string, string>)[filename];
+    return localEdits[filename] !== (filesFromRepo as Record<string, string>)[filename];
   };
 
   const handleContentChange = (newContent: string) => {
@@ -652,12 +694,33 @@ export function IDE() {
     }
   };
 
-  const handleSaveAll = (filepaths = Object.keys(fileContents)) => {
+  const handleDiscardEdits = () => {
+    // Clear all local edits for the current branch
+    setLocalEdits({});
+    // Invalidate and refetch the repo filesystem query
+    queryClient.invalidateQueries(
+      trpc.estate.getRepoFilesystem.queryFilter({
+        estateId,
+        branch: yoloMode ? undefined : currentPrBranch,
+      }),
+    );
+    // Also invalidate for pushToBranch if different
+    if (pushToBranch && pushToBranch !== currentPrBranch) {
+      queryClient.invalidateQueries(
+        trpc.estate.getRepoFilesystem.queryFilter({
+          estateId,
+          branch: pushToBranch,
+        }),
+      );
+    }
+  };
+
+  const handleSaveAll = (filepaths = Object.keys(localEdits)) => {
     const additions: { path: string; contents: string }[] = [];
     const deletions: { path: string }[] = [];
     filepaths.forEach((filename) => {
       if (isFileEdited(filename)) {
-        const content = fileContents[filename];
+        const content = localEdits[filename];
         // If content is null
         if (content === null) {
           deletions.push({ path: filename });
@@ -675,11 +738,11 @@ export function IDE() {
       .filter(Boolean)
       .join(" and ");
 
-    saveFileMutation.mutate({
+    updateRepoMutation.mutate({
       estateId,
       commit: {
         branch: {
-          branchName: currentPrBranch,
+          branchName: pushToBranch || defaultBranch || "main",
           repositoryNameWithOwner: repoData?.full_name || "",
         },
         expectedHeadOid: sha,
@@ -711,7 +774,7 @@ export function IDE() {
   useEffect(() => {
     const monaco = getMonaco();
     if (!monaco) return;
-    dts.data?.forEach((p) => {
+    getDTSQuery.data?.forEach((p) => {
       Object.entries(p.files).forEach(([filename, content]) => {
         monaco.languages.typescript.typescriptDefaults.addExtraLib(
           content,
@@ -719,7 +782,7 @@ export function IDE() {
         );
       });
     });
-  }, [dts.data, validSelectedFile]);
+  }, [getDTSQuery.data, validSelectedFile, viewMode]);
 
   useEffect(() => {
     const monaco = getMonaco();
@@ -746,6 +809,48 @@ export function IDE() {
 
   const { resolvedTheme } = useTheme();
 
+  const language = getLanguage(validSelectedFile || "");
+
+  const monacoTheme = useMemo(
+    () => (resolvedTheme === "dark" ? "vs-dark" : "light"),
+    [resolvedTheme],
+  );
+
+  const monacoLanguage = useMemo(() => language || "markdown", [language]);
+
+  const commonEditorOptions = useMemo(
+    () => ({
+      wordWrap: "on" as const,
+      fixedOverflowWidgets: true,
+    }),
+    [],
+  );
+
+  const monacoBeforeMount = useCallback(
+    (monaco: Parameters<NonNullable<Parameters<typeof Editor>[0]["beforeMount"]>>[0]) => {
+      monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+        enableSchemaRequest: true,
+      });
+
+      const tsconfig = JSON.parse(
+        getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
+      ) as import("type-fest").TsConfigJson;
+      const { jsx, module, moduleResolution, newLine, target, plugins, ...compilerOptions } =
+        tsconfig.compilerOptions || {};
+      monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
+        ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
+        ...compilerOptions,
+        strict: false,
+        lib: ["es6", "DOM"],
+        allowJs: true,
+        allowImportingTsExtensions: true,
+        allowSyntheticDefaultImports: true,
+        typeRoots: ["file:///node_modules"],
+      });
+    },
+    [getRepoFileSystemQuery.data],
+  );
+
   const onMount = useCallback<OnMount>((...params) => {
     editorRef.current = params;
   }, []);
@@ -761,13 +866,13 @@ export function IDE() {
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const language = getLanguage(validSelectedFile || "");
-
   const handleBranchSelect = useCallback(
     (branch: string) => {
-      setCurrentPrBranch(branch);
+      if (!yoloMode) {
+        setCurrentPrBranch(branch);
+      }
     },
-    [setCurrentPrBranch],
+    [setCurrentPrBranch, yoloMode],
   );
 
   const [newBranchDialogOpen, setNewBranchDialogOpen] = useState(false);
@@ -871,7 +976,7 @@ export function IDE() {
                 ? pullsData.reduce((latest, pr) => (pr.number > latest.number ? pr : latest))
                 : null;
 
-            const nextBranch = latestPr?.head.ref || defaultBranch;
+            const nextBranch = latestPr?.head.ref || defaultBranch || "main";
             setCurrentPrBranch(nextBranch);
             setSelectedFile(null);
           },
@@ -883,145 +988,33 @@ export function IDE() {
   };
 
   return (
-    <div className="flex h-[calc(100vh-8rem)] overflow-hidden">
-      {/* PR Sidebar */}
-      {/* <PRSidebar
-        estateId={estateId}
-        currentBranch={currentPrBranch}
-        onBranchSelect={handleBranchSelect}
-        onCreateNewBranch={handleCreateNewBranch}
-        branchExists={branchExists}
-        actualBranch={actualBranch}
-        currentPr={currentPr}
-        onMergePr={handleMergePr}
-        onClosePr={handleClosePr}
-      /> */}
-
-      <div className="w-48 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+    <div ref={containerRef} className="flex h-[calc(100vh-8rem)] overflow-hidden">
+      {/* Consolidated sidebar */}
+      <div className="w-64 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+        {/* Yolo mode toggle */}
         <div className="p-2 border-b">
-          <div className="text-xs font-semibold mb-1">Pull Requests</div>
-          <Button
-            onClick={() => handleCreateNewBranch()}
-            size="sm"
-            variant="ghost"
-            className="w-full h-7 text-xs gap-1.5"
-          >
-            <Plus className="h-3 w-3" />
-            New Branch
-          </Button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2">
-          {pullsQuery.isLoading ? (
-            <div className="text-xs text-muted-foreground p-2">Loading...</div>
-          ) : pullsQuery.data && pullsQuery.data.length > 0 ? (
-            <div className="space-y-1">
-              {pullsQuery.data.map((pr) => {
-                const isSelected = pr.head.ref === currentPrBranch;
-                return (
-                  <button
-                    key={pr.id}
-                    onClick={() => handleBranchSelect(pr.head.ref)}
-                    className={cn(
-                      "w-full text-left px-2 py-1.5 text-xs rounded-sm hover:bg-accent transition-colors",
-                      isSelected && "bg-accent font-medium",
-                    )}
-                    title={pr.title}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      <GitPullRequest className="h-3 w-3 shrink-0" />
-                      <span className="truncate flex-1">#{pr.number}</span>
-                    </div>
-                    <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-                      {pr.head.ref}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          ) : (
-            <div className="text-xs text-muted-foreground p-2">No `ide/*` PRs found</div>
-          )}
-          <div className="mt-2 pt-2 border-t">
-            <div className="text-xs font-semibold mb-1">Current Branch</div>
-            <div className="text-xs text-muted-foreground px-2 py-1 break-all">
-              {currentPrBranch}
-            </div>
-            {!branchExists && actualBranch && actualBranch !== currentPrBranch && (
-              <div className="text-[10px] text-orange-600 dark:text-orange-400 px-2 mt-1">
-                Branch doesn't exist yet, showing {actualBranch}
-              </div>
-            )}
-            {currentPr ? (
-              <div className="mt-2">
-                <div className="px-2 mb-2">
-                  <div className="text-xs font-semibold mb-1">PR #{currentPr.number}</div>
-                  <div className="text-[10px] text-muted-foreground line-clamp-2 mb-2">
-                    {currentPr.title}
-                  </div>
-                  <div className="text-[10px] text-muted-foreground">
-                    {currentPr.headRef} → {currentPr.baseRef}
-                  </div>
-                </div>
-                <div className="flex gap-1">
-                  {handleMergePr && (
-                    <Button
-                      onClick={() => handleMergePr(currentPr.number)}
-                      size="sm"
-                      variant="default"
-                      className="flex-1 h-7 text-xs gap-1.5"
-                    >
-                      <GitMerge className="h-3 w-3" />
-                      Merge
-                    </Button>
-                  )}
-                  {handleClosePr && (
-                    <Button
-                      onClick={() => handleClosePr(currentPr.number)}
-                      size="sm"
-                      variant="destructive"
-                      className="flex-1 h-7 text-xs gap-1.5"
-                    >
-                      <X className="h-3 w-3" />
-                      Close
-                    </Button>
-                  )}
-                </div>
-              </div>
-            ) : branchExists ? (
-              <div className="text-[10px] text-muted-foreground px-2 mt-1">
-                (No PR for this branch)
-              </div>
-            ) : null}
+          <div className="flex items-center justify-between gap-2">
+            <Label htmlFor="yolo-mode" className="text-xs font-semibold cursor-pointer">
+              Yolo Mode
+            </Label>
+            <Switch
+              id="yolo-mode"
+              checked={yoloMode}
+              onCheckedChange={(mode) => setMode(mode ? "yolo" : "pr")}
+            />
           </div>
-
-          {!currentPr && (
-            <div className="border-t mt-2">
-              <Button
-                onClick={() => {
-                  if (currentPrBranch === defaultBranch) {
-                    handleCreateNewBranch("createPr");
-                  } else {
-                    createPullRequestMutation.mutate({ estateId, fromBranch: currentPrBranch });
-                  }
-                }}
-                disabled={createPullRequestMutation.isPending}
-                size="sm"
-                variant="ghost"
-                className="w-full h-7 text-xs mt-2 bg-accent"
-              >
-                <GitPullRequest className="h-3 w-3" />
-                Create PR
-              </Button>
-            </div>
+          {pushToBranch && (
+            <div className="text-[10px] text-muted-foreground mt-1">Pushing to {pushToBranch}</div>
           )}
         </div>
-      </div>
-      {/* File tree sidebar */}
-      <div className="w-48 shrink-0 border-r bg-muted/30 overflow-y-auto flex flex-col">
+
+        {/* Push button */}
         <div className="p-2 border-b">
           <Button
             onClick={() => {
-              if (currentPrBranch === defaultBranch) {
+              if (yoloMode) {
+                handleSaveAll();
+              } else if (currentPrBranch === defaultBranch) {
                 handleCreateNewBranch("push");
               } else {
                 handleSaveAll();
@@ -1029,7 +1022,7 @@ export function IDE() {
             }}
             disabled={
               Object.keys(localEdits || {}).length === 0 ||
-              saveFileMutation.isPending ||
+              updateRepoMutation.isPending ||
               getRepoFileSystemQuery.isPending
             }
             size="sm"
@@ -1037,14 +1030,182 @@ export function IDE() {
             className="w-full h-7 text-xs gap-1.5"
           >
             <Upload className="h-3 w-3" />
-            {saveFileMutation.isPending
+            {updateRepoMutation.isPending
               ? "Pushing..."
               : getRepoFileSystemQuery.isPending
                 ? "Loading..."
-                : `Push`}
+                : yoloMode && pushToBranch
+                  ? `Push to ${pushToBranch}`
+                  : "Push"}
           </Button>
         </div>
-        <div className="p-2 flex-1 overflow-y-auto">
+
+        {/* Discard edits button */}
+        {Object.keys(localEdits || {}).length > 0 && (
+          <div className="p-2 border-b">
+            <Button
+              onClick={handleDiscardEdits}
+              disabled={getRepoFileSystemQuery.isPending}
+              size="sm"
+              variant="ghost"
+              className="w-full h-7 text-xs gap-1.5 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-3 w-3" />
+              Discard edits
+            </Button>
+          </div>
+        )}
+
+        {/* View mode toggle */}
+        {validSelectedFile && (
+          <div className="p-2 border-b">
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={viewMode === "readonly"}
+              onClick={() => setViewMode(viewMode === "diff" ? "edit" : "diff")}
+              className="w-full h-7 text-xs gap-1.5"
+            >
+              {viewMode === "diff" ? (
+                <>
+                  <FileEdit className="h-3 w-3" />
+                  Edit Mode
+                </>
+              ) : (
+                <>
+                  <GitCompare className="h-3 w-3" />
+                  Diff Mode
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+
+        {/* PR/Branch section - only show if pushToBranch is not the default branch */}
+        {pushToBranch && defaultBranch && pushToBranch !== defaultBranch && (
+          <>
+            <div className="p-2 border-b">
+              <div className="text-xs font-semibold mb-1">Pull Requests</div>
+              <Button
+                onClick={() => handleCreateNewBranch()}
+                size="sm"
+                variant="ghost"
+                className="w-full h-7 text-xs gap-1.5"
+              >
+                <Plus className="h-3 w-3" />
+                New Branch
+              </Button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {pullsQuery.isLoading ? (
+                <div className="text-xs text-muted-foreground p-2">Loading...</div>
+              ) : pullsQuery.data && pullsQuery.data.length > 0 ? (
+                <div className="space-y-1">
+                  {pullsQuery.data.map((pr) => {
+                    const isSelected = pr.head.ref === currentPrBranch;
+                    return (
+                      <button
+                        key={pr.id}
+                        onClick={() => handleBranchSelect(pr.head.ref)}
+                        className={cn(
+                          "w-full text-left px-2 py-1.5 text-xs rounded-sm hover:bg-accent transition-colors",
+                          isSelected && "bg-accent font-medium",
+                        )}
+                        title={pr.title}
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <GitPullRequest className="h-3 w-3 shrink-0" />
+                          <span className="truncate flex-1">#{pr.number}</span>
+                        </div>
+                        <div className="text-[10px] text-muted-foreground truncate mt-0.5">
+                          {pr.head.ref}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-muted-foreground p-2">No `ide/*` PRs found</div>
+              )}
+              <div className="mt-2 pt-2 border-t">
+                <div className="text-xs font-semibold mb-1">Current Branch</div>
+                <div className="text-xs text-muted-foreground px-2 py-1 break-all">
+                  {currentPrBranch}
+                </div>
+                {!branchExists && actualBranch && actualBranch !== currentPrBranch && (
+                  <div className="text-[10px] text-orange-600 dark:text-orange-400 px-2 mt-1">
+                    Branch doesn't exist yet, showing {actualBranch}
+                  </div>
+                )}
+                {currentPr ? (
+                  <div className="mt-2">
+                    <div className="px-2 mb-2">
+                      <div className="text-xs font-semibold mb-1">PR #{currentPr.number}</div>
+                      <div className="text-[10px] text-muted-foreground line-clamp-2 mb-2">
+                        {currentPr.title}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground">
+                        {currentPr.headRef} → {currentPr.baseRef}
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      {handleMergePr && (
+                        <Button
+                          onClick={() => handleMergePr(currentPr.number)}
+                          size="sm"
+                          variant="default"
+                          className="flex-1 h-7 text-xs gap-1.5"
+                        >
+                          <GitMerge className="h-3 w-3" />
+                          Merge
+                        </Button>
+                      )}
+                      {handleClosePr && (
+                        <Button
+                          onClick={() => handleClosePr(currentPr.number)}
+                          size="sm"
+                          variant="destructive"
+                          className="flex-1 h-7 text-xs gap-1.5"
+                        >
+                          <X className="h-3 w-3" />
+                          Close
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                ) : branchExists ? (
+                  <div className="text-[10px] text-muted-foreground px-2 mt-1">
+                    (No PR for this branch)
+                  </div>
+                ) : null}
+              </div>
+
+              {!currentPr && (
+                <div className="border-t mt-2">
+                  <Button
+                    onClick={() => {
+                      if (currentPrBranch === defaultBranch) {
+                        handleCreateNewBranch("createPr");
+                      } else {
+                        createPullRequestMutation.mutate({ estateId, fromBranch: currentPrBranch });
+                      }
+                    }}
+                    disabled={createPullRequestMutation.isPending}
+                    size="sm"
+                    variant="ghost"
+                    className="w-full h-7 text-xs mt-2 bg-accent"
+                  >
+                    <GitPullRequest className="h-3 w-3" />
+                    Create PR
+                  </Button>
+                </div>
+              )}
+            </div>
+          </>
+        )}
+
+        {/* File tree */}
+        <div className="border-t p-2 flex-1 overflow-y-auto">
           <FileTreeView
             nodes={fileTree}
             selectedFile={validSelectedFile}
@@ -1061,7 +1222,7 @@ export function IDE() {
         </div>
         {getRepoFileSystemQuery.data?.filesystem &&
           !("iterate.config.ts" in getRepoFileSystemQuery.data.filesystem) && (
-            <div className="p-2 border-b">
+            <div className="p-2 border-t">
               <Button
                 onClick={() =>
                   handleNewFile({
@@ -1082,55 +1243,73 @@ export function IDE() {
       </div>
 
       {/* Main panel - Editor */}
-      <div className="flex-1 min-w-0 relative">
-        {getRepoFileSystemQuery.isFetching ? (
-          <div className="absolute top-2 right-2 z-10 flex items-center gap-2 bg-background/95 border rounded-md px-2 py-1 shadow-sm">
-            <Spinner className="h-3 w-3" />
-            <span className="text-xs text-muted-foreground">Refreshing...</span>
-          </div>
-        ) : null}
+      <div className="flex-1 min-w-0 relative flex flex-col">
+        <div className="absolute top-2 right-2 z-10 flex items-center gap-2 bg-background/95 border rounded-md px-2 py-1 shadow-sm">
+          {getRepoFileSystemQuery.isFetching && (
+            <>
+              <Spinner className="h-3 w-3" />
+              <span className="text-xs text-muted-foreground">Refreshing...</span>
+            </>
+          )}
+          {!getDTSQuery.isSuccess && !getDTSQuery.isError && (
+            <>
+              <Spinner className="h-3 w-3" />
+              <span className="text-xs text-muted-foreground">Types {getDTSQuery.status}...</span>
+            </>
+          )}
+          {getDTSQuery.isError && (
+            <>
+              <AlertTriangle className="h-3 w-3" />
+              <span className="text-xs text-muted-foreground">
+                Failed to get types: {getDTSQuery.error.message}
+              </span>
+            </>
+          )}
+        </div>
         {validSelectedFile ? (
-          <Editor
-            path={validSelectedFile ? `file:///app/${validSelectedFile}` : undefined}
-            height="100%"
-            defaultLanguage={language || "markdown"}
-            language={language}
-            onChange={(val) => handleContentChange(val || "")}
-            value={currentContent || ""}
-            theme={resolvedTheme === "dark" ? "vs-dark" : "light"}
-            options={{ wordWrap: "on", fixedOverflowWidgets: true }}
-            beforeMount={(monaco) => {
-              monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
-                enableSchemaRequest: true, // use fetch to get json schema for intellisense for tsconfig etc.
-              });
-
-              const tsconfig = JSON.parse(
-                getRepoFileSystemQuery.data?.filesystem["tsconfig.json"] || "{}",
-              ) as import("type-fest").TsConfigJson;
-              const {
-                // stupid monaco demands enum values and won't accept perfectly good strings
-                jsx,
-                module,
-                moduleResolution,
-                newLine,
-                target,
-                plugins,
-                ...compilerOptions
-              } = tsconfig.compilerOptions || {};
-              monaco.languages.typescript.typescriptDefaults.setCompilerOptions({
-                ...monaco.languages.typescript.typescriptDefaults.getCompilerOptions(),
-                ...compilerOptions,
-                strict: false,
-                lib: ["es6", "DOM"],
-                allowJs: true,
-                allowImportingTsExtensions: true,
-                allowSyntheticDefaultImports: true,
-                // verbatimModuleSyntax: false, // causes problems with our fake node_modules
-                typeRoots: ["file:///node_modules"],
-              });
-            }}
-            onMount={onMount}
-          />
+          viewMode === "diff" ? (
+            <DiffEditor
+              key={validSelectedFile}
+              height="100%"
+              language={monacoLanguage}
+              original={
+                Object.keys(filesFromRepo).length === 0
+                  ? currentContent || ""
+                  : (filesFromRepo as Record<string, string>)[validSelectedFile] || ""
+              }
+              modified={currentContent || ""}
+              theme={monacoTheme}
+              options={{
+                ...commonEditorOptions,
+                readOnly: false,
+                renderSideBySide: true,
+              }}
+              beforeMount={monacoBeforeMount}
+              onMount={(editor) => {
+                // Make original read-only, modified editable
+                editor.getOriginalEditor().updateOptions({ readOnly: true });
+                // Handle changes in the modified editor
+                const modifiedEditor = editor.getModifiedEditor();
+                modifiedEditor.onDidChangeModelContent(() => {
+                  const value = modifiedEditor.getValue();
+                  handleContentChange(value);
+                });
+              }}
+            />
+          ) : (
+            <Editor
+              path={validSelectedFile ? `file:///app/${validSelectedFile}` : undefined}
+              height="100%"
+              defaultLanguage={monacoLanguage}
+              language={monacoLanguage}
+              onChange={(val) => handleContentChange(val || "")}
+              value={currentContent || ""}
+              theme={monacoTheme}
+              options={commonEditorOptions}
+              beforeMount={monacoBeforeMount}
+              onMount={onMount}
+            />
+          )
         ) : (
           <div className="flex items-center justify-center h-full text-muted-foreground">
             {selectedFile || "Select a file to edit"}
