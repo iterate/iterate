@@ -10,14 +10,14 @@ export default {
   },
   on: {
     push: {
-      branches: ["main", "mmkal/25/10/29/slackclientinworkflows"],
+      branches: ["main", "mmkal/25/11/19/slackmsgondeploy"],
     },
     workflow_dispatch: {
       inputs: {
         stage: {
           description:
             "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
-          default: "prd",
+          default: "prd", // this is the default for MANUAL runs, default for anything where this isn't specified will be 'stg'
           required: true,
           type: "string",
         },
