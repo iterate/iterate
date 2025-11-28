@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import Editor, { DiffEditor } from "@monaco-editor/react";
 import type { OnMount } from "@monaco-editor/react";
 import { useSessionStorage, useLocalStorage } from "usehooks-ts";
@@ -738,6 +739,11 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
       .filter(Boolean)
       .join(" and ");
 
+    if (!summary) {
+      toast.error("No changes to save");
+      return;
+    }
+
     updateRepoMutation.mutate({
       estateId,
       commit: {
@@ -746,9 +752,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
           repositoryNameWithOwner: repoData?.full_name || "",
         },
         expectedHeadOid: sha,
-        message: {
-          headline: `in-browser changes: ${summary}`,
-        },
+        message: { headline: summary },
         fileChanges: { additions, deletions },
       },
       format: "plaintext",
@@ -1020,11 +1024,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
                 handleSaveAll();
               }
             }}
-            disabled={
-              Object.keys(localEdits || {}).length === 0 ||
-              updateRepoMutation.isPending ||
-              getRepoFileSystemQuery.isPending
-            }
+            disabled={updateRepoMutation.isPending || getRepoFileSystemQuery.isPending}
             size="sm"
             variant="ghost"
             className="w-full h-7 text-xs gap-1.5"
