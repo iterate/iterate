@@ -41,7 +41,7 @@ const workflowsProcedure = t.procedure
 
         const convertToNamespaceDotSoFiles = [
           "test.ts", //
-          // 'pkg-pr.ts',
+          "lint-typecheck.ts",
         ];
         Object.values(workflow.jobs).forEach((job) => {
           const shouldConvertToNamespaceDotSo = convertToNamespaceDotSoFiles.some((file) =>
