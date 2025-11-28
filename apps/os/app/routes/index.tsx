@@ -5,10 +5,7 @@ import { getRequestHeader, getRequestUrl } from "@tanstack/react-start/server";
 import { waitUntil } from "../../env.ts";
 import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
-import {
-  createGithubRepoInEstatePool,
-  createUserOrganizationAndEstate,
-} from "../../backend/org-utils.ts";
+import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { DB } from "../../backend/db/client.ts";
@@ -161,40 +158,11 @@ async function determineRedirectPath({
       id: estate.id,
       name: estate.name,
       organizationId: estate.organizationId,
-      connectedRepoId: estate.connectedRepoId,
+      connectedRepoId: estate.sources.at(0)?.repoId ?? null,
       parentOrgName: organization.name,
     })),
   );
 
-  // If any estate has no connected repo, create one in the estate pool
-  await Promise.allSettled(
-    userEstates
-      .filter((estate) => !estate.connectedRepoId)
-      .map(async (estate) => {
-        const repo = await createGithubRepoInEstatePool({
-          organizationName: estate.parentOrgName,
-          organizationId: estate.organizationId,
-        }).catch((error) => {
-          logger.error("Failed to create Github repo in estate pool", {
-            estateId: estate.id,
-            error,
-          });
-          return null;
-        });
-        if (repo) {
-          await db
-            .update(schema.estate)
-            .set({
-              connectedRepoId: repo.id,
-              connectedRepoRef: repo.default_branch,
-              connectedRepoPath: `/`,
-            })
-            .where(eq(schema.estate.id, estate.id));
-        }
-      }),
-  );
-
-  // If user has no estates, throw a 403 response
   if (userEstates.length === 0) {
     throw new Response("You don't have access to any estates, this should never happen.", {
       status: 403,

@@ -385,9 +385,12 @@ export default defineConfig([
               const dbMutateEnforcementListeners = {};
               for (const m of dbMutateMethods) {
                 const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
+                const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
                 dbMutateEnforcementListeners[selector] = (node) => {
-                  const before = node.arguments[0].name;
-                  const after = `schema.${node.arguments[0].name}`;
+                  const before = context.sourceCode.getText(node.arguments[0]);
+                  const after = before.startsWith("schemas.")
+                    ? before.replace("schemas.", "schema.")
+                    : `schema.${node.arguments[0].name}`;
                   if (
                     m === "delete" &&
                     node.callee.object.name !== "db" &&
@@ -406,6 +409,7 @@ export default defineConfig([
                     ],
                   });
                 };
+                dbMutateEnforcementListeners[selector2] = dbMutateEnforcementListeners[selector];
               }
 
               return {

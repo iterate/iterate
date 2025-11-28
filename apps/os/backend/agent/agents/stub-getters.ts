@@ -94,7 +94,7 @@ export async function getAgentStubByName(
       eq(agentInstance.className, className),
       eq(agentInstance.estateId, params.estateId || agentInstance.estateId), // todo: make estateId required? seems safer. but we have lots of calls of this already, so will do separately
     ),
-    with: { estate: { with: { organization: true, iterateConfigs: true } } },
+    with: { estate: { with: { organization: true, iterateConfigs: { with: { build: true } } } } },
   });
 
   if (!row) throw new Error(`Agent instance ${agentInstanceName} not found`);
@@ -105,7 +105,7 @@ export async function getAgentStubByName(
     throw new Error(`Estate ${record.estateId} not found for agent ${record.id}`);
   }
 
-  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.build?.config ?? {};
 
   return getAgentStub(className, {
     agentInitParams: {
@@ -142,13 +142,13 @@ export async function getOrCreateAgentStubByRoute(
 
   const existingAgent = await db.query.agentInstance.findFirst({
     where: eq(agentInstance.routingKey, route),
-    with: { estate: { with: { organization: true, iterateConfigs: true } } },
+    with: { estate: { with: { organization: true, iterateConfigs: { with: { build: true } } } } },
   });
 
   if (!existingAgent) throw new Error(`No agent at ${route} - we should have just inserted it!`);
 
   const { estate: estateJoined, ...record } = existingAgent;
-  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.config ?? {};
+  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.build?.config ?? {};
   return getAgentStub(className, {
     agentInitParams: {
       record,

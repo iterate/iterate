@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
+import * as fs from "node:fs";
 
 export type EnqueueFn = (stream: "stdout" | "stderr", message: string) => void;
 
@@ -52,7 +53,7 @@ export async function setupRepo(opts: {
   await execCommand("/usr/bin/gh", ["auth", "setup-git"], { cwd: safeCwd });
 
   // Always fresh clone into sessionDir
-  enqueue("stdout", "Cloning repository\n");
+  enqueue("stdout", `Cloning repository into ${sessionDir}\n`);
   const cloneArgs = ["repo", "clone", githubRepoUrl, sessionDir];
   if (!isCommitHash && checkoutTarget && checkoutTarget !== "main") {
     cloneArgs.push("--", "--depth", "1", "--branch", checkoutTarget);
@@ -65,10 +66,29 @@ export async function setupRepo(opts: {
     const co = await execCommand("git", ["checkout", checkoutTarget], { cwd: sessionDir });
     if (co.exitCode !== 0) throw new Error(`Checkout failed: ${co.stderr}`);
   }
+
+  const gitFilesOutput = await execCommand("git", ["ls-files"], { cwd: sessionDir });
+  enqueue("stdout", `> git ls-files\n\n${gitFilesOutput.stdout}\n`);
+  const files = await Promise.all(
+    gitFilesOutput.stdout
+      .trim()
+      .split("\n")
+      .map(async (file) => {
+        const fullPath = path.join(sessionDir, file);
+        const stat = await fs.promises.stat(fullPath);
+        if (stat.isDirectory()) {
+          return [];
+        }
+        const content = await fs.promises.readFile(fullPath, "utf8");
+        return [{ path: file, content }];
+      }),
+  ).then((files) => files.flat());
+
   enqueue("stdout", "Installing dependencies\n");
   const install = await execCommand("pnpm", ["i", "--prefer-offline"], { cwd: workDir });
   if (install.exitCode !== 0)
     throw new Error(
       `Install failed (exit code ${install.exitCode}): ${install.stderr} / ${install.stdout}`,
     );
+  return { files };
 }

@@ -192,7 +192,7 @@ function Integrations() {
   };
 
   const handleDisconnect = async (
-    integrationId: string,
+    integrationId: (typeof integrations)[number]["id"],
     disconnectType: "estate" | "personal" | "both" = "both",
   ) => {
     try {

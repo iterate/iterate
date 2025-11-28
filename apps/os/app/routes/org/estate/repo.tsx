@@ -1,4 +1,4 @@
-import React, { Suspense, useMemo, useRef, useState } from "react";
+import React, { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Edit2,
@@ -9,21 +9,23 @@ import {
   RefreshCw,
   Hammer,
   Clock,
-  GitBranch,
   Github,
   FileText,
   BadgeQuestionMarkIcon,
+  PlusIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { inferRouterOutputs } from "@trpc/server";
 import { z } from "zod/v4";
 import { createFileRoute } from "@tanstack/react-router";
+import { match } from "ts-pattern";
+import { pick } from "remeda";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { useTRPC } from "../../../lib/trpc.ts";
-import { useEstateId } from "../../../hooks/use-estate.ts";
+import { useEstateId, useOrganizationId } from "../../../hooks/use-estate.ts";
 import {
   Select,
   SelectContent,
@@ -79,12 +81,13 @@ import { SerializedObjectCodeBlock } from "../../../components/serialized-object
 const IDELazy = React.lazy(() =>
   import("../../../components/ide.tsx").then((m) => ({ default: m.IDE })),
 );
-import { Skeleton } from "../../../components/ui/skeleton.tsx";
+import { type IDEHandle } from "../../../components/ide.tsx";
 import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
+import { Link } from "../../../components/ui/link.tsx";
 import { useSSE, type UseSSEOptions } from "../../../hooks/use-sse.ts";
 
 // Use tRPC's built-in type inference for the build type
@@ -99,24 +102,34 @@ export const estateRepoLoader = authenticatedServerFn
     const { estateId } = data;
     const { db } = context.variables;
 
-    const githubInstallation = await getGithubInstallationForEstate(db, estateId);
+    const trpc = context.variables.trpcCaller;
+    const [githubIntegration, githubRepoResult, githubInstallation] = await Promise.all([
+      trpc.integrations.get({ estateId: estateId, providerId: "github-app" }),
+      trpc.integrations
+        .getGithubRepoForEstate({ estateId: estateId })
+        .then((r) => ({ success: true, data: r, error: null }) as const)
+        .catch((e) => ({ success: false, data: null, error: String(e.message || e) }) as const),
+      getGithubInstallationForEstate(db, estateId),
+    ]);
 
-    // There is no github app installation, that means its using a managed installation
-    if (!githubInstallation) return { status: "ITERATE_MANAGED_INSTALLATION" as const };
-
-    const octokit = await getOctokitForInstallation(githubInstallation.accountId).catch(() => null);
-    const authInfo = octokit
-      ? await octokit
-          .request("GET /app/installations/{installation_id}", {
+    const authInfo =
+      githubInstallation &&
+      (await getOctokitForInstallation(githubInstallation.accountId)
+        .then((octokit) =>
+          octokit.request("GET /app/installations/{installation_id}", {
             installation_id: parseInt(githubInstallation.accountId),
-          })
-          .catch(() => null)
-      : null;
+          }),
+        )
+        .catch());
 
-    if (!authInfo || authInfo.status !== 200 || authInfo.data.suspended_at)
-      return { status: "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" as const };
+    const hasActiveInstallation = authInfo?.status === 200 && !authInfo.data.suspended_at;
 
-    return { status: "ACTIVE_USER_MANAGED_INSTALLATION" as const };
+    return {
+      githubRepoResult,
+      hasGithubIntegration: githubIntegration.isConnected,
+      hasActiveInstallation,
+      managedBy: githubRepoResult.data?.managedBy || "iterate",
+    };
   });
 
 export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/repo")({
@@ -137,11 +150,11 @@ export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/re
 
 function EstateContent({
   installationStatus,
+  ideRef,
 }: {
   installationStatus: Awaited<ReturnType<typeof estateRepoLoader>>;
+  ideRef: React.RefObject<IDEHandle | null>;
 }) {
-  const { status } = installationStatus;
-
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
   const [isIterateConfigSheetOpen, setIsIterateConfigSheetOpen] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<string>("");
@@ -151,30 +164,32 @@ function EstateContent({
   const [isRebuildDialogOpen, setIsRebuildDialogOpen] = useState(false);
   const [rebuildTarget, setRebuildTarget] = useState("");
   const [rebuildTargetType, setRebuildTargetType] = useState<"branch" | "commit">("branch");
-  const [advancedValue, setAdvancedValue] = useState<string | undefined>(undefined);
+  const [advancedValue, setAdvancedValue] = useState<string>();
   const [isLogsSheetOpen, setIsLogsSheetOpen] = useState(false);
   const [logsBuild, setLogsBuild] = useState<Build | null>(null);
+  const [isRollbackDialogOpen, setIsRollbackDialogOpen] = useState(false);
+  const [rollbackBuild, setRollbackBuild] = useState<Build | null>(null);
 
   // Get estate ID from URL
   const estateId = useEstateId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
-  const { data: connectedRepo, isLoading: connectedRepoLoading } = useQuery(
-    trpc.integrations.getGithubRepoForEstate.queryOptions({
-      estateId: estateId,
-    }),
-  );
   const reposQuery = useQuery({
     ...trpc.integrations.listAvailableGithubRepos.queryOptions({
       estateId: estateId,
     }),
-    // Only enumerate repos when the config dialog is open and the user-managed installation is active
-    enabled:
-      isConfigDialogOpen && status === "ACTIVE_USER_MANAGED_INSTALLATION" && Boolean(estateId),
+    // Only enumerate repos when the config dialog is open and GitHub is connected
+    enabled: isConfigDialogOpen && installationStatus.hasGithubIntegration && Boolean(estateId),
     staleTime: 5 * 60 * 1000,
   });
   const repos = reposQuery.data;
+
+  useEffect(() => {
+    if (selectedRepo && !repoBranch && repos) {
+      setRepoBranch(repos.find((r) => r.id === parseInt(selectedRepo))?.default_branch);
+    }
+  }, [selectedRepo, repoBranch, repos]);
 
   const { data: builds, isLoading: buildsLoading } = useQuery(
     trpc.estate.getBuilds.queryOptions({
@@ -194,36 +209,23 @@ function EstateContent({
     ? new Date(compiledConfigQuery.data.updatedAt).toLocaleString()
     : null;
 
-  // Determine whether the IDE will be shown and preload it to avoid layout shift
-  const shouldShowIDE =
-    (status === "ACTIVE_USER_MANAGED_INSTALLATION" || status === "ITERATE_MANAGED_INSTALLATION") &&
-    Boolean(connectedRepo);
-  const [ideReady, setIdeReady] = useState(false);
   React.useEffect(() => {
-    if (connectedRepoLoading) return;
-    if (!shouldShowIDE) {
-      setIdeReady(true);
-      return;
-    }
-    if (ideReady) return;
+    if (!installationStatus.githubRepoResult.success) return;
     // Preload the IDE chunk; React caches dynamic imports so this is cheap on repeat
-    import("../../../components/ide.tsx").then(() => setIdeReady(true));
-  }, [connectedRepoLoading, shouldShowIDE, ideReady]);
-  const pageLoading = connectedRepoLoading || (shouldShowIDE && !ideReady);
+    import("../../../components/ide.tsx");
+  }, [installationStatus.githubRepoResult.success]);
 
-  // Compute display values for repo fields
-  // Use state values if they've been explicitly set (including empty string), otherwise use defaults
-  const displaySelectedRepo = selectedRepo || connectedRepo?.repoId?.toString() || "";
-  const displayRepoPath = repoPath !== undefined ? repoPath : connectedRepo?.path || "/";
-  const displayRepoBranch = repoBranch !== undefined ? repoBranch : connectedRepo?.branch || "main";
-
-  // Auto-open advanced options if path is not "/" or branch is not "main"
   React.useEffect(() => {
-    if (displayRepoPath !== "/" || displayRepoBranch !== "main") {
+    if ((repoPath && repoPath !== "/" && repoPath !== ".") || repoBranch !== "main") {
       setAdvancedValue("advanced");
     }
-  }, [displayRepoPath, displayRepoBranch]);
+  }, [repoPath, repoBranch]);
 
+  const createIterateManagedGithubRepoMutation = useMutation(
+    trpc.integrations.createIterateManagedGithubRepo.mutationOptions({
+      onSuccess: () => window.location.reload(),
+    }),
+  );
   const setGithubRepoForEstateMutation = useMutation(
     trpc.integrations.setGithubRepoForEstate.mutationOptions({}),
   );
@@ -231,33 +233,35 @@ function EstateContent({
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
   );
 
-  const disconnectGithubRepoMutation = useMutation(
-    trpc.integrations.disconnectGithubRepo.mutationOptions({}),
-  );
   const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
+
+  const rollbackToBuildMutation = useMutation(trpc.estate.rollbackToBuild.mutationOptions({}));
+
+  const organizationId = useOrganizationId();
 
   const handleConnectRepo = (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!displaySelectedRepo) {
+    if (!selectedRepo) {
       toast.error("Please select a repository");
+      return;
+    }
+    if (!repoBranch) {
+      toast.error("Please choose a branch");
       return;
     }
 
     setGithubRepoForEstateMutation.mutate(
       {
         estateId: estateId!,
-        repoId: parseInt(displaySelectedRepo),
-        path: displayRepoPath,
-        branch: displayRepoBranch,
+        repoId: parseInt(selectedRepo),
+        path: repoPath,
+        branch: repoBranch,
       },
       {
         onSuccess: () => {
-          toast.success(
-            connectedRepo
-              ? "Configuration updated successfully"
-              : "GitHub repository connected successfully",
-          );
+          toast.success("Configuration updated successfully");
+          window.location.reload(); // the invalidateQueries below doesn't seem to be enough
           setIsConfigDialogOpen(false);
           // Reset form state
           setSelectedRepo("");
@@ -268,25 +272,10 @@ function EstateContent({
           });
         },
         onError: () => {
-          toast.error(
-            connectedRepo
-              ? "Failed to update configuration"
-              : "Failed to set GitHub repository for estate",
-          );
+          toast.error("Failed to update configuration");
         },
       },
     );
-  };
-
-  const handleConnectGitHub = async () => {
-    try {
-      const { installationUrl } = await startGithubAppInstallFlowMutation.mutateAsync({
-        estateId: estateId!,
-      });
-      window.location.href = installationUrl;
-    } catch {
-      toast.error("Failed to start GitHub connection flow");
-    }
   };
 
   const toggleBuildExpanded = (buildId: string) => {
@@ -402,34 +391,195 @@ function EstateContent({
     );
   };
 
-  if (pageLoading) {
+  const connectedRepo = installationStatus.githubRepoResult.data;
+
+  const repositoryConfigurationDialog = (
+    <Dialog
+      open={isConfigDialogOpen}
+      onOpenChange={(open) => {
+        setIsConfigDialogOpen(open);
+        if (!open) {
+          // Reset form state when dialog closes
+          setSelectedRepo("");
+          setRepoPath(undefined);
+          setRepoBranch(undefined);
+          setAdvancedValue(undefined);
+        }
+      }}
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Update Repository Configuration</DialogTitle>
+          <DialogDescription>
+            Select a repository and configure the branch and path for your iterate estate.
+          </DialogDescription>
+        </DialogHeader>
+
+        <form onSubmit={handleConnectRepo}>
+          <FieldSet>
+            <FieldGroup>
+              {/* Repository Select */}
+              <Field>
+                <FieldLabel htmlFor="repository">Repository</FieldLabel>
+                <Select
+                  value={selectedRepo}
+                  onValueChange={setSelectedRepo}
+                  disabled={reposQuery.isLoading || setGithubRepoForEstateMutation.isPending}
+                >
+                  <SelectTrigger id="repository">
+                    <SelectValue placeholder="Select a repository" />
+                    {reposQuery.isLoading && <Spinner className="h-3 w-3 opacity-60" />}
+                  </SelectTrigger>
+                  <SelectContent>
+                    {repos?.map((repo) => (
+                      <SelectItem key={repo.id} value={repo.id.toString()}>
+                        {repo.full_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Choose the GitHub repository that contains your iterate configuration.
+                </FieldDescription>
+              </Field>
+
+              {/* Advanced Options */}
+              <Accordion
+                type="single"
+                collapsible
+                value={advancedValue}
+                onValueChange={setAdvancedValue}
+              >
+                <AccordionItem value="advanced" className="border-none">
+                  <AccordionTrigger className="py-2 text-sm text-muted-foreground hover:text-foreground hover:no-underline">
+                    Advanced options
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-4 pt-2">
+                    {/* Branch Input */}
+                    <Field>
+                      <FieldLabel htmlFor="branch">Branch</FieldLabel>
+                      <Input
+                        id="branch"
+                        value={repoBranch}
+                        onChange={(e) => setRepoBranch(e.target.value)}
+                        placeholder="main"
+                        disabled={setGithubRepoForEstateMutation.isPending}
+                      />
+                      <FieldDescription>The branch to monitor for changes.</FieldDescription>
+                    </Field>
+
+                    {/* Path Input */}
+                    <Field>
+                      <FieldLabel htmlFor="path">Path</FieldLabel>
+                      <Input
+                        id="path"
+                        value={repoPath}
+                        onChange={(e) => setRepoPath(e.target.value)}
+                        placeholder="/"
+                        disabled={setGithubRepoForEstateMutation.isPending}
+                      />
+                      <FieldDescription>
+                        The path to the folder in which your <code>iterate.config.ts</code> file is
+                        located. Defaults to <code>/</code>.
+                      </FieldDescription>
+                    </Field>
+                  </AccordionContent>
+                </AccordionItem>
+              </Accordion>
+            </FieldGroup>
+          </FieldSet>
+
+          <DialogFooter className="mt-6 gap-2">
+            <Button
+              type="button"
+              variant="destructive"
+              onClick={() => {
+                // TODO: temporary disabled
+                // Upon redirect the estate will be disconnected from GitHub
+                // Which will automatically create a new repo in the estate pool
+                // That is not ideal, so we're temporarily disabling this feature
+                toast.error("This feature is temporarily disabled");
+              }}
+              disabled={startGithubAppInstallFlowMutation.isPending}
+              className="flex-1"
+            >
+              {startGithubAppInstallFlowMutation.isPending ? (
+                <>
+                  <Spinner className="w-4 h-4 mr-2" />
+                  Connecting...
+                </>
+              ) : (
+                <>
+                  <Github className="h-4 w-4 mr-2" />
+                  Re-authorize GitHub
+                </>
+              )}
+            </Button>
+            <Button
+              type="submit"
+              disabled={!selectedRepo || setGithubRepoForEstateMutation.isPending}
+              className="flex-1"
+            >
+              {setGithubRepoForEstateMutation.isPending ? (
+                <>
+                  <Spinner className="w-4 h-4 mr-2" />
+                  {connectedRepo ? "Updating..." : "Connecting..."}
+                </>
+              ) : (
+                <>
+                  {connectedRepo ? "Update Configuration" : "Connect Repository"}
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+
+  if (!installationStatus.githubRepoResult.data && installationStatus.hasGithubIntegration) {
     return (
-      <>
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          <Card variant="muted">
-            <CardHeader>
-              <Skeleton className="h-6 w-40" />
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Skeleton className="h-4 w-5/6" />
-              <Skeleton className="h-4 w-2/3" />
-              <Skeleton className="h-4 w-1/2" />
-            </CardContent>
-          </Card>
-          <Card variant="muted">
-            <CardHeader>
-              <Skeleton className="h-6 w-56" />
-            </CardHeader>
-            <CardContent className="space-y-3">
-              <Skeleton className="h-4 w-64" />
-              <Skeleton className="h-9 w-40" />
-            </CardContent>
-          </Card>
-        </div>
-        <div className="mt-6">
-          <Skeleton className="h-[calc(100vh-8rem)] w-full" />
-        </div>
-      </>
+      <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setIsConfigDialogOpen(true)}
+          disabled={!installationStatus.hasGithubIntegration}
+        >
+          Select GitHub Repository
+        </Button>
+        {repositoryConfigurationDialog}
+      </div>
+    );
+  }
+
+  if (!connectedRepo) {
+    const problemMessage = installationStatus.githubRepoResult.error || "No repository connected.";
+    const connectMessage = installationStatus.hasGithubIntegration
+      ? `Try disconnecting and reconnecting GitHub`
+      : `Connect GitHub`;
+    return (
+      <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+        <span>
+          {problemMessage}{" "}
+          <Link to="/$organizationId/$estateId/integrations" params={{ organizationId, estateId }}>
+            {connectMessage}
+          </Link>
+          <div className="flex items-center gap-2 mt-4">
+            {" or "}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => createIterateManagedGithubRepoMutation.mutate({ estateId })}
+              disabled={createIterateManagedGithubRepoMutation.isPending}
+            >
+              <PlusIcon className="h-4 w-4 mr-2" />
+              Create Iterate Managed Repository
+            </Button>
+          </div>
+        </span>
+      </div>
     );
   }
 
@@ -442,16 +592,10 @@ function EstateContent({
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle>Your iterate repo</CardTitle>
-              {connectedRepo && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setIsIterateConfigSheetOpen(true)}
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  View iterate config
-                </Button>
-              )}
+              <Button variant="outline" size="sm" onClick={() => setIsIterateConfigSheetOpen(true)}>
+                <FileText className="mr-2 h-4 w-4" />
+                View iterate config
+              </Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -459,41 +603,21 @@ function EstateContent({
               <p>Your @iterate bot is configured using the files in this repository.</p>
               <p>
                 The entry point to everything is your{" "}
-                {connectedRepo ? (
-                  <a
-                    href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}/blob/${connectedRepo.branch}${connectedRepo.path}iterate.config.ts`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 underline"
-                  >
-                    <code>iterate.config.ts</code>
-                  </a>
-                ) : (
+                <a
+                  href={`${connectedRepo.htmlUrl}/tree/${connectedRepo.branch}${connectedRepo.path}iterate.config.ts`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-blue-600 hover:text-blue-800 underline"
+                >
                   <code>iterate.config.ts</code>
-                )}{" "}
+                </a>{" "}
                 file.
               </p>
-              <p>
-                Try{" "}
-                {connectedRepo ? (
-                  <a
-                    href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}/edit/${connectedRepo.branch}${connectedRepo.path}iterate.config.ts`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-blue-600 hover:text-blue-800 underline"
-                  >
-                    editing it
-                  </a>
-                ) : (
-                  "editing it"
-                )}{" "}
-                to change the behaviour of the @iterate bot.
-              </p>
+              <p>Try editing it below to change the behaviour of the @iterate bot.</p>
             </CardDescription>
           </CardContent>
         </Card>
 
-        {/* Repository Configuration */}
         <Card variant="muted">
           <CardHeader>
             <div className="flex items-center justify-between">
@@ -503,7 +627,7 @@ function EstateContent({
                   variant="outline"
                   size="sm"
                   onClick={() => setIsConfigDialogOpen(true)}
-                  disabled={status === "ITERATE_MANAGED_INSTALLATION"}
+                  disabled={!installationStatus.hasGithubIntegration}
                 >
                   <Edit2 className="h-4 w-4 mr-2" />
                   Edit
@@ -512,116 +636,86 @@ function EstateContent({
             </div>
           </CardHeader>
           <CardContent>
-            {status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
-            status === "ITERATE_MANAGED_INSTALLATION" ? (
-              connectedRepoLoading ? (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
-                    <Skeleton className="h-4 w-20" />
-                    <Skeleton className="h-4 w-64" />
-                    <Skeleton className="h-4 w-16" />
-                    <Skeleton className="h-4 w-24" />
-                    <Skeleton className="h-4 w-12" />
-                    <Skeleton className="h-4 w-20" />
-                  </div>
-                  <Skeleton className="h-3 w-72" />
-                </div>
-              ) : connectedRepo ? (
-                <>
-                  <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
-                    <div className="text-sm text-muted-foreground">Repository:</div>
-                    <a
-                      href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="font-mono text-sm text-blue-600 hover:text-blue-800 underline break-all"
+            {match(installationStatus)
+              .with({ managedBy: "user", hasActiveInstallation: true }, () => {
+                // happiest path
+                return (
+                  <>
+                    <div className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2">
+                      <div className="text-sm text-muted-foreground">Repository:</div>
+                      <a
+                        href={`https://github.com/${connectedRepo.repoFullName || connectedRepo.repoName}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="font-mono text-sm text-blue-600 hover:text-blue-800 underline break-all"
+                      >
+                        {connectedRepo.repoFullName || connectedRepo.repoName}
+                      </a>
+
+                      <div className="text-sm text-muted-foreground">Branch:</div>
+                      <span className="font-mono text-sm">{connectedRepo.branch}</span>
+
+                      {connectedRepo.path && (
+                        <>
+                          <div className="text-sm text-muted-foreground">Path:</div>
+                          <span className="font-mono text-sm">{connectedRepo.path}</span>
+                        </>
+                      )}
+                    </div>
+                  </>
+                );
+              })
+              .with({ managedBy: "user", hasActiveInstallation: false }, () => {
+                return (
+                  <>
+                    <CardDescription className="text-amber-600 dark:text-amber-400">
+                      Your Github App connection has expired, suspended or been revoked. You will
+                      need to remove the connection and reconnect the repo.
+                    </CardDescription>
+                    <div className="flex gap-2 mt-4">
+                      <Link
+                        to="/$organizationId/$estateId/integrations"
+                        params={{ organizationId, estateId }}
+                      >
+                        Manage Integrations
+                      </Link>
+                    </div>
+                  </>
+                );
+              })
+              .with({ managedBy: "iterate", hasGithubIntegration: true }, () => {
+                // todo: transfer repository button? copy config to a new repo? not sure what you can do via API though
+                // story for "upgrade from iterate to user managed" is bad
+                return "This repository is managed by Iterate. To use your own, click the Edit button above.";
+              })
+              .with({ managedBy: "iterate", hasGithubIntegration: false }, () => {
+                return (
+                  <>
+                    This repository is managed by Iterate,{" "}
+                    <Link
+                      to="/$organizationId/$estateId/integrations"
+                      params={{ organizationId, estateId }}
                     >
-                      {connectedRepo.repoFullName || connectedRepo.repoName}
-                    </a>
-
-                    <div className="text-sm text-muted-foreground">Branch:</div>
-                    <span className="font-mono text-sm">{connectedRepo.branch}</span>
-
-                    <div className="text-sm text-muted-foreground">Path:</div>
-                    <span className="font-mono text-sm">{connectedRepo.path}</span>
-                  </div>
-                  {status === "ITERATE_MANAGED_INSTALLATION" && (
-                    <span className="text-xs text-muted-foreground">
-                      This repository is managed by Iterate, connect github integration to add
-                      custom repository
-                    </span>
-                  )}
-                </>
-              ) : (
-                <>
-                  <CardDescription>
-                    Connect your iterate repository to enable automatic builds and deployments.
-                  </CardDescription>
-                  <Button onClick={() => setIsConfigDialogOpen(true)} className="mt-4">
-                    <GitBranch className="h-4 w-4 mr-2" />
-                    Configure Repository
-                  </Button>
-                </>
-              )
-            ) : status === "EXPIRED_OR_SUSPENDED_USER_MANAGED_INSTALLATION" ? (
-              <>
-                <CardDescription className="text-amber-600 dark:text-amber-400">
-                  Your GIthub App connection has expired, suspended or been revoked. You will need
-                  to remove the connection and reconnect the repo.
-                </CardDescription>
-                <div className="flex gap-2 mt-4">
-                  <Button
-                    onClick={() => {
-                      disconnectGithubRepoMutation.mutate({
-                        estateId: estateId!,
-                        deleteInstallation: true,
-                      });
-                    }}
-                    variant="outline"
-                  >
-                    Remove and Reconnect
-                  </Button>
-                </div>
-              </>
-            ) : (
-              <>
-                <CardDescription>GitHub not connected</CardDescription>
-                <Button
-                  onClick={handleConnectGitHub}
-                  disabled={startGithubAppInstallFlowMutation.isPending}
-                  className="mt-4"
-                >
-                  {startGithubAppInstallFlowMutation.isPending ? (
-                    <>
-                      <Spinner className="w-4 h-4 mr-2" />
-                      Connecting...
-                    </>
-                  ) : (
-                    <>
-                      Connect GitHub
-                      <ArrowRight className="h-4 w-4 ml-2" />
-                    </>
-                  )}
-                </Button>
-              </>
-            )}
+                      connect GitHub
+                    </Link>{" "}
+                    to use your own repository.
+                  </>
+                );
+              })
+              .exhaustive()}
           </CardContent>
         </Card>
       </div>
 
-      {(status === "ACTIVE_USER_MANAGED_INSTALLATION" ||
-        status === "ITERATE_MANAGED_INSTALLATION") &&
-        connectedRepo && (
-          <Suspense
-            fallback={
-              <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
-                <Spinner className="h-6 w-6" />
-              </div>
-            }
-          >
-            <IDELazy />
-          </Suspense>
-        )}
+      <Suspense
+        fallback={
+          <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
+            <Spinner className="h-6 w-6" />
+          </div>
+        }
+      >
+        <IDELazy ref={ideRef} />
+      </Suspense>
 
       {/* Build History */}
       {connectedRepo && (
@@ -674,6 +768,7 @@ function EstateContent({
                               title={build.commitMessage}
                             >
                               {build.commitMessage}
+                              {build.isActive && <>{" [active]"}</>}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
@@ -708,7 +803,7 @@ function EstateContent({
                                 </span>
                               </div>
                             )}
-                            <div className="pt-2">
+                            <div className="pt-2 flex items-center gap-2">
                               <Button
                                 onClick={() => handleRebuildCommit(build)}
                                 disabled={
@@ -737,9 +832,18 @@ function EstateContent({
                                 }}
                                 variant="outline"
                                 size="sm"
-                                className="ml-2"
                               >
                                 View Logs
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setRollbackBuild(build);
+                                  setIsRollbackDialogOpen(true);
+                                }}
+                              >
+                                Rollback...
                               </Button>
                             </div>
                           </div>
@@ -855,150 +959,119 @@ function EstateContent({
       </Sheet>
 
       {/* Repository Configuration Dialog */}
+      {repositoryConfigurationDialog}
+
+      {/* Rollback Dialog */}
       <Dialog
-        open={isConfigDialogOpen}
+        open={isRollbackDialogOpen}
         onOpenChange={(open) => {
-          setIsConfigDialogOpen(open);
+          setIsRollbackDialogOpen(open);
           if (!open) {
-            // Reset form state when dialog closes
-            setSelectedRepo("");
-            setRepoPath(undefined);
-            setRepoBranch(undefined);
-            setAdvancedValue(undefined);
+            setRollbackBuild(null);
           }
         }}
       >
-        <DialogContent>
+        <DialogContent
+          className="max-h-[90vh] flex flex-col sm:max-w-[90vw]"
+          style={{ width: "min(90vw, 1400px)" }}
+        >
           <DialogHeader>
-            <DialogTitle>
-              {connectedRepo ? "Update Repository Configuration" : "Configure Repository"}
-            </DialogTitle>
+            <DialogTitle>Rollback to Build</DialogTitle>
             <DialogDescription>
-              Select a repository and configure the branch and path for your iterate estate.
+              This will roll your bot back to its state as of this build. The configuration shown
+              below will be restored to your estate.
             </DialogDescription>
           </DialogHeader>
+          <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
+            {rollbackBuild && (
+              <SerializedObjectCodeBlock
+                data={pick(rollbackBuild, [
+                  "id",
+                  "commitHash",
+                  "commitMessage",
+                  "status",
+                  "files",
+                  "config",
+                ])}
+                className="flex-1 min-h-0"
+              />
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setIsRollbackDialogOpen(false);
+                setRollbackBuild(null);
+              }}
+              disabled={rollbackToBuildMutation.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                if (rollbackBuild && rollbackBuild.files && ideRef.current) {
+                  // Convert build.files array to Record<string, string> format
+                  const record = Object.fromEntries(
+                    rollbackBuild.files.map((file) => [file.path, file.content]),
+                  );
 
-          <form onSubmit={handleConnectRepo}>
-            <FieldSet>
-              <FieldGroup>
-                {/* Repository Select */}
-                <Field>
-                  <FieldLabel htmlFor="repository">Repository</FieldLabel>
-                  <Select
-                    value={displaySelectedRepo}
-                    onValueChange={setSelectedRepo}
-                    disabled={reposQuery.isLoading || setGithubRepoForEstateMutation.isPending}
-                  >
-                    <SelectTrigger id="repository">
-                      <SelectValue placeholder="Select a repository" />
-                      {reposQuery.isLoading && <Spinner className="h-3 w-3 opacity-60" />}
-                    </SelectTrigger>
-                    <SelectContent>
-                      {repos?.map((repo) => (
-                        <SelectItem key={repo.id} value={repo.id.toString()}>
-                          {repo.full_name}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldDescription>
-                    Choose the GitHub repository that contains your iterate configuration.
-                  </FieldDescription>
-                </Field>
-
-                {/* Advanced Options */}
-                <Accordion
-                  type="single"
-                  collapsible
-                  value={advancedValue}
-                  onValueChange={setAdvancedValue}
-                >
-                  <AccordionItem value="advanced" className="border-none">
-                    <AccordionTrigger className="py-2 text-sm text-muted-foreground hover:text-foreground hover:no-underline">
-                      Advanced options
-                    </AccordionTrigger>
-                    <AccordionContent className="space-y-4 pt-2">
-                      {/* Branch Input */}
-                      <Field>
-                        <FieldLabel htmlFor="branch">Branch</FieldLabel>
-                        <Input
-                          id="branch"
-                          value={displayRepoBranch}
-                          onChange={(e) => setRepoBranch(e.target.value)}
-                          placeholder="main"
-                          disabled={setGithubRepoForEstateMutation.isPending}
-                        />
-                        <FieldDescription>
-                          The branch to monitor for changes. Defaults to "main".
-                        </FieldDescription>
-                      </Field>
-
-                      {/* Path Input */}
-                      <Field>
-                        <FieldLabel htmlFor="path">Path</FieldLabel>
-                        <Input
-                          id="path"
-                          value={displayRepoPath}
-                          onChange={(e) => setRepoPath(e.target.value)}
-                          placeholder="/"
-                          disabled={setGithubRepoForEstateMutation.isPending}
-                        />
-                        <FieldDescription>
-                          The path to the folder in which your <code>iterate.config.ts</code> file
-                          is located. Defaults to <code>/</code>.
-                        </FieldDescription>
-                      </Field>
-                    </AccordionContent>
-                  </AccordionItem>
-                </Accordion>
-              </FieldGroup>
-            </FieldSet>
-
-            <DialogFooter className="mt-6 gap-2">
-              <Button
-                type="button"
-                variant="destructive"
-                onClick={() => {
-                  // TODO: temporary disabled
-                  // Upon redirect the estate will be disconnected from GitHub
-                  // Which will automatically create a new repo in the estate pool
-                  // That is not ideal, so we're temporarily disabling this feature
-                  toast.error("This feature is temporarily disabled");
-                }}
-                disabled={startGithubAppInstallFlowMutation.isPending}
-                className="flex-1"
-              >
-                {startGithubAppInstallFlowMutation.isPending ? (
-                  <>
-                    <Spinner className="w-4 h-4 mr-2" />
-                    Connecting...
-                  </>
-                ) : (
-                  <>
-                    <Github className="h-4 w-4 mr-2" />
-                    Re-authorize GitHub
-                  </>
-                )}
-              </Button>
-              <Button
-                type="submit"
-                disabled={!displaySelectedRepo || setGithubRepoForEstateMutation.isPending}
-                className="flex-1"
-              >
-                {setGithubRepoForEstateMutation.isPending ? (
-                  <>
-                    <Spinner className="w-4 h-4 mr-2" />
-                    {connectedRepo ? "Updating..." : "Connecting..."}
-                  </>
-                ) : (
-                  <>
-                    {connectedRepo ? "Update Configuration" : "Connect Repository"}
-                    <ArrowRight className="h-4 w-4 ml-2" />
-                  </>
-                )}
-              </Button>
-            </DialogFooter>
-          </form>
+                  const { branch } = ideRef.current.updateLocalEdits(record);
+                  toast.success(
+                    `Files from this build have been loaded into the IDE. Go to the Git repository tab and click "Push to ${branch}" to apply them.`,
+                    { duration: 8000 },
+                  );
+                  setIsRollbackDialogOpen(false);
+                  setRollbackBuild(null);
+                }
+              }}
+              disabled={!rollbackBuild || !rollbackBuild.files?.length || !ideRef.current}
+            >
+              Re-apply changes
+            </Button>
+            <Button
+              onClick={() => {
+                if (rollbackBuild) {
+                  rollbackToBuildMutation.mutate(
+                    { estateId, buildId: rollbackBuild.id },
+                    {
+                      onSuccess: ({ updated }) => {
+                        if (updated === 0) {
+                          toast.error("Failed to rollback");
+                          return;
+                        }
+                        toast.success("Rollback completed successfully");
+                        setIsRollbackDialogOpen(false);
+                        setRollbackBuild(null);
+                        queryClient.invalidateQueries({
+                          queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+                        });
+                      },
+                      onError: (error) => {
+                        toast.error(error.message || "Failed to rollback");
+                      },
+                    },
+                  );
+                }
+              }}
+              disabled={
+                !rollbackBuild ||
+                rollbackBuild.status !== "complete" ||
+                rollbackBuild.isActive ||
+                rollbackToBuildMutation.isPending
+              }
+            >
+              {rollbackToBuildMutation.isPending ? (
+                <>
+                  <Spinner className="w-4 h-4 mr-2" />
+                  Rolling back...
+                </>
+              ) : (
+                "Rollback"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1102,7 +1175,9 @@ function EstateContent({
 
 export default function ManageEstate() {
   const installationStatus = Route.useLoaderData();
-  return <EstateContent installationStatus={installationStatus} />;
+  const ideRef = useRef<IDEHandle>(null);
+
+  return <EstateContent installationStatus={installationStatus} ideRef={ideRef} />;
 }
 
 function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }) {

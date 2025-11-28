@@ -22,7 +22,7 @@ type BuildInput = {
 };
 
 export type Log = {
-  event: "info" | "stdout" | "output" | "error" | "complete";
+  event: "info" | "stdout" | "files" | "output" | "error" | "complete";
   data: string;
 };
 
@@ -294,6 +294,7 @@ export class EstateBuildManager extends Container {
           (log) => log.event === "complete" || log.event === "error",
         );
         const outputLog = logs.find((log) => log.event === "output");
+        const filesLog = logs.find((log) => log.event === "files");
         if (terminatingLog) {
           const status = terminatingLog.event === "complete" ? "complete" : "failed";
           this._sql.exec(
@@ -301,20 +302,31 @@ export class EstateBuildManager extends Container {
             status,
             buildId,
           );
+
+          const buildUpdate: Partial<typeof schemas.builds.$inferSelect> = { status };
+
+          if (filesLog) {
+            const files = JSON.parse(filesLog.data);
+            buildUpdate.files = files;
+          }
+          if (outputLog) {
+            const config = JSON.parse(outputLog.data);
+            buildUpdate.config = config;
+          }
+
           await this.db
             .update(schemas.builds)
-            .set({ status })
+            .set(buildUpdate)
             .where(eq(schemas.builds.id, buildId));
 
           // Update the iterate config in the database if this is the newest triggered build
-          if (outputLog && buildId === newestTriggeredBuild.buildId) {
-            const config = JSON.parse(outputLog.data);
+          if (buildId === newestTriggeredBuild.buildId) {
             await this.db
               .insert(schemas.iterateConfig)
-              .values({ estateId, config })
+              .values({ estateId, buildId })
               .onConflictDoUpdate({
                 target: [schemas.iterateConfig.estateId],
-                set: { config },
+                set: { buildId },
               });
           }
         }

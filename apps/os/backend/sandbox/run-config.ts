@@ -8,7 +8,7 @@ export interface RunConfigOptions {
   githubToken: string;
   commitHash?: string;
   branch?: string;
-  connectedRepoPath?: string;
+  connectedRepoPath: string | undefined;
   buildId: string;
   estateId: string;
 }

@@ -1,5 +1,5 @@
 import { join } from "path";
-import { mkdir, readFile, access, appendFile } from "fs/promises";
+import { mkdir, readFile, access, appendFile, stat } from "fs/promises";
 import { stripVTControlCharacters } from "util";
 import { createInterface } from "readline/promises";
 import { Hono } from "hono";
@@ -41,7 +41,7 @@ type BuildConfigInput = {
 };
 
 type Log = {
-  event: "info" | "stdout" | "output" | "error" | "complete";
+  event: "info" | "stdout" | "files" | "output" | "error" | "complete";
   data: string;
 };
 
@@ -147,6 +147,27 @@ async function buildConfig(options: BuildConfigInput) {
       });
       return;
     }
+
+    const gitLsFiles = await x("git", ["ls-files", installTargetDir], {
+      nodeOptions: {
+        cwd: installTargetDir,
+        env: process.env,
+      },
+    });
+
+    const files = await Promise.all(
+      gitLsFiles.stdout.split("\n").map(async (file) => {
+        const statResult = await stat(join(installTargetDir, file));
+        if (!statResult.isFile()) return [];
+        const content = await readFile(join(installTargetDir, file), "utf8");
+        return [{ path: file, content }];
+      }),
+    ).then((files) => files.flat());
+
+    await log({
+      event: "files",
+      data: JSON.stringify(files, null, 2),
+    });
 
     await log({
       event: "output",
