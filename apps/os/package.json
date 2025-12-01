@@ -90,7 +90,7 @@
     "nuqs": "^2.8.1",
     "octokit": "^5.0.5",
     "openai": "6.3.0",
-    "p-queue": "^9.0.1",
+    "p-queue": "9.0.0",
     "p-suite": "^0.3.0",
     "partysocket": "^1.1.6",
     "postgres": "^3.4.7",

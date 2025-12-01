@@ -374,8 +374,8 @@ importers:
         specifier: 6.3.0
         version: 6.3.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       p-queue:
-        specifier: ^9.0.1
-        version: 9.0.1
+        specifier: 9.0.0
+        version: 9.0.0
       p-suite:
         specifier: ^0.3.0
         version: 0.3.0
@@ -7924,8 +7924,8 @@ packages:
     resolution: {integrity: sha512-aNZ+VfjobsWryoiPnEApGGmf5WmNsCo9xu8dfaYamG5qaLP7ClhLN6NgsFe6SwJ2UbLEBK5dv9x8Mn5+RVhMWQ==}
     engines: {node: '>=18'}
 
-  p-queue@9.0.1:
-    resolution: {integrity: sha512-RhBdVhSwJb7Ocn3e8ULk4NMwBEuOxe+1zcgphUy9c2e5aR/xbEsdVXxHJ3lynw6Qiqu7OINEyHlZkiblEpaq7w==}
+  p-queue@9.0.0:
+    resolution: {integrity: sha512-KO1RyxstL9g1mK76530TExamZC/S2Glm080Nx8PE5sTd7nlduDQsAfEl4uXX+qZjLiwvDauvzXavufy3+rJ9zQ==}
     engines: {node: '>=20'}
 
   p-race@3.1.0:
@@ -18159,7 +18159,7 @@ snapshots:
       eventemitter3: 5.0.1
       p-timeout: 6.1.4
 
-  p-queue@9.0.1:
+  p-queue@9.0.0:
     dependencies:
       eventemitter3: 5.0.1
       p-timeout: 7.0.0
