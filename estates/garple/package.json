@@ -39,7 +39,7 @@
     "db:studio:garple": "cd apps/website && drizzle-kit studio"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.13.12",
+    "@cloudflare/vite-plugin": "1.15.3",
     "@cloudflare/workers-types": "^4.20251014.0",
     "@iterate-com/sdk": "workspace:*",
     "@types/react": "19.2.2",
@@ -51,6 +51,6 @@
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
     "vitest": "^3.2.4",
-    "wrangler": "^4.45.3"
+    "wrangler": "4.51.0"
   }
 }

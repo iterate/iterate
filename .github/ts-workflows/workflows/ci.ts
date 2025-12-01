@@ -169,31 +169,9 @@ export default {
           const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
-            blocks: [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
-                },
-              },
-              {
-                type: "section",
-                fields: [
-                  { type: "mrkdwn", text: "*Repository:* ${{ github.repository }}" },
-                  { type: "mrkdwn", text: "*Branch:* ${{ github.ref_name }}" },
-                  { type: "mrkdwn", text: "*Workflow:* ${{ github.workflow }}" },
-                  { type: "mrkdwn", text: "*Run Number:* ${{ github.run_number }}" },
-                ],
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
-                },
-              },
-            ],
+            text:
+              `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}. ` +
+              "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
           });
         }),
       ],

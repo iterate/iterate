@@ -182,9 +182,8 @@ export default {
 
               console.log(`PR #${pr.number}`, pr.title, pr.html_url, { reasonsToNag, shouldNag });
 
-              const { getSlackClient, slackChannelIds, slackUsers } = await import(
-                "../utils/slack.ts"
-              );
+              const { getSlackClient, slackChannelIds, slackUsers } =
+                await import("../utils/slack.ts");
               const slack = getSlackClient("${{ secrets.SLACK_CI_BOT_TOKEN }}");
               const slackUser = slackUsers.find(
                 (u) => u.github.toLowerCase() === pr.user?.login?.toLowerCase(),
