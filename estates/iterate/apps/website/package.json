@@ -29,7 +29,7 @@
     "tailwind-merge": "3.3.1",
     "tailwindcss": "4.1.11",
     "unist-util-visit": "^5.0.0",
-    "wrangler": "^4.45.3",
+    "wrangler": "4.51.0",
     "zod": "4.1.12"
   },
   "scripts": {
@@ -40,12 +40,12 @@
     "test:e2e:vitest": "VITEST_RUN_E2E=true pnpm vitest run --passWithNoTests"
   },
   "devDependencies": {
-    "@cloudflare/vite-plugin": "^1.13.12",
+    "@cloudflare/vite-plugin": "1.15.3",
     "@cloudflare/workers-types": "^4.20251014.0",
     "@playwright/test": "1.56.1",
     "@react-router/dev": "7.9.5",
-    "@types/mdast": "^4.0.4",
     "@tailwindcss/vite": "^4.1.16",
+    "@types/mdast": "^4.0.4",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
     "tw-animate": "^1.0.3",
