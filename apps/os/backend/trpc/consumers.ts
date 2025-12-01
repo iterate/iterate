@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { getDb } from "../db/client.ts";
-import { createTrpcConsumer } from "../db/outbox/events.ts";
+import { createConsumerClient, getTrpcEventTypes } from "../db/outbox/events.ts";
 import { logger } from "../tag-logger.ts";
 import {
   createTrialSlackConnectChannel,
@@ -10,10 +10,30 @@ import {
 import type { appRouter } from "./root.ts";
 import { queuer } from "./trpc.ts";
 
-const cc = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+export type InternalEventTypes = {
+  "onboarding:estateCreated": { estateId: string };
+};
+
+type TrpcEventTypes = ReturnType<typeof getTrpcEventTypes<typeof appRouter>>["EventTypes"];
+
+// const cc = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+const cc = createConsumerClient<InternalEventTypes & TrpcEventTypes, typeof queuer.$types.db>(
+  queuer,
+);
 
 export const registerConsumers = () => {
   registerTestConsumers();
+
+  cc.registerConsumer({
+    name: "createGithubRepository",
+    on: "onboarding:estateCreated",
+    handler: async (params) => {
+      const db = getDb();
+      const estates = await db.query.estate.findMany({});
+      const match = estates.find((e) => e.id === params.payload.estateId);
+      return match && `estate name: ${match.name}`;
+    },
+  });
 
   cc.registerConsumer({
     name: "createSlackConnectChannel",
