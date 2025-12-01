@@ -169,22 +169,7 @@ export default {
           const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
-            blocks: [
-              {
-                type: "header",
-                text: {
-                  type: "plain_text",
-                  text: `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}`,
-                },
-              },
-              {
-                type: "section",
-                text: {
-                  type: "mrkdwn",
-                  text: "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
-                },
-              },
-            ],
+            text: `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}. <\${{ github.server_url }}/\${{ github.repository }}/actions/runs/\${{ github.run_id }}|View Workflow Run>`,
           });
         }),
       ],
