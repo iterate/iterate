@@ -1,5 +1,5 @@
 import { createPrivateKey } from "crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { App, Octokit } from "octokit";
 import { getContainer } from "@cloudflare/containers";
 import { env } from "../../../env.ts";
@@ -75,21 +75,24 @@ export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
 };
 
 export const getEstateByRepoId = async (db: DB, repoId: number) => {
-  const [estate] = await db
-    .select({
-      id: schema.estate.id,
-      name: schema.estate.name,
-      connectedRepoRef: schema.iterateConfigSource.branch,
-      connectedRepoPath: schema.iterateConfigSource.path,
-    })
-    .from(schema.estate)
-    .innerJoin(
-      schema.iterateConfigSource,
-      eq(schema.estate.id, schema.iterateConfigSource.estateId),
-    )
-    .where(eq(schema.iterateConfigSource.repoId, repoId));
-
-  return estate;
+  const configSource = await db.query.iterateConfigSource.findFirst({
+    where: and(
+      eq(schema.iterateConfigSource.repoId, repoId),
+      isNull(schema.iterateConfigSource.deactivatedAt),
+    ),
+    with: {
+      estate: true,
+    },
+  });
+  return (
+    configSource?.estate && {
+      id: configSource.estate.id,
+      name: configSource.estate.name,
+      connectedRepoRef: configSource.branch,
+      connectedRepoPath: configSource.path,
+      connectedRepoAccountId: configSource.accountId,
+    }
+  );
 };
 
 export const validateGithubWebhookSignature = async (payload: string, signature: string) =>
