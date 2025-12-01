@@ -116,15 +116,22 @@ export async function processSystemTasks(db: DB): Promise<{
             with: { organization: true },
           });
           if (!estate) throw new Error(`Estate ${task.aggregateId} not found`);
+          const activeSource = await db.query.iterateConfigSource.findFirst({
+            where: and(
+              eq(schema.iterateConfigSource.estateId, estate.id),
+              isNull(schema.iterateConfigSource.deactivatedAt),
+            ),
+          });
+          if (activeSource) {
+            logger.warn(`Estate ${estate.id} already has an active source, skipping`);
+            break;
+          }
+
           const repo = await createGithubRepoInEstatePool({
             organizationName: estate.organization.name,
             organizationId: estate.organizationId,
           });
           await db.transaction(async (tx) => {
-            await tx
-              .update(schema.iterateConfigSource)
-              .set({ deactivatedAt: new Date() })
-              .where(eq(schema.iterateConfigSource.estateId, estate.id));
             await tx.insert(schema.iterateConfigSource).values({
               estateId: estate.id,
               provider: "github",
