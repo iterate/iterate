@@ -11,8 +11,8 @@
     "typecheck": "tsc --build"
   },
   "dependencies": {
-    "glob": "^11.0.3",
-    "yaml": "^2.8.1"
+    "glob": "^13.0.0",
+    "yaml": "^2.8.2"
   },
   "devDependencies": {
     "dedent": "^1.7.0",

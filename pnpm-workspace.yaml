@@ -30,3 +30,4 @@ overrides:
   'agents>x402': '-'
   'agents>viem': '-'
   'quicktype-core>readable-stream': 'npm:vite-compatible-readable-stream@3.6.1'
+  'better-sqlite3': 'npm:libsql@0.5.22'

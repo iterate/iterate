@@ -7,9 +7,9 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "packageManager": "pnpm@10.18.2",
+  "packageManager": "pnpm@10.24.0",
   "dependencies": {
-    "esbuild": "^0.25.12",
-    "dedent": "^1.7.0"
+    "dedent": "^1.7.0",
+    "esbuild": "^0.25.12"
   }
 }

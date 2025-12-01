@@ -670,8 +670,9 @@ with the agent.
   recordedToolCalls?: Array<{ tool: string; input: unknown; output: unknown }>;
 }
 
-export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
-  extends CoreReducedState<TEventInput> {
+export interface AugmentedCoreReducedState<
+  TEventInput = AgentCoreEvent,
+> extends CoreReducedState<TEventInput> {
   enabledContextRules: ContextRule[];
   /**
    * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
