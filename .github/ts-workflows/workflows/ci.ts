@@ -174,7 +174,7 @@ export default {
                 type: "header",
                 text: {
                   type: "plain_text",
-                  text: `🚨 ${failedJobs.join(", ")} failed. ${outputsString} on \${{ github.ref_name }}`,
+                  text: `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}`,
                 },
               },
               {
