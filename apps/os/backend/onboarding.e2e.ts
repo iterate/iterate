@@ -41,7 +41,7 @@ const createDisposer = () => {
 
 test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
   const adminTrpc = await getAuthedTrpcClient();
-  const disposer = createDisposer();
+  await using disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
   disposer.add(async () => {
