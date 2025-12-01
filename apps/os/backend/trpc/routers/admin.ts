@@ -121,37 +121,33 @@ const deleteUserByEmail = adminProcedure
     return deleteUserAccount({ db: ctx.db, user });
   });
 
-const setupTestOnboardingUser = adminProcedure
-  .input(
-    z.object({
-      seedData: z.object({}),
-    }),
-  )
-  .mutation(async ({ ctx, input }) => {
-    const { seedData } = input;
-    const auth = getAuth(ctx.db);
-    const userEmail = `${typeid(`test_user`).toString()}@example.com`;
+const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
+  const auth = getAuth(ctx.db);
+  const userEmail = `${typeid(`test_user`).toString()}@example.com`;
 
-    const { user } = await auth.api.createUser({
-      body: {
-        email: userEmail,
-        name: userEmail.split("@")[0],
-        password: typeid("pass").toString(),
-        role: "user",
-      },
+  const { user } = await auth.api.createUser({
+    body: {
+      email: userEmail,
+      name: userEmail.split("@")[0],
+      password: typeid("pass").toString(),
+      role: "user",
+    },
+  });
+
+  const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
+
+  if (!estate) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to create estate",
     });
+  }
 
-    const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
-
-    if (!estate) {
-      throw new TRPCError({
-        code: "INTERNAL_SERVER_ERROR",
-        message: "Failed to create estate",
-      });
-    }
-
-    let hasSeedData = false;
+  let hasSeedData = false;
+  if (ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS) {
     try {
+      const seedData = E2ETestParams.parse(JSON.parse(ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS));
+
       const [_userAccount, botAccount] = await ctx.db
         .insert(schema.account)
         .values([
@@ -199,9 +195,10 @@ const setupTestOnboardingUser = adminProcedure
     } catch (error) {
       logger.error(`Failed to setup test onboarding user: ${error}`);
     }
+  }
 
-    return { user, organization, estate, hasSeedData };
-  });
+  return { user, organization, estate, hasSeedData };
+});
 
 const markTestUserAsOnboarded = adminProcedure
   .input(

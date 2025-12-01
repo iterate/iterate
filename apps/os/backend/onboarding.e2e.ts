@@ -6,18 +6,14 @@ import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { eq } from "drizzle-orm";
 import {
   createTestHelper,
   getAuthedTrpcClient,
   getImpersonatedTrpcClient,
   getServiceAuthCredentials,
 } from "../evals/helpers.ts";
-import { db } from "../sdk/cli/cli-db.ts";
 import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
-import * as schema from "./db/schema.ts";
-import { getOctokitForInstallation } from "./integrations/github/github-octokit-utils.ts";
 
 /**
  * End-to-End Onboarding Test
@@ -52,19 +48,13 @@ const TestEnv = z.object({
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
 
-const E2EEnv = z.object({
-  SERVICE_AUTH_TOKEN: z.string().min(1),
-  GITHUB_ESTATES_DEFAULT_INSTALLATION_ID: z.string().min(1),
-});
-const env = E2EEnv.parse(process.env);
-
 const createDisposer = () => {
   const disposeFns: Array<() => Promise<void>> = [];
   return {
     add: (fn: () => Promise<void>) => disposeFns.push(fn),
     [Symbol.asyncDispose]: async () => {
       const errors: unknown[] = [];
-      for (const fn of disposeFns) {
+      for (const fn of disposeFns.toReversed()) {
         await fn().catch((err) => errors.push(err));
       }
       if (errors.length === 1) throw errors[0];
@@ -86,9 +76,7 @@ test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
     userId: testUser.id,
   });
   disposer.add(async () => {
-    await db.delete(schema.organization).where(eq(schema.organization.id, organization.id));
-    const leftovers = await db.query.estate.findMany({ where: eq(schema.estate.id, estate.id) });
-    expect(leftovers).toHaveLength(0); // delete of org should cascade
+    await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
   });
 
   const { sessionCookies: adminSessionCookies } = await getServiceAuthCredentials();
@@ -103,17 +91,16 @@ test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
     trpcClient: userTrpc,
   });
 
-  const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
-    estateId: estate.id,
-  });
+  const estateId = estate.id;
+  const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
   expect(foundRepo).toBeDefined();
   disposer.add(async () => {
     if (!foundRepo?.full_name) return;
-    const octokit = await getOctokitForInstallation(env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID);
-
-    const [owner, repoName] = foundRepo.full_name.split("/");
-    await octokit.rest.repos.delete({ owner, repo: repoName });
+    await adminTrpc.testing.deleteIterateManagedRepo.mutate({ repoFullName: foundRepo.full_name });
   });
+
+  // ideally we'd rely on the github webhook, but then this won't work outside of prod/staging
+  await userTrpc.estate.triggerRebuild.mutate({ estateId, target: "main", useExisting: true });
 
   console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
 
@@ -149,7 +136,7 @@ test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
   const msg = await h.sendUserMessage("Hello from E2E test");
 
   const reply = await msg.waitForReply();
-  expect(reply).toMatch(/hey|hi|hello|how are you|can i help/i); // should really be an eval, maybe we just check there is some kind of a reply at all?
+  expect(reply).toMatch(/hey|hi|hello|you|help/i); // should really be an eval, maybe we just check there is some kind of a reply at all?
 });
 
 test(

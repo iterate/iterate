@@ -589,7 +589,7 @@ export class IterateAgent<
                 outputTokens: output_tokens,
               });
             } else {
-              logger.warn("No Stripe customer ID found for organization", {
+              logger.debug("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
               });
             }

@@ -816,6 +816,8 @@ export const estateRouter = router({
       z.object({
         target: z.string().min(1, "Target is required"),
         targetType: z.enum(["branch", "commit"]).default("branch"),
+        /** if true, will skip triggering a new build if one is already in progress for the same commit */
+        useExisting: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -857,6 +859,24 @@ export const estateRouter = router({
         commitHash = branchResponse.data.commit.sha;
         commitMessage = branchResponse.data.commit.commit.message;
       }
+
+      if (input.useExisting) {
+        const existing = await ctx.db.query.builds.findFirst({
+          where: and(
+            eq(builds.estateId, estateId),
+            eq(builds.commitHash, commitHash),
+            eq(builds.status, "in_progress"),
+          ),
+        });
+        if (existing) {
+          return {
+            buildId: existing.id,
+            status: "in_progress",
+            message: existing.commitMessage,
+          };
+        }
+      }
+
       // Use the helper function to trigger the rebuild
       const build = await triggerEstateRebuild({
         db: ctx.db,
