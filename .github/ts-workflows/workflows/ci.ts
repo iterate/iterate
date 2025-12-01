@@ -174,17 +174,8 @@ export default {
                 type: "header",
                 text: {
                   type: "plain_text",
-                  text: `🚨 CI Failed: ${failedJobs.join(", ")}. Variables: ${outputsString}`,
+                  text: `🚨 ${failedJobs.join(", ")} failed. ${outputsString} on \${{ github.ref_name }}`,
                 },
-              },
-              {
-                type: "section",
-                fields: [
-                  { type: "mrkdwn", text: "*Repository:* ${{ github.repository }}" },
-                  { type: "mrkdwn", text: "*Branch:* ${{ github.ref_name }}" },
-                  { type: "mrkdwn", text: "*Workflow:* ${{ github.workflow }}" },
-                  { type: "mrkdwn", text: "*Run Number:* ${{ github.run_number }}" },
-                ],
               },
               {
                 type: "section",
