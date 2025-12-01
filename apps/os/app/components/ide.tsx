@@ -683,7 +683,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
 
   // Check if a file has been edited
   const isFileEdited = (filename: string): boolean => {
-    return localEdits[filename] !== (filesFromRepo as Record<string, string>)[filename];
+    const local = localEdits[filename] ?? undefined;
+    const remote = (filesFromRepo as Record<string, string>)[filename] ?? undefined;
+    return local !== remote;
   };
 
   const handleContentChange = (newContent: string) => {

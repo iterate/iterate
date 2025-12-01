@@ -320,7 +320,7 @@ export class EstateBuildManager extends Container {
             .where(eq(schemas.builds.id, buildId));
 
           // Update the iterate config in the database if this is the newest triggered build
-          if (buildId === newestTriggeredBuild.buildId) {
+          if (buildId === newestTriggeredBuild.buildId && status === "complete") {
             await this.db
               .insert(schemas.iterateConfig)
               .values({ estateId, buildId })
