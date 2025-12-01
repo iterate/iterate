@@ -872,9 +872,9 @@ export const estateRouter = router({
       if (input.useExisting) {
         const existing = await ctx.db.query.builds.findFirst({
           where: and(
-            eq(builds.estateId, estateId),
-            eq(builds.commitHash, commitHash),
-            eq(builds.status, "in_progress"),
+            eq(schema.builds.estateId, estateId),
+            eq(schema.builds.commitHash, commitHash),
+            eq(schema.builds.status, "in_progress"),
           ),
         });
         if (existing) {
