@@ -112,5 +112,5 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const msg = await h.sendUserMessage("Hello from E2E test");
 
   const reply = await msg.waitForReply();
-  expect(reply).toMatch(/hey|hi|hello|you|help/i); // should really be an eval, maybe we just check there is some kind of a reply at all?
+  expect(reply).toMatch(/.+/); // any string reply is ok
 });
