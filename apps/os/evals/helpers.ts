@@ -72,10 +72,15 @@ export async function createTestHelper({
 }: {
   trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
   inputSlug: string;
-  braintrustSpanExportedId: string;
+  braintrustSpanExportedId: string | null;
   logger?: Pick<Console, "info" | "error">;
 }) {
   const agentRoutingKey = testAgentRoutingKey(inputSlug);
+  await expect
+    .poll(() => trpcClient.estates.list.query(), {
+      interval: 10_000,
+    })
+    .not.toHaveLength(0);
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();
@@ -101,11 +106,11 @@ export async function createTestHelper({
   fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
   fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
 
-  // set the braintrust span exported id into the state
-  await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
-    ...agentProcedureProps,
-    braintrustParentSpanExportedId: braintrustSpanExportedId,
-  });
+  if (braintrustSpanExportedId)
+    await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
+      ...agentProcedureProps,
+      braintrustParentSpanExportedId: braintrustSpanExportedId,
+    });
 
   // initialise slack state - right now we require channel and thread to be set independently of the webhook
   // (although this is in the onWebhookReceived method, we don't actually call that in the eval, we create events directly)

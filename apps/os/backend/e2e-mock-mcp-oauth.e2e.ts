@@ -433,7 +433,6 @@ async function cleanupTestUser(
 // Tests
 // ============================================================================
 
-// TODO: still working on this test
 test(
   "MCP OAuth token refresh after expiration",
   {

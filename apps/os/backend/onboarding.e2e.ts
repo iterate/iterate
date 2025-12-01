@@ -6,6 +6,7 @@ import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
+import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
 import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
 
@@ -41,6 +42,95 @@ const TestEnv = z.object({
 });
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
+
+test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
+  const trpcLogs: unknown[][] = [];
+  const adminTrpc = await getAuthedTrpcClient();
+  const h = createTestHelper({
+    braintrustSpanExportedId: null,
+    inputSlug: "onboarding-e2e",
+    trpcClient: adminTrpc,
+  });
+
+  const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
+  const { estate } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+    userId: testUser.id,
+  });
+
+  const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
+  if (!testData) {
+    throw new Error("Failed to setup test user with organization and estate");
+  }
+  return;
+  if (false) {
+    const { user, organization, estate, hasSeedData } = testData;
+    createdUserEmail = user.email;
+    console.log(`Created test user: ${user.email} (${user.id})`);
+    console.log(`Created organization: ${organization.name} (${organization.id})`);
+    console.log(`Created estate: ${estate.name} (${estate.id})`);
+    console.log(`Has seed data: ${hasSeedData}`);
+
+    // Step 3: Impersonate the test user
+    console.log("Step 3: Impersonating test user...");
+
+    const authClient = createAuthClient({
+      baseURL: workerUrl,
+      plugins: [adminClient()],
+    });
+
+    let impersonationCookies = "";
+
+    const impersonationResult = await authClient.admin.impersonateUser(
+      { userId: user.id },
+      {
+        // Something changed in better-auth, so now we need to manually set the Origin header
+        // most likely because we are calling this api from server-side which doesn't add the header
+        // but better-auth expects it to be set
+        headers: { cookie: sessionCookies, origin: env.WORKER_URL },
+        onResponse(context: { response: Response }) {
+          const cookies = context.response.headers.getSetCookie();
+          const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
+          if (cookieObj) {
+            impersonationCookies = Object.entries(cookieObj)
+              .map(([key, value]) => `${key}=${value}`)
+              .join("; ");
+          }
+        },
+      },
+    );
+
+    if (!impersonationResult?.data) {
+      throw new Error("Failed to impersonate user", { cause: impersonationResult });
+    }
+
+    if (!impersonationCookies) {
+      throw new Error("Failed to get impersonation cookies", { cause: impersonationResult });
+    }
+
+    console.log("Successfully impersonated test user");
+
+    // Step 4: Clone estate-template and push to new repository
+    console.log("Step 5: Cloning estate-template repository...");
+
+    // Create TRPC client with impersonated user session
+    const userTrpc = makeVitestTrpcClient({
+      url: `${workerUrl}/api/trpc`,
+      headers: { cookie: impersonationCookies },
+      log: (...args) => trpcLogs.push(["userTrpc", ...args]),
+    });
+
+    // Step 5: List available GitHub repos and verify our new repo is there
+    console.log(`Step 6: Listing available GitHub repositories`);
+
+    const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
+      estateId: estate.id,
+    });
+    expect(foundRepo).toBeDefined();
+    const createdRepoFullName = foundRepo!.full_name;
+
+    console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
+  }
+});
 
 test(
   "end-to-end onboarding flow",

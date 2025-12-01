@@ -1,10 +1,12 @@
 import { z } from "zod";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { typeid } from "typeid-js";
 import { publicProcedure, router } from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { testAdminUser } from "../../auth/test-admin.ts";
 import { schema } from "../../db/client.ts";
+import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 
 const testingProcedure = publicProcedure.use(({ next }) => {
   if (!testAdminUser.enabled) {
@@ -71,7 +73,52 @@ const setUserRole = testingProcedure
     return { success: true, result };
   });
 
+export const createTestUser = testingProcedure
+  .input(
+    z.object({
+      email: z.string().optional(),
+      name: z.string().optional(),
+      password: z.string().optional(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    const {
+      email = `${typeid("test_user")}@example.com`,
+      name = email.split("@")[0],
+      password = typeid("pass").toString(),
+    } = input;
+    const auth = getAuth(ctx.db);
+    const { user } = await auth.api.createUser({
+      body: { email, name, role: "user", password },
+    });
+    return { user };
+  });
+
+export const createOrganizationAndEstate = testingProcedure
+  .input(
+    z.object({
+      userId: z.string(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    const user = await ctx.db.query.user.findFirst({
+      where: eq(schema.user.id, input.userId),
+    });
+    if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
+
+    const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
+
+    if (!estate) throw new Error("Failed to create estate");
+
+    return { organization, estate };
+  });
+
+const _testingRouter = router({
+  createAdminUser,
+  setUserRole,
+  createTestUser,
+  createOrganizationAndEstate,
+});
+
 /** At compile time, this router will be usable, but if you try to use it in production the procedures just won't exist (`as never`) */
-export const testingRouter = testAdminUser.enabled
-  ? router({ createAdminUser, setUserRole })
-  : (router({}) as never);
+export const testingRouter = testAdminUser.enabled ? _testingRouter : (router({}) as never);
