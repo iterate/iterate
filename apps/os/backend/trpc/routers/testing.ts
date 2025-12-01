@@ -115,25 +115,6 @@ export const createOrganizationAndEstate = testingProcedure
     return { organization, estate };
   });
 
-// consider some kind of server-side disposal helper for resources created in tests?
-// maybe something like this? or a global array of dispose fns that are keyed by test id or something?
-// type Procedurish<Input, Output> = {
-//   _def: { types: { input: z.ZodType<Input>; output: z.ZodType<Output> } };
-// };
-
-// createOrganizationAndEstate._def;
-
-// const defineDisposer = <Input, Output>(
-//   _procedure: Procedurish<Input, Output>,
-//   dispose: (params: { input: Input; output: Output }) => Promise<void>,
-// ) => {
-//   return testingProcedure
-//     .input((anything) => anything as { input: Input; output: Output })
-//     .mutation(async ({ input, ctx }) => {
-//       await dispose(input);
-//     });
-// };
-
 export const deleteOrganization = testingProcedure
   .input(z.object({ organizationId: z.string() }))
   .mutation(async ({ ctx, input }) => {
