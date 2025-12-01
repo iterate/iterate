@@ -35,7 +35,7 @@ export const serviceAuthPlugin = () =>
             );
           }
 
-          const session = await ctx.context.internalAdapter.createSession(superUser.id, ctx);
+          const session = await ctx.context.internalAdapter.createSession(superUser.id);
           await setSessionCookie(ctx, { session, user: superUser });
           return ctx.json({ session }, { status: 200 });
         },

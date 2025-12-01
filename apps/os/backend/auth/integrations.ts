@@ -468,7 +468,7 @@ export const integrationsPlugin = () =>
               });
             }
 
-            const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
+            const session = await ctx.context.internalAdapter.createSession(user.id);
             await setSessionCookie(ctx, {
               session,
               user,
