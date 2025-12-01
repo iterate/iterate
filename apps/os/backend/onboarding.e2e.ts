@@ -6,9 +6,18 @@ import { WebClient } from "@slack/web-api";
 import { Octokit } from "octokit";
 import { createAuthClient } from "better-auth/client";
 import { adminClient } from "better-auth/client/plugins";
-import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
+import { eq } from "drizzle-orm";
+import {
+  createTestHelper,
+  getAuthedTrpcClient,
+  getImpersonatedTrpcClient,
+  getServiceAuthCredentials,
+} from "../evals/helpers.ts";
+import { db } from "../sdk/cli/cli-db.ts";
 import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import { E2ETestParams } from "./utils/test-helpers/onboarding-test-schema.ts";
+import * as schema from "./db/schema.ts";
+import { getOctokitForInstallation } from "./integrations/github/github-octokit-utils.ts";
 
 /**
  * End-to-End Onboarding Test
@@ -43,93 +52,104 @@ const TestEnv = z.object({
 
 type E2ETestParams = z.infer<typeof E2ETestParams>;
 
+const E2EEnv = z.object({
+  SERVICE_AUTH_TOKEN: z.string().min(1),
+  GITHUB_ESTATES_DEFAULT_INSTALLATION_ID: z.string().min(1),
+});
+const env = E2EEnv.parse(process.env);
+
+const createDisposer = () => {
+  const disposeFns: Array<() => Promise<void>> = [];
+  return {
+    add: (fn: () => Promise<void>) => disposeFns.push(fn),
+    [Symbol.asyncDispose]: async () => {
+      const errors: unknown[] = [];
+      for (const fn of disposeFns) {
+        await fn().catch((err) => errors.push(err));
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
+    },
+  };
+};
+
 test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
-  const trpcLogs: unknown[][] = [];
   const adminTrpc = await getAuthedTrpcClient();
-  const h = createTestHelper({
-    braintrustSpanExportedId: null,
-    inputSlug: "onboarding-e2e",
-    trpcClient: adminTrpc,
-  });
+  const disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
-  const { estate } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
-    userId: testUser.id,
+  disposer.add(async () => {
+    await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
   });
 
-  const testData = await adminTrpc.admin.setupTestOnboardingUser.mutate();
-  if (!testData) {
-    throw new Error("Failed to setup test user with organization and estate");
-  }
-  return;
-  if (false) {
-    const { user, organization, estate, hasSeedData } = testData;
-    createdUserEmail = user.email;
-    console.log(`Created test user: ${user.email} (${user.id})`);
-    console.log(`Created organization: ${organization.name} (${organization.id})`);
-    console.log(`Created estate: ${estate.name} (${estate.id})`);
-    console.log(`Has seed data: ${hasSeedData}`);
+  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+    userId: testUser.id,
+  });
+  disposer.add(async () => {
+    await db.delete(schema.organization).where(eq(schema.organization.id, organization.id));
+    const leftovers = await db.query.estate.findMany({ where: eq(schema.estate.id, estate.id) });
+    expect(leftovers).toHaveLength(0); // delete of org should cascade
+  });
 
-    // Step 3: Impersonate the test user
-    console.log("Step 3: Impersonating test user...");
+  const { sessionCookies: adminSessionCookies } = await getServiceAuthCredentials();
 
-    const authClient = createAuthClient({
-      baseURL: workerUrl,
-      plugins: [adminClient()],
-    });
+  const { trpcClient: userTrpc } = await getImpersonatedTrpcClient({
+    userId: testUser.id,
+    adminSessionCookes: adminSessionCookies,
+  });
 
-    let impersonationCookies = "";
+  const h = await createTestHelper({
+    inputSlug: "onboarding-e2e",
+    trpcClient: userTrpc,
+  });
 
-    const impersonationResult = await authClient.admin.impersonateUser(
-      { userId: user.id },
-      {
-        // Something changed in better-auth, so now we need to manually set the Origin header
-        // most likely because we are calling this api from server-side which doesn't add the header
-        // but better-auth expects it to be set
-        headers: { cookie: sessionCookies, origin: env.WORKER_URL },
-        onResponse(context: { response: Response }) {
-          const cookies = context.response.headers.getSetCookie();
-          const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
-          if (cookieObj) {
-            impersonationCookies = Object.entries(cookieObj)
-              .map(([key, value]) => `${key}=${value}`)
-              .join("; ");
-          }
-        },
-      },
-    );
+  const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
+    estateId: estate.id,
+  });
+  expect(foundRepo).toBeDefined();
+  disposer.add(async () => {
+    if (!foundRepo?.full_name) return;
+    const octokit = await getOctokitForInstallation(env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID);
 
-    if (!impersonationResult?.data) {
-      throw new Error("Failed to impersonate user", { cause: impersonationResult });
-    }
+    const [owner, repoName] = foundRepo.full_name.split("/");
+    await octokit.rest.repos.delete({ owner, repo: repoName });
+  });
 
-    if (!impersonationCookies) {
-      throw new Error("Failed to get impersonation cookies", { cause: impersonationResult });
-    }
+  console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
 
-    console.log("Successfully impersonated test user");
+  console.log("Waiting for initial build to complete...");
 
-    // Step 4: Clone estate-template and push to new repository
-    console.log("Step 5: Cloning estate-template repository...");
+  const buildTimeout = 5 * 60 * 1000; // 5 minutes
+  const pollInterval = 5000; // 5 seconds
 
-    // Create TRPC client with impersonated user session
-    const userTrpc = makeVitestTrpcClient({
-      url: `${workerUrl}/api/trpc`,
-      headers: { cookie: impersonationCookies },
-      log: (...args) => trpcLogs.push(["userTrpc", ...args]),
-    });
-
-    // Step 5: List available GitHub repos and verify our new repo is there
-    console.log(`Step 6: Listing available GitHub repositories`);
-
-    const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({
+  const getLatestBuild = async () => {
+    const builds = await userTrpc.estate.getBuilds.query({
       estateId: estate.id,
+      limit: 1,
     });
-    expect(foundRepo).toBeDefined();
-    const createdRepoFullName = foundRepo!.full_name;
+    console.log(
+      `Latest build status: ${builds[0]?.status ?? "none"} (${builds[0]?.id ?? "<no-id>"})`,
+    );
+    return builds[0];
+  };
 
-    console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
-  }
+  await expect
+    .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+    .toMatchObject({ status: expect.any(String) }); // make sure we get started fairly quickly
+
+  await expect
+    .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
+    .not.toMatchObject({ status: "in_progress" }); // give it a few minutes for "in_progress"
+
+  // now that it's not in progress, it *must* be complete
+  expect(await getLatestBuild()).toMatchObject({ status: "complete" });
+
+  console.log("Build completed successfully");
+
+  const msg = await h.sendUserMessage("Hello from E2E test");
+
+  const reply = await msg.waitForReply();
+  expect(reply).toMatch(/hey|hi|hello|how are you|can i help/i); // should really be an eval, maybe we just check there is some kind of a reply at all?
 });
 
 test(

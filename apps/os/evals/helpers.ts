@@ -1,4 +1,5 @@
 import { createHash } from "crypto";
+import { inspect } from "util";
 import { z } from "zod";
 import { expect, inject, vi } from "vitest";
 import { createTRPCClient, httpLink } from "@trpc/client";
@@ -64,6 +65,77 @@ export async function getAuthedTrpcClient({
   });
 }
 
+const E2EEnv = z.object({
+  SERVICE_AUTH_TOKEN: z.string(),
+});
+export const getServiceAuthCredentials = async () => {
+  const env = E2EEnv.parse(process.env);
+  const serviceAuthResponse = await fetch(`${baseURL}/api/auth/service-auth/create-session`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ serviceAuthToken: env.SERVICE_AUTH_TOKEN }),
+  });
+
+  if (!serviceAuthResponse.ok) {
+    const error = await serviceAuthResponse.text();
+    const headers = inspect(serviceAuthResponse.headers);
+    throw new Error(
+      `Failed to authenticate with service auth: ${error}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
+    );
+  }
+
+  const sessionCookies = serviceAuthResponse.headers.get("set-cookie");
+  if (!sessionCookies) {
+    const text = await serviceAuthResponse.text();
+    const headers = inspect(serviceAuthResponse.headers);
+    throw new Error(
+      `Failed to get session cookies from service auth. Response: ${text}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
+    );
+  }
+
+  return { sessionCookies };
+};
+
+export const getImpersonatedTrpcClient = async (params: {
+  userId: string;
+  adminSessionCookes: string;
+}) => {
+  let impersonationCookies = "";
+
+  const impersonationResult = await authClient.admin.impersonateUser(
+    { userId: params.userId },
+    {
+      // Something changed in better-auth, so now we need to manually set the Origin header
+      // most likely because we are calling this api from server-side which doesn't add the header
+      // but better-auth expects it to be set
+      headers: { cookie: params.adminSessionCookes, origin: baseURL },
+      onResponse(context: { response: Response }) {
+        const cookies = context.response.headers.getSetCookie();
+        const cookieObj = Object.fromEntries(cookies.map((cookie) => cookie.split("=")));
+        if (cookieObj) {
+          impersonationCookies = Object.entries(cookieObj)
+            .map(([key, value]) => `${key}=${value}`)
+            .join("; ");
+        }
+      },
+    },
+  );
+
+  if (!impersonationResult?.data) {
+    throw new Error("Failed to impersonate user", { cause: impersonationResult });
+  }
+
+  if (!impersonationCookies) {
+    throw new Error("Failed to get impersonation cookies", { cause: impersonationResult });
+  }
+
+  const trpcClient = createTRPCClient<AppRouter>({
+    links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie: impersonationCookies } })],
+  });
+
+  return { trpcClient, impersonationCookies };
+};
+
 export async function createTestHelper({
   trpcClient,
   inputSlug,
@@ -72,15 +144,10 @@ export async function createTestHelper({
 }: {
   trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
   inputSlug: string;
-  braintrustSpanExportedId: string | null;
+  braintrustSpanExportedId?: string;
   logger?: Pick<Console, "info" | "error">;
 }) {
   const agentRoutingKey = testAgentRoutingKey(inputSlug);
-  await expect
-    .poll(() => trpcClient.estates.list.query(), {
-      interval: 10_000,
-    })
-    .not.toHaveLength(0);
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();

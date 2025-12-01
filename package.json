@@ -9,6 +9,7 @@
     "format:check": "prettier --check .",
     "iterate": "pnpm run --silent os iterate",
     "os": "cd apps/os && pnpm",
+    "e2e": "WORKER_URL='http://localhost:5173' doppler run -- pnpm os e2e",
     "eval": "cd apps/os && doppler run -- pnpm evalite",
     "eval:light": "cd apps/os && doppler run -- env -u BRAINTRUST_API_KEY pnpm evalite",
     "lint": "eslint . --fix",
