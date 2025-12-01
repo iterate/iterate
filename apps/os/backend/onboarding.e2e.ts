@@ -39,7 +39,7 @@ const createDisposer = () => {
   };
 };
 
-test("onboardo", { timeout: 15 * 60 * 1000 }, async () => {
+test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const adminTrpc = await getAuthedTrpcClient();
   await using disposer = createDisposer();
 
