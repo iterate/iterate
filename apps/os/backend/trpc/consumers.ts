@@ -78,7 +78,7 @@ function registerTestConsumers() {
       if (params.job.attempt > 2) {
         return "third time lucky";
       }
-      throw new Error(`Attempt ${params.job.attempt} failed ${Math.random()}`);
+      throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
     },
   });
 
@@ -91,7 +91,7 @@ function registerTestConsumers() {
     },
     when: (params) => params.payload.input.message.includes("fail"),
     handler: (params) => {
-      throw new Error(`Attempt ${params.job.attempt} failed ${Math.random()}`);
+      throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
     },
   });
 }
