@@ -40,7 +40,7 @@ const createDisposer = () => {
 };
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
-  const adminTrpc = await getAuthedTrpcClient();
+  const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
   await using disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
@@ -55,12 +55,7 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
     await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
   });
 
-  const { sessionCookies: adminSessionCookies } = await getServiceAuthCredentials();
-
-  const { trpcClient: userTrpc } = await getImpersonatedTrpcClient({
-    userId: testUser.id,
-    adminSessionCookes: adminSessionCookies,
-  });
+  const { trpcClient: userTrpc } = await impersonate(testUser.id);
 
   const h = await createTestHelper({
     inputSlug: "onboarding-e2e",

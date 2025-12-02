@@ -39,30 +39,15 @@ export function testAgentRoutingKey(input: string) {
   return `mock_slack ${testName} | ${suffix} | ${Date.now()}`;
 }
 
-export async function getAuthedTrpcClient({
-  email = testAdminUser.email!,
-  password = testAdminUser.password!,
-} = {}) {
-  const unauthedTrpc = createTRPCClient<AppRouter>({
-    links: [httpLink({ url: `${baseURL}/api/trpc` })],
+export async function getAuthedTrpcClient() {
+  const { sessionCookies } = await getServiceAuthCredentials();
+  const client = createTRPCClient<AppRouter>({
+    links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie: sessionCookies } })],
   });
-  await unauthedTrpc.testing.createAdminUser.mutate({ email, password });
-  let cookie = "";
-  await authClient.signIn.email(
-    { email, password },
-    {
-      onResponse({ response }) {
-        cookie = response.headers.getSetCookie().join("; ");
-      },
-    },
-  );
-  if (!cookie) {
-    throw new Error(`Failed to sign in as ${email}`);
-  }
-
-  return createTRPCClient<AppRouter>({
-    links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie } })],
-  });
+  const impersonate = (userId: string) => {
+    return getImpersonatedTrpcClient({ userId, adminSessionCookes: sessionCookies });
+  };
+  return { client, sessionCookies, impersonate };
 }
 
 const E2EEnv = z.object({
@@ -142,7 +127,7 @@ export async function createTestHelper({
   braintrustSpanExportedId,
   logger = console,
 }: {
-  trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
+  trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
   inputSlug: string;
   braintrustSpanExportedId?: string;
   logger?: Pick<Console, "info" | "error">;
