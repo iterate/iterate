@@ -48,6 +48,22 @@ export default defineConfig({
         });
       },
     },
+    {
+      name: "zod-rewplace-locale",
+      transform: {
+        order: "pre",
+        handler(code, id) {
+          if (!id.includes("zod/v4")) return;
+          const newCode = code.replace(
+            `export * as locales from "../locales/index.js";`,
+            `export {default as en} from "../locales/en.js";`,
+          );
+          return {
+            code: newCode,
+          };
+        },
+      },
+    },
     alchemy(),
     tailwindcss(),
     tanstackStart({
