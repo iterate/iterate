@@ -15,7 +15,6 @@ import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
-import { testAdminUser } from "../backend/auth/test-admin.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 import type { ExplainedScoreResult } from "./scorer.ts";
 

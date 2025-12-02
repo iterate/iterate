@@ -1,10 +1,5 @@
 import { test, expect } from "vitest";
-import {
-  createTestHelper,
-  getAuthedTrpcClient,
-  getImpersonatedTrpcClient,
-  getServiceAuthCredentials,
-} from "../evals/helpers.ts";
+import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
 
 /**
  * End-to-End Onboarding Test
