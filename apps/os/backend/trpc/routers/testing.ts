@@ -98,7 +98,6 @@ export const deleteIterateManagedRepo = testingProcedure
   });
 
 export const testingRouter = router({
-  createAdminUser,
   setUserRole,
   createTestUser,
   createOrganizationAndEstate,

@@ -2,7 +2,6 @@ import { MailIcon } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useSearch } from "@tanstack/react-router";
 import { authClient } from "../lib/auth-client.ts";
-import { parseCredentials } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 import { Spinner } from "./ui/spinner.tsx";
 

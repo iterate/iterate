@@ -4,10 +4,8 @@ import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
 import { proxify } from "trpc-cli/dist/proxify";
 import { createTRPCClient, httpLink } from "@trpc/client";
-import z from "zod";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { appRouter } from "../../backend/trpc/root.ts";
-import { authClient } from "../../app/lib/auth-client.ts";
 import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
@@ -31,16 +29,14 @@ const router = t.router({
   testing: testingRouter,
   trpc: proxify(appRouter, async () => {
     const baseURL = process.env.VITE_PUBLIC_URL!;
-    const serviceAuthResponse = await fetch(`${baseURL}/api/auth/service-auth/create-session`, {
+    const res = await fetch(`${baseURL}/api/auth/service-auth/create-session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ serviceAuthToken: process.env.SERVICE_AUTH_TOKEN }),
     });
-    const Response = z.object({
-      ok: z.literal(true),
-      headers: z.object({ "set-cookie": z.string().nonempty() }),
-    });
-    const cookie = Response.parse(serviceAuthResponse).headers["set-cookie"];
+    const cookie = res.headers.get("set-cookie");
+    if (!res.ok || !cookie) throw new Error(`service auth ${res.status}: ${await res.text()}`);
+
     // for now, you can only sign in as the superadmin user - somewhat limited in usefulness
     // todo: use impersonation
     // todo: maybe add an `auth` thing to trpc-cli - pass it a better-auth client and it could do a full CLI-based auth flow
