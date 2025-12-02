@@ -24,14 +24,11 @@ import { IterateAgent } from "./agent/iterate-agent.ts";
 import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
-import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { EstateBuildManager } from "./durable-objects/estate-build-manager.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
 import { getUserEstateAccess, queuer } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
-import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 import { registerConsumers } from "./trpc/consumers.ts";
@@ -352,12 +349,9 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export {
-  IterateAgent,
-  OnboardingAgent,
-  SlackAgent,
-  OrganizationWebSocket,
-  AdvisoryLocker,
-  EstateBuildManager,
-};
-export { Sandbox } from "@cloudflare/sandbox";
+// vite magic shenanigans to only export the ref-object-exports.ts file in development
+/* <DEV_ONLY> */
+export * from "./ref-object-exports.ts";
+/* </DEV_ONLY> */
+
+export { IterateAgent, OnboardingAgent, SlackAgent };

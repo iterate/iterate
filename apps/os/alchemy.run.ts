@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import alchemy, { type Scope } from "alchemy";
 import {
+  Worker,
   Hyperdrive,
   R2Bucket,
   Container,
@@ -267,21 +268,7 @@ async function setupDatabase() {
   throw new Error(`Unsupported environment: ${app.stage}`);
 }
 
-async function setupDurableObjects() {
-  const SANDBOX = await Container<import("./backend/worker.ts").Sandbox>("sandbox", {
-    className: "Sandbox",
-    name: isProduction ? "os-sandbox" : undefined,
-    build: {
-      dockerfile: "Dockerfile",
-      context: "./backend/sandbox",
-      platform: "linux/amd64",
-    },
-    instanceType: "standard-4",
-    maxInstances: 10,
-    // todo: ask sam to support rollout_active_grace_period
-    adopt: true,
-  });
-
+async function setupAgentDurableObjects() {
   const ITERATE_AGENT = DurableObjectNamespace<import("./backend/worker.ts").IterateAgent>(
     "iterate-agent",
     {
@@ -306,42 +293,59 @@ async function setupDurableObjects() {
     },
   );
 
+  return {
+    ITERATE_AGENT,
+    SLACK_AGENT,
+    ONBOARDING_AGENT,
+  };
+}
+
+export async function setupReferencedDurableObjects() {
+  const SANDBOX = await Container<import("./backend/worker.ts").Sandbox>("sandbox", {
+    className: "Sandbox",
+    name: isProduction ? "os-sandbox" : undefined,
+    build: {
+      dockerfile: "Dockerfile",
+      context: "./backend/sandbox",
+      platform: "linux/amd64",
+    },
+    instanceType: "standard-4",
+    maxInstances: 10,
+    // todo: ask sam to support rollout_active_grace_period
+    adopt: true,
+  });
+
   const ORGANIZATION_WEBSOCKET = DurableObjectNamespace<
-    import("./backend/worker.ts").OrganizationWebSocket
+    import("./backend/ref-object-exports.ts").OrganizationWebSocket
   >("organization-websocket", {
     className: "OrganizationWebSocket",
     sqlite: true,
   });
 
-  const ADVISORY_LOCKER = DurableObjectNamespace<import("./backend/worker.ts").AdvisoryLocker>(
-    "advisory-lock",
-    {
-      className: "AdvisoryLocker",
-      sqlite: true,
-    },
-  );
+  const ADVISORY_LOCKER = DurableObjectNamespace<
+    import("./backend/ref-object-exports.ts").AdvisoryLocker
+  >("advisory-lock", {
+    className: "AdvisoryLocker",
+    sqlite: true,
+  });
 
-  const ESTATE_BUILD_MANAGER = await Container<import("./backend/worker.ts").EstateBuildManager>(
-    "estate-build-manager",
-    {
-      className: "EstateBuildManager",
-      instanceType: "standard-2",
-      build: {
-        context: "./build-manager",
-        dockerfile: "Dockerfile",
-        platform: "linux/amd64",
-      },
-      maxInstances: 10,
-      adopt: true,
+  const ESTATE_BUILD_MANAGER = await Container<
+    import("./backend/ref-object-exports.ts").EstateBuildManager
+  >("estate-build-manager", {
+    className: "EstateBuildManager",
+    instanceType: "standard-2",
+    build: {
+      context: "./build-manager",
+      dockerfile: "Dockerfile",
+      platform: "linux/amd64",
     },
-  );
+    maxInstances: 10,
+    adopt: true,
+  });
 
   return {
-    ITERATE_AGENT,
-    SLACK_AGENT,
-    ONBOARDING_AGENT,
-    ORGANIZATION_WEBSOCKET,
     SANDBOX,
+    ORGANIZATION_WEBSOCKET,
     ADVISORY_LOCKER,
     ESTATE_BUILD_MANAGER,
   };
@@ -375,14 +379,57 @@ const domains = [
 ];
 
 async function deployWorker() {
+  const env = await setupEnvironmentVariables();
+  const agentObjects = await setupAgentDurableObjects();
+
+  const sharedBindings = {
+    ...env,
+    ...(await setupDatabase()),
+    ...(await setupStorage()),
+    WORKER_LOADER: WorkerLoader(),
+    ALLOWED_DOMAINS: domains.join(","),
+  };
+
+  type RefWorkerBindings = Awaited<ReturnType<typeof setupReferencedDurableObjects>>;
+  let refWorker: Worker<RefWorkerBindings> | null = null;
+  if (!app.local) {
+    refWorker = await Worker("os-ref", {
+      name: "os-ref",
+      entrypoint: "./backend/ref-worker.ts",
+      compatibility: "node",
+      bindings: {
+        ...sharedBindings,
+        ...(await setupReferencedDurableObjects()),
+      },
+      // Emulating vite specific stuff we have in code
+      bundle: {
+        banner: {
+          js: `
+          const __IMPORT_META_ENV__ = ${JSON.stringify(
+            R.merge(
+              R.pickBy(env, (_, k) => k.startsWith("VITE_")),
+              {
+                DEV: false,
+                PROD: true,
+                SSR: true,
+                MODE: "production",
+                BASE_URL: "/",
+              },
+            ),
+          )};
+          `,
+        },
+        define: {
+          "import.meta.env": "__IMPORT_META_ENV__",
+        },
+      },
+    });
+  }
   const worker = await TanStackStart("os", {
     bindings: {
-      ...(await setupDatabase()),
-      ...(await setupStorage()),
-      ...(await setupDurableObjects()),
-      ...(await setupEnvironmentVariables()),
-      WORKER_LOADER: WorkerLoader(),
-      ALLOWED_DOMAINS: domains.join(","),
+      ...agentObjects,
+      ...sharedBindings,
+      ...(!app.local && refWorker ? refWorker.bindings : await setupReferencedDurableObjects()),
     },
     name: isProduction ? "os" : isStaging ? "os-staging" : undefined,
     assets: {

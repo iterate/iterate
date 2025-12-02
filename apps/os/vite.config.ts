@@ -4,6 +4,8 @@ import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
+import MagicString from "magic-string";
+import { parse } from "oxc-parser";
 
 export default defineConfig({
   resolve: {
@@ -46,6 +48,26 @@ export default defineConfig({
           }
           return next();
         });
+      },
+    },
+    {
+      name: "iterate:dev-only-exports",
+      apply: (_, env) => env.command === "build" && env.mode === "production",
+      transform: {
+        order: "pre",
+        async handler(code, id) {
+          const ast = await parse(id, code);
+          const startIndicator = ast.comments.find((c) => c.value.trim() === "<DEV_ONLY>");
+          const endIndicator = ast.comments.find((c) => c.value.trim() === "</DEV_ONLY>");
+          if (!startIndicator || !endIndicator) return;
+          this.warn(`Removing dev-only exports from ${id}`);
+          const ms = new MagicString(code);
+          ms.remove(startIndicator.start, endIndicator.end);
+          return {
+            code: ms.toString(),
+            map: ms.generateMap({ hires: true }),
+          };
+        },
       },
     },
     alchemy(),
