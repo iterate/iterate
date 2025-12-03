@@ -11,6 +11,16 @@ export default workflow({
     },
   },
   jobs: {
+    artifact: {
+      ...utils.runsOnUbuntuLatest,
+      steps: [
+        { run: `mkdir website && echo '<i>hi</i>' > website/foo.html` },
+        {
+          uses: "actions/upload-artifact@v4",
+          with: { name: "website", path: "website" },
+        },
+      ],
+    },
     autofix: {
       ...utils.runsOn,
       steps: [

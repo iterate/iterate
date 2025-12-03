@@ -9,6 +9,14 @@ on:
       - "**/*autofix*"
       - "*autofix*"
 jobs:
+  artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - run: mkdir website && echo '<i>hi</i>' > website/foo.html
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website
+          path: website
   autofix:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:
