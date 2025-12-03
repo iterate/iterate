@@ -6,8 +6,6 @@ import { proxify } from "trpc-cli/dist/proxify";
 import { createTRPCClient, httpLink } from "@trpc/client";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { appRouter } from "../../backend/trpc/root.ts";
-import { authClient } from "../../app/lib/auth-client.ts";
-import { testAdminUser } from "../../backend/auth/test-admin.ts";
 import { t } from "./config.ts";
 import { estate } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
@@ -31,18 +29,21 @@ const router = t.router({
   testing: testingRouter,
   trpc: proxify(appRouter, async () => {
     const baseURL = process.env.VITE_PUBLIC_URL!;
-    // for now, you can only sign in as the test admin user - somewhat limited in usefulness
+    const res = await fetch(`${baseURL}/api/auth/service-auth/create-session`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ serviceAuthToken: process.env.SERVICE_AUTH_TOKEN }),
+    });
+    const cookie = res.headers.get("set-cookie");
+    if (!res.ok || !cookie) throw new Error(`service auth ${res.status}: ${await res.text()}`);
+
+    // for now, you can only sign in as the superadmin user - somewhat limited in usefulness
     // todo: use impersonation
     // todo: maybe add an `auth` thing to trpc-cli - pass it a better-auth client and it could do a full CLI-based auth flow
     // how it would work:
     // - start a (trpc-based) server
     // - do some redirect magic
     // - send the creds to the CLI from the browser window?
-    let cookie = "";
-    await authClient.signIn.email(
-      { email: testAdminUser.email!, password: testAdminUser.password! },
-      { onResponse: ({ response: r }) => void (cookie = r.headers.getSetCookie().join("; ")) },
-    );
     return createTRPCClient<typeof appRouter>({
       links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie } })],
     });

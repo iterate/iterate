@@ -78,16 +78,20 @@ function registerTestConsumers() {
       if (params.job.attempt > 2) {
         return "third time lucky";
       }
-      throw new Error(`Attempt ${params.job.attempt} failed ${Math.random()}`);
+      throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
     },
   });
 
   cc.registerConsumer({
     name: "badConsumer",
     on: "trpc:admin.outbox.poke",
+    retry: (job) => {
+      if (job.read_ct <= 5) return { retry: true, reason: "always retry", delay: 1 };
+      return { retry: false, reason: "max retries reached" };
+    },
     when: (params) => params.payload.input.message.includes("fail"),
     handler: (params) => {
-      throw new Error(`Attempt ${params.job.attempt} failed ${Math.random()}`);
+      throw new Error(`[test_error] Attempt ${params.job.attempt} failed ${Math.random()}`);
     },
   });
 }

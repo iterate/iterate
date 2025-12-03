@@ -1,4 +1,4 @@
-FROM docker.io/cloudflare/sandbox:0.5.1 AS builder
+FROM docker.io/cloudflare/sandbox:0.6.0 AS builder
 COPY scripts/package.json /tmp/package.json
 RUN npm install -g pnpm@10
 RUN cd /tmp && pnpm install
@@ -20,7 +20,7 @@ RUN cd /tmp && ./node_modules/.bin/esbuild \
     --outfile=/tmp/sandbox-exec-runner.js
 
 
-FROM docker.io/cloudflare/sandbox:0.4.4
+FROM docker.io/cloudflare/sandbox:0.6.0
 
 ENV COMMAND_TIMEOUT_MS=360000
 

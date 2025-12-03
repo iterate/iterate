@@ -174,9 +174,9 @@ type Inputs = typeof iterateAgentTools.$infer.inputTypes;
  * core ones are always present.
  */
 export class IterateAgent<
-    Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
-    State extends IterateAgentState = IterateAgentState,
-  >
+  Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
+  State extends IterateAgentState = IterateAgentState,
+>
   extends CloudflareAgent<{}, State>
   implements ToolsInterface, WithCallMethod
 {
@@ -589,7 +589,7 @@ export class IterateAgent<
                 outputTokens: output_tokens,
               });
             } else {
-              logger.warn("No Stripe customer ID found for organization", {
+              logger.debug("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
               });
             }

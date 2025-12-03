@@ -11,6 +11,10 @@ export default defineConfig({
   },
   build: {
     sourcemap: true,
+    minify: "terser",
+    terserOptions: {
+      mangle: false,
+    },
   },
   server: {
     allowedHosts: [".dev.iterate.com"],
