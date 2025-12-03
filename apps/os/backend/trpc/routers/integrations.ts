@@ -531,7 +531,7 @@ export const integrationsRouter = router({
       await ctx.db
         .update(schema.iterateConfigSource)
         .set({ deactivatedAt: new Date() })
-        .where(eq(schema.estate.id, estateId));
+        .where(eq(schema.iterateConfigSource.estateId, estateId));
 
       if (deleteInstallation) {
         const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
