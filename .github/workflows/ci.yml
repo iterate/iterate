@@ -23,7 +23,7 @@ jobs:
       - id: get_env
         name: Get environment variables
         run: |-
-          echo stage=${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+          echo stage=${{ inputs.stage || ((github.ref_name == 'main' && 'prd') || 'stg') }} >> $GITHUB_OUTPUT
           echo release_name="v$(TS=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
