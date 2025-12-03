@@ -1,8 +1,8 @@
-import { permalink as getPermalink } from "braintrust/browser";
 import { z } from "zod";
 
 import { and, eq, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
+import { permalink as getPermalink } from "../crap/braintrust-shim.ts";
 import {
   estateProtectedProcedure,
   protectedProcedure,

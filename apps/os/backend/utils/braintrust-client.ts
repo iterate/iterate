@@ -1,4 +1,4 @@
-import { initLogger } from "braintrust/browser";
+import { initLogger } from "../crap/braintrust-shim.ts";
 
 export function getBraintrustLogger(opts: { braintrustKey: string; projectName?: string }) {
   const { braintrustKey, projectName } = opts;

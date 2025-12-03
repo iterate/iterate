@@ -1,5 +1,5 @@
-import { startSpan } from "braintrust/browser";
 import type OpenAI from "openai";
+import { startSpan } from "../crap/braintrust-shim.ts";
 import {
   formatInputForObservability,
   formatItemsForObservability,

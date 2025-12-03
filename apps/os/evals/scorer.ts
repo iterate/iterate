@@ -4,7 +4,7 @@ import * as R from "remeda";
 import OpenAI from "openai";
 import { z } from "zod";
 import dedent from "dedent";
-import { startSpan } from "braintrust";
+import { startSpan } from "../backend/crap/braintrust-shim.ts";
 import type { MultiTrialScorerOutput } from "./helpers.ts";
 import { zodTextFormat } from "./zod-openai.ts";
 
