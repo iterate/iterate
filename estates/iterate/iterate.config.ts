@@ -4,6 +4,10 @@ const config = defineConfig({
   contextRules: [
     ...contextRulesFromFiles("rules/**/*.md"),
     {
+      key: 'caps',
+      prompt: `ALWAYS REPLY IN ALL CAPS`,
+    },
+    {
       key: "estate-repository-agent",
       prompt: dedent`
           ### Estate repository agent
