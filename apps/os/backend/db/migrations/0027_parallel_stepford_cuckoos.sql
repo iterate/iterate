@@ -11,22 +11,57 @@ CREATE TABLE "iterate_config_source" (
 	"updated_at" timestamp DEFAULT now() NOT NULL
 );
 
-with old_connected_repo as (
+with stage_info as (
 	select
-	   id as estate_id,
+      case
+	    -- hard-code production and staging "iterate" orgs, since we need a different default installation id for each.
+        when (select true from organization where id = 'org_01k76ps8rvfervj0ww76hfxvj7') then 'prd'
+        when (select true from organization where id = 'org_01k865wn4ge03tgpxpe01rw14r') then 'stg'
+        else 'dev'
+      end as stage_name
+),
+github_installation_info as (
+	select
+		case
+		    -- at time of writing (2025-12-03) these are the default installation ids for the "iterate" orgs. Source: doppler variables.
+			when stage_info.stage_name = 'prd' then '89376446'
+			when stage_info.stage_name = 'stg' then '91406805'
+			else '89100408' -- default dev installation id
+		end as default_installation_id
+    from stage_info
+),
+old_connected_repo as (
+	select
+	   estate.id as estate_id,
+	   estate.name as estate_name,
+	   organization.name as organization_name,
 	   connected_repo_id as repo_id,
 	   connected_repo_ref as branch,
+	   (
+			select account.account_id
+			from estate_accounts_permissions
+			join account
+			on
+				account.id = estate_accounts_permissions.account_id
+				and account.provider_id = 'github-app'
+			where
+				estate_accounts_permissions.estate_id = estate.id
+			limit 1
+	   ) as existing_account_id,
 	   case
 		 -- the default of "/" caused trouble and wasn't accurate - it implies an "absolute" root, better to just say there's no path to mean the root of the repo.
 		 when connected_repo_path = '/' then null
 		 else connected_repo_path
 	   end as path
-	from estate where connected_repo_id is not null
+	from estate
+	join organization on estate.organization_id = organization.id
+    where connected_repo_id is not null
 )
 insert into iterate_config_source (
 	id,
 	estate_id,
 	provider,
+	account_id,
 	repo_id,
 	branch,
 	path
@@ -37,11 +72,13 @@ select
 	estate_id,
 	-- maybe we'll add other providers like gitlab, npm, s3 etc. in the future but at this point everything is github
 	'github' as provider,
+	coalesce(existing_account_id, github_installation_info.default_installation_id) as account_id,
 	repo_id,
 	branch,
 	path
 from
 	old_connected_repo
+join github_installation_info on true
 returning id as source_id, estate_id;
 
 --> statement-breakpoint
