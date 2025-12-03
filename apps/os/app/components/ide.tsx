@@ -927,12 +927,11 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
 
   const confirmMerge = () => {
     if (prToMerge && currentPr) {
-      const branchToClear = currentPr.headRef;
       mergePullMutation.mutate(
         { estateId, pullNumber: prToMerge, mergeMethod: "squash" },
         {
           onSuccess: async () => {
-            localStorage.removeItem(`iterate-local-edits-${branchToClear}`);
+            localStorage.removeItem(`iterate-ide-local-edits-${estateId}`);
 
             // Invalidate and refetch queries
             await queryClient.refetchQueries(
@@ -959,13 +958,12 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
 
   const confirmClose = () => {
     if (prToClose && currentPr) {
-      const branchToClear = currentPr.headRef;
       closePullMutation.mutate(
         { estateId, pullNumber: prToClose },
         {
           onSuccess: async () => {
-            // Clear local edits for the closed branch
-            localStorage.removeItem(`iterate-local-edits-${branchToClear}`);
+            // Clear local edits
+            localStorage.removeItem(`iterate-ide-local-edits-${estateId}`);
             // Invalidate and refetch queries
             await queryClient.refetchQueries(
               trpc.estate.listPulls.queryFilter({ estateId, state: "open" }),
