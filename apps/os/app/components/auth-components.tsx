@@ -2,7 +2,6 @@ import { MailIcon } from "lucide-react";
 import { useCallback, useEffect } from "react";
 import { useSearch } from "@tanstack/react-router";
 import { authClient } from "../lib/auth-client.ts";
-import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
 import { Spinner } from "./ui/spinner.tsx";
 
@@ -33,17 +32,6 @@ export function LoginProviders() {
       console.error("❌ Slack sign-in error:", error);
     }
   }, [redirectUrl]);
-
-  const handleTestAdminUserSignIn = async () => {
-    const credentials = prompt(
-      "Enter email and password (colon separated)",
-      testAdminUser.credentials || "",
-    );
-    if (!credentials) return;
-    const { email, password } = parseCredentials(credentials);
-    const result = await authClient.signIn.email({ email, password });
-    window.location.href = result?.url ?? "/";
-  };
 
   const handleEmailAuth = async () => {
     const email = prompt("Enter your email");
@@ -109,16 +97,6 @@ export function LoginProviders() {
         <img src="/slack.svg" alt="Slack" className="mr-3 h-6 w-6" />
         Continue with Slack
       </Button>
-      {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (
-        <Button
-          onClick={handleTestAdminUserSignIn}
-          variant="outline"
-          size="lg"
-          className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
-        >
-          Continue as test admin user
-        </Button>
-      )}
       {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
         <Button onClick={handleEmailAuth} variant="outline" className="w-full h-12">
           <MailIcon className="mr-2 h-5 w-5" />

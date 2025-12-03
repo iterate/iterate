@@ -119,7 +119,6 @@ const Env = z.object({
   // Vite environment variables
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
-  VITE_ENABLE_TEST_ADMIN_USER: Optional,
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,

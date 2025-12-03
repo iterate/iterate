@@ -4,7 +4,6 @@ import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
-import { testAdminUser } from "../../auth/test-admin.ts";
 import { schema } from "../../db/client.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { getOctokitForInstallation } from "../../integrations/github/github-utils.ts";
@@ -25,42 +24,6 @@ const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, 
   }
   return next({ ctx });
 });
-
-const createAdminUser = testingProcedure
-  .input(
-    z.object({
-      email: z.string().default(testAdminUser.email!),
-      password: z.string().default(testAdminUser.password!),
-      name: z.string().optional(),
-    }),
-  )
-  .mutation(async ({ ctx, input }) => {
-    const getFromDb = () =>
-      ctx.db.query.user.findFirst({
-        where: eq(schema.user.email, input.email),
-      });
-    const existing = await getFromDb();
-    if (existing) {
-      return { created: false, user: existing }; // hope ur password is right, good luck
-    }
-    const auth = getAuth(ctx.db);
-    const _user = await auth.api
-      .createUser({
-        body: {
-          role: "admin",
-          name: input.name ?? input.email.split("@")[0],
-          email: input.email,
-          password: input.password,
-        },
-      })
-      .catch(async (e) => {
-        if (e.message.includes("already exists")) {
-          return { created: false };
-        }
-        throw e;
-      });
-    return { created: true, user: await getFromDb() };
-  });
 
 const setUserRole = testingProcedure
   .input(
@@ -135,7 +98,6 @@ export const deleteIterateManagedRepo = testingProcedure
   });
 
 export const testingRouter = router({
-  createAdminUser,
   setUserRole,
   createTestUser,
   createOrganizationAndEstate,
