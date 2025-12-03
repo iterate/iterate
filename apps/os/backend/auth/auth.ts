@@ -4,7 +4,6 @@ import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { stripe } from "@better-auth/stripe";
-import { Resend } from "resend";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd } from "../../env.ts";
@@ -52,10 +51,6 @@ export const getAuth = (db: DB) => {
         allowDifferentEmails: true,
       },
     },
-    // for now, we only want to enable email and password login if we know we need it for testing
-    ...(import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
-      ? { emailAndPassword: { enabled: true } }
-      : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
     plugins: [
       admin(),
       ...(import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN
@@ -75,16 +70,7 @@ export const getAuth = (db: DB) => {
                 },
               }),
               async sendVerificationOTP(data) {
-                logger.info("Verification OTP needs to be sent to email", data.email, data.otp);
-                if (!env.RESEND_API_KEY) return;
-                const resend = new Resend(env.RESEND_API_KEY);
-                const result = await resend.emails.send({
-                  from: `iterate <${env.RESEND_FROM_EMAIL || "noreply@iterate.com"}>`,
-                  to: data.email,
-                  subject: `sign in to iterate`,
-                  html: `Your sign in code is ${data.otp}`,
-                });
-                if (result.error) logger.error("Error sending verification OTP", result.error);
+                logger.warn("Verification OTP needs to be sent to email", data.email, data.otp);
               },
             }),
           ]
