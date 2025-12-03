@@ -13,6 +13,9 @@ export default defineConfig({
     sourcemap: true,
     minify: true,
   },
+  esbuild: {
+    keepNames: true,
+  },
   server: {
     allowedHosts: [".dev.iterate.com"],
   },
