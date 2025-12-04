@@ -18,24 +18,23 @@ import {
 } from "../trpc.ts";
 import {
   estate,
-  builds,
   agentInstance,
   iterateConfig,
   organizationUserMembership,
   organization,
 } from "../../db/schema.ts";
 import {
-  getGithubInstallationForEstate,
   getOctokitForInstallation,
   githubAppInstance,
   triggerGithubBuild,
 } from "../../integrations/github/github-utils.ts";
 import { schema, type DB } from "../../db/client.ts";
-import { env, type CloudflareEnv } from "../../../env.ts";
+import { type CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import { logger } from "../../tag-logger.ts";
+import { recentActiveSources } from "../../db/helpers.ts";
 import { CreateCommitOnBranchInput } from "./github-schemas.ts";
 
 export const RepoData = z.object({
@@ -49,11 +48,9 @@ const getInstallationScopedContext = async (options: {
   db: DB;
   estateId: string;
   connectedRepoId: number;
+  connectedRepoAccountId: string;
 }) => {
-  const githubInstallation = await getGithubInstallationForEstate(options.db, options.estateId);
-  const scopedOctokit = await getOctokitForInstallation(
-    githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-  );
+  const scopedOctokit = await getOctokitForInstallation(options.connectedRepoAccountId);
 
   const repoRes = await scopedOctokit.request("GET /repositories/{repository_id}", {
     repository_id: options.connectedRepoId,
@@ -71,7 +68,6 @@ const getInstallationScopedContext = async (options: {
   return {
     octokit: scopedOctokit,
     repoData,
-    githubInstallation,
   };
 };
 
@@ -86,6 +82,7 @@ const githubInstallationScopedProcedure = estateProtectedProcedure.use(async ({ 
     db: ctx.db,
     estateId: ctx.estate.id,
     connectedRepoId: ctx.estate.connectedRepoId,
+    connectedRepoAccountId: ctx.estate.connectedRepoAccountId,
   });
 
   return next({
@@ -114,25 +111,33 @@ export async function triggerEstateRebuild(params: {
   const { db, env, estateId, commitHash, commitMessage, isManual = false } = params;
 
   // Get the estate details
-  const estateWithRepo = await db.query.estate.findFirst({
+  const _estateWithRepo = await db.query.estate.findFirst({
     where: eq(estate.id, estateId),
+    with: recentActiveSources,
   });
 
-  if (!estateWithRepo?.connectedRepoId) {
+  const estateWithRepo = _estateWithRepo && {
+    ..._estateWithRepo,
+    connectedRepoId: _estateWithRepo?.sources?.[0]?.repoId,
+    connectedRepoPath: _estateWithRepo?.sources?.[0]?.path,
+    connectedRepoRef: _estateWithRepo?.sources?.[0]?.branch,
+    connectedRepoAccountId: _estateWithRepo?.sources?.[0]?.accountId,
+  };
+
+  if (!estateWithRepo?.connectedRepoId || !estateWithRepo?.connectedRepoAccountId) {
     throw new Error("No GitHub repository connected to this estate");
   }
 
-  const { repoData, githubInstallation } = await getInstallationScopedContext({
+  const { repoData } = await getInstallationScopedContext({
     db,
     estateId,
     connectedRepoId: estateWithRepo.connectedRepoId,
+    connectedRepoAccountId: estateWithRepo.connectedRepoAccountId,
   });
 
   const installationToken =
     await githubAppInstance().octokit.rest.apps.createInstallationAccessToken({
-      installation_id: parseInt(
-        githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-      ),
+      installation_id: parseInt(estateWithRepo.connectedRepoAccountId),
       repository_ids: [estateWithRepo.connectedRepoId],
     });
 
@@ -265,10 +270,11 @@ export const estateRouter = router({
   getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {
     const record = await ctx.db.query.iterateConfig.findFirst({
       where: eq(iterateConfig.estateId, ctx.estate.id),
+      with: { build: true },
     });
 
     return {
-      config: record?.config ?? null,
+      config: record?.build?.config ?? null,
       updatedAt: record?.updatedAt ?? null,
     };
   }),
@@ -420,12 +426,14 @@ export const estateRouter = router({
       // Check if the requested branch exists, fall back to default branch if not
       let branch = requestedBranch;
       let branchExists = true;
+      let sha: string | undefined;
       try {
         const branchResponse = await ctx.github.rest.repos.getBranch({
           owner: ctx.repo.owner,
           repo: ctx.repo.repo,
           branch: requestedBranch,
         });
+        sha = branchResponse.data?.commit?.sha;
         if (branchResponse.status !== 200) {
           branchExists = false;
           branch = defaultBranch;
@@ -468,7 +476,7 @@ export const estateRouter = router({
             return [[relativePath, v] as const];
           }),
       );
-      const sha = Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
+      sha ||= Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
       return {
         repoData: ctx.repoData,
         pathPrefix,
@@ -695,14 +703,17 @@ export const estateRouter = router({
       const { estateId } = input;
       const limit = input.limit || 20;
 
-      const estateBuilds = await ctx.db
-        .select()
-        .from(builds)
-        .where(eq(builds.estateId, estateId))
-        .orderBy(desc(builds.createdAt))
-        .limit(limit);
+      const builds = await ctx.db.query.builds.findMany({
+        where: eq(schema.builds.estateId, estateId),
+        orderBy: desc(schema.builds.createdAt),
+        with: { estate: { with: { iterateConfigs: true } } },
+        limit: limit,
+      });
 
-      return estateBuilds;
+      return builds.map(({ estate, ...b }) => ({
+        ...b,
+        isActive: b.id === estate.iterateConfigs[0]?.buildId,
+      }));
     }),
 
   getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
@@ -863,9 +874,9 @@ export const estateRouter = router({
       if (input.useExisting) {
         const existing = await ctx.db.query.builds.findFirst({
           where: and(
-            eq(builds.estateId, estateId),
-            eq(builds.commitHash, commitHash),
-            eq(builds.status, "in_progress"),
+            eq(schema.builds.estateId, estateId),
+            eq(schema.builds.commitHash, commitHash),
+            eq(schema.builds.status, "in_progress"),
           ),
         });
         if (existing) {
@@ -891,6 +902,21 @@ export const estateRouter = router({
         status: "in_progress",
         message: "Build triggered successfully",
       };
+    }),
+
+  rollbackToBuild: githubInstallationScopedProcedure
+    .input(z.object({ buildId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { buildId } = input;
+      const updated = await ctx.db
+        .insert(schema.iterateConfig)
+        .values({ buildId, estateId: ctx.estate.id })
+        .onConflictDoUpdate({
+          target: [schema.iterateConfig.estateId],
+          set: { buildId },
+        })
+        .returning();
+      return { updated: updated.length };
     }),
 
   // Mark a user onboarding step as completed

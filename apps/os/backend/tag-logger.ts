@@ -261,7 +261,7 @@ function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
       const plainCause = errorToPOJO(error.cause) as PlainError;
       plain.cause = plainCause;
       if (plainCause?.rootCause) {
-        plain.rootCause = `${plain.rootCause}\n$👆 ${plainCause.rootCause}`;
+        plain.rootCause = `${plain.rootCause}\n👆 ${plainCause.rootCause}`;
       }
     }
 

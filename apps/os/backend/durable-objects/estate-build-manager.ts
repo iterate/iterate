@@ -22,7 +22,7 @@ type BuildInput = {
 };
 
 export type Log = {
-  event: "info" | "stdout" | "output" | "error" | "complete";
+  event: "info" | "stdout" | "files" | "output" | "error" | "complete";
   data: string;
 };
 
@@ -288,12 +288,13 @@ export class EstateBuildManager extends Container {
     }));
     const newestTriggeredBuild = allLogs.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]!;
 
-    await Promise.all(
+    const results = await Promise.allSettled(
       allLogs.map(async ({ buildId, logs }) => {
         const terminatingLog = logs.find(
           (log) => log.event === "complete" || log.event === "error",
         );
         const outputLog = logs.find((log) => log.event === "output");
+        const filesLog = logs.find((log) => log.event === "files");
         if (terminatingLog) {
           const status = terminatingLog.event === "complete" ? "complete" : "failed";
           this._sql.exec(
@@ -301,25 +302,43 @@ export class EstateBuildManager extends Container {
             status,
             buildId,
           );
+
+          const buildUpdate: Partial<typeof schemas.builds.$inferSelect> = { status };
+
+          if (filesLog) {
+            const files = JSON.parse(filesLog.data);
+            buildUpdate.files = files;
+          }
+          if (outputLog) {
+            const config = JSON.parse(outputLog.data);
+            buildUpdate.config = config;
+          }
+
           await this.db
             .update(schemas.builds)
-            .set({ status })
+            .set(buildUpdate)
             .where(eq(schemas.builds.id, buildId));
 
           // Update the iterate config in the database if this is the newest triggered build
-          if (outputLog && buildId === newestTriggeredBuild.buildId) {
-            const config = JSON.parse(outputLog.data);
+          if (buildId === newestTriggeredBuild.buildId && status === "complete") {
             await this.db
               .insert(schemas.iterateConfig)
-              .values({ estateId, config })
+              .values({ estateId, buildId })
               .onConflictDoUpdate({
                 target: [schemas.iterateConfig.estateId],
-                set: { config },
+                set: { buildId },
               });
           }
         }
       }),
     );
+
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) throw errors[0];
+    if (errors.length)
+      throw new AggregateError(errors, `Failed to update ${errors.length} build statuses`);
 
     await invalidateOrganizationQueries(this.env, orgId, {
       type: "INVALIDATE",

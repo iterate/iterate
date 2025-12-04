@@ -19,6 +19,8 @@ import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-ge
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
 import { logger } from "../../tag-logger.ts";
+import { createGithubRepoInEstatePool } from "../../org-utils.ts";
+import { env } from "../../../env.ts";
 
 // Define the integration providers we support
 const INTEGRATION_PROVIDERS = {
@@ -125,7 +127,7 @@ export const integrationsRouter = router({
       const hasPersonal = connections.some((conn) => !conn.isEstateWide);
 
       return {
-        id: providerId,
+        id: providerId as keyof typeof INTEGRATION_PROVIDERS,
         name: provider.name,
         description: provider.description,
         icon: provider.icon,
@@ -231,7 +233,9 @@ export const integrationsRouter = router({
   get: estateProtectedProcedure
     .input(
       z.object({
-        providerId: z.string(),
+        providerId: z.enum(
+          Object.keys(INTEGRATION_PROVIDERS) as [keyof typeof INTEGRATION_PROVIDERS],
+        ),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -328,6 +332,7 @@ export const integrationsRouter = router({
           id: z.number(),
           full_name: z.string(),
           private: z.boolean(),
+          default_branch: z.string(),
         })
         .parse(repoInfo.data);
       return [repoData];
@@ -342,6 +347,7 @@ export const integrationsRouter = router({
         id: repository.id,
         full_name: repository.full_name,
         private: repository.private,
+        default_branch: repository.default_branch,
       })),
     );
 
@@ -351,20 +357,13 @@ export const integrationsRouter = router({
     const { estateId } = input;
     const githubRepo = await getGithubRepoForEstate(ctx.db, estateId);
 
-    if (!githubRepo)
+    if (!githubRepo?.connectedRepoAccountId)
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: "No repository connected to this estate",
+        message: "No repository connected to this estate.",
       });
 
-    // Get the GitHub installation to fetch the repository details
-    const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-    let repoName: string | null = null;
-    let repoFullName: string | null = null;
-
-    const scopedOctokit = await getOctokitForInstallation(
-      githubInstallation?.accountId ?? ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-    );
+    const scopedOctokit = await getOctokitForInstallation(githubRepo.connectedRepoAccountId);
 
     const repoResponse = await scopedOctokit.request("GET /repositories/{repository_id}", {
       repository_id: githubRepo.connectedRepoId,
@@ -378,47 +377,83 @@ export const integrationsRouter = router({
     }
 
     const repoData = z
-      .object({
-        name: z.string(),
-        full_name: z.string(),
-      })
+      .object({ name: z.string(), full_name: z.string(), html_url: z.string() })
       .parse(repoResponse.data);
-
-    repoName = repoData.name;
-    repoFullName = repoData.full_name;
 
     return {
       repoId: githubRepo.connectedRepoId,
-      repoName,
-      repoFullName,
-      branch: githubRepo.connectedRepoRef || "main",
-      path: githubRepo.connectedRepoPath || "/",
+      repoName: repoData.name,
+      repoFullName: repoData.full_name,
+      branch: githubRepo.connectedRepoRef,
+      path: githubRepo.connectedRepoPath,
+      htmlUrl: repoData.html_url,
+      managedBy:
+        githubRepo.connectedRepoAccountId === ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID
+          ? ("iterate" as const)
+          : ("user" as const),
     };
   }),
+
+  createIterateManagedGithubRepo: estateProtectedProcedure
+    .input(
+      z.object({
+        estateId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { estateId } = input;
+      const estate = await ctx.db.query.estate.findFirst({
+        where: eq(schema.estate.id, estateId),
+        with: { organization: true },
+      });
+      if (!estate) throw new Error(`Estate ${estateId} not found`);
+      const repo = await createGithubRepoInEstatePool({
+        organizationName: estate.organization.name,
+        organizationId: estate.organizationId,
+      });
+      await ctx.db.transaction(async (tx) => {
+        await tx
+          .update(schema.iterateConfigSource)
+          .set({ deactivatedAt: new Date() })
+          .where(eq(schema.iterateConfigSource.estateId, estateId));
+        await tx.insert(schema.iterateConfigSource).values({
+          estateId,
+          provider: "github",
+          repoId: repo.id,
+          branch: repo.default_branch,
+          accountId: ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+        });
+      });
+      return {
+        success: true,
+      };
+    }),
 
   setGithubRepoForEstate: estateProtectedProcedure
     .input(
       z.object({
         repoId: z.number(),
-        branch: z.string().optional().default("main"),
-        path: z.string().optional().default("/"),
+        branch: z.string(),
+        path: z.string().or(z.undefined()),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const { estateId, repoId, branch, path } = input;
 
       const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-      if (!githubInstallation || !githubInstallation.accountId) {
-        throw new TRPCError({
-          code: "NOT_FOUND",
-          message:
-            "GitHub installation not found, make sure you have Github integrated before connecting a repository",
+
+      const accountId =
+        githubInstallation?.accountId ?? ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID;
+      const scopedOctokit = await getOctokitForInstallation(accountId);
+
+      const repo = await scopedOctokit
+        .request("GET /repositories/{id}", { id: repoId })
+        .catch((e) => {
+          throw new Error(
+            `Oh no: GET /repositories/${repoId} failed with account id ${accountId}`,
+            { cause: e },
+          );
         });
-      }
-
-      const scopedOctokit = await getOctokitForInstallation(githubInstallation.accountId);
-
-      const repo = await scopedOctokit.request("GET /repositories/{id}", { id: repoId });
       if (repo.status !== 200) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -435,14 +470,21 @@ export const integrationsRouter = router({
         })
         .parse(repo.data);
 
-      await ctx.db
-        .update(schema.estate)
-        .set({
-          connectedRepoId: repoId,
-          connectedRepoRef: branch,
-          connectedRepoPath: path,
-        })
-        .where(eq(schema.estate.id, estateId));
+      const deactivateOthersQuery = ctx.db
+        .update(schema.iterateConfigSource)
+        .set({ deactivatedAt: new Date() })
+        .where(eq(schema.iterateConfigSource.estateId, estateId));
+
+      // todo: cte? didn't seem to work first time i tried it
+      await deactivateOthersQuery;
+      await ctx.db.insert(schema.iterateConfigSource).values({
+        estateId,
+        repoId,
+        branch,
+        path,
+        provider: "github",
+        accountId,
+      });
 
       const branchData = await scopedOctokit.rest.repos.getBranch({
         owner: repoData.owner.login,
@@ -487,13 +529,9 @@ export const integrationsRouter = router({
       const { estateId, deleteInstallation } = input;
 
       await ctx.db
-        .update(schema.estate)
-        .set({
-          connectedRepoId: null,
-          connectedRepoRef: null,
-          connectedRepoPath: null,
-        })
-        .where(eq(schema.estate.id, estateId));
+        .update(schema.iterateConfigSource)
+        .set({ deactivatedAt: new Date() })
+        .where(eq(schema.iterateConfigSource.estateId, estateId));
 
       if (deleteInstallation) {
         const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
@@ -518,7 +556,9 @@ export const integrationsRouter = router({
   disconnect: estateProtectedProcedure
     .input(
       z.object({
-        providerId: z.string(),
+        providerId: z.enum(
+          Object.keys(INTEGRATION_PROVIDERS) as [keyof typeof INTEGRATION_PROVIDERS],
+        ),
         disconnectType: z.enum(["estate", "personal", "both"]).default("both"),
       }),
     )
@@ -557,14 +597,23 @@ export const integrationsRouter = router({
           // For GitHub integrations, also clear the connected repo information and revoke the installation
           if (providerId === "github-app") {
             // Clear the connected repo information
-            await ctx.db
-              .update(schema.estate)
-              .set({
-                connectedRepoId: null,
-                connectedRepoRef: null,
-                connectedRepoPath: null,
-              })
-              .where(eq(schema.estate.id, estateId));
+            await ctx.db.transaction(async (tx) => {
+              const disabledSources = await tx
+                .update(schema.iterateConfigSource)
+                .set({ deactivatedAt: new Date() })
+                .where(eq(schema.iterateConfigSource.estateId, estateId))
+                .returning();
+
+              const latestManagedSource = disabledSources
+                .filter((s) => s.accountId === env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID)
+                .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+                .at(0);
+
+              if (latestManagedSource) {
+                const { id, createdAt, updatedAt, deactivatedAt, ...rest } = latestManagedSource;
+                await tx.insert(schema.iterateConfigSource).values(rest);
+              }
+            });
 
             // Always revoke the GitHub app installation
             for (const { account: acc } of estateAccountsToDisconnect) {
@@ -649,12 +698,12 @@ export const integrationsRouter = router({
         });
       }
 
-      return {
+      return ctx.sendToOutbox(ctx.db, {
         success: true,
         estateDisconnected,
         personalDisconnected,
         totalDisconnected: estateDisconnected + personalDisconnected,
-      };
+      });
     }),
 
   disconnectMCP: estateProtectedProcedure

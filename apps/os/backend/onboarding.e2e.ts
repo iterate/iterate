@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect, vi } from "vitest";
 import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
 
 /**
@@ -14,15 +14,12 @@ import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
  * 7. Send a message to Slack
  * 8. Verify the bot responds
  * 9. Clean up the created repository
- *
- * Prerequisites:
- * - GitHub App must be installed for the test organization
  */
 
 const createDisposer = () => {
   const disposeFns: Array<() => Promise<void>> = [];
   return {
-    add: (fn: () => Promise<void>) => disposeFns.push(fn),
+    fns: disposeFns,
     [Symbol.asyncDispose]: async () => {
       const errors: unknown[] = [];
       for (const fn of disposeFns.toReversed()) {
@@ -36,17 +33,18 @@ const createDisposer = () => {
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
+  await adminTrpc.testing.nuke.mutate();
   await using disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
-  disposer.add(async () => {
+  disposer.fns.push(async () => {
     await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
   });
 
   const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
     userId: testUser.id,
   });
-  disposer.add(async () => {
+  disposer.fns.push(async () => {
     await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
   });
 
@@ -58,9 +56,15 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   });
 
   const estateId = estate.id;
-  const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
-  expect(foundRepo).toBeDefined();
-  disposer.add(async () => {
+  const foundRepo = await vi.waitUntil(
+    async () => {
+      const [first] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
+      return first;
+    },
+    { interval: 1000, timeout: 5000 },
+  );
+  expect(foundRepo, "(a github repo should be available)").toBeDefined();
+  disposer.fns.push(async () => {
     if (!foundRepo?.full_name) return;
     await adminTrpc.testing.deleteIterateManagedRepo.mutate({ repoFullName: foundRepo.full_name });
   });
