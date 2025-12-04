@@ -33,7 +33,6 @@ const createDisposer = () => {
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
-  await adminTrpc.testing.nuke.mutate();
   await using disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});

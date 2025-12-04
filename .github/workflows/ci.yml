@@ -13,7 +13,6 @@ on:
     inputs:
       stage:
         description: The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).
-        default: prd
         required: true
         type: string
 jobs:
@@ -23,7 +22,7 @@ jobs:
       - id: get_env
         name: Get environment variables
         run: |-
-          echo stage=${{ inputs.stage || ((github.ref_name == 'main' && 'prd') || 'stg') }} >> $GITHUB_OUTPUT
+          echo stage=${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
           echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
