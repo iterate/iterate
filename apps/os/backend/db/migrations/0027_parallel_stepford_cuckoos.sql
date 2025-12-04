@@ -68,7 +68,7 @@ insert into iterate_config_source (
 )
 select
     -- unfortunately we have yielded control of our id generation to drizzle, so we have to use a hack to generate a valid id here.
-	replace(old_connected_repo.estate_id, 'es_', 'ics_') as id,
+	replace(old_connected_repo.estate_id, 'est_', 'ics_') as id,
 	estate_id,
 	-- maybe we'll add other providers like gitlab, npm, s3 etc. in the future but at this point everything is github
 	'github' as provider,

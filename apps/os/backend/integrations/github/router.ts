@@ -139,7 +139,9 @@ githubApp.get(
       return tx.query.estate.findFirst({ where: eq(schema.estate.id, estateId) });
     });
 
-    return c.redirect(callbackURL || `/${estate?.organizationId}/${estate?.id}/repo`);
+    return c.redirect(
+      callbackURL || (estate ? `/${estate?.organizationId}/${estate?.id}/repo` : "/"),
+    );
   },
 );
 

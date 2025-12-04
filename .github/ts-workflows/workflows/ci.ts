@@ -47,7 +47,7 @@ export default {
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
           run: dedent`
             echo stage=\${{ inputs.stage || ((github.ref_name == 'main' && 'prd') || 'stg') }} >> $GITHUB_OUTPUT
-            echo release_name="v$(TS=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
+            echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
           `,
         },
       ],

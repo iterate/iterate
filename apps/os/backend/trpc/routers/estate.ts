@@ -476,7 +476,6 @@ export const estateRouter = router({
             return [[relativePath, v] as const];
           }),
       );
-      console.log({ sha }, 11111);
       sha ||= Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
       return {
         repoData: ctx.repoData,
