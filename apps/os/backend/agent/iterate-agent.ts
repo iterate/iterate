@@ -589,8 +589,8 @@ export class IterateAgent<
                 inputTokens: input_tokens,
                 outputTokens: output_tokens,
               });
-            } else {
-              logger.debug("No Stripe customer ID found for organization", {
+            } else if (import.meta.env.VITE_APP_STAGE === "prd") {
+              logger.warn("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
               });
             }

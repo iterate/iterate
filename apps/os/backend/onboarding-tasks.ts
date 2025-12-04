@@ -141,13 +141,16 @@ export async function processSystemTasks(
             organizationId: estate.organizationId,
           });
           await db.transaction(async (tx) => {
-            await tx.insert(schema.iterateConfigSource).values({
-              estateId: estate.id,
-              provider: "github",
-              repoId: repo.id,
-              branch: repo.default_branch,
-              accountId: env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-            });
+            await tx
+              .insert(schema.iterateConfigSource)
+              .values({
+                estateId: estate.id,
+                provider: "github",
+                repoId: repo.id,
+                branch: repo.default_branch,
+                accountId: env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+              })
+              .onConflictDoNothing(); // conflict implies there's already an active source, let the user-defined one win
           });
           break;
         }
