@@ -115,6 +115,36 @@ export async function createOrganizationAndEstate(
   return result;
 }
 
+const commonPublicEmailDomains = new Set([
+  "gmail.com",
+  "hotmail.com",
+  "yahoo.com",
+  "outlook.com",
+  "aol.com",
+  "icloud.com",
+  "gmail.com",
+  "hotmail.com",
+  "yahoo.com",
+  "outlook.com",
+  "aol.com",
+  "icloud.com",
+  "proton.me",
+  "pm.me",
+  "me.com",
+  "mac.com",
+  "live.com",
+  "live.co.uk",
+  "live.com.au",
+  "live.com.au",
+  "googlemail.com",
+  "btinternet.com",
+]);
+export const slugsFromEmail = (email: string) => {
+  let full = `iterate-${email}`.replace(/\.com$/, "").replace(/\W+/g, "-");
+  full = full.replace(/^[-_]+/, "").replace(/[-_]+$/, ""); // remove leading and trailing hyphens and underscores
+  return full.slice(0, 80 - 15); // subtract 15 from slack max channel name length so we can add `-${Date.now()}` if the channel name is taken
+};
+
 // Function to create organization and estate for new users
 export const createUserOrganizationAndEstate = async (
   db: DB,
@@ -137,9 +167,7 @@ export const createUserOrganizationAndEstate = async (
     };
   }
 
-  // Create repo first, then centralize DB work via shared helper
   const provisionalOrgName = `${user.email}'s Organization`;
-  // todo: create an iterate-estates/ repo in a consumer
 
   const { organization, estate } = await createOrganizationAndEstate(db, {
     organizationName: provisionalOrgName,

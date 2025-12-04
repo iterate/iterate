@@ -10,7 +10,7 @@ const setupTestEstate = async (now = Date.now()) => {
     .returning();
   const [est] = await db
     .insert(schema.estate)
-    .values({ name: "testestate" + now, organizationId: org.id })
+    .values({ name: "testestate" + now, slug: "testestate" + now, organizationId: org.id })
     .returning();
 
   return {

@@ -161,6 +161,7 @@ export const filesRelations = relations(files, ({ one }) => ({
 
 export const estate = pgTable("estate", (t) => ({
   id: iterateId("est"),
+  slug: t.text().notNull().unique(),
   name: t.text().notNull(),
   organizationId: t
     .text()
