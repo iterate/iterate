@@ -39,6 +39,14 @@ export function testAgentRoutingKey(input: string) {
 }
 
 export async function getAuthedTrpcClient() {
+  const unauthedClient = createTRPCClient<AppRouter>({
+    links: [httpLink({ url: `${baseURL}/api/trpc` })],
+  });
+
+  await unauthedClient.testing.createSuperAdminUser.mutate({
+    serviceAuthToken: process.env.SERVICE_AUTH_TOKEN!,
+  });
+
   const { sessionCookies } = await getServiceAuthCredentials();
   const client = createTRPCClient<AppRouter>({
     links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie: sessionCookies } })],

@@ -103,17 +103,13 @@ export async function createOrganizationAndEstate(
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  let result!: {
-    organization: typeof schema.organization.$inferSelect;
-    estate: typeof schema.estate.$inferSelect;
-  };
-  await db.transaction(async (tx) => {
-    result = await createOrganizationAndEstateInTransaction(tx, params);
+  const result = await db.transaction(async (tx) => {
+    return createOrganizationAndEstateInTransaction(tx, params);
   });
   // Kick task processing in background; cron also processes
   waitUntil(
     (async () => {
-      await processSystemTasks(db);
+      await processSystemTasks(db, result.estate.id);
     })(),
   );
   return result;
@@ -221,6 +217,12 @@ export async function initializeOnboardingForEstateInTransaction(
     {
       aggregateType: "estate",
       aggregateId: estateId,
+      taskType: "CreateGithubRepo",
+      payload: { estateId },
+    },
+    {
+      aggregateType: "estate",
+      aggregateId: estateId,
       taskType: "CreateStripeCustomer",
       payload: { organizationId, estateId },
     },
@@ -229,12 +231,6 @@ export async function initializeOnboardingForEstateInTransaction(
       aggregateId: estateId,
       taskType: "WarmOnboardingAgent",
       payload: { estateId, onboardingAgentName },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateGithubRepo",
-      payload: { estateId },
     },
   ] satisfies EstateOnboardingEventShape<"Insert">[]);
 }

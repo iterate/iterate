@@ -545,7 +545,7 @@ async function getURLContentFromWebpage(params: {
     if (!includeScreenshotOfPage || !isFulfilled(screenshotResult)) {
       return {
         success: false,
-        error: `Failed to extract webpage content: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
+        error: `Failed to extract webpage content of ${url}: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
         contentType: "webpage" as const,
       };
     }

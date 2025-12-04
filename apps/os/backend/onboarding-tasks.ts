@@ -80,7 +80,11 @@ async function handleOnboardingAgentWarmup(
   });
 }
 
-export async function processSystemTasks(db: DB): Promise<{
+export async function processSystemTasks(
+  db: DB,
+  /** optional - if you only want to process tasks for a specific aggregate you can pass this in. The scheduled processing will process for all aggregates. */
+  aggregateId?: string,
+): Promise<{
   processed: number;
   successful: number;
   failed: number;
@@ -88,7 +92,12 @@ export async function processSystemTasks(db: DB): Promise<{
   const systemTasks = await db
     .select()
     .from(schema.systemTasks)
-    .where(isNull(schema.systemTasks.processedAt))
+    .where(
+      and(
+        isNull(schema.systemTasks.processedAt),
+        eq(schema.systemTasks.aggregateId, aggregateId || schema.systemTasks.aggregateId),
+      ),
+    )
     .orderBy(asc(schema.systemTasks.createdAt))
     .limit(50);
 

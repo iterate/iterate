@@ -115,7 +115,7 @@ export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type })
   return result;
 });
 
-// Protected procedure that requires authentication
+/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any estate-specific resources */
 export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
