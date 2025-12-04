@@ -9,6 +9,7 @@ export default defineConfig({
     provide: {
       vitestBatchId: `batch-${Date.now()}`,
     },
+    outputFile: { html: "e2e-ignoreme/index.html" },
   },
 });
 

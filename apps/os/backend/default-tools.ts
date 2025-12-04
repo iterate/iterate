@@ -292,7 +292,7 @@ async function callExaEndpoint<Schema extends z.ZodTypeAny>(
   }
 
   const data = await response.json();
-  return schema.parse(data);
+  return zodParse(`${path} response`, schema, data);
 }
 
 function isFulfilled<T>(result: PromiseSettledResult<T>): result is PromiseFulfilledResult<T> {
@@ -346,8 +346,20 @@ export async function searchWeb(input: z.infer<typeof SearchRequest>) {
   return callExaEndpoint("/search", payload, SearchResponse);
 }
 
+const zodParse = <Z extends z.ZodType<any, any, any>>(
+  context: string,
+  schema: Z,
+  input: unknown,
+) => {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw new Error(`${context} parse failed: ${z.prettifyError(result.error)}`);
+  }
+  return result.data;
+};
+
 export async function getURLContentFromExa(input: z.infer<typeof ContentsRequestInput>) {
-  const payload = ContentsRequestInput.parse(input);
+  const payload = zodParse(JSON.stringify(input), ContentsRequestInput, input);
   return callExaEndpoint("/contents", payload, ContentsResponse);
 }
 
@@ -545,7 +557,7 @@ async function getURLContentFromWebpage(params: {
     if (!includeScreenshotOfPage || !isFulfilled(screenshotResult)) {
       return {
         success: false,
-        error: `Failed to extract webpage content: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
+        error: `Failed to extract webpage content of ${url}: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
         contentType: "webpage" as const,
       };
     }

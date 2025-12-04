@@ -5,20 +5,12 @@ RUN cd /tmp && pnpm install
 # Copy the entire scripts directory so esbuild can resolve local imports
 COPY ./scripts /tmp/scripts
 RUN cd /tmp && ./node_modules/.bin/esbuild \
-    scripts/sandbox-build-runner.ts \
-    --bundle \
-    --platform=node \
-    --format=cjs \
-    --target=node24 \
-    --outfile=/tmp/sandbox-build-runner.js
-RUN cd /tmp && ./node_modules/.bin/esbuild \
     scripts/sandbox-exec-runner.ts \
     --bundle \
     --platform=node \
     --format=cjs \
     --target=node24 \
     --outfile=/tmp/sandbox-exec-runner.js
-
 
 FROM docker.io/cloudflare/sandbox:0.6.0
 
@@ -56,8 +48,6 @@ COPY ./scripts/sandbox-entry.ts /tmp/sandbox-entry.ts
 RUN chmod +x /tmp/sandbox-entry.ts
 
 
-COPY --from=builder /tmp/sandbox-build-runner.js /tmp/sandbox-build-runner.js
-RUN chmod +x /tmp/sandbox-build-runner.js
 COPY --from=builder /tmp/sandbox-exec-runner.js /tmp/sandbox-exec-runner.js
 RUN chmod +x /tmp/sandbox-exec-runner.js
 

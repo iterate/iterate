@@ -1,10 +1,11 @@
 import { beforeAll } from "vitest";
 import { createTestHelper, getAuthedTrpcClient, multiTurnScorer, evaliterate } from "./helpers.ts";
 
-let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>;
+let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
 
 beforeAll(async () => {
-  trpcClient = await getAuthedTrpcClient();
+  const authed = await getAuthedTrpcClient();
+  trpcClient = authed.client;
 });
 
 evaliterate("agent knows when to end their turn", {

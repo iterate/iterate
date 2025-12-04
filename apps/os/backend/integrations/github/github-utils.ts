@@ -1,12 +1,13 @@
 import { createPrivateKey } from "crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { App, Octokit } from "octokit";
 import { getContainer } from "@cloudflare/containers";
 import { env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
-import * as schemas from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
+import { recentActiveSources } from "../../db/helpers.ts";
 
 const privateKey = createPrivateKey({
   key: env.GITHUB_APP_PRIVATE_KEY,
@@ -35,33 +36,36 @@ export const githubAppInstance = (): GithubAppInstance =>
 export const getGithubInstallationForEstate = async (db: DB, estateId: string) => {
   const installations = await db
     .select({
-      accountId: schemas.account.accountId,
-      accessToken: schemas.account.accessToken,
-      refreshToken: schemas.account.refreshToken,
-      accessTokenExpiresAt: schemas.account.accessTokenExpiresAt,
+      accountId: schema.account.accountId,
+      accessToken: schema.account.accessToken,
+      refreshToken: schema.account.refreshToken,
+      accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
     })
-    .from(schemas.estateAccountsPermissions)
-    .innerJoin(schemas.account, eq(schemas.estateAccountsPermissions.accountId, schemas.account.id))
+    .from(schema.estateAccountsPermissions)
+    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
     .where(
       and(
-        eq(schemas.estateAccountsPermissions.estateId, estateId),
-        eq(schemas.account.providerId, "github-app"),
+        eq(schema.estateAccountsPermissions.estateId, estateId),
+        eq(schema.account.providerId, "github-app"),
       ),
     )
-    .limit(1);
+    .limit(2);
 
-  return installations.length > 0 ? installations[0] : null;
+  return installations.at(0);
 };
 
 export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
-  const [estate] = await db
-    .select({
-      connectedRepoId: schemas.estate.connectedRepoId,
-      connectedRepoRef: schemas.estate.connectedRepoRef,
-      connectedRepoPath: schemas.estate.connectedRepoPath,
-    })
-    .from(schemas.estate)
-    .where(eq(schemas.estate.id, estateId));
+  const e = await db.query.estate.findFirst({
+    where: eq(schema.estate.id, estateId),
+    with: recentActiveSources,
+  });
+  const s = e?.sources?.[0];
+  const estate = {
+    connectedRepoId: s?.repoId,
+    connectedRepoRef: s?.branch,
+    connectedRepoPath: s?.path,
+    connectedRepoAccountId: s?.accountId,
+  };
 
   if (!estate || !estate.connectedRepoId) {
     return null;
@@ -71,17 +75,24 @@ export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
 };
 
 export const getEstateByRepoId = async (db: DB, repoId: number) => {
-  const [estate] = await db
-    .select({
-      id: schemas.estate.id,
-      name: schemas.estate.name,
-      connectedRepoRef: schemas.estate.connectedRepoRef,
-      connectedRepoPath: schemas.estate.connectedRepoPath,
-    })
-    .from(schemas.estate)
-    .where(eq(schemas.estate.connectedRepoId, repoId));
-
-  return estate;
+  const configSource = await db.query.iterateConfigSource.findFirst({
+    where: and(
+      eq(schema.iterateConfigSource.repoId, repoId),
+      isNull(schema.iterateConfigSource.deactivatedAt),
+    ),
+    with: {
+      estate: true,
+    },
+  });
+  return (
+    configSource?.estate && {
+      id: configSource.estate.id,
+      name: configSource.estate.name,
+      connectedRepoRef: configSource.branch,
+      connectedRepoPath: configSource.path,
+      connectedRepoAccountId: configSource.accountId,
+    }
+  );
 };
 
 export const validateGithubWebhookSignature = async (payload: string, signature: string) =>
@@ -124,12 +135,13 @@ export async function triggerGithubBuild(params: {
 
   // Create a new build record
   const [build] = await db
-    .insert(schemas.builds)
+    .insert(schema.builds)
     .values({
       status: "in_progress",
       commitHash,
       commitMessage: isManual ? `[Manual] ${commitMessage}` : commitMessage,
       webhookIterateId: webhookId || `${isManual ? "manual" : "auto"}-${Date.now()}`,
+      files: [],
       estateId,
       iterateWorkflowRunId: workflowRunId,
     })
@@ -137,7 +149,7 @@ export async function triggerGithubBuild(params: {
 
   // Get the organization ID for WebSocket invalidation
   const estateWithOrg = await db.query.estate.findFirst({
-    where: eq(schemas.estate.id, estateId),
+    where: eq(schema.estate.id, estateId),
     with: {
       organization: true,
     },
