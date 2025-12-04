@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, lt } from "drizzle-orm";
 import { env } from "../env.ts";
 import type { DB } from "./db/client.ts";
 import * as schema from "./db/schema.ts";
@@ -96,6 +96,7 @@ export async function processSystemTasks(
       and(
         isNull(schema.systemTasks.processedAt),
         eq(schema.systemTasks.aggregateId, aggregateId || schema.systemTasks.aggregateId),
+        lt(schema.systemTasks.attempts, 5), // give up after 5 attempts
       ),
     )
     .orderBy(asc(schema.systemTasks.createdAt))
@@ -107,6 +108,7 @@ export async function processSystemTasks(
   let failed = 0;
 
   for (const task of systemTasks) {
+    const newAttempts = (task.attempts ?? 0) + 1;
     try {
       const taskType = task.taskType as SystemTaskUnion["taskType"];
       switch (taskType) {
@@ -160,7 +162,7 @@ export async function processSystemTasks(
       }
       await db
         .update(schema.systemTasks)
-        .set({ processedAt: new Date(), error: null, updatedAt: new Date() })
+        .set({ processedAt: new Date(), error: null, attempts: newAttempts, updatedAt: new Date() })
         .where(eq(schema.systemTasks.id, task.id as number));
       successful++;
     } catch (err) {
@@ -168,7 +170,7 @@ export async function processSystemTasks(
       const message = err instanceof Error ? err.message : String(err);
       await db
         .update(schema.systemTasks)
-        .set({ attempts: (task.attempts ?? 0) + 1, error: message, updatedAt: new Date() })
+        .set({ attempts: newAttempts, error: message, updatedAt: new Date() })
         .where(eq(schema.systemTasks.id, task.id as number));
       failed++;
     }
