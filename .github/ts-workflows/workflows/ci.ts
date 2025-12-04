@@ -17,7 +17,6 @@ export default {
         stage: {
           description:
             "The stage to deploy to. Must correspond to a Doppler config in the os project (prd, stg, dev, dev_bob etc.).",
-          default: "${{ (github.ref_name == 'main' && 'prd') || 'stg' }}",
           required: true,
           type: "string",
         },
