@@ -288,7 +288,7 @@ export class EstateBuildManager extends Container {
     }));
     const newestTriggeredBuild = allLogs.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]!;
 
-    await Promise.all(
+    const results = await Promise.allSettled(
       allLogs.map(async ({ buildId, logs }) => {
         const terminatingLog = logs.find(
           (log) => log.event === "complete" || log.event === "error",
@@ -332,6 +332,13 @@ export class EstateBuildManager extends Container {
         }
       }),
     );
+
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) throw errors[0];
+    if (errors.length)
+      throw new AggregateError(errors, `Failed to update ${errors.length} build statuses`);
 
     await invalidateOrganizationQueries(this.env, orgId, {
       type: "INVALIDATE",
