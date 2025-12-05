@@ -22,10 +22,8 @@ import {
  * - Mock MCP server running at MOCK_MCP_BASE_URL
  */
 
-const DEFAULT_MCP_BASE_URL = "http://localhost:8789";
-
 const TestEnv = z.object({
-  MOCK_MCP_BASE_URL: z.string().url().optional(),
+  MOCK_MCP_BASE_URL: z.string().default("https://mock.iterate.com"),
   MOCK_MCP_NO_AUTH_PATH: z.string().default("/no-auth"),
   MOCK_MCP_OAUTH_PATH: z.string().default("/oauth"),
   MOCK_MCP_BEARER_PATH: z.string().default("/bearer"),
@@ -39,14 +37,11 @@ function parseEnv() {
     MOCK_MCP_BEARER_PATH: process.env.MOCK_MCP_BEARER_PATH,
   });
 
-  const baseUrl = raw.MOCK_MCP_BASE_URL ?? DEFAULT_MCP_BASE_URL;
-
   return {
     ...raw,
-    MOCK_MCP_BASE_URL: baseUrl,
-    MOCK_MCP_NO_AUTH_SERVER_URL: resolveServerUrl(baseUrl, raw.MOCK_MCP_NO_AUTH_PATH),
-    MOCK_MCP_OAUTH_SERVER_URL: resolveServerUrl(baseUrl, raw.MOCK_MCP_OAUTH_PATH),
-    MOCK_MCP_BEARER_SERVER_URL: resolveServerUrl(baseUrl, raw.MOCK_MCP_BEARER_PATH),
+    MOCK_MCP_NO_AUTH_SERVER_URL: resolveServerUrl(raw.MOCK_MCP_BASE_URL, raw.MOCK_MCP_NO_AUTH_PATH),
+    MOCK_MCP_OAUTH_SERVER_URL: resolveServerUrl(raw.MOCK_MCP_BASE_URL, raw.MOCK_MCP_OAUTH_PATH),
+    MOCK_MCP_BEARER_SERVER_URL: resolveServerUrl(raw.MOCK_MCP_BASE_URL, raw.MOCK_MCP_BEARER_PATH),
   };
 }
 
@@ -399,7 +394,7 @@ async function completeOAuthFlow(
 
 async function fillBearerTokenViaPlaywright(paramsUrl: string, cookies: string): Promise<void> {
   console.log("[Bearer] Starting Playwright...");
-  const browser: Browser = await chromium.launch({ headless: false });
+  const browser: Browser = await chromium.launch({ headless: true });
 
   try {
     const context = await browser.newContext({
