@@ -174,8 +174,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
-
-    if (params.record.durableObjectName.includes("mock_slack")) {
+    const timestamp = extractTimestampFromDurableObjectName(params.record.durableObjectName);
+    if (timestamp.length === 4) {
       this.slackAPI = createSlackAPIMock<WebClient>();
       return;
     }
@@ -1437,4 +1437,19 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         "This function no longer exists - but we need it here because otherwise the agent would be bricked",
     };
   }
+}
+
+/**
+ * Extracts the timestamp from a durable object name.
+ * Format: SlackAgent-ts-{timestamp}-slack-...
+ */
+function extractTimestampFromDurableObjectName(name: string): string {
+  const parts = name.split("ts-");
+  if (parts.length < 2) return "";
+
+  const afterTs = parts[1];
+  const endIndex = afterTs.indexOf("-slack");
+  if (endIndex === -1) return "";
+
+  return afterTs.substring(0, endIndex);
 }

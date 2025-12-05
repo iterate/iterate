@@ -354,7 +354,6 @@ slackApp.post("/webhook", async (c) => {
   if ("type" in body && body.type === "url_verification" && "challenge" in body) {
     return c.text(body.challenge as string);
   }
-
   // First we get a slack team ID
   if (!body.team_id || !body.event) {
     logger.warn("Slack webhook received without a team ID", body);
@@ -403,7 +402,6 @@ async function determineEstateIdsToProcess({
     const existingRoutes = await db.query.agentInstance.findMany({
       where: sql`${schema.agentInstance.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstance.routingKey} LIKE ${"%-slack-%"}`,
     });
-
     if (existingRoutes.length > 0) {
       const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
       return { estateIds, instruction: "process" };
@@ -705,8 +703,35 @@ export async function syncSlackChannels(
 }
 
 /**
- * Syncs internal Slack workspace users for an estate.
- * Returns Set of Slack user IDs that are internal to the workspace.
+ * Represents the minimal Slack member data needed for syncing users.
+ * This matches the structure returned by Slack's users.list API.
+ */
+export type SlackMemberData = {
+  id: string;
+  deleted?: boolean;
+  name?: string;
+  real_name?: string;
+  is_bot?: boolean;
+  is_restricted?: boolean;
+  is_ultra_restricted?: boolean;
+  team_id?: string;
+  profile?: {
+    email?: string;
+    image_192?: string;
+  };
+};
+
+/**
+ * Options for saving Slack users to database.
+ */
+export type SaveSlackUsersOptions = {
+  /** If true, skip creating Slackbot user. Default: false */
+  skipSlackbot?: boolean;
+};
+
+/**
+ * Saves Slack users to the database, creating user records, provider mappings,
+ * and organization memberships.
  *
  * Email handling strategy:
  * - Regular users with email: Use their actual Slack profile email
@@ -714,197 +739,178 @@ export async function syncSlackChannels(
  * - Slackbot: Generate team-specific email: slackbot@{teamId}.slack.iterate.com
  *
  * This ensures that the same Slack user synced from different teams gets unique emails and separate iterate user records.
+ *
+ * @returns Set of Slack user IDs that were saved
  */
-export async function syncSlackUsersInBackground(
+export async function saveSlackUsersToDatabase(
   db: DB,
-  botToken: string,
+  members: SlackMemberData[],
   estateId: string,
   teamId: string,
+  options: SaveSlackUsersOptions = {},
 ): Promise<Set<string>> {
-  try {
-    const authedWebClient = new WebClient(botToken);
+  const { skipSlackbot = false } = options;
 
-    // Paginate through all users
-    const allMembers = [];
-    let cursor: string | undefined;
+  // Filter out invalid members upfront
+  // Include bots by allowing members without emails (we'll create synthetic emails for them)
+  const validMembers = members.filter(
+    (member) => member.id && !member.deleted && (member.profile?.email || member.is_bot),
+  );
 
-    do {
-      const userListResponse = await authedWebClient.users.list({
-        cursor,
-        limit: 200,
-      });
+  if (validMembers.length === 0) {
+    logger.info("No valid Slack members to sync");
+    return new Set();
+  }
 
-      if (!userListResponse.ok || !userListResponse.members) {
-        logger.error(
-          "Failed to fetch Slack users:",
-          userListResponse.error || "No members returned",
-        );
-        return new Set();
-      }
+  await db.transaction(async (tx) => {
+    // Get the organization ID from the estate
+    const estate = await tx.query.estate.findFirst({
+      where: eq(schema.estate.id, estateId),
+      columns: {
+        organizationId: true,
+      },
+    });
 
-      allMembers.push(...userListResponse.members);
-      cursor = userListResponse.response_metadata?.next_cursor;
-    } while (cursor);
-
-    // Filter out invalid members upfront
-    // Include bots by allowing members without emails (we'll create synthetic emails for them)
-    const validMembers = allMembers.filter(
-      (member) => member.id && !member.deleted && (member.profile?.email || member.is_bot),
-    );
-
-    if (validMembers.length === 0) {
-      logger.info("No valid Slack members to sync");
-      return new Set();
+    if (!estate) {
+      logger.error(`Estate ${estateId} not found`);
+      return;
     }
 
-    await db.transaction(async (tx) => {
-      // Get the organization ID from the estate
-      const estate = await tx.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
-        columns: {
-          organizationId: true,
+    // Create emails for all members
+    // Strategy: Always use syncing team ID for synthetic emails to ensure uniqueness per estate
+    // - Regular users with email: Use actual email (globally unique across Slack)
+    // - Users without email: Generate team-scoped synthetic email {userId}@{teamId}.slack.iterate.com
+    // - Slackbot: Generate team-specific email slackbot@{teamId}.slack.iterate.com
+    //
+    // This means: If estate A and estate B both sync the same external user without email,
+    // they will get different iterate user records (different emails), which is the desired behavior.
+    const memberEmails = validMembers.map((m) => {
+      if (m.id === "USLACKBOT") {
+        // Special case: Team-scoped Slackbot email
+        return `slackbot@${teamId}.slack.iterate.com`;
+      }
+      if (m.profile?.email) {
+        return m.profile.email;
+      }
+      // Synthetic email scoped to the syncing team (not user's home team)
+      return `${m.id}@${teamId}.slack.iterate.com`;
+    });
+
+    // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
+    try {
+      await tx
+        .insert(schema.user)
+        .values(
+          validMembers.map((member, index) => ({
+            name: member.real_name || member.name || "",
+            email: memberEmails[index],
+            image: member.profile?.image_192,
+            emailVerified: false,
+            isBot: member.is_bot ?? false,
+          })),
+        )
+        .onConflictDoNothing();
+    } catch (error) {
+      logger.error("Error creating users (will continue with existing ones):", error);
+    }
+
+    // Step 2: Fetch ALL users (both existing and newly created)
+    const allUsers = await tx.query.user.findMany({
+      where: inArray(schema.user.email, memberEmails),
+    });
+    const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
+
+    // Step 3: Upsert all provider mappings at once
+    const mappingsToUpsert = [];
+    const organizationMembershipsToUpsert = [];
+
+    for (let i = 0; i < validMembers.length; i++) {
+      const member = validMembers[i];
+      const memberEmail = memberEmails[i];
+      const user = usersByEmail.get(memberEmail);
+
+      if (!user) {
+        logger.error(`User not found for email ${memberEmail}`);
+        continue;
+      }
+
+      mappingsToUpsert.push({
+        providerId: "slack-bot" as const,
+        internalUserId: user.id,
+        externalId: member.id!,
+        estateId: estateId,
+        externalUserTeamId: null, // Internal users have no external team
+        providerMetadata: {
+          ...member,
+          sourceTeamId: teamId,
         },
       });
 
-      if (!estate) {
-        logger.error(`Estate ${estateId} not found`);
-        return;
-      }
+      // Determine role based on Slack restrictions
+      const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
 
-      // Create emails for all members
-      // Strategy: Always use syncing team ID for synthetic emails to ensure uniqueness per estate
-      // - Regular users with email: Use actual email (globally unique across Slack)
-      // - Users without email: Generate team-scoped synthetic email {userId}@{teamId}.slack.iterate.com
-      // - Slackbot: Generate team-specific email slackbot@{teamId}.slack.iterate.com
-      //
-      // This means: If estate A and estate B both sync the same external user without email,
-      // they will get different iterate user records (different emails), which is the desired behavior.
-      const memberEmails = validMembers.map((m) => {
-        if (m.id === "USLACKBOT") {
-          // Special case: Team-scoped Slackbot email
-          return `slackbot@${teamId}.slack.iterate.com`;
-        }
-        if (m.profile?.email) {
-          return m.profile.email;
-        }
-        // Synthetic email scoped to the syncing team (not user's home team)
-        return `${m.id}@${teamId}.slack.iterate.com`;
+      organizationMembershipsToUpsert.push({
+        organizationId: estate.organizationId,
+        userId: user.id,
+        role: role as "guest" | "member",
       });
+    }
 
-      // Step 1: Create any missing users first (try to create all, onConflictDoNothing handles existing)
-      try {
-        await tx
-          .insert(schema.user)
-          .values(
-            validMembers.map((member, index) => ({
-              name: member.real_name || member.name || "",
-              email: memberEmails[index],
-              image: member.profile?.image_192,
-              emailVerified: false,
-              isBot: member.is_bot ?? false,
-            })),
-          )
-          .onConflictDoNothing();
-      } catch (error) {
-        logger.error("Error creating users (will continue with existing ones):", error);
-      }
+    logger.info(`Upserting ${mappingsToUpsert.length} provider mappings`);
 
-      // Step 2: Fetch ALL users (both existing and newly created)
-      const allUsers = await tx.query.user.findMany({
-        where: inArray(schema.user.email, memberEmails),
-      });
-      const usersByEmail = new Map(allUsers.map((u) => [u.email, u]));
-
-      // Step 3: Upsert all provider mappings at once
-      const mappingsToUpsert = [];
-      const organizationMembershipsToUpsert = [];
-
-      for (let i = 0; i < validMembers.length; i++) {
-        const member = validMembers[i];
-        const memberEmail = memberEmails[i];
-        const user = usersByEmail.get(memberEmail);
-
-        if (!user) {
-          logger.error(`User not found for email ${memberEmail}`);
-          continue;
-        }
-
-        mappingsToUpsert.push({
-          providerId: "slack-bot" as const,
-          internalUserId: user.id,
-          externalId: member.id!,
-          estateId: estateId,
-          externalUserTeamId: null, // Internal users have no external team
-          providerMetadata: {
-            ...member,
-            sourceTeamId: teamId,
+    if (mappingsToUpsert.length > 0) {
+      await tx
+        .insert(schema.providerUserMapping)
+        .values(mappingsToUpsert)
+        .onConflictDoUpdate({
+          target: [
+            schema.providerUserMapping.providerId,
+            schema.providerUserMapping.estateId,
+            schema.providerUserMapping.externalId,
+          ],
+          set: {
+            providerMetadata: sql`excluded.provider_metadata`,
           },
         });
+    }
 
-        // Determine role based on Slack restrictions or bot status
-        const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
+    // Step 4: Upsert organization memberships
+    // Note: We use onConflictDoUpdate to ensure roles are updated when re-syncing
+    // This is important for trial upgrades where users may have different roles in the new workspace
+    // However, we must preserve owner/admin roles as these are set by the app, not inferred from Slack
+    logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
 
-        organizationMembershipsToUpsert.push({
-          organizationId: estate.organizationId,
-          userId: user.id,
-          role: role as "guest" | "member",
+    if (organizationMembershipsToUpsert.length > 0) {
+      await tx
+        .insert(schema.organizationUserMembership)
+        .values(organizationMembershipsToUpsert)
+        .onConflictDoUpdate({
+          target: [
+            schema.organizationUserMembership.organizationId,
+            schema.organizationUserMembership.userId,
+          ],
+          set: {
+            // Only update role if current role is not owner/admin
+            // Owner and admin roles are managed through the app, not inferred from Slack
+            role: sql`
+              CASE 
+                              WHEN ${schema.organizationUserMembership.role} IN ('owner', 'admin') 
+                              THEN ${schema.organizationUserMembership.role}
+                              ELSE excluded.role 
+                            END
+            `,
+          },
         });
-      }
+    }
 
-      logger.info(`Upserting ${mappingsToUpsert.length} provider mappings`);
+    // Log sync results
+    const botCount = validMembers.filter((m) => m.is_bot).length;
+    logger.info(
+      `Slack sync complete: ${validMembers.length} members processed (${botCount} bots), ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
+    );
 
-      if (mappingsToUpsert.length > 0) {
-        await tx
-          .insert(schema.providerUserMapping)
-          .values(mappingsToUpsert)
-          .onConflictDoUpdate({
-            target: [
-              schema.providerUserMapping.providerId,
-              schema.providerUserMapping.estateId,
-              schema.providerUserMapping.externalId,
-            ],
-            set: {
-              providerMetadata: sql`excluded.provider_metadata`,
-            },
-          });
-      }
-
-      // Step 4: Upsert organization memberships
-      // Note: We use onConflictDoUpdate to ensure roles are updated when re-syncing
-      // This is important for trial upgrades where users may have different roles in the new workspace
-      // However, we must preserve owner/admin roles as these are set by the app, not inferred from Slack
-      logger.info(`Upserting ${organizationMembershipsToUpsert.length} organization memberships`);
-
-      if (organizationMembershipsToUpsert.length > 0) {
-        await tx
-          .insert(schema.organizationUserMembership)
-          .values(organizationMembershipsToUpsert)
-          .onConflictDoUpdate({
-            target: [
-              schema.organizationUserMembership.organizationId,
-              schema.organizationUserMembership.userId,
-            ],
-            set: {
-              // Only update role if current role is not owner/admin
-              // Owner and admin roles are managed through the app, not inferred from Slack
-              role: sql`
-                CASE 
-                                WHEN ${schema.organizationUserMembership.role} IN ('owner', 'admin') 
-                                THEN ${schema.organizationUserMembership.role}
-                                ELSE excluded.role 
-                              END
-              `,
-            },
-          });
-      }
-
-      // Log sync results
-      const botCount = validMembers.filter((m) => m.is_bot).length;
-      logger.info(
-        `Slack sync complete: ${validMembers.length} members processed (${botCount} bots), ${mappingsToUpsert.length} mappings upserted, ${organizationMembershipsToUpsert.length} memberships upserted`,
-      );
-
-      // Proactively ensure Slackbot exists (it may not be in members list)
+    // Proactively ensure Slackbot exists (it may not be in members list)
+    if (!skipSlackbot) {
       const slackbotEmail = `slackbot@${teamId}.slack.iterate.com`;
       const slackbotExists = validMembers.some((m) => m.id === "USLACKBOT");
 
@@ -975,13 +981,60 @@ export async function syncSlackUsersInBackground(
           logger.info("Slackbot user record created proactively");
         }
       }
-    });
+    }
+  });
 
-    // Return Set of all internal user IDs for Slack Connect detection
-    // Include USLACKBOT explicitly
-    const allUserIds = new Set(validMembers.map((m) => m.id!));
+  // Return Set of all valid user IDs
+  // Include USLACKBOT explicitly if not skipped
+  const allUserIds = new Set(validMembers.map((m) => m.id!));
+  if (!skipSlackbot) {
     allUserIds.add("USLACKBOT");
-    return allUserIds;
+  }
+  return allUserIds;
+}
+
+/**
+ * Syncs internal Slack workspace users for an estate.
+ * Fetches users from Slack API and saves them to the database.
+ * Returns Set of Slack user IDs that are internal to the workspace.
+ *
+ * This is a convenience wrapper that:
+ * 1. Fetches all users from Slack API with pagination
+ * 2. Calls saveSlackUsersToDatabase to persist them
+ */
+export async function syncSlackUsersInBackground(
+  db: DB,
+  botToken: string,
+  estateId: string,
+  teamId: string,
+): Promise<Set<string>> {
+  try {
+    const authedWebClient = new WebClient(botToken);
+
+    // Paginate through all users
+    const allMembers: SlackMemberData[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const userListResponse = await authedWebClient.users.list({
+        cursor,
+        limit: 200,
+      });
+
+      if (!userListResponse.ok || !userListResponse.members) {
+        logger.error(
+          "Failed to fetch Slack users:",
+          userListResponse.error || "No members returned",
+        );
+        return new Set();
+      }
+
+      // Cast to SlackMemberData - the Slack API response is compatible
+      allMembers.push(...(userListResponse.members as SlackMemberData[]));
+      cursor = userListResponse.response_metadata?.next_cursor;
+    } while (cursor);
+
+    return await saveSlackUsersToDatabase(db, allMembers, estateId, teamId);
   } catch (error) {
     logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
     throw error;

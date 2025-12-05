@@ -47,6 +47,7 @@ export const Route = createFileRoute(
 
 function MCPParams() {
   const navigate = Route.useNavigate();
+  const searchParams = Route.useSearch();
   const {
     serverUrl,
     mode,
@@ -55,7 +56,8 @@ function MCPParams() {
     agentDurableObject: durableObject,
     integrationSlug,
     finalRedirectUrl,
-  } = Route.useSearch();
+  } = searchParams;
+
   const estateId = useEstateId();
   const trpc = useTRPC();
   const router = useRouter();
@@ -73,6 +75,12 @@ function MCPParams() {
   const [formValues, setFormValues] = useState<Record<string, string>>(initialValues);
 
   const firstAuthInputRef = useRef<HTMLInputElement>(null);
+
+  // Track hydration state - button is disabled until JS is ready
+  const [isHydrated, setIsHydrated] = useState(false);
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   // Focus the first authorization input field on mount
   useEffect(() => {
@@ -175,7 +183,7 @@ function MCPParams() {
 
       <Card className="max-w-2xl">
         <CardContent>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} action="javascript:void(0)" method="POST">
             <FieldSet>
               <FieldLegend>Authentication Parameters</FieldLegend>
               <FieldDescription>
@@ -242,8 +250,8 @@ function MCPParams() {
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={isPending} className="flex-1">
-                    {isPending ? "Saving..." : "Save and Connect"}
+                  <Button type="submit" disabled={!isHydrated || isPending} className="flex-1">
+                    {!isHydrated ? "Loading..." : isPending ? "Saving..." : "Save and Connect"}
                   </Button>
                 </div>
               </FieldGroup>

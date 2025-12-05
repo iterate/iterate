@@ -8,6 +8,7 @@ import { schema } from "../../db/client.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { getOctokitForInstallation } from "../../integrations/github/github-utils.ts";
 import { env } from "../../../env.ts";
+import { saveSlackUsersToDatabase } from "../../integrations/slack/slack.ts";
 
 const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -66,6 +67,8 @@ export const createOrganizationAndEstate = testingProcedure
   .input(
     z.object({
       userId: z.string(),
+      /** If true, mark onboarding as completed so the estate doesn't redirect to onboarding flow */
+      skipOnboarding: z.boolean().default(true),
     }),
   )
   .mutation(async ({ ctx, input }) => {
@@ -77,6 +80,17 @@ export const createOrganizationAndEstate = testingProcedure
     const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
 
     if (!estate) throw new Error("Failed to create estate");
+
+    // Mark onboarding as completed to avoid redirecting to onboarding flow
+    if (input.skipOnboarding) {
+      await ctx.db.insert(schema.estateOnboardingEvent).values({
+        estateId: estate.id,
+        organizationId: organization.id,
+        eventType: "OnboardingCompleted",
+        category: "system",
+        detail: "Skipped for testing",
+      });
+    }
 
     return { organization, estate };
   });
@@ -107,6 +121,88 @@ export const deleteIterateManagedRepo = testingProcedure
     await octokit.rest.repos.delete({ owner, repo: repoName });
   });
 
+const SlackMemberInfo = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  real_name: z.string().optional(),
+  is_bot: z.boolean().optional(),
+  is_restricted: z.boolean().optional(),
+  is_ultra_restricted: z.boolean().optional(),
+  profile: z
+    .object({
+      email: z.string().optional(),
+      image_192: z.string().optional(),
+    })
+    .optional(),
+});
+
+export const addSlackUsersToEstate = testingProcedure
+  .input(
+    z.object({
+      estateId: z.string(),
+      teamId: z.string().default("TEST_TEAM"),
+      members: z.array(SlackMemberInfo),
+      /** If provided, all Slack users will be linked to this iterate user ID
+       * instead of creating new user records. This is useful for tests where
+       * the Slack user needs to match the logged-in user. */
+      linkToUserId: z.string().optional(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    // First save the users normally (this creates user records and mappings)
+    await saveSlackUsersToDatabase(ctx.db, input.members, input.estateId, input.teamId);
+
+    // If linkToUserId is provided, update the mappings to point to that user
+    if (input.linkToUserId) {
+      for (const member of input.members) {
+        await ctx.db
+          .insert(schema.providerUserMapping)
+          .values({
+            providerId: "slack-bot",
+            externalId: member.id,
+            internalUserId: input.linkToUserId,
+            estateId: input.estateId,
+            externalUserTeamId: input.teamId,
+          })
+          .onConflictDoUpdate({
+            target: [
+              schema.providerUserMapping.providerId,
+              schema.providerUserMapping.estateId,
+              schema.providerUserMapping.externalId,
+            ],
+            set: {
+              internalUserId: input.linkToUserId,
+              externalUserTeamId: input.teamId,
+            },
+          });
+      }
+    }
+
+    return { success: true, memberCount: input.members.length };
+  });
+
+export const setupTeamId = testingProcedure
+  .input(z.object({ estateId: z.string(), teamId: z.string() }))
+  .mutation(async ({ ctx, input }) => {
+    await ctx.db
+      .insert(schema.providerEstateMapping)
+      .values([
+        {
+          providerId: "slack-bot",
+          internalEstateId: input.estateId,
+          externalId: input.teamId,
+        },
+      ])
+      .onConflictDoUpdate({
+        target: [schema.providerEstateMapping.providerId, schema.providerEstateMapping.externalId],
+        set: {
+          internalEstateId: input.estateId,
+          externalId: input.teamId,
+        },
+      });
+    return { success: true };
+  });
+
 export const testingRouter = router({
   nuke: testingProcedure.mutation(async ({ ctx }) => {
     await ctx.db.transaction(async (tx) => {
@@ -130,11 +226,9 @@ export const testingRouter = router({
       const user = await db.query.user.findFirst({
         where: eq(schema.user.email, "admin-npc@nustom.com"),
       });
-
       if (user) {
         return { created: false, user };
       }
-
       const [newUser] = await db
         .insert(schema.user)
         .values({
@@ -152,4 +246,6 @@ export const testingRouter = router({
   createOrganizationAndEstate,
   deleteOrganization,
   deleteIterateManagedRepo,
+  addSlackUsersToEstate,
+  setupTeamId,
 });

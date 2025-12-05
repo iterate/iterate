@@ -392,11 +392,11 @@ export default defineConfig([
                     ? before.replace("schemas.", "schema.")
                     : `schema.${node.arguments[0].name}`;
                   if (
-                    m === "delete" &&
+                    (m === "delete" || m === "update") &&
                     node.callee.object.name !== "db" &&
                     node.callee.object.name !== "tx"
                   ) {
-                    return; // too many false positives for Maps
+                    return; // too many false positives for Maps, hmac.update, etc.
                   }
                   context.report({
                     node: node.arguments[0],
