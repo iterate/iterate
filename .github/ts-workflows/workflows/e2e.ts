@@ -62,7 +62,25 @@ export default workflow({
         {
           name: "Install Playwright browsers",
           "working-directory": "apps/os",
-          run: "pnpm exec playwright install",
+          run: "pnpm exec playwright install && pnpm exec playwright install-deps",
+        },
+        {
+          name: "Start MCP Mock Server",
+          "working-directory": "apps/mcp-mock-server",
+          run: [
+            'npx pm2 start "pnpm dev:mock-server" --name mcp-mock-server',
+            "# Wait for server to be ready",
+            "for i in {1..30}; do",
+            "  if curl -s http://localhost:8789/health > /dev/null; then",
+            '    echo "MCP Mock Server is ready"',
+            "    break",
+            "  fi",
+            '  echo "Waiting for MCP Mock Server... (attempt $i/30)"',
+            "  sleep 1",
+            "done",
+            "# Final health check",
+            "curl -f http://localhost:8789/health",
+          ].join("\n"),
         },
         {
           name: "Run E2E Tests",
@@ -79,6 +97,11 @@ export default workflow({
             WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
+        },
+        {
+          name: "Show MCP Mock Server logs",
+          if: "failure()",
+          run: "npx pm2 logs mcp-mock-server --nostream --lines 100 || true",
         },
         {
           name: "upload e2e logs",
