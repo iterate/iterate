@@ -104,6 +104,7 @@ const Env = z.object({
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_PRICING_PLAN_ID: Required,
   SERVICE_AUTH_TOKEN: Required,
+  PARALLEL_AI_API_KEY: Required,
 
   // optional keys
   ADMIN_EMAIL_HOSTS: Optional,
