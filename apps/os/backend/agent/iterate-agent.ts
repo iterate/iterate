@@ -23,7 +23,12 @@ import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { signUrl } from "../utils/url-signing.ts";
-import { searchWeb, getURLContent } from "../default-tools.ts";
+import {
+  searchWeb,
+  getURLContent,
+  createDeepResearchTask,
+  checkDeepResearchStatus,
+} from "../default-tools.ts";
 import {
   getFileContent,
   getFilePublicURL,
@@ -175,9 +180,9 @@ type Inputs = typeof iterateAgentTools.$infer.inputTypes;
  * core ones are always present.
  */
 export class IterateAgent<
-  Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
-  State extends IterateAgentState = IterateAgentState,
->
+    Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
+    State extends IterateAgentState = IterateAgentState,
+  >
   extends CloudflareAgent<{}, State>
   implements ToolsInterface, WithCallMethod
 {
@@ -1664,6 +1669,143 @@ export class IterateAgent<
       })),
       totalResults: result.results.length,
     };
+  }
+
+  async deepResearch(input: Inputs["deepResearch"]) {
+    const taskRun = await createDeepResearchTask({
+      query: input.query,
+      processor: input.processor,
+      outputFormat: input.outputFormat,
+    });
+
+    await this.schedule(15, "pollForDeepResearch", {
+      runId: taskRun.run_id,
+      query: input.query,
+      processor: input.processor,
+      outputFormat: input.outputFormat,
+      pollUntil: Date.now() + 15 * 60 * 1000, // Poll for at most 15 minutes
+      pollCount: 0,
+    });
+
+    return {
+      status: "queued",
+      runId: taskRun.run_id,
+      message:
+        "The deep research has been queued. I will poll the API every 15 seconds and share the results as soon as they're ready. This may take several minutes.",
+    };
+  }
+
+  async pollForDeepResearch(data: {
+    runId: string;
+    query: string;
+    processor: string;
+    outputFormat: string;
+    pollUntil: number;
+    pollCount: number;
+  }) {
+    // Helper function to add developer messages
+    const addDeveloperMessage = ({
+      text,
+      triggerLLMRequest,
+    }: {
+      text: string;
+      triggerLLMRequest: boolean;
+    }) => {
+      this.agentCore.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text,
+            },
+          ],
+        },
+        triggerLLMRequest,
+      });
+    };
+
+    // Check if we've exceeded the polling time limit
+    if (Date.now() > data.pollUntil) {
+      logger.info("deep research polling timeout reached:", { runId: data.runId });
+      addDeveloperMessage({
+        text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>15 minutes). The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    try {
+      const result = await checkDeepResearchStatus(data.runId);
+
+      // Helper to schedule next poll with incremented count
+      const scheduleNextPoll = async () => {
+        const nextPollCount = data.pollCount + 1;
+        if (nextPollCount % 4 === 0) {
+          logger.info("deep research still in progress:", {
+            runId: data.runId,
+            elapsedMinutes: Math.floor((nextPollCount * 15) / 60),
+          });
+        }
+        await this.schedule(15, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
+      };
+
+      // Check if still running (returns simple status object without output)
+      if (!("output" in result)) {
+        await scheduleNextPoll();
+        return;
+      }
+
+      // We have a result with output
+      const output = result.output;
+
+      // Handle running status in output (API may return full response with running status)
+      if (output.status === "running") {
+        await scheduleNextPoll();
+        return;
+      }
+
+      if (output.status === "failed") {
+        addDeveloperMessage({
+          text: `Deep research failed for run ${data.runId}: ${JSON.stringify(output.error)}. The query was: "${data.query}"`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+
+      if (output.status === "completed") {
+        // Format citations for the message
+        const citationsSummary =
+          output.basis
+            ?.slice(0, 5)
+            .map(
+              (b: { field: string; confidence?: string; citations?: Array<{ url: string }> }) => {
+                const sources = b.citations?.map((c) => c.url).join(", ");
+                return `- ${b.field}: ${b.confidence} confidence${sources ? ` (sources: ${sources})` : ""}`;
+              },
+            )
+            .join("\n") ?? "No citations available";
+
+        const contentPreview =
+          typeof output.content === "string"
+            ? output.content
+            : JSON.stringify(output.content, null, 2);
+
+        addDeveloperMessage({
+          text: `Deep research completed for query: "${data.query}"\n\n## Research Results\n\n${contentPreview}\n\n## Key Citations\n${citationsSummary}\n\n(Total citations: ${output.basis?.length ?? 0})`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+    } catch (err) {
+      logger.error("deep research polling error:", err);
+      addDeveloperMessage({
+        text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+    }
   }
 
   async generateImage(input: Inputs["generateImage"]) {

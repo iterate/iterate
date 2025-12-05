@@ -271,6 +271,7 @@ const FindSimilarResponse = z.object({
 });
 
 const EXA_BASE_URL = "https://api.exa.ai";
+const PARALLEL_AI_BASE_URL = "https://api.parallel.ai/v1";
 const ITERATE_USER_AGENT = "iterate-bot";
 
 async function callExaEndpoint<Schema extends z.ZodTypeAny>(
@@ -303,6 +304,14 @@ function getExaApiKey() {
   const apiKey = env.EXA_API_KEY;
   if (!apiKey) {
     throw new Error("EXA_API_KEY environment variable is not set");
+  }
+  return apiKey;
+}
+
+function getParallelAIApiKey() {
+  const apiKey = env.PARALLEL_AI_API_KEY;
+  if (!apiKey) {
+    throw new Error("PARALLEL_AI_API_KEY environment variable is not set");
   }
   return apiKey;
 }
@@ -713,6 +722,123 @@ export async function getURLContent(options: {
       db,
     });
   }
+}
+
+// Parallel AI Deep Research schemas
+const DeepResearchInputType = z.object({
+  query: z.string().max(15000),
+  processor: z.enum(["pro", "ultra"]).default("pro"),
+  outputFormat: z.enum(["auto", "text"]).default("text"),
+});
+
+const DeepResearchCitation = z.object({
+  url: z.string(),
+  excerpts: z.array(z.string()).optional(),
+  title: z.string().optional(),
+});
+
+const DeepResearchFieldBasis = z.object({
+  field: z.string(),
+  reasoning: z.string().optional(),
+  citations: z.array(DeepResearchCitation).optional(),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
+});
+
+const DeepResearchTaskRunResponse = z.object({
+  run_id: z.string(),
+  status: z.enum(["running", "completed", "failed"]),
+});
+
+const DeepResearchResultType = z.object({
+  output: z.object({
+    content: z.any(),
+    basis: z.array(DeepResearchFieldBasis).optional(),
+    run_id: z.string(),
+    status: z.enum(["running", "completed", "failed"]),
+    created_at: z.string().optional(),
+    completed_at: z.string().optional(),
+    processor: z.string().optional(),
+    warnings: z.any().optional(),
+    error: z.any().optional(),
+  }),
+});
+
+export type DeepResearchInputType = z.infer<typeof DeepResearchInputType>;
+export type DeepResearchResultType = z.infer<typeof DeepResearchResultType>;
+
+/**
+ * Create a deep research task using Parallel AI's Task API.
+ * Returns the run_id immediately - use checkDeepResearchStatus to poll for results.
+ */
+export async function createDeepResearchTask(input: DeepResearchInputType) {
+  const parsedInput = DeepResearchInputType.parse(input);
+  const apiKey = getParallelAIApiKey();
+
+  const taskSpec =
+    parsedInput.outputFormat === "text" ? { output_schema: { type: "text" as const } } : undefined;
+
+  const createResponse = await fetch(`${PARALLEL_AI_BASE_URL}/task_run`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      input: parsedInput.query,
+      processor: parsedInput.processor,
+      ...(taskSpec ? { task_spec: taskSpec } : {}),
+    }),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text();
+    throw new Error(
+      `Parallel AI API error: ${createResponse.status} ${createResponse.statusText} - ${errorText}`,
+    );
+  }
+
+  const taskRun = zodParse(
+    "task_run create response",
+    DeepResearchTaskRunResponse,
+    await createResponse.json(),
+  );
+
+  return taskRun;
+}
+
+/**
+ * Check the status of a deep research task.
+ * Returns null if still processing (202 status), or the result if completed/failed.
+ */
+export async function checkDeepResearchStatus(runId: string) {
+  const apiKey = getParallelAIApiKey();
+
+  const resultResponse = await fetch(`${PARALLEL_AI_BASE_URL}/task_run/${runId}/result`, {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+    },
+  });
+
+  // 202 means still processing
+  if (resultResponse.status === 202) {
+    return { status: "running" as const, runId };
+  }
+
+  if (!resultResponse.ok) {
+    const errorText = await resultResponse.text();
+    throw new Error(
+      `Parallel AI API error: ${resultResponse.status} ${resultResponse.statusText} - ${errorText}`,
+    );
+  }
+
+  const result = zodParse(
+    "task_run result response",
+    DeepResearchResultType,
+    await resultResponse.json(),
+  );
+
+  return result;
 }
 
 // Note: TRPC router removed as requested - only utility functions remain

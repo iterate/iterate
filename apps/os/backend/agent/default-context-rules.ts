@@ -447,6 +447,7 @@ export const defaultContextRules = defineRules([
           }),
         ),
       }),
+      iterateAgentTool.deepResearch(),
       iterateAgentTool.generateImage(),
       iterateAgentTool.generateVideo(),
       slackAgentTool.sendSlackMessage({
@@ -551,6 +552,52 @@ export const defaultContextRules = defineRules([
       - Never show raw Notion URLs in results - always wrap them in Slack link format
     `,
     match: matchers.hasMCPConnection("mcp.notion.com"),
+  },
+  {
+    key: "deep-research-guidelines",
+    prompt: dedent`
+      ### Deep Research Tool
+
+      You have access to the deepResearch tool which uses Parallel AI to conduct comprehensive multi-step web research.
+
+      **When to use deepResearch vs searchWeb:**
+      - Use \`searchWeb\` for quick lookups, finding specific facts, or getting a list of relevant links
+      - Use \`deepResearch\` for comprehensive research questions that require:
+        - Synthesizing information from multiple authoritative sources
+        - Market research, competitive analysis, or industry reports
+        - In-depth investigation of complex topics
+        - Research that would take a human analyst hours to complete
+
+      **Important: Deep research runs in the background**
+      - When you call deepResearch, it returns immediately with a "queued" status
+      - The research runs in the background and can take 2-10 minutes
+      - You will receive the results via a developer message when complete
+      - Tell the user the research is underway and you'll share results when ready
+      - You can continue other work while waiting
+
+      **Usage guidelines:**
+      - Be specific in your query - include relevant context, time frames, and specific aspects to investigate
+      - The output includes citations with confidence levels - share key sources with the user
+      - Processor options: "pro" is faster, "ultra" is more comprehensive
+      - Output format: "text" gives a markdown report, "auto" gives structured JSON
+
+      **Example queries:**
+      - "Create a comprehensive market research report on the HVAC industry in the USA including recent M&A activity"
+      - "Research the competitive landscape for AI coding assistants in 2024-2025, focusing on pricing and key features"
+      - "Analyze recent developments in battery technology for electric vehicles with a focus on solid-state batteries"
+
+      **Example flow:**
+      1. User asks for deep research
+      2. Call deepResearch with specific query
+      3. Tell user: "I've started the research, this may take a few minutes. I'll share the results as soon as they're ready."
+      4. End your turn (the research runs in the background)
+      5. When results arrive, summarize key findings and cite sources
+
+      **Presenting results:**
+      - For text format: share the key findings and cite sources with inline links
+      - For auto format: summarize the structured data and highlight high-confidence findings
+      - Always mention that the research was conducted with citations from authoritative sources
+    `,
   },
   {
     key: "sandbox-starting",
