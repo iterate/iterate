@@ -391,13 +391,13 @@ export default defineConfig([
                   const after = before.startsWith("schemas.")
                     ? before.replace("schemas.", "schema.")
                     : `schema.${node.arguments[0].name}`;
-                if (
-                  (m === "delete" || m === "update") &&
-                  node.callee.object.name !== "db" &&
-                  node.callee.object.name !== "tx"
-                ) {
-                  return; // too many false positives for Maps, hmac.update, etc.
-                }
+                  if (
+                    (m === "delete" || m === "update") &&
+                    node.callee.object.name !== "db" &&
+                    node.callee.object.name !== "tx"
+                  ) {
+                    return; // too many false positives for Maps, hmac.update, etc.
+                  }
                   context.report({
                     node: node.arguments[0],
                     message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
