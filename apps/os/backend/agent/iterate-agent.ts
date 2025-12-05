@@ -180,9 +180,9 @@ type Inputs = typeof iterateAgentTools.$infer.inputTypes;
  * core ones are always present.
  */
 export class IterateAgent<
-    Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
-    State extends IterateAgentState = IterateAgentState,
-  >
+  Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
+  State extends IterateAgentState = IterateAgentState,
+>
   extends CloudflareAgent<{}, State>
   implements ToolsInterface, WithCallMethod
 {
