@@ -6,6 +6,14 @@ import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils
 import { isValidTypeID } from "../../../../backend/utils/utils.ts";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 
+// Paths that should bypass the onboarding check (OAuth callbacks, etc.)
+function shouldBypassOnboardingCheck(pathname: string): boolean {
+  if (pathname.endsWith("/onboarding")) return true;
+  if (pathname.includes("/integrations/redirect")) return true;
+  if (pathname.includes("/integrations/mcp-params")) return true;
+  return false;
+}
+
 const assertDoesNotNeedOnboarding = authenticatedServerFn
   .inputValidator(
     z.object({ organizationId: z.string(), estateId: z.string(), pathname: z.string() }),
@@ -14,7 +22,7 @@ const assertDoesNotNeedOnboarding = authenticatedServerFn
     const { organizationId, estateId, pathname } = data;
     if (!isValidTypeID(organizationId, "org") || !isValidTypeID(estateId, "est")) throw notFound();
 
-    const isOnboardingPath = pathname.endsWith("/onboarding");
+    const bypassOnboardingCheck = shouldBypassOnboardingCheck(pathname);
 
     const [accessResult, needsOnboarding] = await Promise.all([
       getUserEstateAccess(
@@ -23,7 +31,7 @@ const assertDoesNotNeedOnboarding = authenticatedServerFn
         estateId,
         organizationId,
       ),
-      isOnboardingPath
+      bypassOnboardingCheck
         ? Promise.resolve(false)
         : isEstateOnboardingRequired(context.variables.db, estateId),
     ]);
@@ -36,7 +44,7 @@ const assertDoesNotNeedOnboarding = authenticatedServerFn
       });
     }
 
-    if (needsOnboarding && !isOnboardingPath) {
+    if (needsOnboarding && !bypassOnboardingCheck) {
       throw redirect({
         to: `/$organizationId/$estateId/onboarding`,
         params: { organizationId, estateId },

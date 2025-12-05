@@ -87,61 +87,39 @@ githubApp.get(
     );
 
     if (!installation) {
-      const message = `User ${userInfo.data.id} does not have access to installation ${installation_id}`;
-      logger.error(message);
-      return c.json({ error: message }, 400);
+      logger.error(
+        `User ${userInfo.data.id} does not have access to installation ${installation_id}`,
+      );
+      return c.json(
+        {
+          error: `User ${userInfo.data.id} does not have access to installation ${installation_id}`,
+        },
+        400,
+      );
     }
-    const repos = await Array.fromAsync(
-      githubAppInstance().eachRepository.iterator({
-        installationId: parseInt(installation_id.toString()),
-      }),
-    );
 
-    const estate = await c.var.db.transaction(async (tx) => {
-      const [account] = await tx
-        .insert(schema.account)
-        .values({
-          providerId: "github-app",
-          accountId: installation_id.toString(),
-          userId,
-          accessToken: oauthResult.authentication.token,
-          refreshToken: oauthResult.authentication.refreshToken,
-          accessTokenExpiresAt: new Date(oauthResult.authentication.expiresAt!),
-          refreshTokenExpiresAt: new Date(oauthResult.authentication.refreshTokenExpiresAt!),
-          scope: Object.entries(installation.permissions)
-            .map(([key, value]) => `${key}:${value}`)
-            .join(","),
-        })
-        .returning();
+    const [account] = await c.var.db
+      .insert(schema.account)
+      .values({
+        providerId: "github-app",
+        accountId: installation_id.toString(),
+        userId,
+        accessToken: oauthResult.authentication.token,
+        refreshToken: oauthResult.authentication.refreshToken,
+        accessTokenExpiresAt: new Date(oauthResult.authentication.expiresAt!),
+        refreshTokenExpiresAt: new Date(oauthResult.authentication.refreshTokenExpiresAt!),
+        scope: Object.entries(installation.permissions)
+          .map(([key, value]) => `${key}:${value}`)
+          .join(","),
+      })
+      .returning();
 
-      await tx.insert(schema.estateAccountsPermissions).values({
-        accountId: account.id,
-        estateId,
-      });
-
-      // user has just connected github, let's deactivate the old source to avoid confusion and to make sure we prompt them to select a new source
-      await tx
-        .update(schema.iterateConfigSource)
-        .set({ deactivatedAt: new Date() })
-        .where(eq(schema.iterateConfigSource.estateId, estateId));
-
-      if (repos.length === 1) {
-        // exactly one repo authorised, we can assume they want to use this one by default
-        await tx.insert(schema.iterateConfigSource).values({
-          estateId,
-          provider: "github",
-          repoId: repos[0].repository.id,
-          branch: repos[0].repository.default_branch,
-          accountId: installation_id.toString(),
-        });
-      }
-
-      return tx.query.estate.findFirst({ where: eq(schema.estate.id, estateId) });
+    await c.var.db.insert(schema.estateAccountsPermissions).values({
+      accountId: account.id,
+      estateId,
     });
 
-    return c.redirect(
-      callbackURL || (estate ? `/${estate?.organizationId}/${estate?.id}/repo` : "/"),
-    );
+    return c.redirect(callbackURL || "/");
   },
 );
 

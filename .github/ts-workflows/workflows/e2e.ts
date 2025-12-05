@@ -60,6 +60,11 @@ export default workflow({
           },
         },
         {
+          name: "Install Playwright browsers",
+          "working-directory": "apps/os",
+          run: "pnpm exec playwright install",
+        },
+        {
           name: "Run E2E Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",

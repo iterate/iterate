@@ -37,6 +37,9 @@ jobs:
         run: doppler setup --config ${{ inputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - name: Install Playwright browsers
+        working-directory: apps/os
+        run: pnpm exec playwright install
       - name: Run E2E Tests
         id: tests
         uses: nick-fields/retry@v3
