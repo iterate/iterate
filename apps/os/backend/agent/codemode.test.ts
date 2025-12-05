@@ -679,6 +679,29 @@ test("iterate agent tools", async () => {
      */
     declare function searchWeb(input: searchWeb.Input): Promise<unknown>
 
+    /** Namespace containing the input type for the deepResearch tool. */
+    declare namespace deepResearch {
+      export interface Input {
+        /**
+         * A detailed research question or topic to investigate. Be specific and include relevant context for better results. Keep under 15,000 characters.
+         */
+        query: string;
+        /**
+         * Research depth: 'pro' for faster results, 'ultra' for more comprehensive research
+         */
+        processor?: ("pro" | "ultra");
+        /**
+         * Output format: 'auto' for structured JSON with nested field citations, 'text' for markdown report with inline citations
+         */
+        outputFormat?: ("auto" | "text");
+      }
+    }
+
+    /**
+     * Conduct comprehensive deep research on a topic using Parallel AI. This tool performs multi-step web exploration across authoritative sources and synthesizes findings into a structured report with citations. Best for open-ended research questions that require analyst-grade intelligence. Note: Deep research can take several minutes to complete.
+     */
+    declare function deepResearch(input: deepResearch.Input): Promise<unknown>
+
     /** Namespace containing the input type for the generateImage tool. */
     declare namespace generateImage {
       export interface Input {

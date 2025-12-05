@@ -180,9 +180,9 @@ type Inputs = typeof iterateAgentTools.$infer.inputTypes;
  * core ones are always present.
  */
 export class IterateAgent<
-  Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
-  State extends IterateAgentState = IterateAgentState,
->
+    Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
+    State extends IterateAgentState = IterateAgentState,
+  >
   extends CloudflareAgent<{}, State>
   implements ToolsInterface, WithCallMethod
 {
@@ -1799,6 +1799,13 @@ export class IterateAgent<
         });
         return;
       }
+
+      // Unknown status - log and continue polling (API may have added new statuses)
+      logger.info("deep research unknown status, continuing to poll:", {
+        runId: data.runId,
+        status: output.status,
+      });
+      await scheduleNextPoll();
     } catch (err) {
       logger.error("deep research polling error:", err);
       addDeveloperMessage({
