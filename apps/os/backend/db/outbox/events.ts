@@ -41,24 +41,23 @@ type RetryFn = (
   | { retry: false; reason: string; delay?: never }
   | { retry: true; reason: string; delay: number };
 
-export type ConsumersForEvent = Record<
-  `consumerName:${string}`,
-  {
-    /** consumer name */
-    name: string;
-    when: WhenFn<{ input: unknown; output: unknown }>;
-    /** delay before processing in seconds. if not specified, will process immediately */
-    delay: DelayFn<{ input: unknown; output: unknown }>;
-    retry: RetryFn;
-    /** handler function */
-    handler: (params: {
-      eventName: string;
-      eventId: number;
-      payload: { input: unknown; output: unknown };
-      job: { id: number | string; attempt: number };
-    }) => Promise<void | string>;
-  }
->;
+export type ConsumerDefinition<Payload> = {
+  /** consumer name */
+  name: string;
+  when: WhenFn<Payload>;
+  /** delay before processing in seconds. if not specified, will process immediately */
+  delay: DelayFn<Payload>;
+  retry: RetryFn;
+  /** handler function */
+  handler: (params: {
+    eventName: string;
+    eventId: number;
+    payload: Payload;
+    job: { id: number | string; attempt: number };
+  }) => Promise<void | string>;
+};
+
+export type ConsumersForEvent = Record<`consumerName:${string}`, ConsumerDefinition<{}>>;
 
 export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
@@ -386,9 +385,55 @@ type ProcUnion<P, Prefix extends string = ""> = {
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
 }[keyof P];
 
-export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
+export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
 ) => {
+  type EventName = Extract<keyof EventTypes, string>;
+  const registerConsumer = <P extends EventName>(options: {
+    name: string;
+    on: P;
+    when?: WhenFn<EventTypes[P]>;
+    delay?: DelayFn<EventTypes[P]>;
+    retry?: RetryFn;
+    handler: (params: {
+      eventName: P;
+      eventId: number;
+      payload: EventTypes[P];
+      job: { id: string | number; attempt: number };
+    }) => string | void | Promise<string | void>;
+  }) => {
+    queuer.consumers[`eventName:${options.on}`] ||= {};
+    const consumersForEvent: ConsumersForEvent = queuer.consumers[`eventName:${options.on}`];
+    consumersForEvent[`consumerName:${options.name}`] = {
+      name: options.name,
+      when: (options.when as WhenFn<{}>) ?? (() => true),
+      delay: (options.delay as DelayFn<{}>) ?? (() => 0),
+      retry: options.retry ?? defaultRetryFn,
+      handler: async (params) => {
+        return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
+          return options.handler({
+            eventName: options.on,
+            eventId: params.eventId,
+            job: params.job,
+            payload: params.payload as EventTypes[P],
+          });
+        });
+      },
+    };
+  };
+
+  const sendEvent = async (db: DBLike, eventName: EventName, payload: EventTypes[EventName]) => {
+    return queuer.addToQueue(db as DBConnection, { name: eventName, payload: payload as never });
+  };
+
+  return {
+    registerConsumer,
+    sendEvent,
+  };
+};
+
+/** A rare *types-only* function! */
+export const getTrpcEventTypes = <R extends AnyTRPCRouter>() => {
   type FlatProcedures = FlattenProcedures<R["_def"]["procedures"]>;
   type ProcedureTypes<P extends keyof FlatProcedures> = FlatProcedures[P] extends {
     _def: { $types: { input: infer I; output: infer O } };
@@ -402,49 +447,21 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
       : never;
   }[keyof FlatProcedures];
 
-  const registerConsumer = <P extends EventableProcedureName>(options: {
-    name: string;
-    on: `trpc:${P}`;
-    when?: WhenFn<ProcedureTypes<P>>;
-    delay?: DelayFn<ProcedureTypes<P>>;
-    retry?: RetryFn;
-    handler: (params: {
-      eventName: `trpc:${P}`;
-      eventId: number;
-      payload: ProcedureTypes<P>;
-      job: { id: string | number; attempt: number };
-    }) => void | string | Promise<void | string>;
-  }) => {
-    queuer.consumers[`eventName:${options.on}`] ||= {};
-
-    // for some reason without the explicit type annotation you get "Type 'ConsumersRecord[`eventName:${P}`]' is generic and can only be indexed for reading"
-    const consumersForEvent: ConsumersForEvent = queuer.consumers[`eventName:${options.on}`];
-    consumersForEvent[`consumerName:${options.name}`] = {
-      name: options.name,
-      when: (options.when as WhenFn<{ input: unknown; output: unknown }>) ?? (() => true),
-      delay: (options.delay as DelayFn<{ input: unknown; output: unknown }>) ?? (() => 0),
-      retry: options.retry ?? defaultRetryFn,
-      handler: async (params) => {
-        return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
-          return options.handler({
-            eventName: options.on,
-            eventId: params.eventId,
-            job: params.job,
-            payload: params.payload as ProcedureTypes<P>,
-          });
-        });
-      },
-    };
+  type EventTypes = {
+    [K in EventableProcedureName as `trpc:${K}`]: ProcedureTypes<K>;
   };
 
+  return { EventTypes: {} as EventTypes };
+};
+
+export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
+  queuer: Queuer<DBConnection>,
+) => {
+  type EventTypes = ReturnType<typeof getTrpcEventTypes<R>>;
+
+  const { registerConsumer } = createConsumerClient<EventTypes, DBConnection>(queuer);
+
   return {
-    /** compile-time only helper types */
-    $types: {
-      /** flattened object shape of all procedures in the router */
-      FlatProcedures: {} as FlatProcedures,
-      /** record whose keys are the names of all "eventable" procedures in the router (procedure paths which can be subscribed to by consumers) */
-      EventableProcedureName: {} as Record<EventableProcedureName, true>,
-    },
     registerConsumer,
     queuer,
   };
