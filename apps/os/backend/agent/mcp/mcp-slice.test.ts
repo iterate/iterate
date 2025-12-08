@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi as _vi, type Mock } from "vitest";
 import { createAgentCoreTest } from "../agent-core-test-harness.ts";
 
+// avoid type scrictness for now
 const vi = _vi as Omit<typeof _vi, "fn"> & {
   fn: (f?: Function) => Mock<(...args: any[]) => any>;
 };
