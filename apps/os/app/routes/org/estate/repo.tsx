@@ -89,6 +89,7 @@ import {
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 import { Link } from "../../../components/ui/link.tsx";
 import { useSSE, type UseSSEOptions } from "../../../hooks/use-sse.ts";
+import { Badge } from "../../../components/ui/badge.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -96,7 +97,7 @@ type _Build = RouterOutputs["estate"]["getBuilds"][0];
 type BuildStatus = _Build["status"] | "timed_out";
 type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
-export const estateRepoLoader = authenticatedServerFn
+const estateRepoLoader = authenticatedServerFn
   .inputValidator(z.object({ estateId: z.string() }))
   .handler(async ({ context, data }) => {
     const { estateId } = data;
@@ -768,7 +769,11 @@ function EstateContent({
                               title={build.commitMessage}
                             >
                               {build.commitMessage}
-                              {build.isActive && <>{" [active]"}</>}
+                              {build.isActive && (
+                                <Badge variant="default" className="ml-2">
+                                  Active
+                                </Badge>
+                              )}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
@@ -836,6 +841,7 @@ function EstateContent({
                                 View Logs
                               </Button>
                               <Button
+                                disabled={build.status !== "complete" || build.isActive}
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
