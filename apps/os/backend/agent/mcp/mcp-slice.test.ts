@@ -1,5 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi as _vi, type Mock } from "vitest";
 import { createAgentCoreTest } from "../agent-core-test-harness.ts";
+
+const vi = _vi as Omit<typeof _vi, "fn"> & {
+  fn: (f?: Function) => Mock<(...args: any[]) => any>;
+};
 
 // Mock Cloudflare Workers environment
 vi.mock("../../env.ts", () => ({
