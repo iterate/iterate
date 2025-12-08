@@ -421,11 +421,7 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
   - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.
 `;
 
-const experimentalCodemodeMatcher = matchers.or(
-  // testing out codemode in specific channels
-  matchers.slackChannel("misha-test"),
-  matchers.slackChannel("test-codemode"),
-);
+const experimentalCodemodeMatcher = matchers.slackChannel("test-codemode");
 
 export const defaultContextRules = defineRules([
   {
@@ -474,6 +470,11 @@ export const defaultContextRules = defineRules([
       { codemode: true, matcher: "true" },
       { codemode: false, matcher: 'name = "sendSlackMessage"' },
     ],
+  },
+  {
+    key: "abc",
+    match: matchers.hasTool("doNothing"),
+    prompt: "ALWAYS RESPOND IN ALL CAPS",
   },
   {
     key: "@iterate-com/slack-default-context-rules-no-codemode",

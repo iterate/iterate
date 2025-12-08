@@ -318,20 +318,24 @@ export class AgentCore<
       rawKeys: Object.keys(inputState),
     };
 
+    let enabledContextRulesString = "";
+
     const setEnabledContextRules = () => {
       const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
         const matchAgainst = this.deps.getRuleMatchData(next);
         return evaluateContextRuleMatchers({ contextRule, matchAgainst });
       });
+      const newEnabledContextRulesString = JSON.stringify(enabledContextRules.map((r) => [r.key]));
+      if (newEnabledContextRulesString === enabledContextRulesString) {
+        return { modified: false };
+      }
+      enabledContextRulesString = newEnabledContextRulesString;
       next.enabledContextRules = enabledContextRules;
       // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
       // into the LLM instructions for this request. These are ephemeral and recomputed per request.
-      next.ephemeralPromptFragments = {
-        ...next.ephemeralPromptFragments,
-        ...Object.fromEntries(
-          enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
-        ),
-      };
+      next.ephemeralPromptFragments = Object.fromEntries(
+        enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
+      );
       const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
       next.groupedRuntimeTools = {
         ...next.groupedRuntimeTools,
@@ -339,14 +343,16 @@ export class AgentCore<
       };
       next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
       next.mcpServers = [...next.mcpServers];
+      // todo: figure out how to deduplicate these in case of name collisions?
+      next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
+
+      return { modified: true };
     };
 
-    next.ephemeralPromptFragments = {};
-
-    setEnabledContextRules();
-
-    // todo: figure out how to deduplicate these in case of name collisions?
-    next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
+    for (let i = 0; i < 10; i++) {
+      const { modified } = setEnabledContextRules();
+      if (!modified) break;
+    }
 
     const codemodeified = this.codemodeifyState(next);
 
