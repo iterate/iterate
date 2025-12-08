@@ -1,4 +1,5 @@
 // @ts-check
+import * as path from "node:path";
 import { tsImport } from "tsx/esm/api";
 import js from "@eslint/js";
 import typescript from "@typescript-eslint/eslint-plugin";
@@ -195,6 +196,50 @@ export default defineConfig([
     plugins: {
       iterate: {
         rules: {
+          "no-raw-fetch": {
+            meta: {
+              fixable: "code",
+            },
+            create: (context) => {
+              return {
+                "CallExpression[callee.name='fetch']": (node) => {
+                  const osDir = path.join(process.cwd(), "apps/os");
+                  if (!context.physicalFilename.includes(osDir)) return;
+
+                  /** @type {import("eslint").AST.Program} */
+                  // @ts-expect-error eslint types are bad
+                  const program = context.sourceCode.ast;
+                  const fetchImported = program.body.some(
+                    (i) =>
+                      i.type === "ImportDeclaration" &&
+                      i.specifiers.some(
+                        (s) =>
+                          s.type === "ImportSpecifier" &&
+                          s.imported.type === "Identifier" &&
+                          s.imported.name === "fetch",
+                      ),
+                  );
+                  if (fetchImported) return;
+
+                  const moduleToImportFrom = path.join(osDir, "backend/fetch.ts");
+
+                  const relativeImport = path
+                    .relative(path.dirname(context.physicalFilename), moduleToImportFrom)
+                    .replace(/^f/, "./f"); // if in the same directory, we need "./fetch.ts" not "fetch.ts"
+
+                  context.report({
+                    node,
+                    message: `Avoid using raw fetch - import from ${relativeImport} instead`,
+                    fix: (fixer) =>
+                      fixer.insertTextBefore(
+                        program.body[0],
+                        `import { fetch } from ${JSON.stringify(relativeImport)};\n`,
+                      ),
+                  });
+                },
+              };
+            },
+          },
           "no-public-procedure": {
             meta: {
               docs: {
@@ -445,6 +490,7 @@ export default defineConfig([
   {
     name: "iterate-config",
     rules: {
+      "iterate/no-raw-fetch": "error",
       "iterate/prefer-const": "error",
       "iterate/import-rules": "warn",
       "iterate/zod-schema-naming": "error",
