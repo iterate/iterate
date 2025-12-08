@@ -1,6 +1,7 @@
 import { createPrivateKey } from "crypto";
 import { eq, and, desc } from "drizzle-orm";
 import { SignJWT } from "jose";
+import { fetch } from "../../backend/fetch.ts";
 import { db, schema } from "./cli-db.ts";
 
 // Same as the backend/integrations/github/github-utils.ts file

@@ -5,6 +5,7 @@ import { execSync } from "node:child_process";
 import { tsImport } from "tsx/esm/api";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
+import { fetch } from "../../../backend/fetch.ts";
 import { t } from "../config.ts";
 import * as schema from "../../../backend/db/schema.ts";
 import { createDb } from "../cli-db.ts";

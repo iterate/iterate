@@ -2,6 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { z } from "zod";
 import { createAuthorizationURL } from "better-auth/oauth2";
 import { generateRandomString } from "better-auth/crypto";
+import { fetch } from "../fetch.ts";
 import { env } from "../../env.ts";
 import * as schema from "../db/schema.ts";
 import type { DB } from "../db/client.ts";

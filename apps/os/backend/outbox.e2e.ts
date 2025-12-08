@@ -3,6 +3,7 @@ import { test, expect, vi } from "vitest";
 import { z } from "zod";
 import { and, eq, ilike, sql } from "drizzle-orm";
 import { db } from "../sdk/cli/cli-db.ts";
+import { fetch } from "./fetch.ts";
 import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
 import * as schema from "./db/schema.ts";
 

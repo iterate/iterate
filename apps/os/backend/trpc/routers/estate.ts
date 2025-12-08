@@ -9,6 +9,7 @@ import { z } from "zod";
 import { eq, desc, and, notInArray } from "drizzle-orm";
 import dedent from "dedent";
 import { TRPCError } from "@trpc/server";
+import { fetch } from "../../fetch.ts";
 import {
   protectedProcedure,
   estateProtectedProcedure,

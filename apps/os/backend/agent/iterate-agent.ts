@@ -14,6 +14,7 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
+import { fetch } from "../fetch.ts";
 import { logger } from "../tag-logger.ts";
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";

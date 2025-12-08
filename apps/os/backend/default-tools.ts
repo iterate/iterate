@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { or, eq, asc } from "drizzle-orm";
 import { env } from "../env.ts";
+import { fetch } from "./fetch.ts";
 import type { AgentCoreEvent } from "./agent/agent-core-schemas.ts";
 import type { DB } from "./db/client.ts";
 import { slackWebhookEvent } from "./db/schema.ts";

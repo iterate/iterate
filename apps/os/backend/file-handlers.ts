@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import type { Context } from "hono";
 import { typeid } from "typeid-js";
 import { env, type CloudflareEnv } from "../env.ts";
+import { fetch } from "./fetch.ts";
 import type { Variables } from "./worker.ts";
 import { schema, type DB } from "./db/client.ts";
 import { files } from "./db/schema.ts";

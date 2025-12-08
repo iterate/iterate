@@ -8,6 +8,7 @@ import { generateRandomString } from "better-auth/crypto";
 import { getContext } from "hono/context-storage";
 import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
+import { fetch } from "../fetch.ts";
 import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";

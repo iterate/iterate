@@ -3,6 +3,7 @@ import * as path from "path";
 import * as fs from "fs/promises";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
+import { fetch } from "../../../backend/fetch.ts";
 import { t } from "../config.ts";
 import { addUserToEstate } from "./add-to-estate.ts";
 

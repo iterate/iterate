@@ -1,6 +1,7 @@
 // Creates a TRPC client that can be used in vitest tests running in Node.js
 
 import { createTRPCClient, httpBatchLink, type TRPCClient } from "@trpc/client";
+import { fetch } from "../../../../fetch.ts";
 import type { AppRouter } from "../../../../trpc/root";
 
 /**

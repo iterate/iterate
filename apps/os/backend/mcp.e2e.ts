@@ -8,6 +8,7 @@ import {
   getImpersonatedTrpcClient,
   type AgentEvent,
 } from "../evals/helpers.ts";
+import { fetch } from "./fetch.ts";
 
 /**
  * MCP E2E Tests

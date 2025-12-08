@@ -4,6 +4,7 @@ import { createCli } from "trpc-cli";
 import * as prompts from "@clack/prompts";
 import { proxify } from "trpc-cli/dist/proxify";
 import { createTRPCClient, httpLink } from "@trpc/client";
+import { fetch } from "../../backend/fetch.ts";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { appRouter } from "../../backend/trpc/root.ts";
 import { t } from "./config.ts";

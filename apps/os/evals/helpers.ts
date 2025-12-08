@@ -10,6 +10,7 @@ import { init, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
 import { match, P } from "ts-pattern";
+import { fetch } from "../backend/fetch.ts";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";

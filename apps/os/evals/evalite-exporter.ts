@@ -4,6 +4,7 @@ import { createRequire } from "module";
 import { createDatabase, getMostRecentRun, getEvals, getResults } from "evalite/db";
 import { createServer } from "evalite/server";
 import { DB_LOCATION } from "evalite/backend-only-constants";
+import { fetch } from "../backend/fetch.ts";
 
 const exportEvaliteUI = async (
   db: ReturnType<typeof createDatabase>,

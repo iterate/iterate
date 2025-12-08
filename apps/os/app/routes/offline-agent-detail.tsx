@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { ArrowLeft, Upload, Link as LinkIcon, Info } from "lucide-react";
 import * as fflate from "fflate/browser";
+import { fetch } from "../../backend/fetch.ts";
 import { Button } from "../components/ui/button.tsx";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card.tsx";
 import { Input } from "../components/ui/input.tsx";

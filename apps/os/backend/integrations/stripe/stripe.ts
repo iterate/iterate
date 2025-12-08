@@ -1,5 +1,6 @@
 import Stripe from "stripe";
 import { eq } from "drizzle-orm";
+import { fetch } from "../../fetch.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { env } from "../../../env.ts";

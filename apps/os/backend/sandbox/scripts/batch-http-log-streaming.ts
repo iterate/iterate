@@ -1,3 +1,4 @@
+import { fetch } from "../../fetch.ts";
 export type Stream = "stdout" | "stderr";
 
 export type LogItem<E extends string | undefined = string> = {
