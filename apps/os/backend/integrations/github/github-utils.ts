@@ -2,6 +2,7 @@ import { createPrivateKey } from "crypto";
 import { eq, and, isNull } from "drizzle-orm";
 import { App, Octokit } from "octokit";
 import { getContainer } from "@cloudflare/containers";
+import { typeid } from "typeid-js";
 import { env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
@@ -133,10 +134,24 @@ export async function triggerGithubBuild(params: {
     isManual = false,
   } = params;
 
+  const buildId = typeid("build").toString();
+
+  const container = getContainer(env.ESTATE_BUILD_MANAGER, estateId);
+
+  // Trigger the build first, so that we don't add a in_progress build record to the database if the build fails to start
+  using _build = await container.build({
+    buildId,
+    repo: repoUrl,
+    branch: branch || "main",
+    path: connectedRepoPath || "/",
+    authToken: installationToken,
+  });
+
   // Create a new build record
   const [build] = await db
     .insert(schema.builds)
     .values({
+      id: buildId,
       status: "in_progress",
       commitHash,
       commitMessage: isManual ? `[Manual] ${commitMessage}` : commitMessage,
@@ -165,15 +180,6 @@ export async function triggerGithubBuild(params: {
       },
     });
   }
-
-  const container = getContainer(env.ESTATE_BUILD_MANAGER, estateId);
-  using _res = await container.build({
-    buildId: build.id,
-    repo: repoUrl,
-    branch: branch || "main",
-    path: connectedRepoPath || "/",
-    authToken: installationToken,
-  });
 
   return build;
 }
