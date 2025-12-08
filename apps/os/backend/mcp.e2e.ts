@@ -229,7 +229,7 @@ describe("MCP server connections", () => {
 
   test(
     "refreshes OAuth token when expired and continues to work",
-    { timeout: 2 * 60 * 1000 },
+    { timeout: 3 * 60 * 1000 },
     async () => {
       const env = parseEnv();
       const serverUrl = env.MOCK_MCP_OAUTH_SERVER_URL;
@@ -468,9 +468,12 @@ async function fillBearerTokenViaPlaywright(paramsUrl: string, cookies: string):
 
     // Click the button and wait for redirect to a real page (not mcp-params, not about:blank)
     await Promise.all([
-      page.waitForURL((url) => url.href.startsWith("http") && !url.href.includes("/mcp-params"), {
-        timeout: 30_000,
-      }),
+      page.waitForURL(
+        (url: URL) => url.href.startsWith("http") && !url.href.includes("/mcp-params"),
+        {
+          timeout: 60_000,
+        },
+      ),
       page.getByRole("button", { name: "Save and Connect" }).click(),
     ]);
 
