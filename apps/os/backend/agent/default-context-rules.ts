@@ -560,6 +560,11 @@ export const defaultContextRules = defineRules([
 
       You have access to the deepResearch tool which uses Parallel AI to conduct comprehensive multi-step web research.
 
+      **CRITICAL: BEFORE using deepResearch, ALWAYS ask for clarification first:**
+      - If the user's request is vague or could be interpreted multiple ways, ask what specifically they want to know
+      - You MUST always ask for more specific details. 
+      - If you think it's relevant, ask whether they need a quick answer (use searchWeb or lite/base processor) or a comprehensive report (use pro/ultra). Otherwise try to infer from the context of the conversation.
+
       **When to use deepResearch vs searchWeb:**
       - Use \`searchWeb\` for quick lookups, finding specific facts, or getting a list of relevant links
       - Use \`deepResearch\` for comprehensive research questions that require:
@@ -570,34 +575,48 @@ export const defaultContextRules = defineRules([
 
       **Important: Deep research runs in the background**
       - When you call deepResearch, it returns immediately with a "queued" status
-      - The research runs in the background and can take 2-10 minutes
+      - The research runs in the background and can take minutes to hours depending on processor
       - You will receive the results via a developer message when complete
       - Tell the user the research is underway and you'll share results when ready
       - You can continue other work while waiting
 
+      **Processor options - match speed to user needs:**
+      | Processor | Latency | Best for |
+      |-----------|---------|----------|
+      | lite | 10s-60s | Quick facts, basic lookups |
+      | base | 15s-100s | Standard enrichments - good default for simple questions |
+      | core | 60s-5min | Cross-referenced, moderately complex topics |
+      | pro | 2-10min | Exploratory web research - good balance of speed and depth |
+      | pro-fast | ~1-5min | Use when user wants depth but is time-sensitive |
+      | ultra | 5-25min | Advanced multi-source deep research - only for thorough reports |
+      | ultra-fast | ~2-12min | Faster ultra - when user wants comprehensive but not willing to wait 25min |
+      | ultra2x/4x/8x | 5min-2hr | Only for explicitly requested exhaustive research |
+
       **Usage guidelines:**
       - Be specific in your query - include relevant context, time frames, and specific aspects to investigate
       - The output includes citations with confidence levels - share key sources with the user
-      - Processor options: "pro" is faster, "ultra" is more comprehensive
-      - Output format: "text" gives a markdown report, "auto" gives structured JSON
-
-      **Example queries:**
-      - "Create a comprehensive market research report on the HVAC industry in the USA including recent M&A activity"
-      - "Research the competitive landscape for AI coding assistants in 2024-2025, focusing on pricing and key features"
-      - "Analyze recent developments in battery technology for electric vehicles with a focus on solid-state batteries"
+      - Remember to ALWAYS check with the user for any clarifications or additional details before calling deepResearch.
 
       **Example flow:**
-      1. User asks for deep research
-      2. Call deepResearch with specific query
-      3. Tell user: "I've started the research, this may take a few minutes. I'll share the results as soon as they're ready."
-      4. End your turn (the research runs in the background)
-      5. When results arrive, summarize key findings and cite sources
+      User: "I want some recommendations for a new laptop"
+      Agent: "What specific features are you looking for? What's your budget? Linux or Windows?"
+      User: "I'm looking for a Windows laptop with a 16GB RAM and a 1TB SSD, budget is $1,500"
+      Agent: "I'll start researching the best Windows laptops with 16GB RAM and a 1TB SSD under $1,500. This will take a few minutes..."
+      Agent: "I've found the best Windows laptops with 16GB RAM and a 1TB SSD under $1,500. Here are the results:"
+      Agent: "Here are the results:
+      - The best Windows laptops with 16GB RAM and a 1TB SSD under $1,500 are the Lenovo ThinkPad X1 Carbon Gen 10 and the Dell Latitude 9440."
+      Agent: "**TL;DR:** The best Windows laptops with 16GB RAM and a 1TB SSD under $1,500 are the Lenovo ThinkPad X1 Carbon Gen 10 and the Dell Latitude 9440."
 
       **Presenting results:**
-      - For text format: share the key findings and cite sources with inline links
-      - For auto format: summarize the structured data and highlight high-confidence findings
-      - Always mention that the research was conducted with citations from authoritative sources
+       ALWAYS give a quick TL;DR of the results at the bottom, then give the full results with INLINE sources.
+       Example output:
+       \`\`\` text
+       **Full results:**
+       Paris is the capital of France (https://en.wikipedia.org/wiki/Paris), and has been since the 10th century (Source: https://en.wikipedia.org/wiki/France)
+       **TL;DR:** The capital of France is Paris.
+       \`\`\`
     `,
+    match: matchers.hasTool("deepResearch"),
   },
   {
     key: "sandbox-starting",

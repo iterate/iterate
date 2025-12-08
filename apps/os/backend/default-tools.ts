@@ -727,44 +727,31 @@ export async function getURLContent(options: {
 // Parallel AI Deep Research schemas
 const DeepResearchInputType = z.object({
   query: z.string().max(15000),
-  processor: z.enum(["pro", "ultra"]).default("pro"),
+  processor: z
+    .enum([
+      "lite",
+      "base",
+      "core",
+      "core2x",
+      "pro",
+      "pro-fast",
+      "ultra",
+      "ultra-fast",
+      "ultra2x",
+      "ultra4x",
+      "ultra8x",
+    ])
+    .default("pro"),
   outputFormat: z.enum(["auto", "text"]).default("text"),
 });
 
-const DeepResearchCitation = z.object({
-  url: z.string(),
-  excerpts: z.array(z.string()).optional(),
-  title: z.string().optional(),
-});
-
-const DeepResearchFieldBasis = z.object({
-  field: z.string(),
-  reasoning: z.string().optional(),
-  citations: z.array(DeepResearchCitation).optional(),
-  confidence: z.enum(["high", "medium", "low"]).optional(),
-});
-
+// The create response - just need the run_id
 const DeepResearchTaskRunResponse = z.object({
   run_id: z.string(),
-  status: z.enum(["running", "completed", "failed"]),
-});
-
-const DeepResearchResultType = z.object({
-  output: z.object({
-    content: z.any(),
-    basis: z.array(DeepResearchFieldBasis).optional(),
-    run_id: z.string(),
-    status: z.enum(["running", "completed", "failed"]),
-    created_at: z.string().optional(),
-    completed_at: z.string().optional(),
-    processor: z.string().optional(),
-    warnings: z.any().optional(),
-    error: z.any().optional(),
-  }),
+  status: z.string().optional(),
 });
 
 export type DeepResearchInputType = z.infer<typeof DeepResearchInputType>;
-export type DeepResearchResultType = z.infer<typeof DeepResearchResultType>;
 
 /**
  * Create a deep research task using Parallel AI's Task API.
@@ -777,11 +764,11 @@ export async function createDeepResearchTask(input: DeepResearchInputType) {
   const taskSpec =
     parsedInput.outputFormat === "text" ? { output_schema: { type: "text" as const } } : undefined;
 
-  const createResponse = await fetch(`${PARALLEL_AI_BASE_URL}/task_run`, {
+  const createResponse = await fetch(`${PARALLEL_AI_BASE_URL}/tasks/runs`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`,
+      "x-api-key": apiKey,
     },
     body: JSON.stringify({
       input: parsedInput.query,
@@ -810,35 +797,54 @@ export async function createDeepResearchTask(input: DeepResearchInputType) {
  * Check the status of a deep research task.
  * Returns null if still processing (202 status), or the result if completed/failed.
  */
-export async function checkDeepResearchStatus(runId: string) {
+/**
+ * Check the status of a deep research task using long polling.
+ * The API holds the connection until the task completes or times out.
+ * We use 15s polls to avoid issues with Durable Object connection limits.
+ * @param runId - The task run ID
+ * @param timeoutMs - Timeout in milliseconds (default 15 seconds per poll)
+ */
+export async function checkDeepResearchStatus(runId: string, timeoutMs = 15 * 1000) {
   const apiKey = getParallelAIApiKey();
 
-  const resultResponse = await fetch(`${PARALLEL_AI_BASE_URL}/task_run/${runId}/result`, {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-    },
-  });
+  // Long polling - the API holds the connection until complete
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  // 202 means still processing
-  if (resultResponse.status === 202) {
-    return { status: "running" as const, runId };
+  try {
+    const resultResponse = await fetch(`${PARALLEL_AI_BASE_URL}/tasks/runs/${runId}/result`, {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    // 202 means still processing (shouldn't happen often with long polling)
+    if (resultResponse.status === 202) {
+      return { status: "running" as const, runId };
+    }
+
+    if (!resultResponse.ok) {
+      const errorText = await resultResponse.text();
+      throw new Error(
+        `Parallel AI API error: ${resultResponse.status} ${resultResponse.statusText} - ${errorText}`,
+      );
+    }
+
+    // Don't strictly parse - just return the raw JSON for the model to interpret
+    const rawResult = await resultResponse.json();
+    return { status: "completed" as const, runId, data: rawResult };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      // Timeout - return running status so polling continues
+      logger.info("deep research long poll timed out, will retry:", { runId });
+      return { status: "running" as const, runId };
+    }
+    throw error;
   }
-
-  if (!resultResponse.ok) {
-    const errorText = await resultResponse.text();
-    throw new Error(
-      `Parallel AI API error: ${resultResponse.status} ${resultResponse.statusText} - ${errorText}`,
-    );
-  }
-
-  const result = zodParse(
-    "task_run result response",
-    DeepResearchResultType,
-    await resultResponse.json(),
-  );
-
-  return result;
 }
 
 // Note: TRPC router removed as requested - only utility functions remain

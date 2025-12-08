@@ -85,6 +85,9 @@ import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { toolNameToJsIdentifier } from "./codemode.ts";
 
+// Deep research processors that have shorter timeout (20 min vs 60 min for pro+)
+const UNDER_PRO_PROCESSORS = ["lite", "base", "core", "core2x"] as const;
+
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
   record: AgentInstanceDatabaseRecord;
@@ -1675,15 +1678,22 @@ export class IterateAgent<
     const taskRun = await createDeepResearchTask({
       query: input.query,
       processor: input.processor,
-      outputFormat: input.outputFormat,
+      outputFormat: "auto",
     });
 
-    await this.schedule(15, "pollForDeepResearch", {
+    // Calculate timeout based on processor tier (under pro: 20 min, pro+: 60 min)
+    const maxPollTime = UNDER_PRO_PROCESSORS.includes(
+      input.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+    )
+      ? 20 * 60 * 1000
+      : 60 * 60 * 1000;
+
+    await this.schedule(5, "pollForDeepResearch", {
       runId: taskRun.run_id,
       query: input.query,
       processor: input.processor,
-      outputFormat: input.outputFormat,
-      pollUntil: Date.now() + 15 * 60 * 1000, // Poll for at most 15 minutes
+      outputFormat: "auto",
+      pollUntil: Date.now() + maxPollTime,
       pollCount: 0,
     });
 
@@ -1729,9 +1739,19 @@ export class IterateAgent<
 
     // Check if we've exceeded the polling time limit
     if (Date.now() > data.pollUntil) {
-      logger.info("deep research polling timeout reached:", { runId: data.runId });
+      // Under pro: 20 min timeout, pro+: 60 min timeout
+      const expectedMinutes = UNDER_PRO_PROCESSORS.includes(
+        data.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+      )
+        ? 20
+        : 60;
+
+      logger.info("deep research polling timeout reached:", {
+        runId: data.runId,
+        processor: data.processor,
+      });
       addDeveloperMessage({
-        text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>15 minutes). The query was: "${data.query}"`,
+        text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>${expectedMinutes} minutes for ${data.processor} processor). The query was: "${data.query}"`,
         triggerLLMRequest: true,
       });
       return;
@@ -1741,71 +1761,56 @@ export class IterateAgent<
       const result = await checkDeepResearchStatus(data.runId);
 
       // Helper to schedule next poll with incremented count
-      const scheduleNextPoll = async () => {
+      // Each poll can take up to 15 seconds (long polling timeout), then we schedule next poll after 5s
+      const POLL_TIMEOUT_SECONDS = 15;
+      const scheduleNextPoll = async (sendProgressMessage = false) => {
         const nextPollCount = data.pollCount + 1;
-        if (nextPollCount % 4 === 0) {
-          logger.info("deep research still in progress:", {
-            runId: data.runId,
-            elapsedMinutes: Math.floor((nextPollCount * 15) / 60),
+
+        // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
+        if (sendProgressMessage && nextPollCount % 4 === 0) {
+          const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
+          addDeveloperMessage({
+            text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
+            triggerLLMRequest: false, // Don't trigger a new turn, just inform
           });
         }
-        await this.schedule(15, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
+
+        await this.schedule(5, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
       };
 
-      // Check if still running (returns simple status object without output)
-      if (!("output" in result)) {
-        await scheduleNextPoll();
+      // Check result status
+      if (result.status === "running") {
+        // Still running - schedule next poll
+        await scheduleNextPoll(true);
         return;
       }
 
-      // We have a result with output
-      const output = result.output;
+      if (result.status === "completed") {
+        // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
+        const rawOutput = result.data ? JSON.stringify(result.data, null, 2) : "(no data returned)";
 
-      // Handle running status in output (API may return full response with running status)
-      if (output.status === "running") {
-        await scheduleNextPoll();
-        return;
-      }
+        // Truncate if too long (keep first 50k chars)
+        const truncatedOutput =
+          rawOutput.length > 50000
+            ? rawOutput.slice(0, 50000) +
+              "\n\n... (truncated, full output was " +
+              rawOutput.length +
+              " chars)"
+            : rawOutput;
 
-      if (output.status === "failed") {
         addDeveloperMessage({
-          text: `Deep research failed for run ${data.runId}: ${JSON.stringify(output.error)}. The query was: "${data.query}"`,
+          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${truncatedOutput}`,
           triggerLLMRequest: true,
         });
         return;
       }
 
-      if (output.status === "completed") {
-        // Format citations for the message
-        const citationsSummary =
-          output.basis
-            ?.slice(0, 5)
-            .map(
-              (b: { field: string; confidence?: string; citations?: Array<{ url: string }> }) => {
-                const sources = b.citations?.map((c) => c.url).join(", ");
-                return `- ${b.field}: ${b.confidence} confidence${sources ? ` (sources: ${sources})` : ""}`;
-              },
-            )
-            .join("\n") ?? "No citations available";
-
-        const contentPreview =
-          typeof output.content === "string"
-            ? output.content
-            : JSON.stringify(output.content, null, 2);
-
-        addDeveloperMessage({
-          text: `Deep research completed for query: "${data.query}"\n\n## Research Results\n\n${contentPreview}\n\n## Key Citations\n${citationsSummary}\n\n(Total citations: ${output.basis?.length ?? 0})`,
-          triggerLLMRequest: true,
-        });
-        return;
-      }
-
-      // Unknown status - log and continue polling (API may have added new statuses)
-      logger.info("deep research unknown status, continuing to poll:", {
+      // Unknown status - log and continue polling
+      logger.info("deep research unknown response, continuing to poll:", {
         runId: data.runId,
-        status: output.status,
+        result,
       });
-      await scheduleNextPoll();
+      await scheduleNextPoll(true);
     } catch (err) {
       logger.error("deep research polling error:", err);
       addDeveloperMessage({
