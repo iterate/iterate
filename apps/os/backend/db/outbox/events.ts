@@ -293,11 +293,11 @@ const appRouter = t.router({
   }
 })
 
-const consumer = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+const consumer = createConsumerClient<TrpcEventTypes<typeof appRouter>, typeof queuer.$types.db>(queuer);
 
 consumer.registerConsumer({
 name: "sendWelcomeEmail",
-on: "users.createUser",
+on: "trpc:users.createUser",
 handler: async ({ eventName, eventId, payload, job }) => {
     await myEmailService.sendEmail({
       to: payload.input.user.email,
@@ -454,15 +454,6 @@ export const getTrpcEventTypes = <R extends AnyTRPCRouter>() => {
   return { EventTypes: {} as EventTypes };
 };
 
-export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
-  queuer: Queuer<DBConnection>,
-) => {
-  type EventTypes = ReturnType<typeof getTrpcEventTypes<R>>;
-
-  const { registerConsumer } = createConsumerClient<EventTypes, DBConnection>(queuer);
-
-  return {
-    registerConsumer,
-    queuer,
-  };
-};
+export type TrpcEventTypes<R extends AnyTRPCRouter> = ReturnType<
+  typeof getTrpcEventTypes<R>
+>["EventTypes"];

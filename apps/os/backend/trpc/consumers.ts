@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { getDb } from "../db/client.ts";
-import { createConsumerClient, getTrpcEventTypes } from "../db/outbox/events.ts";
+import { createConsumerClient, type TrpcEventTypes } from "../db/outbox/events.ts";
 import { logger } from "../tag-logger.ts";
 import {
   createTrialSlackConnectChannel,
@@ -14,10 +14,9 @@ export type InternalEventTypes = {
   "onboarding:estateCreated": { estateId: string };
 };
 
-type TrpcEventTypes = ReturnType<typeof getTrpcEventTypes<typeof appRouter>>["EventTypes"];
+type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
 
-// const cc = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
-const cc = createConsumerClient<InternalEventTypes & TrpcEventTypes, typeof queuer.$types.db>(
+const cc = createConsumerClient<InternalEventTypes & AppTrpcEventTypes, typeof queuer.$types.db>(
   queuer,
 );
 
