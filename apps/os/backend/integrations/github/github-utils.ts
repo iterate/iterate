@@ -1,12 +1,12 @@
 import { createPrivateKey } from "crypto";
 import { eq, and, isNull } from "drizzle-orm";
 import { App, Octokit } from "octokit";
-import { typeid } from "typeid-js";
 import { env } from "../../../env.ts";
-import type { DB } from "../../db/client.ts";
+import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
-import type { EstateBuilderWorkflowInput } from "../../workflows/estate-builder.ts";
+import type { EstateBuilderWorkflowInput } from "../../outbox/client.ts";
+import { outboxClient } from "../../outbox/client.ts";
 
 const privateKey = createPrivateKey({
   key: env.GITHUB_APP_PRIVATE_KEY,
@@ -103,8 +103,31 @@ export const getOctokitForInstallation = async (installationId: string): Promise
   await githubAppInstance().getInstallationOctokit(parseInt(installationId));
 
 // Helper function to trigger a GitHub estate build
-export async function triggerGithubBuild(params: EstateBuilderWorkflowInput) {
-  const id = typeid("build").toString();
-  await env.ESTATE_BUILDER_WORKFLOW.create({ id, params });
-  return { id };
+export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
+  const db = getDb();
+  return await db.transaction(async (tx) => {
+    const [build] = await tx
+      .insert(schema.builds)
+      .values({
+        status: "in_progress",
+        commitHash: payload.commitHash,
+        commitMessage: payload.isManual
+          ? `[Manual] ${payload.commitMessage}`
+          : payload.commitMessage,
+        webhookIterateId:
+          payload.webhookId || `${payload.isManual ? "manual" : "auto"}-${Date.now()}`,
+        files: [],
+        estateId: payload.estateId,
+        iterateWorkflowRunId: payload.workflowRunId,
+      })
+      .returning();
+
+    // eslint-disable-next-line iterate/drizzle-conventions -- i need it
+    await outboxClient.sendEvent({ parent: db, transaction: tx }, "estate:build:created", {
+      buildId: build.id,
+      ...payload,
+    });
+
+    return { id: build.id };
+  });
 }

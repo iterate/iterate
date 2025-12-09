@@ -8,7 +8,6 @@ import {
   DurableObjectNamespace,
   TanStackStart,
   WorkerLoader,
-  Workflow,
 } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
@@ -381,9 +380,6 @@ async function deployWorker() {
       ...(await setupStorage()),
       ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
-      ESTATE_BUILDER_WORKFLOW: Workflow("estate-builder-workflow", {
-        className: "EstateBuilderWorkflow",
-      }),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
     },

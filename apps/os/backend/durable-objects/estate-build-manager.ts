@@ -86,9 +86,9 @@ export class EstateBuildManager extends Container {
   }
 
   public async build({ buildId, repo, branch, path, authToken }: BuildInput) {
-    const buildExists = this._sql
-      .exec<{ id: string }>("SELECT id FROM builds WHERE id = ?", buildId)
-      .one();
+    const buildExists =
+      this._sql.exec<{ id: string }>("SELECT id FROM builds WHERE id = ?", buildId).toArray()
+        .length > 0;
 
     if (!buildExists) {
       this._sql.exec(
