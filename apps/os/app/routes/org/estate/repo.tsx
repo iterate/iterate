@@ -767,7 +767,7 @@ function EstateContent({
                               className="font-medium text-gray-900 dark:text-gray-100 truncate"
                               title={build.commitMessage}
                             >
-                              {build.commitMessage}
+                              {build.commitMessage.split("\n")[0]}
                               {build.isActive && <>{" [active]"}</>}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
@@ -785,6 +785,14 @@ function EstateContent({
                       {isExpanded && (
                         <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
                           <div className="space-y-2 text-sm">
+                            {build.commitMessage
+                              .split("\n")
+                              .slice(1)
+                              .map((line, index) => (
+                                <p key={index} className="text-gray-500 dark:text-gray-400">
+                                  {line}
+                                </p>
+                              ))}
                             <div>
                               <span className="font-medium text-gray-700 dark:text-gray-300">
                                 Commit:{" "}

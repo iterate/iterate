@@ -260,6 +260,9 @@ export type ConsumerPluginCtx = {
   calls?: Record<string, string[]>;
 };
 
+/** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `import {waitUntil} from 'cloudflare:workers'` or `import {after} from 'next/server'` */
+export type WaitUntilFn = (promise: Promise<unknown>) => undefined | void;
+
 /**
  example usage:
 
@@ -312,7 +315,7 @@ export const createPostProcedureConsumerPlugin = <DBConnection>(
   queuer: Queuer<DBConnection>,
   {
     /** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `waitUntil` from `cloudflare:workers` or `after` from 'next/server' */
-    waitUntil = (promise: Promise<unknown>): undefined | void => void promise,
+    waitUntil = ((promise) => void promise) as WaitUntilFn,
   } = {},
 ) => {
   const pluginTrpc = initTRPC.context<{ db: DBConnection }>().create();
@@ -387,6 +390,7 @@ type ProcUnion<P, Prefix extends string = ""> = {
 
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
+  { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
   const registerConsumer = <P extends EventName>(options: {
@@ -423,7 +427,14 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   };
 
   const sendEvent = async (db: DBLike, eventName: EventName, payload: EventTypes[EventName]) => {
-    return queuer.addToQueue(db as DBConnection, { name: eventName, payload: payload as never });
+    const addResult = await queuer.addToQueue(db as DBConnection, {
+      name: eventName,
+      payload: payload as never,
+    });
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(queuer.processQueue(db as DBConnection));
+    }
+    return addResult;
   };
 
   return {
