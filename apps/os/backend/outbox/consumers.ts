@@ -1,16 +1,12 @@
 import { WebClient } from "@slack/web-api";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import { getDb } from "../db/client.ts";
-import { createTrpcConsumer } from "../db/outbox/events.ts";
 import { logger } from "../tag-logger.ts";
 import {
   createTrialSlackConnectChannel,
   getIterateSlackEstateId,
 } from "../utils/trial-channel-setup.ts";
-import type { appRouter } from "./root.ts";
-import { queuer } from "./trpc.ts";
-
-const cc = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
   registerTestConsumers();
@@ -60,6 +56,15 @@ export const registerConsumers = () => {
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
 function registerTestConsumers() {
+  cc.registerConsumer({
+    name: "logPoke",
+    on: "testing:poke",
+    handler: (params) => {
+      logger.info(`GOT: ${params.eventName}, message: ${params.payload.message}`, params);
+      return "received message: " + params.payload.message;
+    },
+  });
+
   cc.registerConsumer({
     name: "logGreeting",
     on: "trpc:admin.outbox.poke",
