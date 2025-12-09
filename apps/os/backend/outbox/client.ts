@@ -4,7 +4,6 @@ import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
-  "onboarding:estateCreated": { estateId: string };
   "testing:poke": { message: string };
 };
 

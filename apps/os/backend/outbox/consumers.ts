@@ -12,17 +12,6 @@ export const registerConsumers = () => {
   registerTestConsumers();
 
   cc.registerConsumer({
-    name: "createGithubRepository",
-    on: "onboarding:estateCreated",
-    handler: async (params) => {
-      const db = getDb();
-      const estates = await db.query.estate.findMany({});
-      const match = estates.find((e) => e.id === params.payload.estateId);
-      return match && `estate name: ${match.name}`;
-    },
-  });
-
-  cc.registerConsumer({
     name: "createSlackConnectChannel",
     on: "trpc:integrations.setupSlackConnectTrial",
     handler: async (params) => {
