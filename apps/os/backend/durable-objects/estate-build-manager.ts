@@ -202,8 +202,9 @@ export class EstateBuildManager extends Container {
   private getLogsFromDatabase(buildId: string) {
     try {
       const lines = this._sql
-        .exec("select data from build_log_lines order by idx asc where build_id = ?", buildId)
-        .toArray();
+        .exec("select data, idx from build_log_lines where build_id = ?", buildId)
+        .toArray()
+        .sort((a, b) => Number(a.idx) - Number(b.idx)); // for some reason order by in the sql statement makes the whole thing fail
       return lines.map((line) => JSON.parse(line.data as string) as Log);
     } catch {
       return [];
