@@ -202,7 +202,7 @@ export class EstateBuildManager extends Container {
   private getLogsFromDatabase(buildId: string) {
     try {
       const lines = this._sql
-        .exec("select data from build_log_lines where build_id = ?", buildId)
+        .exec("select data from build_log_lines order by idx asc where build_id = ?", buildId)
         .toArray();
       return lines.map((line) => JSON.parse(line.data as string) as Log);
     } catch {
@@ -257,6 +257,7 @@ export class EstateBuildManager extends Container {
     );
 
     for (const { buildId, logs } of logsResponse) {
+      this._sql.exec(`delete from build_log_lines where build_id = ?`, buildId);
       for (const [index, data] of logs.entries()) {
         this._sql.exec(
           `insert into build_log_lines (build_id, data, idx) values (?, ?, ?)`,
