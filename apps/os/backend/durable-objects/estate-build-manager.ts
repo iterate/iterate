@@ -51,7 +51,14 @@ export class EstateBuildManager extends Container {
         CREATE TABLE IF NOT EXISTS build_logs (
             id TEXT PRIMARY KEY NOT NULL,
             build_id TEXT NOT NULL,
-            log_lines TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS build_log_lines (
+            build_id TEXT NOT NULL,
+            data TEXT NOT NULL,
+            idx INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -82,12 +89,7 @@ export class EstateBuildManager extends Container {
         JSON.stringify({ repo, branch, path, authToken }),
       );
       const logId = typeid("build_log").toString();
-      this._sql.exec(
-        `INSERT INTO build_logs (id, build_id, log_lines) VALUES (?, ?, ?)`,
-        logId,
-        buildId,
-        JSON.stringify([]),
-      );
+      this._sql.exec(`INSERT INTO build_logs (id, build_id) VALUES (?, ?)`, logId, buildId);
     }
 
     try {
@@ -199,12 +201,10 @@ export class EstateBuildManager extends Container {
 
   private getLogsFromDatabase(buildId: string) {
     try {
-      const log = this._sql
-        .exec("SELECT log_lines FROM build_logs WHERE build_id = ?", buildId)
-        .one();
-      const logLines = log?.log_lines;
-      if (typeof logLines !== "string") return [];
-      return JSON.parse(logLines) as Array<Log>;
+      const lines = this._sql
+        .exec("select data from build_log_lines where build_id = ?", buildId)
+        .toArray();
+      return lines.map((line) => JSON.parse(line.data as string) as Log);
     } catch {
       return [];
     }
@@ -257,11 +257,14 @@ export class EstateBuildManager extends Container {
     );
 
     for (const { buildId, logs } of logsResponse) {
-      this._sql.exec(
-        "UPDATE build_logs SET log_lines = ?, updated_at = CURRENT_TIMESTAMP WHERE build_id = ?",
-        JSON.stringify(logs),
-        buildId,
-      );
+      for (const [index, data] of logs.entries()) {
+        this._sql.exec(
+          `insert into build_log_lines (build_id, data, idx) values (?, ?, ?)`,
+          buildId,
+          JSON.stringify(data),
+          index,
+        );
+      }
     }
   }
 
@@ -404,6 +407,7 @@ export class EstateBuildManager extends Container {
 
     // Delete old build logs
     this._sql.exec(`DELETE FROM build_logs WHERE created_at < ?`, retentionThreshold);
+    this._sql.exec(`DELETE FROM build_log_lines WHERE created_at < ?`, retentionThreshold);
 
     // Timeout in-progress builds that have been running for too long
     this._sql.exec(
