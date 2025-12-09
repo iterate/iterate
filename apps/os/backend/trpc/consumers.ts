@@ -12,6 +12,7 @@ import { queuer } from "./trpc.ts";
 
 export type InternalEventTypes = {
   "onboarding:estateCreated": { estateId: string };
+  "testing:poke": { message: string };
 };
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
@@ -79,6 +80,15 @@ export const registerConsumers = () => {
 
 /** a few consumers for the sake of e2e tests, to check queueing, retries, DLQ etc. work */
 function registerTestConsumers() {
+  cc.registerConsumer({
+    name: "logPoke",
+    on: "testing:poke",
+    handler: (params) => {
+      logger.info(`GOT: ${params.eventName}, message: ${params.payload.message}`, params);
+      return "received message: " + params.payload.message;
+    },
+  });
+
   cc.registerConsumer({
     name: "logGreeting",
     on: "trpc:admin.outbox.poke",

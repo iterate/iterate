@@ -260,6 +260,9 @@ export type ConsumerPluginCtx = {
   calls?: Record<string, string[]>;
 };
 
+/** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `import {waitUntil} from 'cloudflare:workers'` or `import {after} from 'next/server'` */
+export type WaitUntilFn = (promise: Promise<unknown>) => undefined | void;
+
 /**
  example usage:
 
@@ -309,12 +312,9 @@ handler: async ({ eventName, eventId, payload, job }) => {
 ```
  */
 export const createPostProcedureConsumerPlugin = <DBConnection>(
-  queuer: Queuer<DBConnection>,
-  {
-    /** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `waitUntil` from `cloudflare:workers` or `after` from 'next/server' */
-    waitUntil = (promise: Promise<unknown>): undefined | void => void promise,
-  } = {},
+  ...args: Parameters<typeof createConsumerClient>
 ) => {
+  const consumerClient = createConsumerClient(...args);
   const pluginTrpc = initTRPC.context<{ db: DBConnection }>().create();
 
   return (
@@ -327,19 +327,7 @@ export const createPostProcedureConsumerPlugin = <DBConnection>(
             const input = await getRawInput();
             const payload = { input, output };
             return logger.run({ consumerPlugin: "true", path }, async () => {
-              const queueResult = await queuer.addToQueue(db, { name: `trpc:${path}`, payload });
-
-              if (queueResult.matchedConsumers > 0) {
-                waitUntil(
-                  logger.run({ queuedEventId: queueResult.eventId }, async () => {
-                    // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
-                    // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
-                    // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
-                    await new Promise((resolve) => setTimeout(resolve, 20));
-                    return queuer.processQueue(_ctx.db);
-                  }),
-                );
-              }
+              await consumerClient.sendEvent(db as DBLike, `trpc:${path}`, payload);
 
               return output as T & { $enqueued: true };
             });
@@ -387,6 +375,7 @@ type ProcUnion<P, Prefix extends string = ""> = {
 
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
+  { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
 ) => {
   type EventName = Extract<keyof EventTypes, string>;
   const registerConsumer = <P extends EventName>(options: {
@@ -423,7 +412,22 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   };
 
   const sendEvent = async (db: DBLike, eventName: EventName, payload: EventTypes[EventName]) => {
-    return queuer.addToQueue(db as DBConnection, { name: eventName, payload: payload as never });
+    const addResult = await queuer.addToQueue(db as DBConnection, {
+      name: eventName,
+      payload: payload as never,
+    });
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(
+        logger.run({ queuedEventId: addResult.eventId }, async () => {
+          // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
+          // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
+          // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return queuer.processQueue(db as DBConnection);
+        }),
+      );
+    }
+    return addResult;
   };
 
   return {
