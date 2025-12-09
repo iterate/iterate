@@ -317,8 +317,11 @@ handler: async ({ eventName, eventId, payload, job }) => {
 });
 ```
  */
-export const createPostProcedureConsumerPlugin = <DBConnection>(
-  ...args: Parameters<typeof createConsumerClient>
+export const createPostProcedureConsumerPlugin = <
+  EventTypes extends Record<string, {}>,
+  DBConnection,
+>(
+  ...args: Parameters<typeof createConsumerClient<EventTypes, DBConnection>>
 ) => {
   const consumerClient = createConsumerClient(...args);
   const pluginTrpc = initTRPC.context<{ db: DBConnection }>().create();
@@ -379,6 +382,30 @@ type ProcUnion<P, Prefix extends string = ""> = {
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
 }[keyof P];
 
+/**
+ * Create a client that will allow registering consumers and sending events from procedures. Generics should be specified explicitly, e.g.
+ *
+ * ```ts
+ * import { waitUntil } from "./wait-until.ts";
+ *
+ * type MyEvents = {
+ *   "application:userCreated": { userId: string };
+ * }
+ *
+ * const consumerClient = createConsumerClient<MyEvents, typeof queuer.$types.db>(queuer, { waitUntil });
+ *
+ * consumerClient.registerConsumer({
+ *   name: "sendWelcomeEmail",
+ *   on: "application:userCreated",
+ *   handler: async ({ eventName, eventId, payload, job }) => {
+ *     const user = await findUser(payload.userId);
+ *     await sendWelcomeEmail({ to: user.email, subject: "Welcome to our app", body: "We think you will like it here" });
+ *   },
+ * });
+ *
+ * consumerClient.sendEvent(db, "application:userCreated", { userId: "123" }); // this triggers the consumer to run
+ * ```
+ */
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
   { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
