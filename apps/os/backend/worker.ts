@@ -27,15 +27,16 @@ import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { EstateBuildManager } from "./durable-objects/estate-build-manager.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
-import { getUserEstateAccess, queuer } from "./trpc/trpc.ts";
+import { getUserEstateAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
-import { registerConsumers } from "./trpc/consumers.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
 import * as workerConfig from "./worker-config.ts";
+import { queuer } from "./outbox/outbox-queuer.ts";
 
 registerConsumers();
 
