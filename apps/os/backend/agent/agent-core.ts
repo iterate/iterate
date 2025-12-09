@@ -328,8 +328,8 @@ export class AgentCore<
       const newEnabledContextRulesString = JSON.stringify(enabledContextRules.map((r) => [r.key]));
       if (newEnabledContextRulesString === enabledContextRulesString) {
         const codemodeified = this.codemodeifyState(next);
-        // shortcut: neither rule-enabling nor codemode actually changed anything, so we can return early
-        if (!codemodeified.modified) return { modified: false };
+        // shortcut: rule-enabling didn't change anything, so we can return early, but codemode might have changed something
+        return { modified: codemodeified.modified };
       }
 
       enabledContextRulesString = newEnabledContextRulesString;
