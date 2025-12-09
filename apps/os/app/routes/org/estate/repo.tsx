@@ -89,7 +89,6 @@ import {
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 import { Link } from "../../../components/ui/link.tsx";
 import { useSSE, type UseSSEOptions } from "../../../hooks/use-sse.ts";
-import { Badge } from "../../../components/ui/badge.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -97,7 +96,7 @@ type _Build = RouterOutputs["estate"]["getBuilds"][0];
 type BuildStatus = _Build["status"] | "timed_out";
 type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
-const estateRepoLoader = authenticatedServerFn
+export const estateRepoLoader = authenticatedServerFn
   .inputValidator(z.object({ estateId: z.string() }))
   .handler(async ({ context, data }) => {
     const { estateId } = data;
@@ -768,12 +767,8 @@ function EstateContent({
                               className="font-medium text-gray-900 dark:text-gray-100 truncate"
                               title={build.commitMessage}
                             >
-                              {build.commitMessage}
-                              {build.isActive && (
-                                <Badge variant="default" className="ml-2">
-                                  Active
-                                </Badge>
-                              )}
+                              {build.commitMessage.split("\n")[0]}
+                              {build.isActive && <>{" [active]"}</>}
                             </div>
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {build.commitHash.substring(0, 7)} • {formatDate(build.createdAt)}
@@ -790,6 +785,14 @@ function EstateContent({
                       {isExpanded && (
                         <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700">
                           <div className="space-y-2 text-sm">
+                            {build.commitMessage
+                              .split("\n")
+                              .slice(1)
+                              .map((line, index) => (
+                                <p key={index} className="text-gray-500 dark:text-gray-400">
+                                  {line}
+                                </p>
+                              ))}
                             <div>
                               <span className="font-medium text-gray-700 dark:text-gray-300">
                                 Commit:{" "}
@@ -841,7 +844,6 @@ function EstateContent({
                                 View Logs
                               </Button>
                               <Button
-                                disabled={build.status !== "complete" || build.isActive}
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
