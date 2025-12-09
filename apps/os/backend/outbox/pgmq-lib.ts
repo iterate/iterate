@@ -336,7 +336,11 @@ export const createPostProcedureConsumerPlugin = <
             const input = await getRawInput();
             const payload = { input, output };
             return logger.run({ consumerPlugin: "true", path }, async () => {
-              await consumerClient.sendEvent(db as DBLike, `trpc:${path}`, payload);
+              await consumerClient.sendEvent(
+                { transaction: db as DBLike, parent: _ctx.db as DBLike },
+                `trpc:${path}`,
+                payload,
+              );
 
               return output as T & { $enqueued: true };
             });
@@ -403,7 +407,12 @@ type ProcUnion<P, Prefix extends string = ""> = {
  *   },
  * });
  *
- * consumerClient.sendEvent(db, "application:userCreated", { userId: "123" }); // this triggers the consumer to run
+ * const addUser = async (db: DB, email: string) => {
+ *   return myDb.transaction(async tx => {
+ *     const [user] = await tx.insert(schema.user).values({ email }).returning();
+ *     await consumerClient.sendEvent({ transaction: tx, parent: db }, "application:userCreated", { userId: user.id });
+ *   })
+ * }
  * ```
  */
 export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
@@ -444,8 +453,12 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     };
   };
 
-  const sendEvent = async (db: DBLike, eventName: EventName, payload: EventTypes[EventName]) => {
-    const addResult = await queuer.addToQueue(db as DBConnection, {
+  const sendEvent = async (
+    connections: { transaction: DBLike; parent: DBLike },
+    eventName: EventName,
+    payload: EventTypes[EventName],
+  ) => {
+    const addResult = await queuer.addToQueue(connections.transaction as DBConnection, {
       name: eventName,
       payload: payload as never,
     });
@@ -456,7 +469,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
           // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
           // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
           await new Promise((resolve) => setTimeout(resolve, 20));
-          return queuer.processQueue(db as DBConnection);
+          return queuer.processQueue(connections.parent as DBConnection);
         }),
       );
     }
