@@ -30,7 +30,7 @@
     "build": "cd apps/website && doppler run -- vite build",
     "deploy": "pnpm run build && cd apps/website && doppler run -- wrangler deploy",
     "typecheck": "cd apps/website && tsc --noEmit",
-    "test": "cd apps/website && vitest run --passWithNoTests",
+    "test": "echo 'no tests sorry :('",
     "lint": "cd apps/website && eslint . --fix",
     "lint:check": "cd apps/website && eslint . --max-warnings 0",
     "db:generate": "cd apps/website && drizzle-kit generate",
@@ -50,7 +50,6 @@
     "tailwindcss": "^3.4.18",
     "typescript": "^5.9.3",
     "vite": "^7.1.12",
-    "vitest": "^3.2.4",
     "wrangler": "4.51.0"
   }
 }
