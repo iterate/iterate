@@ -23,7 +23,7 @@ test("internal event types", () => {
   expectTypeOf(outboxClient.sendEvent).toBeCallableWith(
     { transaction: db, parent: db },
     "testing:poke",
-    { message: "hello" },
+    { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
   );
 
   expectTypeOf(outboxClient.sendEvent).toBeCallableWith(
