@@ -2,9 +2,9 @@ import { inspect } from "node:util";
 import { test, expect, vi } from "vitest";
 import { z } from "zod";
 import { and, eq, ilike, sql } from "drizzle-orm";
-import { db } from "../sdk/cli/cli-db.ts";
-import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
-import * as schema from "./db/schema.ts";
+import { db } from "../../sdk/cli/cli-db.ts";
+import { makeVitestTrpcClient } from "../utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
+import * as schema from "../db/schema.ts";
 
 const TestEnv = z.object({
   WORKER_URL: z.url(),
@@ -227,3 +227,57 @@ async function makeAdminTrpcClient(
     headers: { cookie: sessionCookies },
   });
 }
+
+test("use lower-level outbox client directly", { timeout: 15 * 60 * 1000 }, async () => {
+  const env = TestEnv.parse({
+    WORKER_URL: process.env.WORKER_URL,
+    SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
+  } satisfies Partial<z.input<typeof TestEnv>>);
+  const workerUrl = env.WORKER_URL;
+
+  const adminTrpc = await makeAdminTrpcClient(workerUrl, env);
+
+  const ts = Date.now();
+  await adminTrpc.admin.outbox.pokeOutboxClientDirectly.mutate({ message: "hi" + ts });
+
+  const event = await vi.waitUntil(async () => {
+    return db.query.outboxEvent.findFirst({
+      where: and(
+        eq(schema.outboxEvent.name, "testing:poke"),
+        ilike(sql`${schema.outboxEvent.payload}::text`, `%hi${ts}%`),
+      ),
+    });
+  });
+
+  expect(event).toMatchObject({
+    name: "testing:poke",
+    payload: { message: expect.stringContaining(`hi${ts} at ${new Date().getFullYear()}`) },
+  });
+
+  const result = await vi.waitUntil(
+    async () => {
+      await adminTrpc.admin.outbox.process.mutate();
+      const archive = await adminTrpc.admin.outbox.peekArchive.query();
+      return archive.find((m) => m.message.event_id === event.id);
+    },
+    { timeout: 60_000, interval: 2000 },
+  );
+
+  expect(result).toMatchObject({
+    enqueued_at: expect.any(String),
+    message: {
+      consumer_name: "logPoke",
+      event_id: event.id,
+      event_name: "testing:poke",
+      event_payload: {
+        message: expect.stringContaining(`hi${ts}`),
+      },
+      processing_results: expect.arrayContaining([
+        expect.stringContaining(`received message: hi${ts} at ${new Date().getFullYear()}`),
+      ]),
+    },
+    msg_id: expect.any(String),
+    read_ct: 1,
+    vt: expect.any(String),
+  });
+});
