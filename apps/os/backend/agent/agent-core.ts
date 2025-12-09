@@ -341,7 +341,7 @@ export class AgentCore<
         ...next.groupedRuntimeTools,
         "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
       };
-      next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
+      next.toolSpecs = [...updatedContextRulesTools];
       next.mcpServers = [...next.mcpServers];
       // todo: figure out how to deduplicate these in case of name collisions?
       next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
@@ -349,11 +349,17 @@ export class AgentCore<
       return { modified: true };
     };
 
-    for (let i = 0; i < 10; i++) {
+    for (let i = 10; i >= 0; i--) {
       const { modified } = setEnabledContextRules();
       if (!modified) break;
+      if (i === 0)
+        logger.error(
+          "Enabled context rules loop did not converge after 10 iterations, this may be an insanely complex set of matchers but is probably a bug",
+          next,
+        );
     }
 
+    // todo: change matchers.hasTool so that this doesn't empty out the runtimeTools array, making it always return false
     const codemodeified = this.codemodeifyState(next);
 
     if (codemodeified.modified) {

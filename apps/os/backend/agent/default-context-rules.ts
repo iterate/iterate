@@ -472,11 +472,6 @@ export const defaultContextRules = defineRules([
     ],
   },
   {
-    key: "abc",
-    match: matchers.hasTool("doNothing"),
-    prompt: "ALWAYS RESPOND IN ALL CAPS",
-  },
-  {
     key: "@iterate-com/slack-default-context-rules-no-codemode",
     prompt: defaultSlackAgentPrompt_withoutCodemode,
     match: matchers.and(
