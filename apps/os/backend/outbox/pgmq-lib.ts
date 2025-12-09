@@ -453,10 +453,15 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     };
   };
 
-  const sendEvent = async (
-    connections: { transaction: DBLike; parent: DBLike },
-    eventName: EventName,
-    payload: EventTypes[EventName],
+  const sendEvent = async <Name extends EventName>(
+    connections: {
+      /** the transaction reference that will be used to insert the event record into the databse */
+      transaction: DBLike;
+      /** the parent database connection that will be used to process consumers for the event *after* the event is committed */
+      parent: DBLike;
+    },
+    eventName: Name,
+    payload: EventTypes[Name],
   ) => {
     const addResult = await queuer.addToQueue(connections.transaction as DBConnection, {
       name: eventName,

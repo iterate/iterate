@@ -21,6 +21,7 @@ import {
 import { env } from "../../../env.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { deleteUserAccount } from "./user.ts";
 
 // don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
@@ -620,6 +621,17 @@ export const adminRouter = router({
           const [{ now: dbtime }] = await tx.execute(sql`select now()`);
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
           return ctx.sendToOutbox(tx, { dbtime, reply });
+        });
+      }),
+    pokeOutboxClientDirectly: adminProcedure
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.db.transaction(async (tx) => {
+          // eslint-disable-next-line iterate/drizzle-conventions -- this is just to demo using the lower-level outbox client directly
+          await outboxClient.sendEvent({ transaction: tx, parent: ctx.db }, "testing:poke", {
+            message: `${input.message} at ${new Date().toISOString()}`,
+          });
+          return { done: true };
         });
       }),
     peek: adminProcedure
