@@ -40,6 +40,9 @@ export type WhenFn<Payload> = (params: { payload: Payload }) => boolean | null |
 export type DelayFn<Payload> = (params: { payload: Payload }) => number;
 
 export type DBLike = Pick<DB, "execute">;
+export type Transactable = DBLike & {
+  transaction: <T>(callback: (tx: DBLike) => Promise<T>) => Promise<T>;
+};
 
 type RetryFn = (
   job: ConsumerJobQueueMessage,
@@ -481,9 +484,25 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return addResult;
   };
 
+  /** Create an event in a db transaction and send to the outbox. Takes a callback which will receive a transaction reference, which can be used to insert/update database rows. The outbox even will then be inserted in the same transaction */
+  const createEvent = <Name extends EventName>(
+    parent: Transactable,
+    eventName: Name,
+    callback: (db: DBLike) => Promise<EventTypes[Name]>,
+  ) => {
+    return parent.transaction(async (tx) => {
+      return logger.run({ transactionForEvent: eventName }, async () => {
+        const payload = await callback(tx);
+        await sendEvent({ transaction: tx, parent }, eventName, payload);
+        return payload;
+      });
+    });
+  };
+
   return {
     registerConsumer,
     sendEvent,
+    createEvent,
   };
 };
 
