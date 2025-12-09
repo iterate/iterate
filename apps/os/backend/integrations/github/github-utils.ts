@@ -1,14 +1,12 @@
 import { createPrivateKey } from "crypto";
 import { eq, and, isNull } from "drizzle-orm";
 import { App, Octokit } from "octokit";
-import { getContainer } from "@cloudflare/containers";
 import { typeid } from "typeid-js";
 import { env } from "../../../env.ts";
 import type { DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
-import type { CloudflareEnv } from "../../../env.ts";
-import { invalidateOrganizationQueries } from "../../utils/websocket-utils.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
+import type { EstateBuilderWorkflowInput } from "../../workflows/estate-builder.ts";
 
 const privateKey = createPrivateKey({
   key: env.GITHUB_APP_PRIVATE_KEY,
@@ -105,81 +103,8 @@ export const getOctokitForInstallation = async (installationId: string): Promise
   await githubAppInstance().getInstallationOctokit(parseInt(installationId));
 
 // Helper function to trigger a GitHub estate build
-export async function triggerGithubBuild(params: {
-  db: DB;
-  env: CloudflareEnv;
-  estateId: string;
-  commitHash: string;
-  commitMessage: string;
-  repoUrl: string;
-  installationToken: string;
-  connectedRepoPath?: string;
-  branch?: string;
-  webhookId?: string;
-  workflowRunId?: string;
-  isManual?: boolean;
-}) {
-  const {
-    db,
-    env,
-    estateId,
-    commitHash,
-    commitMessage,
-    repoUrl,
-    installationToken,
-    connectedRepoPath,
-    branch,
-    webhookId,
-    workflowRunId,
-    isManual = false,
-  } = params;
-
-  const buildId = typeid("build").toString();
-
-  const container = getContainer(env.ESTATE_BUILD_MANAGER, estateId);
-
-  // Trigger the build first, so that we don't add a in_progress build record to the database if the build fails to start
-  using _build = await container.build({
-    buildId,
-    repo: repoUrl,
-    branch: branch || "main",
-    path: connectedRepoPath || "/",
-    authToken: installationToken,
-  });
-
-  // Create a new build record
-  const [build] = await db
-    .insert(schema.builds)
-    .values({
-      id: buildId,
-      status: "in_progress",
-      commitHash,
-      commitMessage: isManual ? `[Manual] ${commitMessage}` : commitMessage,
-      webhookIterateId: webhookId || `${isManual ? "manual" : "auto"}-${Date.now()}`,
-      files: [],
-      estateId,
-      iterateWorkflowRunId: workflowRunId,
-    })
-    .returning();
-
-  // Get the organization ID for WebSocket invalidation
-  const estateWithOrg = await db.query.estate.findFirst({
-    where: eq(schema.estate.id, estateId),
-    with: {
-      organization: true,
-    },
-  });
-
-  // Invalidate organization queries to show the new in-progress build
-  if (estateWithOrg?.organization) {
-    await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
-      type: "INVALIDATE",
-      invalidateInfo: {
-        type: "TRPC_QUERY",
-        paths: ["estate.getBuilds"],
-      },
-    });
-  }
-
-  return build;
+export async function triggerGithubBuild(params: EstateBuilderWorkflowInput) {
+  const id = typeid("build").toString();
+  await env.ESTATE_BUILDER_WORKFLOW.create({ id, params });
+  return { id };
 }

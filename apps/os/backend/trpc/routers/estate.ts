@@ -108,7 +108,7 @@ export async function triggerEstateRebuild(params: {
   commitMessage: string;
   isManual?: boolean;
 }) {
-  const { db, env, estateId, commitHash, commitMessage, isManual = false } = params;
+  const { db, estateId, commitHash, commitMessage, isManual = false } = params;
 
   // Get the estate details
   const _estateWithRepo = await db.query.estate.findFirst({
@@ -149,8 +149,6 @@ export async function triggerEstateRebuild(params: {
 
   // Use the common build trigger function
   return await triggerGithubBuild({
-    db,
-    env,
     estateId,
     commitHash,
     commitMessage,

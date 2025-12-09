@@ -37,6 +37,7 @@ import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getter
 import { registerConsumers } from "./outbox/consumers.ts";
 import * as workerConfig from "./worker-config.ts";
 import { queuer } from "./outbox/outbox-queuer.ts";
+import { EstateBuilderWorkflow } from "./workflows/estate-builder.ts";
 
 registerConsumers();
 
@@ -360,5 +361,6 @@ export {
   OrganizationWebSocket,
   AdvisoryLocker,
   EstateBuildManager,
+  EstateBuilderWorkflow,
 };
 export { Sandbox } from "@cloudflare/sandbox";
