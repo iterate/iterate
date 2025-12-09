@@ -4,7 +4,7 @@ import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
 export type InternalEventTypes = {
-  "testing:poke": { message: string };
+  "testing:poke": { dbtime: string; message: string };
 };
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;
