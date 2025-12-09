@@ -327,8 +327,11 @@ export class AgentCore<
       });
       const newEnabledContextRulesString = JSON.stringify(enabledContextRules.map((r) => [r.key]));
       if (newEnabledContextRulesString === enabledContextRulesString) {
-        return { modified: false };
+        const codemodeified = this.codemodeifyState(next);
+        // shortcut: neither rule-enabling nor codemode actually changed anything, so we can return early
+        if (!codemodeified.modified) return { modified: false };
       }
+
       enabledContextRulesString = newEnabledContextRulesString;
       next.enabledContextRules = enabledContextRules;
       // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
@@ -346,6 +349,9 @@ export class AgentCore<
       // todo: figure out how to deduplicate these in case of name collisions?
       next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
 
+      // todo: change matchers.hasTool so that this doesn't empty out the runtimeTools array, making it always return false
+      this.codemodeifyState(next);
+
       return { modified: true };
     };
 
@@ -357,13 +363,6 @@ export class AgentCore<
           "Enabled context rules loop did not converge after 10 iterations, this may be an insanely complex set of matchers but is probably a bug",
           next,
         );
-    }
-
-    // todo: change matchers.hasTool so that this doesn't empty out the runtimeTools array, making it always return false
-    const codemodeified = this.codemodeifyState(next);
-
-    if (codemodeified.modified) {
-      setEnabledContextRules();
     }
 
     return next as MergedStateForSlices<Slices> &
