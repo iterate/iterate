@@ -64,6 +64,8 @@ export class EstateBuildManager extends Container {
         );
     `);
 
+    this.migrateOldLogsIfNeeded();
+
     waitUntil(
       (async () => {
         // Handle retries
@@ -208,6 +210,39 @@ export class EstateBuildManager extends Container {
       return lines.map((line) => JSON.parse(line.data as string) as Log);
     } catch {
       return [];
+    }
+  }
+
+  private migrateOldLogsIfNeeded() {
+    const tableInfo = this._sql
+      .exec<{ name: string; type: string }>("PRAGMA table_info(build_logs)")
+      .toArray();
+
+    const hasOldColumn = tableInfo.some((col) => col.name === "log_lines");
+
+    if (!hasOldColumn) return;
+
+    const oldBuilds = this._sql
+      .exec("select build_id, log_lines from build_logs where log_lines is not null")
+      .toArray();
+
+    for (const old of oldBuilds) {
+      const existingLines = this._sql
+        .exec("select count(*) as count from build_log_lines where build_id = ?", old.build_id)
+        .one();
+
+      if (Number(existingLines?.count) > 0 || typeof old.log_lines !== "string") continue;
+
+      const logs = JSON.parse(old.log_lines) as Array<Log>;
+      for (const [index, log] of logs.entries()) {
+        this._sql.exec(
+          `insert into build_log_lines (build_id, data, idx) values (?, ?, ?)`,
+          old.build_id,
+          JSON.stringify(log),
+          index,
+        );
+      }
+      this._sql.exec(`update build_logs set log_lines = null where build_id = ?`, old.build_id);
     }
   }
 
