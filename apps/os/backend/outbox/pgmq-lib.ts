@@ -1,8 +1,14 @@
+// outbox "library" implementation using pgmq. it could be split out into a separate package some day.
+// it also has a trpc plugin for easily registering consumers and sending events from procedures.
+// before splitting out we'd probably want to abstract out things like drizzle first
+
+// before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
+
 import { sql } from "drizzle-orm";
 import { initTRPC, AnyTRPCRouter, AnyTRPCProcedure } from "@trpc/server";
 import { z } from "zod";
-import type { DB } from "../client.ts";
-import { logger } from "../../tag-logger.ts";
+import type { DB } from "../db/client.ts";
+import { logger } from "../tag-logger.ts";
 
 export const ConsumerEvent = z.object({
   event_name: z.string(),

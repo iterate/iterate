@@ -5,10 +5,10 @@ import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import { logger } from "../tag-logger.ts";
-import { createPostProcedureConsumerPlugin } from "../db/outbox/events.ts";
+import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
 import { waitUntil } from "../../env.ts";
 import { recentActiveSources } from "../db/helpers.ts";
-import { queuer } from "../queuer.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -364,6 +364,3 @@ export const estateProtectedProcedure = protectedProcedureWithNoEstateRestrictio
       },
     });
   });
-
-const m1 = publicProcedure.mutation(async () => 1);
-const m2 = publicProcedure.output(z.number()).mutation(async () => 2);

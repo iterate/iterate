@@ -1,8 +1,8 @@
 import { expectTypeOf, test } from "vitest";
-import { appRouter } from "../../trpc/root.ts";
-import type { FlattenProcedures } from "./events.ts";
+import { appRouter } from "../trpc/root.ts";
+import type { FlattenProcedures } from "./pgmq-lib.ts";
 
-test("event types", () => {
+test("trpc types", () => {
   type F = FlattenProcedures<typeof appRouter._def.procedures>;
   expectTypeOf<F>()
     .toHaveProperty("admin.createStripeCustomer")
