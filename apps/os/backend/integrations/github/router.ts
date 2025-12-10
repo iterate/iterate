@@ -238,8 +238,6 @@ githubApp.post("/webhook", async (c) => {
 
     // Use the common build trigger function
     const build = await triggerGithubBuild({
-      db: c.var.db,
-      env: c.env,
       estateId: estate.id,
       commitHash: commitHash!,
       commitMessage: commitMessage || "No commit message",

@@ -301,6 +301,8 @@ function EstateContent({
         return <RefreshCw className="h-5 w-5 text-blue-600 animate-spin" />;
       case "timed_out":
         return <Clock className="h-5 w-5 text-gray-600" />;
+      case "queued":
+        return <Clock className="h-5 w-5 text-gray-600" />;
       default:
         status satisfies never;
         return <BadgeQuestionMarkIcon className="h-5 w-5 text-gray-600" />;
@@ -317,6 +319,8 @@ function EstateContent({
         return "text-blue-700 bg-blue-50 dark:text-blue-400 dark:bg-blue-900/20";
       case "timed_out":
         return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
+      case "queued":
+        return "text-yellow-700 bg-yellow-50 dark:text-yellow-400 dark:bg-yellow-900/20";
       default:
         status satisfies never;
         return "text-gray-700 bg-gray-50 dark:text-gray-400 dark:bg-gray-900/20";
@@ -821,7 +825,8 @@ function EstateContent({
                                 onClick={() => handleRebuildCommit(build)}
                                 disabled={
                                   triggerRebuildMutation.isPending ||
-                                  derivedStatus === "in_progress"
+                                  derivedStatus === "in_progress" ||
+                                  derivedStatus === "queued"
                                 }
                                 variant="outline"
                                 size="sm"
@@ -843,13 +848,14 @@ function EstateContent({
                                   setLogsBuild(build);
                                   setIsLogsSheetOpen(true);
                                 }}
+                                disabled={derivedStatus === "queued"}
                                 variant="outline"
                                 size="sm"
                               >
                                 View Logs
                               </Button>
                               <Button
-                                disabled={build.status !== "complete" || build.isActive}
+                                disabled={derivedStatus !== "complete" || build.isActive}
                                 variant="outline"
                                 size="sm"
                                 onClick={() => {
