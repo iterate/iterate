@@ -69,9 +69,16 @@ async function verifyDopplerEnvironment() {
 
 async function uploadSourcemaps() {
   if (!isDevelopment) {
-    await Exec("posthog-sourcemap-upload", {
-      command: "pnpm posthog:sourcemaps:upload",
-    });
+    for (let i = 3; i >= 0; i--) {
+      try {
+        await Exec("posthog-sourcemap-upload", { command: "pnpm posthog:sourcemaps:upload" });
+        break;
+      } catch (e) {
+        if (i === 0) throw e;
+        console.log(`Failed to upload sourcemaps, retrying... (${i} attempts left)`, e);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
   }
 }
 const Required = z.string().nonempty();
