@@ -178,9 +178,8 @@ export default defineConfig([
       ],
     },
   },
-  {
-    ignores: [".tmp-ci-build*"],
-  },
+  { ignores: ["**/evalite-export/**"] },
+  { ignores: [".tmp-ci-build*"] },
   // Override for React Router route files
   {
     files: ["**/routes/**", "**/app/root.tsx"],

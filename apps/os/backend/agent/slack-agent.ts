@@ -1435,18 +1435,3 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     };
   }
 }
-
-/**
- * Extracts the timestamp from a durable object name.
- * Format: SlackAgent-ts-{timestamp}-slack-...
- */
-function extractTimestampFromDurableObjectName(name: string): string {
-  const parts = name.split("ts-");
-  if (parts.length < 2) return "";
-
-  const afterTs = parts[1];
-  const endIndex = afterTs.indexOf("-slack");
-  if (endIndex === -1) return "";
-
-  return afterTs.substring(0, endIndex);
-}
