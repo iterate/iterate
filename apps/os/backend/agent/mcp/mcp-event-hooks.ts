@@ -329,8 +329,6 @@ export async function handleMCPConnectRequest(
     return events;
   }
 
-  mcpConnectionCache.managers.set(cacheKey, manager);
-
   // Failback to Unknown if the server developer has not implemented the specification properly
   const serverName = manager.mcpConnections[result.id].client.getServerVersion()?.name || "Unknown";
 
@@ -341,6 +339,35 @@ export async function handleMCPConnectRequest(
   logger.log(
     `[MCP] Server ${result.id} provides ${tools.length} tools, ${prompts.length} prompts, ${resources.length} resources`,
   );
+
+  // Detect invalid connections (server unreachable or not a valid MCP server)
+  if (
+    serverName === "Unknown" &&
+    tools.length === 0 &&
+    prompts.length === 0 &&
+    resources.length === 0
+  ) {
+    try {
+      await manager.closeConnection(result.id);
+    } catch {
+      // Ignore cleanup errors
+    }
+    events.push({
+      type: "MCP:CONNECTION_ERROR",
+      data: {
+        connectionKey,
+        serverUrl,
+        userId: userId || undefined,
+        error:
+          "Server did not respond correctly - may not be a valid MCP server or server is unreachable",
+      },
+      metadata: {},
+      triggerLLMRequest: false,
+    });
+    return events;
+  }
+
+  mcpConnectionCache.managers.set(cacheKey, manager);
 
   const filteredTools = allowedTools ? tools.filter((t) => allowedTools.includes(t.name)) : tools;
   const filteredPrompts = allowedPrompts
