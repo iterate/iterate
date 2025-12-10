@@ -16,11 +16,13 @@
  * - POST /replay - Look up a fixture by test name and request index, with diff on mismatch
  * - GET /health - Health check
  */
-
 import * as assert from "node:assert";
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as R from "remeda";
+import * as YAML from "yaml";
+import gitDiff from "git-diff";
 
 export interface FixtureServerOptions {
   port: number;
@@ -68,46 +70,6 @@ export interface ReplayResponse {
 }
 
 /**
- * Strip volatile fields from objects for comparison.
- * These fields may vary between runs but don't affect the semantic request/response.
- */
-function stripVolatileFields(obj: unknown): unknown {
-  if (typeof obj === "string") {
-    return obj
-      .replace(/\busr_\w+\b/g, "usr_...")
-      .replace(/email: .*@/g, "email: ...@")
-      .replace(/"ts": "\d+"/g, '"ts": "..."')
-      .replace(/"createdAt": ".*?"/g, '"createdAt": "..."')
-      .replace(/"user": "TEST.*"/g, '"user": "TEST_..."');
-  }
-  if (typeof obj !== "object" || obj === null) {
-    return obj;
-  }
-
-  if (Array.isArray(obj)) {
-    return obj.map(stripVolatileFields);
-  }
-
-  const volatileFields = [
-    "id",
-    "request_id",
-    "timestamp",
-    "created_at",
-    "created",
-    "system_fingerprint",
-  ];
-
-  const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
-    if (volatileFields.includes(key)) {
-      continue; // Skip volatile fields entirely for comparison
-    }
-    result[key] = stripVolatileFields(value);
-  }
-  return result;
-}
-
-/**
  * Strip volatile fields from response chunks for storage.
  * Replace with placeholders to maintain structure for debugging.
  */
@@ -148,11 +110,12 @@ function sanitizeResponseChunks(chunks: unknown[]): unknown[] {
  * Returns null if objects are equal.
  */
 function getRequestDiff(expected: unknown, actual: unknown): string | null {
-  if (JSON.stringify(actual) === JSON.stringify(expected)) {
+  if (R.isDeepEqual(actual, expected)) {
     return null;
   }
+  return gitDiff(YAML.stringify(actual), YAML.stringify(expected), { color: true });
   try {
-    assert.deepStrictEqual(actual, expected);
+    assert.equal(YAML.stringify(actual), YAML.stringify(expected));
     return null;
   } catch (err) {
     return (err as Error).message;
@@ -188,6 +151,31 @@ function sanitizeHeaders(headers: Record<string, string>): Record<string, string
   return sanitized;
 }
 
+function stripVolatileFields<T>(obj: T): T {
+  const yaml = YAML.stringify(
+    JSON.parse(
+      JSON.stringify(obj, (key, value) => {
+        if (key === "headers" && value && typeof value === "object")
+          return Object.fromEntries(Object.keys(value).map((key) => [key, "..."]));
+        return value;
+      }),
+    ),
+  );
+  const stripped = yaml
+    .replace(/_[a-z0-9]{26}\b/g, "_<typeid>") // any typeid-js generated string
+    .replace(/\busr_\w+\b/g, "usr_...")
+    .replace(/\btest_slack_user_\w+\b/g, "usr_...")
+    .replace(/email: .*@/g, "email: ...@")
+    .replace(/"ts": "\d+"/g, '"ts": "..."')
+    .replace(/"createdAt": ".*?"/g, '"createdAt": "..."')
+    .replace(/TEST_slack-\w+\b/g, "TEST_slack-...")
+    .split("\n")
+    .filter((line, i, arr) => line.trim() || arr[i + 1]?.trim()) // get rid of multiple empty lines, for some reason this is inconsistent
+    .join("\n");
+
+  return YAML.parse(stripped);
+}
+
 /**
  * Create and start the fixture server.
  */
@@ -211,7 +199,7 @@ export function createFixtureServer(options: FixtureServerOptions): {
   }
 
   function getFixturePath(testName: string, requestIndex: number): string {
-    return path.join(getTestDir(testName), `request-${requestIndex}.json`);
+    return path.join(getTestDir(testName), `request-${requestIndex}.yaml`);
   }
 
   const server = http.createServer(async (req, res) => {
@@ -285,7 +273,7 @@ export function createFixtureServer(options: FixtureServerOptions): {
           recordedAt: new Date().toISOString(),
         };
 
-        fs.writeFileSync(fixturePath, JSON.stringify(fixture, null, 2));
+        fs.writeFileSync(fixturePath, YAML.stringify(fixture, null, 2));
         console.log(`[fixture-server] Recorded: ${data.testName}/request-${requestIndex}`);
 
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -327,7 +315,7 @@ export function createFixtureServer(options: FixtureServerOptions): {
           return;
         }
 
-        const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
+        const fixture = YAML.parse(fs.readFileSync(fixturePath, "utf-8"));
 
         // Compare request bodies (with volatile fields stripped)
         const expectedBody = stripVolatileFields(fixture.request.body);

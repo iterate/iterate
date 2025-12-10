@@ -11,6 +11,7 @@ import { init, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
 import { match, P } from "ts-pattern";
+import { typeid } from "typeid-js";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
@@ -176,10 +177,10 @@ export async function createTestHelper({
   // Generate unique Slack user IDs per test run to avoid conflicts between tests
   // Format: TEST_{unique-suffix}_{name} to identify as test users
   // Use a combination of inputSlug and timestamp to ensure uniqueness across tests
-  const uniqueSuffix = `${inputSlug.slice(0, 8)}_${Date.now().toString(36)}`;
+  const uniqueSuffix = `${typeid("test_slack_user")}`;
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
-  const aliceId = `TEST_${uniqueSuffix}_ALICE`;
-  const bobId = `TEST_${uniqueSuffix}_BOB`;
+  const aliceId = `${uniqueSuffix}-ALICE`;
+  const bobId = `${uniqueSuffix}-BOB`;
   fakeSlackUsers[aliceId] = { name: "Alice", id: aliceId };
   fakeSlackUsers[bobId] = { name: "Bob", id: bobId };
 
