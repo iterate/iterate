@@ -21,19 +21,19 @@ test("trpc types", () => {
 
 test("internal event types", () => {
   const db = {} as DBLike;
-  expectTypeOf(outboxClient.sendEvent).toBeCallableWith(
+  expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
     "testing:poke",
     { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
   );
 
-  expectTypeOf(outboxClient.sendEvent).toBeCallableWith(
+  expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
     "testing:poke",
     // @ts-expect-error - typo in payload
     { messageTYPO: "hello" },
   );
-  expectTypeOf(outboxClient.sendEvent).toBeCallableWith(
+  expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
     // @ts-expect-error - typo in event name
     "testing:pokeTYPO",
@@ -41,10 +41,10 @@ test("internal event types", () => {
   );
 });
 
-test("createEvent", () => {
+test("sendTx", () => {
   expectTypeOf(outboxClient)
     .map((client) => {
-      return client.createEvent(getDb(), "testing:poke", async (tx) => {
+      return client.sendTx(getDb(), "testing:poke", async (tx) => {
         // make sure tx is usable as a normal drizzle transaction helper
         expectTypeOf(
           tx.query.outboxEvent.findFirst({ columns: { id: true } }),

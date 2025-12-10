@@ -698,7 +698,7 @@ export const integrationsRouter = router({
         });
       }
 
-      return ctx.sendToOutbox(ctx.db, {
+      return ctx.sendTrpc(ctx.db, {
         success: true,
         estateDisconnected,
         personalDisconnected,
@@ -1153,7 +1153,7 @@ export const integrationsRouter = router({
 
         logger.info(`Created provider estate mapping for estate ${ctx.estate.id}`);
 
-        return ctx.sendToOutbox(tx, {
+        return ctx.sendTrpc(tx, {
           success: true,
           estateId: ctx.estate.id,
           organizationId: ctx.estate.organizationId,
@@ -1310,7 +1310,7 @@ export const integrationsRouter = router({
           }
         }
 
-        return ctx.sendToOutbox(tx, { success: true, trialChannelId, estateId });
+        return ctx.sendTrpc(tx, { success: true, trialChannelId, estateId });
       });
     }),
 });
