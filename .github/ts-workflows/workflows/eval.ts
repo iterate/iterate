@@ -104,14 +104,8 @@ export default workflow({
 
             # finally, run the tests
             export PROJECT_NAME=gh-evals-\${{ github.head_ref || github.ref_name }}
-            doppler run -- pnpm evalite run-once
+            doppler run -- pnpm evalite export --output ignoreme/evalite-ui
           `,
-        },
-        {
-          name: "export ui",
-          if: "always()",
-          "working-directory": "apps/os",
-          run: "pnpm tsx evals/evalite-exporter.ts",
         },
         {
           name: "upload evalite ui",
