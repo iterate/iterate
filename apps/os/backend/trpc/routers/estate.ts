@@ -6,7 +6,7 @@ import * as semver from "semver";
 import * as tarStream from "tar-stream";
 import * as fflate from "fflate/browser";
 import { z } from "zod";
-import { eq, desc, and, notInArray } from "drizzle-orm";
+import { eq, desc, and, notInArray, or } from "drizzle-orm";
 import dedent from "dedent";
 import { TRPCError } from "@trpc/server";
 import {
@@ -874,7 +874,7 @@ export const estateRouter = router({
           where: and(
             eq(schema.builds.estateId, estateId),
             eq(schema.builds.commitHash, commitHash),
-            eq(schema.builds.status, "in_progress"),
+            or(eq(schema.builds.status, "in_progress"), eq(schema.builds.status, "queued")),
           ),
         });
         if (existing) {

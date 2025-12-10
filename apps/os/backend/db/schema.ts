@@ -525,7 +525,7 @@ export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
 
 export const builds = pgTable("builds", (t) => ({
   id: iterateId("build"),
-  status: t.text({ enum: ["complete", "failed", "in_progress"] }).notNull(),
+  status: t.text({ enum: ["complete", "failed", "in_progress", "queued"] }).notNull(),
   commitHash: t.text().notNull(),
   commitMessage: t.text().notNull(),
   files: t.jsonb().$type<{ path: string; content: string }[]>().notNull(),

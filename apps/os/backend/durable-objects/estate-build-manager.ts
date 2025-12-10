@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 import { ms } from "itty-time";
 import { typeid } from "typeid-js";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, or } from "drizzle-orm";
 import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import { intoImmediateSSEResponse } from "../utils/sse-utils.ts";
 import { getDb } from "../db/client.ts";
@@ -397,14 +397,19 @@ export class EstateBuildManager extends Container {
       timeoutThreshold,
     );
 
-    await this.db
-      .update(schemas.builds)
-      .set({ status: "failed", failureReason: "Build timed out" })
-      .where(
-        and(
-          eq(schemas.builds.status, "in_progress"),
-          lt(schemas.builds.updatedAt, new Date(Date.now() - TIMEOUT_TIME)),
-        ),
-      );
+    const { estateId } = await this.getBuilderMetadata().catch(() => ({ estateId: null }));
+
+    if (estateId) {
+      await this.db
+        .update(schemas.builds)
+        .set({ status: "failed", failureReason: "Build timed out" })
+        .where(
+          and(
+            eq(schemas.builds.estateId, estateId),
+            or(eq(schemas.builds.status, "in_progress"), eq(schemas.builds.status, "queued")),
+            lt(schemas.builds.updatedAt, new Date(Date.now() - TIMEOUT_TIME)),
+          ),
+        );
+    }
   }
 }

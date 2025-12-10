@@ -1,13 +1,15 @@
 import { WebClient } from "@slack/web-api";
 import { getContainer } from "@cloudflare/containers";
+import { eq } from "drizzle-orm";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
-import { getDb } from "../db/client.ts";
+import { getDb, schema } from "../db/client.ts";
 import { logger } from "../tag-logger.ts";
 import {
   createTrialSlackConnectChannel,
   getIterateSlackEstateId,
 } from "../utils/trial-channel-setup.ts";
 import { env } from "../../env.ts";
+import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -69,6 +71,31 @@ export const registerConsumers = () => {
         path: payload.connectedRepoPath || "/",
         authToken: payload.installationToken,
       });
+
+      const db = getDb();
+
+      await db
+        .update(schema.builds)
+        .set({ status: "in_progress" })
+        .where(eq(schema.builds.id, buildId));
+
+      const estateWithOrg = await db.query.estate.findFirst({
+        where: eq(schema.estate.id, payload.estateId),
+        with: {
+          organization: true,
+        },
+      });
+
+      // Invalidate organization queries to show the new in-progress build
+      if (estateWithOrg?.organization) {
+        await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
+          type: "INVALIDATE",
+          invalidateInfo: {
+            type: "TRPC_QUERY",
+            paths: ["estate.getBuilds"],
+          },
+        });
+      }
     },
   });
 };

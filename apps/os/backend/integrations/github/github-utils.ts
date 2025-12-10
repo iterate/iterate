@@ -105,11 +105,12 @@ export const getOctokitForInstallation = async (installationId: string): Promise
 // Helper function to trigger a GitHub estate build
 export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
   const db = getDb();
-  return await db.transaction(async (tx) => {
+
+  const res = await outboxClient.createEvent(db, "estate:build:created", async (tx) => {
     const [build] = await tx
       .insert(schema.builds)
       .values({
-        status: "in_progress",
+        status: "queued",
         commitHash: payload.commitHash,
         commitMessage: payload.isManual
           ? `[Manual] ${payload.commitMessage}`
@@ -122,12 +123,10 @@ export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
       })
       .returning();
 
-    // eslint-disable-next-line iterate/drizzle-conventions -- i need it
-    await outboxClient.sendEvent({ parent: db, transaction: tx }, "estate:build:created", {
-      buildId: build.id,
-      ...payload,
-    });
-
-    return { id: build.id };
+    return { buildId: build.id, ...payload };
   });
+
+  // stupid circular type problem
+  const id: string = res.buildId;
+  return { id };
 }
