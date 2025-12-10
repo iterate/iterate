@@ -69,7 +69,7 @@ import {
 import { mcpSlice, getConnectionKey } from "./mcp/mcp-slice.ts";
 import { MCPConnectRequestEvent } from "./mcp/mcp-slice.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
-import { openAIProvider } from "./openai-client.ts";
+import { openAIProvider, type RecordReplayMode } from "./openai-client.ts";
 import { renderPromptFragment } from "./prompt-fragments.ts";
 import type { ToolSpec } from "./tool-schemas.ts";
 import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
@@ -195,6 +195,12 @@ export class IterateAgent<
   protected mcpManagerCache: MCPManagerCache;
   protected mcpConnectionQueues: MCPConnectionQueues;
   _isInitialized = false;
+  // Record/replay configuration for e2e tests
+  private _recordReplayConfig?: {
+    mode: RecordReplayMode;
+    fixtureServerUrl: string;
+    testName: string;
+  };
 
   // This runs between the synchronous durable object constructor and the asynchronous onStart of the agents SDK
   // It also performs the PartyKit set-name fetch internally to trigger onStart.
@@ -218,6 +224,20 @@ export class IterateAgent<
     await res.text();
 
     this._isInitialized = true;
+  }
+
+  /**
+   * Configure OpenAI record/replay mode for e2e tests.
+   * This enables deterministic testing by either:
+   * - 'record': Making real OpenAI requests and saving responses to fixtures
+   * - 'replay': Serving responses from fixtures without hitting OpenAI
+   * - 'passthrough': Normal behavior (default)
+   *
+   * @param testName - Slugified test name used to organize fixtures by test
+   */
+  setOpenAIRecordReplayMode(mode: RecordReplayMode, fixtureServerUrl: string, testName: string) {
+    this._recordReplayConfig = { mode, fixtureServerUrl, testName };
+    logger.info("OpenAI record/replay mode configured", { mode, fixtureServerUrl, testName });
   }
 
   /**
@@ -531,6 +551,7 @@ export class IterateAgent<
           braintrust: {
             getBraintrustParentSpanExportedId,
           },
+          recordReplay: this._recordReplayConfig,
         });
       },
 

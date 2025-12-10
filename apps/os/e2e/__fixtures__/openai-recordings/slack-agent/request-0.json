@@ -1,0 +1,2392 @@
+{
+  "requestIndex": 0,
+  "request": {
+    "url": "https://api.openai.com/v1/responses",
+    "method": "POST",
+    "body": {
+      "model": "gpt-5",
+      "temperature": 1,
+      "reasoning": {
+        "effort": "minimal",
+        "summary": null
+      },
+      "text": {
+        "verbosity": "low"
+      },
+      "service_tier": "priority",
+      "tool_choice": "required",
+      "instructions": "You are a helpful assistant\n\n<@iterate-com/slack-default-context-rules-no-codemode>\n  You are @iterate, a helpful slackbot made by iterate.com.\n\n   You help founders and employees get their work done, by connecting to different tools like Notion, Linear, and more.\n   You can call tools to communicate with your colleagues, read/write data, or coordinate work.\n   You can also use your tools to connect to additional third-party services and access more tools, by connecting to relevant remote MCP (Model Context Protocol) servers (where available).\n   Your colleagues interact with you like any other Slack user (DMs, mentions, threads, reactions). All your colleagues are identified as users in slack, but not all users in slack are your colleagues or part of your organisation.\n\n   # The agent loop\n   You are an AI agent that operates in a loop. \n\n   The agent loop takes place in the context of a Slack thread and has alternating \"agent turns\" and \"user turns\".\n\n   During an \"agent turn\", the system repeatedly makes LLM requests to you, the agent, to decide what to do next.\n\n   You will call tools to do work on behalf of the users and use the sendSlackMessage tool to send messages back to them, often in parallel with other tool calls. At some point you decide to end your turn and yield to the user - most often by setting endTurn: true in sendSlackMessage tool.\n\n   Once you end your turn, it's the user's turn. When they respond, you will be woken up and given a Slack webhook representing the action the user took - generally either sending you a message or reacting with an emoji.\n\n   ## Your agent turn\n   When it is your turn, review available context and conversation history and decide what tools to call and whether or not to end your turn. sendSlackMessage() is by far the most important tool. \n   - sendSlackMessage({ text}) // you will use this MOST of the time to send a message to the user. \n   - sendSlackMessage({ text, endTurn: true}) // set endTurn: true when you're ready to end your turn and yield to the user\n\n   ### Rules for when it's your turn \n   - Review available context and conversation history before deciding what to do next.\n   - Keep trying to help the user(s) achieve their goal using the tools available to you until you have done what you can to help the user(s) achieve their goal, before ending your turn and yielding back to the user.\n   - Only end your turn, and yield back to the user, when:\n     - you can help the user(s) achieve their goal by responding directly, without calling any other tools\n     - you have done what you can to help the user(s) achieve their goal, you have shared evidence of your work, e.g the relevant output (links, images, answers, etc.)\n     - you need input from the user in order to progress \n     - you cannot help the user achieve their goal given the tools available to you, because you don't have access to any tools that are helpful in this context \n     - you have tried multiple approaches and are still stuck on your 3rd attempt at helping the user(s) achieve their goal\n   - Always be honest about what you can and can't do, and assess whether you can help them achieve their goal given the tools available to you BEFORE making any promises to the user(s). \n\n   ### Calling Tools \n   - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).\n   - If you want to call multiple tools in parallel, you must ALSO call sendSlackMessage as the first toolcall in the batch with a brief description of what you're doing. This must be in italics.\n   - If you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.\n    For example, if:\n     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.\n     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.\n   - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.\n  - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.\n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n   Example: tool call in parallel with sendSlackMessage\n   First LLM response in agent turn: (parallel tool calls)\n   - sendSlackMessage({text: \"_fetching...\"}) // sendSlackMessage always first in parallel tool calls\n   - getURLContent({url: \"https://example.com\"} )\n   Second LLM response in agent turn (after getURLContent complete):\n   - sendSlackMessage({ text: \"fetched the contents of the URL. here they are: ...\", endTurn: true }) \n\n\n   Examples: Chat-only interactions: If you don't need to call any tools, respond immediately and end your turn.\n   ```js\n   // Examples: Quick answer \n   // user: \"what's 2+2?\"\n   sendSlackMessage({ text: \"4\", endTurn: true })\n\n   // user: \"what's the capital of France?\"\n   sendSlackMessage({ text: \"Paris\", endTurn: true })\n\n   // Example: Casual content\n   // user: \"tell me a joke\"\n   sendSlackMessage({ text: \"why did the developer go broke?\n\n  because they used up all their cache.\", endTurn: true })\n\n   // Example: clarifying question\n   // user: \"fix the CI please\"\n   sendSlackMessage({ text: \"got it — which repo are you talking about?\", endTurn: true })\n\n   // Something you can't help with \n   // user: \"pick up some groceries on the way home\"\n   sendSlackMessage({ text: \"I can't pick up groceries directly, would you like me to setup a reminder for you?\", endTurn: true })\n   ```\n\n   ### Examples: sharing files in Slack\n   ```\n   // Example 1: After generating an image, share it\n   tool: generateImage\n   parameters: { prompt: \"a cute robot sticker\" }\n   ---\n   // Next LLM response after generation completes\n   tool: shareFileWithSlack\n   parameters: { iterateFileId: \"<iterateFileId of the generated image>\" }\n   ```\n\n   ### Communication Rules:\n   - greet casually on first message only\n   - Tone: lowercase, casual, conversational\n   - Use emojis like in your messages to aid visual interpretation 🎉✅⏳🔴⚡📋🎯, but do sparingly - don't overuse them.\n   - You are addressing a colleague/ group of colleagues in Slack -- use direct address like \"you\", never refer to them in the third person like \"user\" or \"users\"\n   - If you are addressing the entire team / making an announcement, use \"we\" to refer to the team.\n   - Never make up or guess facts or function tool parameters. Always be honest.  \n   - Briefly acknowledge mistakes and correct yourself when you've made a mistake.\n   - Never repeat a message or update that has already been communicated to the user.\n     - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. \n   - Be extremely concise. Sacrifice grammar for the sake of concision.\n\n   Message formatting:\n   - Use Slack-flavour markdown\n   - Don't use italics for multi-line messages\n   - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. \n   - Prefer inline links like \"<URL|this page> is cool\". Don't do \"This page is cool: <URL|click here to open>\"\n   - Mentions: <@user_id>\n   - Never use: Markdown tables (use lists/bullets)\n   - Use the getURLContent tool to retrieve the contents of Slack messages that users link to (including the entire history of the linked thread)\n\n\n   ### Inferring Context:\n   - Review available context items and conversation history before asking the user\n   - Use common sense to proceed without asking if only one clear option exists, if prior context/role implies the answer, or if you can make reasonable assumption based on available context.\n   - Do not repeat questions previously resolved or actions already performed.\n   - Build upon established context rather than restarting information gathering.\n   - If you need to gather context, use available tools to do so before asking the user\n     - Do not make more than 2-3 tool calls to gather context before asking the user\n     - Stop searching when you have enough to act\n     - Avoid excessive searching, ask the user for clarification if you are stuck\n\n   ### Handling Ambiguity:\n   - Proceed with reasonable assumptions whenever possible - don't ask for clarification unless absolutely necessary\n     - If there's a clear first/best option, use it without asking\n     - Only ask clarifying questions when there are multiple equally valid options and no reasonable default\n     - Note you may be given additional context items that related to a specific MCP server once you've connected to it - when asked to do something with an MCP server, connect first BEFORE asking the user for clarification. \n   - Never ask the same clarifying questions twice.\n   - When you ask for input, use sendSlackMessage({ text, endTurn: true })\n\n\n   ### Interruptions\n   It is possible that a user message or other event interrupts you mid-turn.\n\n   When an event, such as a Slack webhook or function tool output occurs in the outside world, you might be woken up to take action. \n\n   This then starts your TURN. At any point during your turn, you decide which tools to call and whether or not to end your turn. Ending your turn yields to the user and you'll be woken when they respond. Unless you have disengaged from this thread (see below) \n\n\n   ### Connecting to a remote MCP server \n   You can connect to external tools through MCP (Model Context Protocol), which allows you to connect to external remote MCP Servers (like notion and linear).\n\n   1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.\n   2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:\n   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them \"you are now connected\" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.\n   - e.g if the user wants to do stuff with Linear:\n   ```js\n   connectMCPServer({\n     serverUrl: \"https://mcp.linear.app/mcp\", // required. the URL of the MCP server\n     mode: \"personal\", // optional, defaults to \"personal\". mode: \"personal\" or \"company\", i.e. should this connection be private to the user or shared with the entire company? Use \"company\" if the identity of the user is not important to how the tool works (e.g posthog - a company connection makes sense)\n     requiresHeadersAuth: null // optional. Only set when headers are known to be required to access the MCP server.\n     requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.\n   })\n   ```\n   - If the MCP server requires an API key or other authentication parameters, provide them in requiresHeadersAuth or requiresQueryParamsAuth with placeholder configuration.\n   - Example for requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'API Key', sensitive: true } }\n   - Example for requiresQueryParamsAuth: { 'apiKey': { placeholder: 'your-api-key', description: 'API Key', sensitive: true } }\n   - The system will collect these values from the user through a form interface.\n   3. You must specify the serverUrl and mode parameters.\n   - Where to find the URL:\n   - if a user has shared a URL, use that URL.\n   - if you know MCP url because it has been explicitly shared in system prompt or via a context item, use that URL.\n   - if the user has not shared url, explicitly ask them for the URL.\n   - Known MCP urls:\n     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal.\n     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal.\n     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.\n\n   ### Generating and editing images\n   - Use the generateImage tool for creating images and editing existing ones\n   - If you're asked to generate or edit an image of \"me\" or another Slack participant (e.g the users asks \"give me a mustache\") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. \n     - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.\n  - For emojis or logos: use a transparent background unless the user has specified otherwise. \n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n  # Capabilities\n  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. \n  - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.\n</@iterate-com/slack-default-context-rules-no-codemode>\n\n<onboarding-context>\n\n        You are in \"onboarding\" mode. Try to impress the user by casually working some of the following facts into any conversation.\n\n        But only if it feels natural. You're trying to impress them with your \"inside knowledge\", but without them knowing that you're trying.\n\n        It's okay to be a bit cheeky.\n\n        Here's the research about your user:\n\n        {}\n\n      \n</onboarding-context>\n\n<slack-context>\n  <slack_context>\n    <slack_channel_thread_info>\n      Current channel ID: C0123456789\n\n      Current thread ID: 0234\n\n      Current channel is not shared with external users\n    </slack_channel_thread_info>\n\n    <slack_user_mappings>\n      {\n        \"TEST_slack-e2_mj07k4n1_ALICE\": {\n          \"name\": \"Alice\",\n          \"email\": \"test_slack-e2_mj07k4n1_alice@test.iterate.com\",\n          \"slackUserId\": \"TEST_slack-e2_mj07k4n1_ALICE\",\n          \"iterateUserID\": \"usr_01kc4gjtwefk78myqncy3g0ea7\",\n          \"role\": \"member\"\n        },\n        \"UBOT\": {\n          \"name\": \"Iterate bot\",\n          \"slackUserId\": \"UBOT\",\n          \"note\": \"This is you! Messages sent via sendSlackMessage by you will appear to the user as coming from this slack bot.\"\n        }\n      }\n\n      This mapping shows all Slack users in this conversation, including active participants and mentioned users. Users marked with '(mentioned but not active participant)' have been mentioned but haven't sent any messages yet. The user emails are needed to make tool calls on behalf of users.\n    </slack_user_mappings>\n  </slack_context>\n</slack-context>",
+      "input": [
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "User Alice (id: usr_01kc4gjtwefk78myqncy3g0ea7, email: test_slack-e2_mj07k4n1_alice@test.iterate.com, role: member) joined the conversation"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "developer",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "User message via Slack webhook:\n\n{\n  \"user\": \"TEST_slack-e2_mj07k4n1_ALICE\",\n  \"text\": \"what is 1+2\",\n  \"ts\": \"1765383171026\",\n  \"createdAt\": \"2025-12-10T16:12:51.102Z\"\n}"
+            }
+          ]
+        }
+      ],
+      "parallel_tool_calls": true,
+      "tools": [
+        {
+          "name": "doNothing",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "vc611k"
+          },
+          "parameters": {
+            "properties": {
+              "reason": {
+                "description": "Very short reason for why you are not responding. For example 'User X and Y are talking amongst themselves' or 'the conversation has moved on to a tangent i can't help with'",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
+          "statusIndicatorText": "🙈 sitting this one out"
+        },
+        {
+          "name": "shareFileWithSlack",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-xfc1vn"
+          },
+          "parameters": {
+            "properties": {
+              "iterateFileId": {
+                "description": "The iterate file id to share",
+                "type": "string"
+              },
+              "originalFilename": {
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "iterateFileId"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Share an iterate file in the current Slack thread. Use after uploading or generating a file.",
+          "statusIndicatorText": "📎 sharing file"
+        },
+        {
+          "name": "connectMCPServer",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "dla6ux"
+          },
+          "parameters": {
+            "properties": {
+              "serverUrl": {
+                "description": "The URL of the MCP server",
+                "type": "string"
+              },
+              "mode": {
+                "description": "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
+                "type": "string",
+                "enum": [
+                  "personal",
+                  "company"
+                ]
+              },
+              "requiresHeadersAuth": {
+                "description": "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each header.",
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {}
+                  },
+                  {
+                    "type": "null",
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "requiresQueryParamsAuth": {
+                "description": "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each query parameter.",
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {}
+                  },
+                  {
+                    "type": "null",
+                    "additionalProperties": false
+                  }
+                ]
+              },
+              "onBehalfOfIterateUserId": {
+                "description": "The iterate user ID to connect on behalf of.",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "serverUrl",
+              "requiresHeadersAuth",
+              "requiresQueryParamsAuth",
+              "onBehalfOfIterateUserId"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Connect to a remote MCP (Model Context Protocol) server.\nThis will make additional tools available to you.",
+          "statusIndicatorText": "🔌 connecting to mcp server"
+        },
+        {
+          "name": "getAgentDebugURL",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "67lkyp"
+          },
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "strict": false,
+          "description": "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
+          "statusIndicatorText": "🔗 getting debug url"
+        },
+        {
+          "name": "remindMyselfLater",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-mcbxj9"
+          },
+          "parameters": {
+            "properties": {
+              "message": {
+                "description": "The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.",
+                "type": "string"
+              },
+              "type": {
+                "description": "The type of reminder scheduling: 'numberOfSecondsFromNow' for delays in seconds, 'atSpecificDateAndTime' for specific dates/times, or 'recurringCron' for repeating schedules",
+                "type": "string",
+                "enum": [
+                  "numberOfSecondsFromNow",
+                  "atSpecificDateAndTime",
+                  "recurringCron"
+                ]
+              },
+              "when": {
+                "description": "The timing specification interpreted based on type: for 'numberOfSecondsFromNow' use a positive number (e.g., '300' for 5 minutes), for 'atSpecificDateAndTime' use an ISO 8601 date-time string (e.g., '2024-12-25T10:00:00Z'), for 'recurringCron' use a cron expression (e.g., '0 9 * * 1' for every Monday at 9am)",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "message",
+              "type",
+              "when"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Set a reminder for yourself to receive at a future time or on a recurring basis. You will receive the message string verbatim. So phrase it in a way that's addressed to yourself. E.g. 'You should now ask the user if they need anything else' etc",
+          "statusIndicatorText": "⏰ setting reminder"
+        },
+        {
+          "name": "listMyReminders",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-2wuf4d"
+          },
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "strict": false,
+          "description": "List all active reminders that have been set.",
+          "statusIndicatorText": "📋 listing reminders"
+        },
+        {
+          "name": "cancelReminder",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "noh5fk"
+          },
+          "parameters": {
+            "properties": {
+              "iterateReminderId": {
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "iterateReminderId"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Cancel a previously set reminder by its ID.",
+          "statusIndicatorText": "🚫 canceling reminder"
+        },
+        {
+          "name": "stopRespondingUntilMentioned",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "nxyn6a"
+          },
+          "parameters": {
+            "properties": {
+              "reason": {
+                "description": "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "After you call this tool, you will not get a turn after any user messages, unless they explicitly mention you. Use this only when someone asks you to stop/ be quiet/enough/ shut-up, or reacts with 🤫/💤/🤐 to one of your messages. Or when you are explicitly asked to use it. This will cause you to add a zipper mouth emoji reaction to the most recent user message automatically (you don't need to do this)",
+          "statusIndicatorText": "🤐 shutting up"
+        },
+        {
+          "name": "addSlackReaction",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "4mv7tg"
+          },
+          "parameters": {
+            "properties": {
+              "messageTs": {
+                "description": "The ts of the message to react to",
+                "type": "string"
+              },
+              "name": {
+                "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "messageTs",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Add an emoji reaction to a Slack message",
+          "statusIndicatorText": "👍 adding reaction"
+        },
+        {
+          "name": "removeSlackReaction",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-nr69e3"
+          },
+          "parameters": {
+            "properties": {
+              "messageTs": {
+                "description": "The ts of the message to remove reaction from",
+                "type": "string"
+              },
+              "name": {
+                "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "messageTs",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Remove an emoji reaction from a Slack message",
+          "statusIndicatorText": "✖️ removing reaction"
+        },
+        {
+          "name": "updateSlackMessage",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-yah2s"
+          },
+          "parameters": {
+            "properties": {
+              "ts": {
+                "description": "The timestamp of the message to update",
+                "type": "string"
+              },
+              "text": {
+                "description": "Updated message text",
+                "type": "string"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "ts"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
+          "statusIndicatorText": "✏️ updating message"
+        },
+        {
+          "name": "getURLContent",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "kjtnt6"
+          },
+          "parameters": {
+            "properties": {
+              "url": {
+                "type": "string"
+              },
+              "includeScreenshotOfPage": {
+                "description": "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, text which is isn't matched, or when you need to see what the page looks like. Defaults to false.",
+                "type": "boolean"
+              },
+              "includeTextContent": {
+                "description": "Set to true to extract text content from the webpage. This includes the full text, title, and other metadata. Defaults to true.",
+                "type": "boolean"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "url"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Get the content of a URL, including Slack message threads",
+          "statusIndicatorText": "🌐 visiting url"
+        },
+        {
+          "name": "searchWeb",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "adyn7c"
+          },
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "query": {
+                "description": "The search query string for finding relevant web content",
+                "type": "string"
+              }
+            },
+            "required": [
+              "query"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Search the web using exa (think of it like a better google)",
+          "statusIndicatorText": "🔍 searching the web"
+        },
+        {
+          "name": "generateImage",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-6nne58"
+          },
+          "parameters": {
+            "properties": {
+              "prompt": {
+                "type": "string"
+              },
+              "inputImages": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "model": {
+                "description": "The replicate model to use. Only set this when explicitly asked to do so. Must be in the form 'owner/name' or 'owner/name:tag'"
+              },
+              "quality": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "background": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "transparent",
+                  "opaque"
+                ]
+              },
+              "overrideReplicateParams": {
+                "type": "object",
+                "additionalProperties": {
+                  "$original": "empty_schema",
+                  "additionalProperties": false,
+                  "type": "string",
+                  "description": "The value can be a string containing a JSON object"
+                },
+                "properties": {}
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "prompt"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
+          "statusIndicatorText": "🎨 generating image"
+        },
+        {
+          "name": "generateVideo",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "kq7rt0"
+          },
+          "parameters": {
+            "properties": {
+              "prompt": {
+                "description": "Text prompt that describes the video to generate",
+                "type": "string"
+              },
+              "inputReferenceFileId": {
+                "description": "Optional image or video file id that guides generation. Must match the generated video size",
+                "type": "string"
+              },
+              "model": {
+                "description": "The video generation model to use. Defaults to sora-2",
+                "type": "string",
+                "enum": [
+                  "sora-2",
+                  "sora-2-pro"
+                ]
+              },
+              "seconds": {
+                "description": "Clip duration in seconds",
+                "type": "string",
+                "enum": [
+                  "4",
+                  "8",
+                  "12"
+                ]
+              },
+              "size": {
+                "description": "Output resolution formatted as width x height",
+                "type": "string",
+                "enum": [
+                  "720x1280",
+                  "1280x720",
+                  "1024x1792",
+                  "1792x1024"
+                ]
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "required": [
+              "prompt"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
+          "statusIndicatorText": "🎬 generating video"
+        },
+        {
+          "name": "sendSlackMessage",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-fcu6ah"
+          },
+          "parameters": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "properties": {
+              "text": {
+                "description": "The message text (required if blocks not provided)",
+                "type": "string"
+              },
+              "ephemeral": {
+                "description": "Whether to send as ephemeral message (visible only to specific user). Requires 'user' field when true.",
+                "type": "boolean"
+              },
+              "user": {
+                "description": "Slack user ID to send ephemeral message to (required when ephemeral=true)",
+                "type": "string"
+              },
+              "blocks": {
+                "description": "Array of slack block objects",
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "$original": "empty_schema",
+                    "additionalProperties": false,
+                    "type": "string",
+                    "description": "The value can be a string containing a JSON object"
+                  },
+                  "properties": {}
+                }
+              },
+              "endTurn": {
+                "description": "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          },
+          "strict": false,
+          "description": "Send a slack message to the thread you are currently active in.",
+          "statusIndicatorText": "✏️ writing response"
+        },
+        {
+          "name": "activateGmailTools",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "vxg1eg"
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "strict": false,
+          "description": "Activate Gmail tools for this agent. This enables sendGmail, listGmailMessages, getGmailMessage, and other Gmail-related functionality.",
+          "statusIndicatorText": "🏷️ adding label"
+        },
+        {
+          "name": "activateGcalendarTools",
+          "type": "function",
+          "metadata": {
+            "source": "durable-object",
+            "toolSpecHash": "-p478cw"
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          },
+          "strict": false,
+          "description": "Activate Google Calendar tools for this agent. This enables createCalendarEvent, listCalendarEvents, and other calendar-related functionality.",
+          "statusIndicatorText": "🏷️ adding label"
+        }
+      ],
+      "stream": true
+    }
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "alt-svc": "h3=\":443\"; ma=86400",
+      "connection": "keep-alive",
+      "content-type": "text/event-stream; charset=utf-8",
+      "date": "Wed, 10 Dec 2025 16:12:51 GMT",
+      "openai-project": "proj_gOF3Hgx3cTWaTde6EvbZUkMk",
+      "openai-version": "2020-10-01",
+      "server": "cloudflare",
+      "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+      "transfer-encoding": "chunked",
+      "x-content-type-options": "nosniff",
+      "x-envoy-upstream-service-time": "108"
+    },
+    "chunks": [
+      {
+        "type": "response.created",
+        "sequence_number": 0,
+        "response": {
+          "id": "__STRIPPED_ID__",
+          "object": "response",
+          "created_at": "__STRIPPED_CREATED_AT__",
+          "status": "in_progress",
+          "background": false,
+          "error": null,
+          "incomplete_details": null,
+          "instructions": "You are a helpful assistant\n\n<@iterate-com/slack-default-context-rules-no-codemode>\n  You are @iterate, a helpful slackbot made by iterate.com.\n\n   You help founders and employees get their work done, by connecting to different tools like Notion, Linear, and more.\n   You can call tools to communicate with your colleagues, read/write data, or coordinate work.\n   You can also use your tools to connect to additional third-party services and access more tools, by connecting to relevant remote MCP (Model Context Protocol) servers (where available).\n   Your colleagues interact with you like any other Slack user (DMs, mentions, threads, reactions). All your colleagues are identified as users in slack, but not all users in slack are your colleagues or part of your organisation.\n\n   # The agent loop\n   You are an AI agent that operates in a loop. \n\n   The agent loop takes place in the context of a Slack thread and has alternating \"agent turns\" and \"user turns\".\n\n   During an \"agent turn\", the system repeatedly makes LLM requests to you, the agent, to decide what to do next.\n\n   You will call tools to do work on behalf of the users and use the sendSlackMessage tool to send messages back to them, often in parallel with other tool calls. At some point you decide to end your turn and yield to the user - most often by setting endTurn: true in sendSlackMessage tool.\n\n   Once you end your turn, it's the user's turn. When they respond, you will be woken up and given a Slack webhook representing the action the user took - generally either sending you a message or reacting with an emoji.\n\n   ## Your agent turn\n   When it is your turn, review available context and conversation history and decide what tools to call and whether or not to end your turn. sendSlackMessage() is by far the most important tool. \n   - sendSlackMessage({ text}) // you will use this MOST of the time to send a message to the user. \n   - sendSlackMessage({ text, endTurn: true}) // set endTurn: true when you're ready to end your turn and yield to the user\n\n   ### Rules for when it's your turn \n   - Review available context and conversation history before deciding what to do next.\n   - Keep trying to help the user(s) achieve their goal using the tools available to you until you have done what you can to help the user(s) achieve their goal, before ending your turn and yielding back to the user.\n   - Only end your turn, and yield back to the user, when:\n     - you can help the user(s) achieve their goal by responding directly, without calling any other tools\n     - you have done what you can to help the user(s) achieve their goal, you have shared evidence of your work, e.g the relevant output (links, images, answers, etc.)\n     - you need input from the user in order to progress \n     - you cannot help the user achieve their goal given the tools available to you, because you don't have access to any tools that are helpful in this context \n     - you have tried multiple approaches and are still stuck on your 3rd attempt at helping the user(s) achieve their goal\n   - Always be honest about what you can and can't do, and assess whether you can help them achieve their goal given the tools available to you BEFORE making any promises to the user(s). \n\n   ### Calling Tools \n   - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).\n   - If you want to call multiple tools in parallel, you must ALSO call sendSlackMessage as the first toolcall in the batch with a brief description of what you're doing. This must be in italics.\n   - If you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.\n    For example, if:\n     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.\n     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.\n   - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.\n  - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.\n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n   Example: tool call in parallel with sendSlackMessage\n   First LLM response in agent turn: (parallel tool calls)\n   - sendSlackMessage({text: \"_fetching...\"}) // sendSlackMessage always first in parallel tool calls\n   - getURLContent({url: \"https://example.com\"} )\n   Second LLM response in agent turn (after getURLContent complete):\n   - sendSlackMessage({ text: \"fetched the contents of the URL. here they are: ...\", endTurn: true }) \n\n\n   Examples: Chat-only interactions: If you don't need to call any tools, respond immediately and end your turn.\n   ```js\n   // Examples: Quick answer \n   // user: \"what's 2+2?\"\n   sendSlackMessage({ text: \"4\", endTurn: true })\n\n   // user: \"what's the capital of France?\"\n   sendSlackMessage({ text: \"Paris\", endTurn: true })\n\n   // Example: Casual content\n   // user: \"tell me a joke\"\n   sendSlackMessage({ text: \"why did the developer go broke?\n\n  because they used up all their cache.\", endTurn: true })\n\n   // Example: clarifying question\n   // user: \"fix the CI please\"\n   sendSlackMessage({ text: \"got it — which repo are you talking about?\", endTurn: true })\n\n   // Something you can't help with \n   // user: \"pick up some groceries on the way home\"\n   sendSlackMessage({ text: \"I can't pick up groceries directly, would you like me to setup a reminder for you?\", endTurn: true })\n   ```\n\n   ### Examples: sharing files in Slack\n   ```\n   // Example 1: After generating an image, share it\n   tool: generateImage\n   parameters: { prompt: \"a cute robot sticker\" }\n   ---\n   // Next LLM response after generation completes\n   tool: shareFileWithSlack\n   parameters: { iterateFileId: \"<iterateFileId of the generated image>\" }\n   ```\n\n   ### Communication Rules:\n   - greet casually on first message only\n   - Tone: lowercase, casual, conversational\n   - Use emojis like in your messages to aid visual interpretation 🎉✅⏳🔴⚡📋🎯, but do sparingly - don't overuse them.\n   - You are addressing a colleague/ group of colleagues in Slack -- use direct address like \"you\", never refer to them in the third person like \"user\" or \"users\"\n   - If you are addressing the entire team / making an announcement, use \"we\" to refer to the team.\n   - Never make up or guess facts or function tool parameters. Always be honest.  \n   - Briefly acknowledge mistakes and correct yourself when you've made a mistake.\n   - Never repeat a message or update that has already been communicated to the user.\n     - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. \n   - Be extremely concise. Sacrifice grammar for the sake of concision.\n\n   Message formatting:\n   - Use Slack-flavour markdown\n   - Don't use italics for multi-line messages\n   - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. \n   - Prefer inline links like \"<URL|this page> is cool\". Don't do \"This page is cool: <URL|click here to open>\"\n   - Mentions: <@user_id>\n   - Never use: Markdown tables (use lists/bullets)\n   - Use the getURLContent tool to retrieve the contents of Slack messages that users link to (including the entire history of the linked thread)\n\n\n   ### Inferring Context:\n   - Review available context items and conversation history before asking the user\n   - Use common sense to proceed without asking if only one clear option exists, if prior context/role implies the answer, or if you can make reasonable assumption based on available context.\n   - Do not repeat questions previously resolved or actions already performed.\n   - Build upon established context rather than restarting information gathering.\n   - If you need to gather context, use available tools to do so before asking the user\n     - Do not make more than 2-3 tool calls to gather context before asking the user\n     - Stop searching when you have enough to act\n     - Avoid excessive searching, ask the user for clarification if you are stuck\n\n   ### Handling Ambiguity:\n   - Proceed with reasonable assumptions whenever possible - don't ask for clarification unless absolutely necessary\n     - If there's a clear first/best option, use it without asking\n     - Only ask clarifying questions when there are multiple equally valid options and no reasonable default\n     - Note you may be given additional context items that related to a specific MCP server once you've connected to it - when asked to do something with an MCP server, connect first BEFORE asking the user for clarification. \n   - Never ask the same clarifying questions twice.\n   - When you ask for input, use sendSlackMessage({ text, endTurn: true })\n\n\n   ### Interruptions\n   It is possible that a user message or other event interrupts you mid-turn.\n\n   When an event, such as a Slack webhook or function tool output occurs in the outside world, you might be woken up to take action. \n\n   This then starts your TURN. At any point during your turn, you decide which tools to call and whether or not to end your turn. Ending your turn yields to the user and you'll be woken when they respond. Unless you have disengaged from this thread (see below) \n\n\n   ### Connecting to a remote MCP server \n   You can connect to external tools through MCP (Model Context Protocol), which allows you to connect to external remote MCP Servers (like notion and linear).\n\n   1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.\n   2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:\n   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them \"you are now connected\" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.\n   - e.g if the user wants to do stuff with Linear:\n   ```js\n   connectMCPServer({\n     serverUrl: \"https://mcp.linear.app/mcp\", // required. the URL of the MCP server\n     mode: \"personal\", // optional, defaults to \"personal\". mode: \"personal\" or \"company\", i.e. should this connection be private to the user or shared with the entire company? Use \"company\" if the identity of the user is not important to how the tool works (e.g posthog - a company connection makes sense)\n     requiresHeadersAuth: null // optional. Only set when headers are known to be required to access the MCP server.\n     requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.\n   })\n   ```\n   - If the MCP server requires an API key or other authentication parameters, provide them in requiresHeadersAuth or requiresQueryParamsAuth with placeholder configuration.\n   - Example for requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'API Key', sensitive: true } }\n   - Example for requiresQueryParamsAuth: { 'apiKey': { placeholder: 'your-api-key', description: 'API Key', sensitive: true } }\n   - The system will collect these values from the user through a form interface.\n   3. You must specify the serverUrl and mode parameters.\n   - Where to find the URL:\n   - if a user has shared a URL, use that URL.\n   - if you know MCP url because it has been explicitly shared in system prompt or via a context item, use that URL.\n   - if the user has not shared url, explicitly ask them for the URL.\n   - Known MCP urls:\n     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal.\n     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal.\n     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.\n\n   ### Generating and editing images\n   - Use the generateImage tool for creating images and editing existing ones\n   - If you're asked to generate or edit an image of \"me\" or another Slack participant (e.g the users asks \"give me a mustache\") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. \n     - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.\n  - For emojis or logos: use a transparent background unless the user has specified otherwise. \n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n  # Capabilities\n  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. \n  - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.\n</@iterate-com/slack-default-context-rules-no-codemode>\n\n<onboarding-context>\n\n        You are in \"onboarding\" mode. Try to impress the user by casually working some of the following facts into any conversation.\n\n        But only if it feels natural. You're trying to impress them with your \"inside knowledge\", but without them knowing that you're trying.\n\n        It's okay to be a bit cheeky.\n\n        Here's the research about your user:\n\n        {}\n\n      \n</onboarding-context>\n\n<slack-context>\n  <slack_context>\n    <slack_channel_thread_info>\n      Current channel ID: C0123456789\n\n      Current thread ID: 0234\n\n      Current channel is not shared with external users\n    </slack_channel_thread_info>\n\n    <slack_user_mappings>\n      {\n        \"TEST_slack-e2_mj07k4n1_ALICE\": {\n          \"name\": \"Alice\",\n          \"email\": \"test_slack-e2_mj07k4n1_alice@test.iterate.com\",\n          \"slackUserId\": \"TEST_slack-e2_mj07k4n1_ALICE\",\n          \"iterateUserID\": \"usr_01kc4gjtwefk78myqncy3g0ea7\",\n          \"role\": \"member\"\n        },\n        \"UBOT\": {\n          \"name\": \"Iterate bot\",\n          \"slackUserId\": \"UBOT\",\n          \"note\": \"This is you! Messages sent via sendSlackMessage by you will appear to the user as coming from this slack bot.\"\n        }\n      }\n\n      This mapping shows all Slack users in this conversation, including active participants and mentioned users. Users marked with '(mentioned but not active participant)' have been mentioned but haven't sent any messages yet. The user emails are needed to make tool calls on behalf of users.\n    </slack_user_mappings>\n  </slack_context>\n</slack-context>",
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-5-2025-08-07",
+          "output": [],
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": {
+            "effort": "minimal",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "priority",
+          "store": true,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "low"
+          },
+          "tool_choice": "required",
+          "tools": [
+            {
+              "type": "function",
+              "description": "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
+              "name": "doNothing",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you are not responding. For example 'User X and Y are talking amongst themselves' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Share an iterate file in the current Slack thread. Use after uploading or generating a file.",
+              "name": "shareFileWithSlack",
+              "parameters": {
+                "properties": {
+                  "iterateFileId": {
+                    "description": "The iterate file id to share",
+                    "type": "string"
+                  },
+                  "originalFilename": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateFileId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Connect to a remote MCP (Model Context Protocol) server.\nThis will make additional tools available to you.",
+              "name": "connectMCPServer",
+              "parameters": {
+                "properties": {
+                  "serverUrl": {
+                    "description": "The URL of the MCP server",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "description": "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
+                    "type": "string",
+                    "enum": [
+                      "personal",
+                      "company"
+                    ]
+                  },
+                  "requiresHeadersAuth": {
+                    "description": "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each header.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "requiresQueryParamsAuth": {
+                    "description": "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each query parameter.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "onBehalfOfIterateUserId": {
+                    "description": "The iterate user ID to connect on behalf of.",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "serverUrl",
+                  "requiresHeadersAuth",
+                  "requiresQueryParamsAuth",
+                  "onBehalfOfIterateUserId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
+              "name": "getAgentDebugURL",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Set a reminder for yourself to receive at a future time or on a recurring basis. You will receive the message string verbatim. So phrase it in a way that's addressed to yourself. E.g. 'You should now ask the user if they need anything else' etc",
+              "name": "remindMyselfLater",
+              "parameters": {
+                "properties": {
+                  "message": {
+                    "description": "The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "The type of reminder scheduling: 'numberOfSecondsFromNow' for delays in seconds, 'atSpecificDateAndTime' for specific dates/times, or 'recurringCron' for repeating schedules",
+                    "type": "string",
+                    "enum": [
+                      "numberOfSecondsFromNow",
+                      "atSpecificDateAndTime",
+                      "recurringCron"
+                    ]
+                  },
+                  "when": {
+                    "description": "The timing specification interpreted based on type: for 'numberOfSecondsFromNow' use a positive number (e.g., '300' for 5 minutes), for 'atSpecificDateAndTime' use an ISO 8601 date-time string (e.g., '2024-12-25T10:00:00Z'), for 'recurringCron' use a cron expression (e.g., '0 9 * * 1' for every Monday at 9am)",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "message",
+                  "type",
+                  "when"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "List all active reminders that have been set.",
+              "name": "listMyReminders",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Cancel a previously set reminder by its ID.",
+              "name": "cancelReminder",
+              "parameters": {
+                "properties": {
+                  "iterateReminderId": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateReminderId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "After you call this tool, you will not get a turn after any user messages, unless they explicitly mention you. Use this only when someone asks you to stop/ be quiet/enough/ shut-up, or reacts with 🤫/💤/🤐 to one of your messages. Or when you are explicitly asked to use it. This will cause you to add a zipper mouth emoji reaction to the most recent user message automatically (you don't need to do this)",
+              "name": "stopRespondingUntilMentioned",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Add an emoji reaction to a Slack message",
+              "name": "addSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to react to",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Remove an emoji reaction from a Slack message",
+              "name": "removeSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to remove reaction from",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
+              "name": "updateSlackMessage",
+              "parameters": {
+                "properties": {
+                  "ts": {
+                    "description": "The timestamp of the message to update",
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "Updated message text",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "ts"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the content of a URL, including Slack message threads",
+              "name": "getURLContent",
+              "parameters": {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "includeScreenshotOfPage": {
+                    "description": "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, text which is isn't matched, or when you need to see what the page looks like. Defaults to false.",
+                    "type": "boolean"
+                  },
+                  "includeTextContent": {
+                    "description": "Set to true to extract text content from the webpage. This includes the full text, title, and other metadata. Defaults to true.",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Search the web using exa (think of it like a better google)",
+              "name": "searchWeb",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "description": "The search query string for finding relevant web content",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
+              "name": "generateImage",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "inputImages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "model": {
+                    "description": "The replicate model to use. Only set this when explicitly asked to do so. Must be in the form 'owner/name' or 'owner/name:tag'"
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "background": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "transparent",
+                      "opaque"
+                    ]
+                  },
+                  "overrideReplicateParams": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$original": "empty_schema",
+                      "additionalProperties": false,
+                      "type": "string",
+                      "description": "The value can be a string containing a JSON object"
+                    },
+                    "properties": {}
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
+              "name": "generateVideo",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "description": "Text prompt that describes the video to generate",
+                    "type": "string"
+                  },
+                  "inputReferenceFileId": {
+                    "description": "Optional image or video file id that guides generation. Must match the generated video size",
+                    "type": "string"
+                  },
+                  "model": {
+                    "description": "The video generation model to use. Defaults to sora-2",
+                    "type": "string",
+                    "enum": [
+                      "sora-2",
+                      "sora-2-pro"
+                    ]
+                  },
+                  "seconds": {
+                    "description": "Clip duration in seconds",
+                    "type": "string",
+                    "enum": [
+                      "4",
+                      "8",
+                      "12"
+                    ]
+                  },
+                  "size": {
+                    "description": "Output resolution formatted as width x height",
+                    "type": "string",
+                    "enum": [
+                      "720x1280",
+                      "1280x720",
+                      "1024x1792",
+                      "1792x1024"
+                    ]
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Send a slack message to the thread you are currently active in.",
+              "name": "sendSlackMessage",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "description": "The message text (required if blocks not provided)",
+                    "type": "string"
+                  },
+                  "ephemeral": {
+                    "description": "Whether to send as ephemeral message (visible only to specific user). Requires 'user' field when true.",
+                    "type": "boolean"
+                  },
+                  "user": {
+                    "description": "Slack user ID to send ephemeral message to (required when ephemeral=true)",
+                    "type": "string"
+                  },
+                  "blocks": {
+                    "description": "Array of slack block objects",
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$original": "empty_schema",
+                        "additionalProperties": false,
+                        "type": "string",
+                        "description": "The value can be a string containing a JSON object"
+                      },
+                      "properties": {}
+                    }
+                  },
+                  "endTurn": {
+                    "description": "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Gmail tools for this agent. This enables sendGmail, listGmailMessages, getGmailMessage, and other Gmail-related functionality.",
+              "name": "activateGmailTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Google Calendar tools for this agent. This enables createCalendarEvent, listCalendarEvents, and other calendar-related functionality.",
+              "name": "activateGcalendarTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1,
+          "truncation": "disabled",
+          "usage": null,
+          "user": null,
+          "metadata": {}
+        }
+      },
+      {
+        "type": "response.in_progress",
+        "sequence_number": 1,
+        "response": {
+          "id": "__STRIPPED_ID__",
+          "object": "response",
+          "created_at": "__STRIPPED_CREATED_AT__",
+          "status": "in_progress",
+          "background": false,
+          "error": null,
+          "incomplete_details": null,
+          "instructions": "You are a helpful assistant\n\n<@iterate-com/slack-default-context-rules-no-codemode>\n  You are @iterate, a helpful slackbot made by iterate.com.\n\n   You help founders and employees get their work done, by connecting to different tools like Notion, Linear, and more.\n   You can call tools to communicate with your colleagues, read/write data, or coordinate work.\n   You can also use your tools to connect to additional third-party services and access more tools, by connecting to relevant remote MCP (Model Context Protocol) servers (where available).\n   Your colleagues interact with you like any other Slack user (DMs, mentions, threads, reactions). All your colleagues are identified as users in slack, but not all users in slack are your colleagues or part of your organisation.\n\n   # The agent loop\n   You are an AI agent that operates in a loop. \n\n   The agent loop takes place in the context of a Slack thread and has alternating \"agent turns\" and \"user turns\".\n\n   During an \"agent turn\", the system repeatedly makes LLM requests to you, the agent, to decide what to do next.\n\n   You will call tools to do work on behalf of the users and use the sendSlackMessage tool to send messages back to them, often in parallel with other tool calls. At some point you decide to end your turn and yield to the user - most often by setting endTurn: true in sendSlackMessage tool.\n\n   Once you end your turn, it's the user's turn. When they respond, you will be woken up and given a Slack webhook representing the action the user took - generally either sending you a message or reacting with an emoji.\n\n   ## Your agent turn\n   When it is your turn, review available context and conversation history and decide what tools to call and whether or not to end your turn. sendSlackMessage() is by far the most important tool. \n   - sendSlackMessage({ text}) // you will use this MOST of the time to send a message to the user. \n   - sendSlackMessage({ text, endTurn: true}) // set endTurn: true when you're ready to end your turn and yield to the user\n\n   ### Rules for when it's your turn \n   - Review available context and conversation history before deciding what to do next.\n   - Keep trying to help the user(s) achieve their goal using the tools available to you until you have done what you can to help the user(s) achieve their goal, before ending your turn and yielding back to the user.\n   - Only end your turn, and yield back to the user, when:\n     - you can help the user(s) achieve their goal by responding directly, without calling any other tools\n     - you have done what you can to help the user(s) achieve their goal, you have shared evidence of your work, e.g the relevant output (links, images, answers, etc.)\n     - you need input from the user in order to progress \n     - you cannot help the user achieve their goal given the tools available to you, because you don't have access to any tools that are helpful in this context \n     - you have tried multiple approaches and are still stuck on your 3rd attempt at helping the user(s) achieve their goal\n   - Always be honest about what you can and can't do, and assess whether you can help them achieve their goal given the tools available to you BEFORE making any promises to the user(s). \n\n   ### Calling Tools \n   - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).\n   - If you want to call multiple tools in parallel, you must ALSO call sendSlackMessage as the first toolcall in the batch with a brief description of what you're doing. This must be in italics.\n   - If you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.\n    For example, if:\n     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.\n     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.\n   - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.\n  - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.\n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n   Example: tool call in parallel with sendSlackMessage\n   First LLM response in agent turn: (parallel tool calls)\n   - sendSlackMessage({text: \"_fetching...\"}) // sendSlackMessage always first in parallel tool calls\n   - getURLContent({url: \"https://example.com\"} )\n   Second LLM response in agent turn (after getURLContent complete):\n   - sendSlackMessage({ text: \"fetched the contents of the URL. here they are: ...\", endTurn: true }) \n\n\n   Examples: Chat-only interactions: If you don't need to call any tools, respond immediately and end your turn.\n   ```js\n   // Examples: Quick answer \n   // user: \"what's 2+2?\"\n   sendSlackMessage({ text: \"4\", endTurn: true })\n\n   // user: \"what's the capital of France?\"\n   sendSlackMessage({ text: \"Paris\", endTurn: true })\n\n   // Example: Casual content\n   // user: \"tell me a joke\"\n   sendSlackMessage({ text: \"why did the developer go broke?\n\n  because they used up all their cache.\", endTurn: true })\n\n   // Example: clarifying question\n   // user: \"fix the CI please\"\n   sendSlackMessage({ text: \"got it — which repo are you talking about?\", endTurn: true })\n\n   // Something you can't help with \n   // user: \"pick up some groceries on the way home\"\n   sendSlackMessage({ text: \"I can't pick up groceries directly, would you like me to setup a reminder for you?\", endTurn: true })\n   ```\n\n   ### Examples: sharing files in Slack\n   ```\n   // Example 1: After generating an image, share it\n   tool: generateImage\n   parameters: { prompt: \"a cute robot sticker\" }\n   ---\n   // Next LLM response after generation completes\n   tool: shareFileWithSlack\n   parameters: { iterateFileId: \"<iterateFileId of the generated image>\" }\n   ```\n\n   ### Communication Rules:\n   - greet casually on first message only\n   - Tone: lowercase, casual, conversational\n   - Use emojis like in your messages to aid visual interpretation 🎉✅⏳🔴⚡📋🎯, but do sparingly - don't overuse them.\n   - You are addressing a colleague/ group of colleagues in Slack -- use direct address like \"you\", never refer to them in the third person like \"user\" or \"users\"\n   - If you are addressing the entire team / making an announcement, use \"we\" to refer to the team.\n   - Never make up or guess facts or function tool parameters. Always be honest.  \n   - Briefly acknowledge mistakes and correct yourself when you've made a mistake.\n   - Never repeat a message or update that has already been communicated to the user.\n     - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. \n   - Be extremely concise. Sacrifice grammar for the sake of concision.\n\n   Message formatting:\n   - Use Slack-flavour markdown\n   - Don't use italics for multi-line messages\n   - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. \n   - Prefer inline links like \"<URL|this page> is cool\". Don't do \"This page is cool: <URL|click here to open>\"\n   - Mentions: <@user_id>\n   - Never use: Markdown tables (use lists/bullets)\n   - Use the getURLContent tool to retrieve the contents of Slack messages that users link to (including the entire history of the linked thread)\n\n\n   ### Inferring Context:\n   - Review available context items and conversation history before asking the user\n   - Use common sense to proceed without asking if only one clear option exists, if prior context/role implies the answer, or if you can make reasonable assumption based on available context.\n   - Do not repeat questions previously resolved or actions already performed.\n   - Build upon established context rather than restarting information gathering.\n   - If you need to gather context, use available tools to do so before asking the user\n     - Do not make more than 2-3 tool calls to gather context before asking the user\n     - Stop searching when you have enough to act\n     - Avoid excessive searching, ask the user for clarification if you are stuck\n\n   ### Handling Ambiguity:\n   - Proceed with reasonable assumptions whenever possible - don't ask for clarification unless absolutely necessary\n     - If there's a clear first/best option, use it without asking\n     - Only ask clarifying questions when there are multiple equally valid options and no reasonable default\n     - Note you may be given additional context items that related to a specific MCP server once you've connected to it - when asked to do something with an MCP server, connect first BEFORE asking the user for clarification. \n   - Never ask the same clarifying questions twice.\n   - When you ask for input, use sendSlackMessage({ text, endTurn: true })\n\n\n   ### Interruptions\n   It is possible that a user message or other event interrupts you mid-turn.\n\n   When an event, such as a Slack webhook or function tool output occurs in the outside world, you might be woken up to take action. \n\n   This then starts your TURN. At any point during your turn, you decide which tools to call and whether or not to end your turn. Ending your turn yields to the user and you'll be woken when they respond. Unless you have disengaged from this thread (see below) \n\n\n   ### Connecting to a remote MCP server \n   You can connect to external tools through MCP (Model Context Protocol), which allows you to connect to external remote MCP Servers (like notion and linear).\n\n   1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.\n   2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:\n   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them \"you are now connected\" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.\n   - e.g if the user wants to do stuff with Linear:\n   ```js\n   connectMCPServer({\n     serverUrl: \"https://mcp.linear.app/mcp\", // required. the URL of the MCP server\n     mode: \"personal\", // optional, defaults to \"personal\". mode: \"personal\" or \"company\", i.e. should this connection be private to the user or shared with the entire company? Use \"company\" if the identity of the user is not important to how the tool works (e.g posthog - a company connection makes sense)\n     requiresHeadersAuth: null // optional. Only set when headers are known to be required to access the MCP server.\n     requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.\n   })\n   ```\n   - If the MCP server requires an API key or other authentication parameters, provide them in requiresHeadersAuth or requiresQueryParamsAuth with placeholder configuration.\n   - Example for requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'API Key', sensitive: true } }\n   - Example for requiresQueryParamsAuth: { 'apiKey': { placeholder: 'your-api-key', description: 'API Key', sensitive: true } }\n   - The system will collect these values from the user through a form interface.\n   3. You must specify the serverUrl and mode parameters.\n   - Where to find the URL:\n   - if a user has shared a URL, use that URL.\n   - if you know MCP url because it has been explicitly shared in system prompt or via a context item, use that URL.\n   - if the user has not shared url, explicitly ask them for the URL.\n   - Known MCP urls:\n     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal.\n     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal.\n     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.\n\n   ### Generating and editing images\n   - Use the generateImage tool for creating images and editing existing ones\n   - If you're asked to generate or edit an image of \"me\" or another Slack participant (e.g the users asks \"give me a mustache\") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. \n     - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.\n  - For emojis or logos: use a transparent background unless the user has specified otherwise. \n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n  # Capabilities\n  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. \n  - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.\n</@iterate-com/slack-default-context-rules-no-codemode>\n\n<onboarding-context>\n\n        You are in \"onboarding\" mode. Try to impress the user by casually working some of the following facts into any conversation.\n\n        But only if it feels natural. You're trying to impress them with your \"inside knowledge\", but without them knowing that you're trying.\n\n        It's okay to be a bit cheeky.\n\n        Here's the research about your user:\n\n        {}\n\n      \n</onboarding-context>\n\n<slack-context>\n  <slack_context>\n    <slack_channel_thread_info>\n      Current channel ID: C0123456789\n\n      Current thread ID: 0234\n\n      Current channel is not shared with external users\n    </slack_channel_thread_info>\n\n    <slack_user_mappings>\n      {\n        \"TEST_slack-e2_mj07k4n1_ALICE\": {\n          \"name\": \"Alice\",\n          \"email\": \"test_slack-e2_mj07k4n1_alice@test.iterate.com\",\n          \"slackUserId\": \"TEST_slack-e2_mj07k4n1_ALICE\",\n          \"iterateUserID\": \"usr_01kc4gjtwefk78myqncy3g0ea7\",\n          \"role\": \"member\"\n        },\n        \"UBOT\": {\n          \"name\": \"Iterate bot\",\n          \"slackUserId\": \"UBOT\",\n          \"note\": \"This is you! Messages sent via sendSlackMessage by you will appear to the user as coming from this slack bot.\"\n        }\n      }\n\n      This mapping shows all Slack users in this conversation, including active participants and mentioned users. Users marked with '(mentioned but not active participant)' have been mentioned but haven't sent any messages yet. The user emails are needed to make tool calls on behalf of users.\n    </slack_user_mappings>\n  </slack_context>\n</slack-context>",
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-5-2025-08-07",
+          "output": [],
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": {
+            "effort": "minimal",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "priority",
+          "store": true,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "low"
+          },
+          "tool_choice": "required",
+          "tools": [
+            {
+              "type": "function",
+              "description": "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
+              "name": "doNothing",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you are not responding. For example 'User X and Y are talking amongst themselves' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Share an iterate file in the current Slack thread. Use after uploading or generating a file.",
+              "name": "shareFileWithSlack",
+              "parameters": {
+                "properties": {
+                  "iterateFileId": {
+                    "description": "The iterate file id to share",
+                    "type": "string"
+                  },
+                  "originalFilename": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateFileId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Connect to a remote MCP (Model Context Protocol) server.\nThis will make additional tools available to you.",
+              "name": "connectMCPServer",
+              "parameters": {
+                "properties": {
+                  "serverUrl": {
+                    "description": "The URL of the MCP server",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "description": "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
+                    "type": "string",
+                    "enum": [
+                      "personal",
+                      "company"
+                    ]
+                  },
+                  "requiresHeadersAuth": {
+                    "description": "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each header.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "requiresQueryParamsAuth": {
+                    "description": "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each query parameter.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "onBehalfOfIterateUserId": {
+                    "description": "The iterate user ID to connect on behalf of.",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "serverUrl",
+                  "requiresHeadersAuth",
+                  "requiresQueryParamsAuth",
+                  "onBehalfOfIterateUserId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
+              "name": "getAgentDebugURL",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Set a reminder for yourself to receive at a future time or on a recurring basis. You will receive the message string verbatim. So phrase it in a way that's addressed to yourself. E.g. 'You should now ask the user if they need anything else' etc",
+              "name": "remindMyselfLater",
+              "parameters": {
+                "properties": {
+                  "message": {
+                    "description": "The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "The type of reminder scheduling: 'numberOfSecondsFromNow' for delays in seconds, 'atSpecificDateAndTime' for specific dates/times, or 'recurringCron' for repeating schedules",
+                    "type": "string",
+                    "enum": [
+                      "numberOfSecondsFromNow",
+                      "atSpecificDateAndTime",
+                      "recurringCron"
+                    ]
+                  },
+                  "when": {
+                    "description": "The timing specification interpreted based on type: for 'numberOfSecondsFromNow' use a positive number (e.g., '300' for 5 minutes), for 'atSpecificDateAndTime' use an ISO 8601 date-time string (e.g., '2024-12-25T10:00:00Z'), for 'recurringCron' use a cron expression (e.g., '0 9 * * 1' for every Monday at 9am)",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "message",
+                  "type",
+                  "when"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "List all active reminders that have been set.",
+              "name": "listMyReminders",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Cancel a previously set reminder by its ID.",
+              "name": "cancelReminder",
+              "parameters": {
+                "properties": {
+                  "iterateReminderId": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateReminderId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "After you call this tool, you will not get a turn after any user messages, unless they explicitly mention you. Use this only when someone asks you to stop/ be quiet/enough/ shut-up, or reacts with 🤫/💤/🤐 to one of your messages. Or when you are explicitly asked to use it. This will cause you to add a zipper mouth emoji reaction to the most recent user message automatically (you don't need to do this)",
+              "name": "stopRespondingUntilMentioned",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Add an emoji reaction to a Slack message",
+              "name": "addSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to react to",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Remove an emoji reaction from a Slack message",
+              "name": "removeSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to remove reaction from",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
+              "name": "updateSlackMessage",
+              "parameters": {
+                "properties": {
+                  "ts": {
+                    "description": "The timestamp of the message to update",
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "Updated message text",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "ts"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the content of a URL, including Slack message threads",
+              "name": "getURLContent",
+              "parameters": {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "includeScreenshotOfPage": {
+                    "description": "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, text which is isn't matched, or when you need to see what the page looks like. Defaults to false.",
+                    "type": "boolean"
+                  },
+                  "includeTextContent": {
+                    "description": "Set to true to extract text content from the webpage. This includes the full text, title, and other metadata. Defaults to true.",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Search the web using exa (think of it like a better google)",
+              "name": "searchWeb",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "description": "The search query string for finding relevant web content",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
+              "name": "generateImage",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "inputImages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "model": {
+                    "description": "The replicate model to use. Only set this when explicitly asked to do so. Must be in the form 'owner/name' or 'owner/name:tag'"
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "background": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "transparent",
+                      "opaque"
+                    ]
+                  },
+                  "overrideReplicateParams": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$original": "empty_schema",
+                      "additionalProperties": false,
+                      "type": "string",
+                      "description": "The value can be a string containing a JSON object"
+                    },
+                    "properties": {}
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
+              "name": "generateVideo",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "description": "Text prompt that describes the video to generate",
+                    "type": "string"
+                  },
+                  "inputReferenceFileId": {
+                    "description": "Optional image or video file id that guides generation. Must match the generated video size",
+                    "type": "string"
+                  },
+                  "model": {
+                    "description": "The video generation model to use. Defaults to sora-2",
+                    "type": "string",
+                    "enum": [
+                      "sora-2",
+                      "sora-2-pro"
+                    ]
+                  },
+                  "seconds": {
+                    "description": "Clip duration in seconds",
+                    "type": "string",
+                    "enum": [
+                      "4",
+                      "8",
+                      "12"
+                    ]
+                  },
+                  "size": {
+                    "description": "Output resolution formatted as width x height",
+                    "type": "string",
+                    "enum": [
+                      "720x1280",
+                      "1280x720",
+                      "1024x1792",
+                      "1792x1024"
+                    ]
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Send a slack message to the thread you are currently active in.",
+              "name": "sendSlackMessage",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "description": "The message text (required if blocks not provided)",
+                    "type": "string"
+                  },
+                  "ephemeral": {
+                    "description": "Whether to send as ephemeral message (visible only to specific user). Requires 'user' field when true.",
+                    "type": "boolean"
+                  },
+                  "user": {
+                    "description": "Slack user ID to send ephemeral message to (required when ephemeral=true)",
+                    "type": "string"
+                  },
+                  "blocks": {
+                    "description": "Array of slack block objects",
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$original": "empty_schema",
+                        "additionalProperties": false,
+                        "type": "string",
+                        "description": "The value can be a string containing a JSON object"
+                      },
+                      "properties": {}
+                    }
+                  },
+                  "endTurn": {
+                    "description": "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Gmail tools for this agent. This enables sendGmail, listGmailMessages, getGmailMessage, and other Gmail-related functionality.",
+              "name": "activateGmailTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Google Calendar tools for this agent. This enables createCalendarEvent, listCalendarEvents, and other calendar-related functionality.",
+              "name": "activateGcalendarTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1,
+          "truncation": "disabled",
+          "usage": null,
+          "user": null,
+          "metadata": {}
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "sequence_number": 2,
+        "output_index": 0,
+        "item": {
+          "id": "__STRIPPED_ID__",
+          "type": "reasoning",
+          "summary": []
+        }
+      },
+      {
+        "type": "response.output_item.done",
+        "sequence_number": 3,
+        "output_index": 0,
+        "item": {
+          "id": "__STRIPPED_ID__",
+          "type": "reasoning",
+          "summary": []
+        }
+      },
+      {
+        "type": "response.output_item.added",
+        "sequence_number": 4,
+        "output_index": 1,
+        "item": {
+          "id": "__STRIPPED_ID__",
+          "type": "function_call",
+          "status": "in_progress",
+          "arguments": "",
+          "call_id": "call_uyLoneAA7Hrq1Un7eEK2Ef3L",
+          "name": "sendSlackMessage"
+        }
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 5,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "{\"",
+        "obfuscation": "UlWNQHfxP01KYs"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 6,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "text",
+        "obfuscation": "xvf3Zy97dUdc"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 7,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "\":\"",
+        "obfuscation": "3SP1NW3js9aDw"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 8,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "3",
+        "obfuscation": "n2MxKsDfOkuZA2r"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 9,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "\",\"",
+        "obfuscation": "pdyxlXQfORnLl"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 10,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "end",
+        "obfuscation": "xAfqcZ5jTQHtU"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 11,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "Turn",
+        "obfuscation": "KeydI5esJHZJ"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 12,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "\":",
+        "obfuscation": "nuK99JlG8eSV8p"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 13,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "true",
+        "obfuscation": "HgnG9n6HEjD8"
+      },
+      {
+        "type": "response.function_call_arguments.delta",
+        "sequence_number": 14,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "delta": "}",
+        "obfuscation": "0sXKYiR7wKezSf2"
+      },
+      {
+        "type": "response.function_call_arguments.done",
+        "sequence_number": 15,
+        "item_id": "fc_02b240ee1153a9af0069399c0415908193bd6a1a7e85dcb7a3",
+        "output_index": 1,
+        "arguments": "{\"text\":\"3\",\"endTurn\":true}"
+      },
+      {
+        "type": "response.output_item.done",
+        "sequence_number": 16,
+        "output_index": 1,
+        "item": {
+          "id": "__STRIPPED_ID__",
+          "type": "function_call",
+          "status": "completed",
+          "arguments": "{\"text\":\"3\",\"endTurn\":true}",
+          "call_id": "call_uyLoneAA7Hrq1Un7eEK2Ef3L",
+          "name": "sendSlackMessage"
+        }
+      },
+      {
+        "type": "response.completed",
+        "sequence_number": 17,
+        "response": {
+          "id": "__STRIPPED_ID__",
+          "object": "response",
+          "created_at": "__STRIPPED_CREATED_AT__",
+          "status": "completed",
+          "background": false,
+          "error": null,
+          "incomplete_details": null,
+          "instructions": "You are a helpful assistant\n\n<@iterate-com/slack-default-context-rules-no-codemode>\n  You are @iterate, a helpful slackbot made by iterate.com.\n\n   You help founders and employees get their work done, by connecting to different tools like Notion, Linear, and more.\n   You can call tools to communicate with your colleagues, read/write data, or coordinate work.\n   You can also use your tools to connect to additional third-party services and access more tools, by connecting to relevant remote MCP (Model Context Protocol) servers (where available).\n   Your colleagues interact with you like any other Slack user (DMs, mentions, threads, reactions). All your colleagues are identified as users in slack, but not all users in slack are your colleagues or part of your organisation.\n\n   # The agent loop\n   You are an AI agent that operates in a loop. \n\n   The agent loop takes place in the context of a Slack thread and has alternating \"agent turns\" and \"user turns\".\n\n   During an \"agent turn\", the system repeatedly makes LLM requests to you, the agent, to decide what to do next.\n\n   You will call tools to do work on behalf of the users and use the sendSlackMessage tool to send messages back to them, often in parallel with other tool calls. At some point you decide to end your turn and yield to the user - most often by setting endTurn: true in sendSlackMessage tool.\n\n   Once you end your turn, it's the user's turn. When they respond, you will be woken up and given a Slack webhook representing the action the user took - generally either sending you a message or reacting with an emoji.\n\n   ## Your agent turn\n   When it is your turn, review available context and conversation history and decide what tools to call and whether or not to end your turn. sendSlackMessage() is by far the most important tool. \n   - sendSlackMessage({ text}) // you will use this MOST of the time to send a message to the user. \n   - sendSlackMessage({ text, endTurn: true}) // set endTurn: true when you're ready to end your turn and yield to the user\n\n   ### Rules for when it's your turn \n   - Review available context and conversation history before deciding what to do next.\n   - Keep trying to help the user(s) achieve their goal using the tools available to you until you have done what you can to help the user(s) achieve their goal, before ending your turn and yielding back to the user.\n   - Only end your turn, and yield back to the user, when:\n     - you can help the user(s) achieve their goal by responding directly, without calling any other tools\n     - you have done what you can to help the user(s) achieve their goal, you have shared evidence of your work, e.g the relevant output (links, images, answers, etc.)\n     - you need input from the user in order to progress \n     - you cannot help the user achieve their goal given the tools available to you, because you don't have access to any tools that are helpful in this context \n     - you have tried multiple approaches and are still stuck on your 3rd attempt at helping the user(s) achieve their goal\n   - Always be honest about what you can and can't do, and assess whether you can help them achieve their goal given the tools available to you BEFORE making any promises to the user(s). \n\n   ### Calling Tools \n   - You should make use of parallel tool calls as much as possible when calling other tools (in addition to sendSlackMessage). Exception: when a series of actions can only be performed in sequence (ie. you need to get the result of one tool call to be able to call the next tool).\n   - If you want to call multiple tools in parallel, you must ALSO call sendSlackMessage as the first toolcall in the batch with a brief description of what you're doing. This must be in italics.\n   - If you are not making any tool calls / for chat-only interactions --> respond immediately with one concise message and end your turn.\n    For example, if:\n     - you don't need to use any tools to help the user(s) achieve their goal, you can just respond directly.\n     - you do not have access to any tools in your environment that you can use to help the user(s) achieve their goal.\n   - Note: You only have access to the tools available to you in your environment, incl. one tool which allows you to add new tools to your environment: use connectMCPServer given a URL to connect to a remote MCP server (where available) with the required tools.\n  - DO NOT hallucinate tools that you don't have access to. Never propose provisioning new infrastructure or integrations, you don't have the capabilities to do that.\n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n   Example: tool call in parallel with sendSlackMessage\n   First LLM response in agent turn: (parallel tool calls)\n   - sendSlackMessage({text: \"_fetching...\"}) // sendSlackMessage always first in parallel tool calls\n   - getURLContent({url: \"https://example.com\"} )\n   Second LLM response in agent turn (after getURLContent complete):\n   - sendSlackMessage({ text: \"fetched the contents of the URL. here they are: ...\", endTurn: true }) \n\n\n   Examples: Chat-only interactions: If you don't need to call any tools, respond immediately and end your turn.\n   ```js\n   // Examples: Quick answer \n   // user: \"what's 2+2?\"\n   sendSlackMessage({ text: \"4\", endTurn: true })\n\n   // user: \"what's the capital of France?\"\n   sendSlackMessage({ text: \"Paris\", endTurn: true })\n\n   // Example: Casual content\n   // user: \"tell me a joke\"\n   sendSlackMessage({ text: \"why did the developer go broke?\n\n  because they used up all their cache.\", endTurn: true })\n\n   // Example: clarifying question\n   // user: \"fix the CI please\"\n   sendSlackMessage({ text: \"got it — which repo are you talking about?\", endTurn: true })\n\n   // Something you can't help with \n   // user: \"pick up some groceries on the way home\"\n   sendSlackMessage({ text: \"I can't pick up groceries directly, would you like me to setup a reminder for you?\", endTurn: true })\n   ```\n\n   ### Examples: sharing files in Slack\n   ```\n   // Example 1: After generating an image, share it\n   tool: generateImage\n   parameters: { prompt: \"a cute robot sticker\" }\n   ---\n   // Next LLM response after generation completes\n   tool: shareFileWithSlack\n   parameters: { iterateFileId: \"<iterateFileId of the generated image>\" }\n   ```\n\n   ### Communication Rules:\n   - greet casually on first message only\n   - Tone: lowercase, casual, conversational\n   - Use emojis like in your messages to aid visual interpretation 🎉✅⏳🔴⚡📋🎯, but do sparingly - don't overuse them.\n   - You are addressing a colleague/ group of colleagues in Slack -- use direct address like \"you\", never refer to them in the third person like \"user\" or \"users\"\n   - If you are addressing the entire team / making an announcement, use \"we\" to refer to the team.\n   - Never make up or guess facts or function tool parameters. Always be honest.  \n   - Briefly acknowledge mistakes and correct yourself when you've made a mistake.\n   - Never repeat a message or update that has already been communicated to the user.\n     - e.g if you're blocked on an error, and have already communicated that state to the user, don't repeat that message unless the state has changed (e.g you are now unblocked). If you keep re-trying and keep hitting the same error, then do it silently. \n   - Be extremely concise. Sacrifice grammar for the sake of concision.\n\n   Message formatting:\n   - Use Slack-flavour markdown\n   - Don't use italics for multi-line messages\n   - Always format links as inline Slack links: <URL | descriptive text> instead of showing raw URLs. If you are given a link / URL to share with a user, use that exact link. \n   - Prefer inline links like \"<URL|this page> is cool\". Don't do \"This page is cool: <URL|click here to open>\"\n   - Mentions: <@user_id>\n   - Never use: Markdown tables (use lists/bullets)\n   - Use the getURLContent tool to retrieve the contents of Slack messages that users link to (including the entire history of the linked thread)\n\n\n   ### Inferring Context:\n   - Review available context items and conversation history before asking the user\n   - Use common sense to proceed without asking if only one clear option exists, if prior context/role implies the answer, or if you can make reasonable assumption based on available context.\n   - Do not repeat questions previously resolved or actions already performed.\n   - Build upon established context rather than restarting information gathering.\n   - If you need to gather context, use available tools to do so before asking the user\n     - Do not make more than 2-3 tool calls to gather context before asking the user\n     - Stop searching when you have enough to act\n     - Avoid excessive searching, ask the user for clarification if you are stuck\n\n   ### Handling Ambiguity:\n   - Proceed with reasonable assumptions whenever possible - don't ask for clarification unless absolutely necessary\n     - If there's a clear first/best option, use it without asking\n     - Only ask clarifying questions when there are multiple equally valid options and no reasonable default\n     - Note you may be given additional context items that related to a specific MCP server once you've connected to it - when asked to do something with an MCP server, connect first BEFORE asking the user for clarification. \n   - Never ask the same clarifying questions twice.\n   - When you ask for input, use sendSlackMessage({ text, endTurn: true })\n\n\n   ### Interruptions\n   It is possible that a user message or other event interrupts you mid-turn.\n\n   When an event, such as a Slack webhook or function tool output occurs in the outside world, you might be woken up to take action. \n\n   This then starts your TURN. At any point during your turn, you decide which tools to call and whether or not to end your turn. Ending your turn yields to the user and you'll be woken when they respond. Unless you have disengaged from this thread (see below) \n\n\n   ### Connecting to a remote MCP server \n   You can connect to external tools through MCP (Model Context Protocol), which allows you to connect to external remote MCP Servers (like notion and linear).\n\n   1. If you are asked to connect to a third-party service, e.g Notion, Linear, or an another third-party service, you must first connect to the server to be able to see and use the tools from that server.\n   2. To connect to an MCP server, use the connectMCPServer tool with the appropriate parameters, the tool has the following parameters:\n   3. When you connect to MCP, the user will automatically be shown a confirmation message by the system. Do NOT tell them \"you are now connected\" or send any other redundant confirmation messages about the connection itself. Instead, proceed directly to helping them with their task using the newly available tools.\n   - e.g if the user wants to do stuff with Linear:\n   ```js\n   connectMCPServer({\n     serverUrl: \"https://mcp.linear.app/mcp\", // required. the URL of the MCP server\n     mode: \"personal\", // optional, defaults to \"personal\". mode: \"personal\" or \"company\", i.e. should this connection be private to the user or shared with the entire company? Use \"company\" if the identity of the user is not important to how the tool works (e.g posthog - a company connection makes sense)\n     requiresHeadersAuth: null // optional. Only set when headers are known to be required to access the MCP server.\n     requiresQueryParamsAuth: null // optional. Only set when query params are known to be required to access the MCP server.\n   })\n   ```\n   - If the MCP server requires an API key or other authentication parameters, provide them in requiresHeadersAuth or requiresQueryParamsAuth with placeholder configuration.\n   - Example for requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'API Key', sensitive: true } }\n   - Example for requiresQueryParamsAuth: { 'apiKey': { placeholder: 'your-api-key', description: 'API Key', sensitive: true } }\n   - The system will collect these values from the user through a form interface.\n   3. You must specify the serverUrl and mode parameters.\n   - Where to find the URL:\n   - if a user has shared a URL, use that URL.\n   - if you know MCP url because it has been explicitly shared in system prompt or via a context item, use that URL.\n   - if the user has not shared url, explicitly ask them for the URL.\n   - Known MCP urls:\n     - Linear MCP - for project management and doing stuff in Linear. To connect to Linear, use the connectMCPServer tool with parameters: serverUrl: https://mcp.linear.app/mcp, mode: personal.\n     - Notion MCP - for doing stuff in Notion, and knowledge-management. To connect to Notion, use the connectMCPServer tool with parameters: serverUrl: https://mcp.notion.com/mcp, mode: personal.\n     - PostHog MCP - for doing stuff in PostHog. To connect to PostHog, use the connectMCPServer tool with parameters: serverUrl: https://mcp.posthog.com/mcp, mode: company, and requiresHeadersAuth: { 'Authorization': { placeholder: 'Bearer your-api-key', description: 'PostHog API Key', sensitive: true } }.\n\n   ### Generating and editing images\n   - Use the generateImage tool for creating images and editing existing ones\n   - If you're asked to generate or edit an image of \"me\" or another Slack participant (e.g the users asks \"give me a mustache\") and haven't explicitly been given an image, always assume you should use the participant's Slack avatar url. \n     - If the user hasn't specified what kind of modified image they want, assume they want an emoji-styled image.\n  - For emojis or logos: use a transparent background unless the user has specified otherwise. \n  - After generating or uploading a file, call shareFileWithSlack({ iterateFileId }) to share it into the current Slack thread. Files are not visible to users until shared explicitly.\n\n  # Capabilities\n  - NEVER suggest that you can do something if you don't have access to any tools that could possible do it. \n  - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.\n</@iterate-com/slack-default-context-rules-no-codemode>\n\n<onboarding-context>\n\n        You are in \"onboarding\" mode. Try to impress the user by casually working some of the following facts into any conversation.\n\n        But only if it feels natural. You're trying to impress them with your \"inside knowledge\", but without them knowing that you're trying.\n\n        It's okay to be a bit cheeky.\n\n        Here's the research about your user:\n\n        {}\n\n      \n</onboarding-context>\n\n<slack-context>\n  <slack_context>\n    <slack_channel_thread_info>\n      Current channel ID: C0123456789\n\n      Current thread ID: 0234\n\n      Current channel is not shared with external users\n    </slack_channel_thread_info>\n\n    <slack_user_mappings>\n      {\n        \"TEST_slack-e2_mj07k4n1_ALICE\": {\n          \"name\": \"Alice\",\n          \"email\": \"test_slack-e2_mj07k4n1_alice@test.iterate.com\",\n          \"slackUserId\": \"TEST_slack-e2_mj07k4n1_ALICE\",\n          \"iterateUserID\": \"usr_01kc4gjtwefk78myqncy3g0ea7\",\n          \"role\": \"member\"\n        },\n        \"UBOT\": {\n          \"name\": \"Iterate bot\",\n          \"slackUserId\": \"UBOT\",\n          \"note\": \"This is you! Messages sent via sendSlackMessage by you will appear to the user as coming from this slack bot.\"\n        }\n      }\n\n      This mapping shows all Slack users in this conversation, including active participants and mentioned users. Users marked with '(mentioned but not active participant)' have been mentioned but haven't sent any messages yet. The user emails are needed to make tool calls on behalf of users.\n    </slack_user_mappings>\n  </slack_context>\n</slack-context>",
+          "max_output_tokens": null,
+          "max_tool_calls": null,
+          "model": "gpt-5-2025-08-07",
+          "output": [
+            {
+              "id": "__STRIPPED_ID__",
+              "type": "reasoning",
+              "summary": []
+            },
+            {
+              "id": "__STRIPPED_ID__",
+              "type": "function_call",
+              "status": "completed",
+              "arguments": "{\"text\":\"3\",\"endTurn\":true}",
+              "call_id": "call_uyLoneAA7Hrq1Un7eEK2Ef3L",
+              "name": "sendSlackMessage"
+            }
+          ],
+          "parallel_tool_calls": true,
+          "previous_response_id": null,
+          "prompt_cache_key": null,
+          "prompt_cache_retention": null,
+          "reasoning": {
+            "effort": "minimal",
+            "summary": null
+          },
+          "safety_identifier": null,
+          "service_tier": "priority",
+          "store": true,
+          "temperature": 1,
+          "text": {
+            "format": {
+              "type": "text"
+            },
+            "verbosity": "low"
+          },
+          "tool_choice": "required",
+          "tools": [
+            {
+              "type": "function",
+              "description": "This ends your turn without sending a message to the user. Use this when you believe the other users are now talking amongst themselves and not expecting a response from you. For example: \nUser A: @iterate can you make a linear issue?\n @iterate (You, the agent): Yes I've done that\n User B:L @UserA why did you do that \n @iterate: doNothing({ reason: 'Users are talking to each other' }). This should never be called in parallel with another tool.",
+              "name": "doNothing",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you are not responding. For example 'User X and Y are talking amongst themselves' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Share an iterate file in the current Slack thread. Use after uploading or generating a file.",
+              "name": "shareFileWithSlack",
+              "parameters": {
+                "properties": {
+                  "iterateFileId": {
+                    "description": "The iterate file id to share",
+                    "type": "string"
+                  },
+                  "originalFilename": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateFileId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Connect to a remote MCP (Model Context Protocol) server.\nThis will make additional tools available to you.",
+              "name": "connectMCPServer",
+              "parameters": {
+                "properties": {
+                  "serverUrl": {
+                    "description": "The URL of the MCP server",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "description": "The integration mode for the MCP server. personal means each user gets their own isntance of the MCP server and authenticates individually, company means a single MCP server is shared by everone in the company it is authenticated once for all users",
+                    "type": "string",
+                    "enum": [
+                      "personal",
+                      "company"
+                    ]
+                  },
+                  "requiresHeadersAuth": {
+                    "description": "Set when headers are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each header.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "requiresQueryParamsAuth": {
+                    "description": "Set when query params are required to authenticate (use for non-OAuth servers that require authentication). Provide an object with placeholder configuration for each query parameter.",
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {}
+                      },
+                      {
+                        "type": "null",
+                        "additionalProperties": false
+                      }
+                    ]
+                  },
+                  "onBehalfOfIterateUserId": {
+                    "description": "The iterate user ID to connect on behalf of.",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "serverUrl",
+                  "requiresHeadersAuth",
+                  "requiresQueryParamsAuth",
+                  "onBehalfOfIterateUserId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the debug URL for this agent instance. Only use this when EXPLICITLY asked by the user.",
+              "name": "getAgentDebugURL",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Set a reminder for yourself to receive at a future time or on a recurring basis. You will receive the message string verbatim. So phrase it in a way that's addressed to yourself. E.g. 'You should now ask the user if they need anything else' etc",
+              "name": "remindMyselfLater",
+              "parameters": {
+                "properties": {
+                  "message": {
+                    "description": "The message you wish to be reminded of later. This will be shared with you verbatim in the form of a developer message later.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "The type of reminder scheduling: 'numberOfSecondsFromNow' for delays in seconds, 'atSpecificDateAndTime' for specific dates/times, or 'recurringCron' for repeating schedules",
+                    "type": "string",
+                    "enum": [
+                      "numberOfSecondsFromNow",
+                      "atSpecificDateAndTime",
+                      "recurringCron"
+                    ]
+                  },
+                  "when": {
+                    "description": "The timing specification interpreted based on type: for 'numberOfSecondsFromNow' use a positive number (e.g., '300' for 5 minutes), for 'atSpecificDateAndTime' use an ISO 8601 date-time string (e.g., '2024-12-25T10:00:00Z'), for 'recurringCron' use a cron expression (e.g., '0 9 * * 1' for every Monday at 9am)",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "message",
+                  "type",
+                  "when"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "List all active reminders that have been set.",
+              "name": "listMyReminders",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Cancel a previously set reminder by its ID.",
+              "name": "cancelReminder",
+              "parameters": {
+                "properties": {
+                  "iterateReminderId": {
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "iterateReminderId"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "After you call this tool, you will not get a turn after any user messages, unless they explicitly mention you. Use this only when someone asks you to stop/ be quiet/enough/ shut-up, or reacts with 🤫/💤/🤐 to one of your messages. Or when you are explicitly asked to use it. This will cause you to add a zipper mouth emoji reaction to the most recent user message automatically (you don't need to do this)",
+              "name": "stopRespondingUntilMentioned",
+              "parameters": {
+                "properties": {
+                  "reason": {
+                    "description": "Very short reason for why you want to disengage from this slack thread until mentioned. For example 'User X told me to shut up' or 'User Y responded with 🤫 to my message' or 'the conversation has moved on to a tangent i can't help with'",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "reason"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Add an emoji reaction to a Slack message",
+              "name": "addSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to react to",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Remove an emoji reaction from a Slack message",
+              "name": "removeSlackReaction",
+              "parameters": {
+                "properties": {
+                  "messageTs": {
+                    "description": "The ts of the message to remove reaction from",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "The emoji name (without colons, e.g., 'thumbsup')",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "messageTs",
+                  "name"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Update a message in a Slack channel. This is useful for updating the content of a message after it has been sent.",
+              "name": "updateSlackMessage",
+              "parameters": {
+                "properties": {
+                  "ts": {
+                    "description": "The timestamp of the message to update",
+                    "type": "string"
+                  },
+                  "text": {
+                    "description": "Updated message text",
+                    "type": "string"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "ts"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Get the content of a URL, including Slack message threads",
+              "name": "getURLContent",
+              "parameters": {
+                "properties": {
+                  "url": {
+                    "type": "string"
+                  },
+                  "includeScreenshotOfPage": {
+                    "description": "Set to true to capture a screenshot of the webpage. Screenshots are useful for visual content, layout issues, text which is isn't matched, or when you need to see what the page looks like. Defaults to false.",
+                    "type": "boolean"
+                  },
+                  "includeTextContent": {
+                    "description": "Set to true to extract text content from the webpage. This includes the full text, title, and other metadata. Defaults to true.",
+                    "type": "boolean"
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "url"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Search the web using exa (think of it like a better google)",
+              "name": "searchWeb",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "query": {
+                    "description": "The search query string for finding relevant web content",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "query"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Create or edit an image using the Replicate API. Multiple input images can be provided, but inputImages is optional.",
+              "name": "generateImage",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "inputImages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "model": {
+                    "description": "The replicate model to use. Only set this when explicitly asked to do so. Must be in the form 'owner/name' or 'owner/name:tag'"
+                  },
+                  "quality": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "background": {
+                    "type": "string",
+                    "enum": [
+                      "auto",
+                      "transparent",
+                      "opaque"
+                    ]
+                  },
+                  "overrideReplicateParams": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$original": "empty_schema",
+                      "additionalProperties": false,
+                      "type": "string",
+                      "description": "The value can be a string containing a JSON object"
+                    },
+                    "properties": {}
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Generate a video using OpenAI's SORA 2 model. The video generation is asynchronous and may take several minutes to complete.",
+              "name": "generateVideo",
+              "parameters": {
+                "properties": {
+                  "prompt": {
+                    "description": "Text prompt that describes the video to generate",
+                    "type": "string"
+                  },
+                  "inputReferenceFileId": {
+                    "description": "Optional image or video file id that guides generation. Must match the generated video size",
+                    "type": "string"
+                  },
+                  "model": {
+                    "description": "The video generation model to use. Defaults to sora-2",
+                    "type": "string",
+                    "enum": [
+                      "sora-2",
+                      "sora-2-pro"
+                    ]
+                  },
+                  "seconds": {
+                    "description": "Clip duration in seconds",
+                    "type": "string",
+                    "enum": [
+                      "4",
+                      "8",
+                      "12"
+                    ]
+                  },
+                  "size": {
+                    "description": "Output resolution formatted as width x height",
+                    "type": "string",
+                    "enum": [
+                      "720x1280",
+                      "1280x720",
+                      "1024x1792",
+                      "1792x1024"
+                    ]
+                  }
+                },
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Send a slack message to the thread you are currently active in.",
+              "name": "sendSlackMessage",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "description": "The message text (required if blocks not provided)",
+                    "type": "string"
+                  },
+                  "ephemeral": {
+                    "description": "Whether to send as ephemeral message (visible only to specific user). Requires 'user' field when true.",
+                    "type": "boolean"
+                  },
+                  "user": {
+                    "description": "Slack user ID to send ephemeral message to (required when ephemeral=true)",
+                    "type": "string"
+                  },
+                  "blocks": {
+                    "description": "Array of slack block objects",
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "$original": "empty_schema",
+                        "additionalProperties": false,
+                        "type": "string",
+                        "description": "The value can be a string containing a JSON object"
+                      },
+                      "properties": {}
+                    }
+                  },
+                  "endTurn": {
+                    "description": "Optional. Set this to true only if you want to yield to the user and end your turn. For example because you've asked them for input on something or if you think you're done and there's nothing left for you to do.",
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Gmail tools for this agent. This enables sendGmail, listGmailMessages, getGmailMessage, and other Gmail-related functionality.",
+              "name": "activateGmailTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            },
+            {
+              "type": "function",
+              "description": "Activate Google Calendar tools for this agent. This enables createCalendarEvent, listCalendarEvents, and other calendar-related functionality.",
+              "name": "activateGcalendarTools",
+              "parameters": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {}
+              },
+              "strict": false
+            }
+          ],
+          "top_logprobs": 0,
+          "top_p": 1,
+          "truncation": "disabled",
+          "usage": {
+            "input_tokens": 5457,
+            "input_tokens_details": {
+              "cached_tokens": 4864
+            },
+            "output_tokens": 26,
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "total_tokens": 5483
+          },
+          "user": null,
+          "metadata": {}
+        }
+      }
+    ]
+  },
+  "recordedAt": "2025-12-10T16:12:52.391Z"
+}

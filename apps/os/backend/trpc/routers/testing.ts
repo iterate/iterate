@@ -289,6 +289,23 @@ export const testingRouter = router({
     await (agent as {} as SlackAgent).mockSlackAPI();
     return { success: true };
   }),
+  /**
+   * Configure OpenAI record/replay mode for an agent.
+   * Used in e2e tests to record API responses or replay from fixtures.
+   */
+  setOpenAIRecordReplayMode: testingAgentProcedure
+    .input(
+      z.object({
+        mode: z.enum(["record", "replay", "passthrough"]),
+        fixtureServerUrl: z.string(),
+        testName: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const agent = ctx.agent as {} as IterateAgent;
+      agent.setOpenAIRecordReplayMode(input.mode, input.fixtureServerUrl, input.testName);
+      return { success: true };
+    }),
   setUserRole,
   createTestUser,
   createOrganizationAndEstate,

@@ -1,5 +1,23 @@
-import { expect, test } from "vitest";
-import { createDisposer, createTestHelper, getAuthedTrpcClient } from "./helpers.ts";
+import { expect, test, beforeAll, afterAll } from "vitest";
+import {
+  createDisposer,
+  createTestHelper,
+  getAuthedTrpcClient,
+  startOpenAIFixtureServer,
+} from "./helpers.ts";
+
+let fixtureServerUrl: string;
+let stopFixtureServer: () => Promise<void>;
+
+beforeAll(async () => {
+  const server = await startOpenAIFixtureServer();
+  fixtureServerUrl = server.fixtureServerUrl;
+  stopFixtureServer = server.stop;
+});
+
+afterAll(async () => {
+  await stopFixtureServer();
+});
 
 test("slack agent", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
@@ -23,6 +41,10 @@ test("slack agent", { timeout: 15 * 60 * 1000 }, async () => {
     inputSlug: "slack-e2e",
     trpcClient: userTrpc,
   });
+
+  // Enable OpenAI record/replay for deterministic testing
+  // By default uses 'replay' mode. Set OPENAI_RECORD_MODE=record to capture new fixtures.
+  await h.enableOpenAIRecordReplay(fixtureServerUrl);
 
   const sent = await h.sendUserMessage("what is 1+2");
   const reply = await sent.waitForReply();

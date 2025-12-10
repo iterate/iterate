@@ -5,6 +5,9 @@ import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import { getBraintrustLogger } from "../utils/braintrust-client.ts";
 import { posthogOpenAIWrapper } from "./posthog-openai-wrapper.ts";
 import { braintrustOpenAIWrapper } from "./braintrust-wrapper.ts";
+import { createRecordReplayFetch, type RecordReplayMode } from "./openai-record-replay-fetch.ts";
+
+export type { RecordReplayMode };
 
 /**
  * Return an OpenAI client wrapped in Braintrust and PostHog.
@@ -24,14 +27,33 @@ export async function openAIProvider(opts: {
     getBraintrustParentSpanExportedId: () => Promise<string>;
   };
   estateName: string;
+  /**
+   * Optional record/replay configuration for e2e tests.
+   * When set, the OpenAI client will use a custom fetch that either:
+   * - 'record': Makes real requests and saves responses to the fixture server
+   * - 'replay': Serves responses from the fixture server without hitting OpenAI
+   * - 'passthrough': Normal behavior (no recording/replaying)
+   */
+  recordReplay?: {
+    mode: RecordReplayMode;
+    fixtureServerUrl: string;
+    testName: string;
+  };
 }): Promise<OpenAI> {
   const { env } = opts;
 
   const openAIKey = env.OPENAI_API_KEY;
   invariant(openAIKey, "OPENAI_API_KEY is missing from environment");
 
+  // Create custom fetch if record/replay is enabled
+  const customFetch =
+    opts.recordReplay && opts.recordReplay.mode !== "passthrough"
+      ? createRecordReplayFetch(opts.recordReplay)
+      : undefined;
+
   let openai = new OpenAI({
     apiKey: openAIKey,
+    fetch: customFetch,
   });
 
   if (opts.posthog) {
