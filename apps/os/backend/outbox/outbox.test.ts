@@ -1,5 +1,6 @@
 import { expectTypeOf, test } from "vitest";
 import { appRouter } from "../trpc/root.ts";
+import { getDb } from "../db/client.ts";
 import type { DBLike, FlattenProcedures } from "./pgmq-lib.ts";
 import { outboxClient } from "./client.ts";
 
@@ -38,4 +39,18 @@ test("internal event types", () => {
     "testing:pokeTYPO",
     { message: "hello" },
   );
+});
+
+test("createEvent", () => {
+  expectTypeOf(outboxClient)
+    .map((client) => {
+      return client.createEvent(getDb(), "testing:poke", async (tx) => {
+        // make sure tx is usable as a normal drizzle transaction helper
+        expectTypeOf(
+          tx.query.outboxEvent.findFirst({ columns: { id: true } }),
+        ).resolves.toEqualTypeOf<{ id: number } | undefined>();
+        return { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" };
+      });
+    })
+    .resolves.toEqualTypeOf<{ dbtime: string; message: string }>();
 });
