@@ -6,7 +6,7 @@ import * as semver from "semver";
 import * as tarStream from "tar-stream";
 import * as fflate from "fflate/browser";
 import { z } from "zod";
-import { eq, desc, and, notInArray } from "drizzle-orm";
+import { eq, desc, and, notInArray, or } from "drizzle-orm";
 import dedent from "dedent";
 import { TRPCError } from "@trpc/server";
 import {
@@ -108,7 +108,7 @@ export async function triggerEstateRebuild(params: {
   commitMessage: string;
   isManual?: boolean;
 }) {
-  const { db, env, estateId, commitHash, commitMessage, isManual = false } = params;
+  const { db, estateId, commitHash, commitMessage, isManual = false } = params;
 
   // Get the estate details
   const _estateWithRepo = await db.query.estate.findFirst({
@@ -149,8 +149,6 @@ export async function triggerEstateRebuild(params: {
 
   // Use the common build trigger function
   return await triggerGithubBuild({
-    db,
-    env,
     estateId,
     commitHash,
     commitMessage,
@@ -876,7 +874,7 @@ export const estateRouter = router({
           where: and(
             eq(schema.builds.estateId, estateId),
             eq(schema.builds.commitHash, commitHash),
-            eq(schema.builds.status, "in_progress"),
+            or(eq(schema.builds.status, "in_progress"), eq(schema.builds.status, "queued")),
           ),
         });
         if (existing) {
