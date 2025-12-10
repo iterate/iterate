@@ -8,7 +8,7 @@
     "posthog:sourcemaps:inject": "doppler run -- posthog-cli --host https://eu.posthog.com sourcemap inject --directory ./dist",
     "posthog:sourcemaps:upload": "doppler run -- posthog-cli --host https://eu.posthog.com sourcemap upload --directory ./dist",
     "dev": "doppler run -- tsx ./alchemy.run cli --dev --stage local-$USER",
-    "eval": "doppler run -- evalite && evalite export",
+    "eval": "doppler run -- evalite",
     "eval:serve": "pnpx serve evalite-export",
     "eval:watch": "doppler run -- evalite watch",
     "iterate": "doppler run -- tsx --import ./sdk/cli/cf-shim/loader.ts ./sdk/cli/index.ts",

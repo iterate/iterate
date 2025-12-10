@@ -539,7 +539,8 @@ export const createDisposer = () => {
         await fn().catch((err) => errors.push(err));
       }
       if (errors.length === 1) throw errors[0];
-      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
+      if (errors.length > 0)
+        throw new Error("Multiple disposers failed:\n" + errors.join("\n"), { cause: errors });
     },
   };
 };
