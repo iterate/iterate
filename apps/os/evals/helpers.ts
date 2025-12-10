@@ -169,6 +169,8 @@ export async function createTestHelper({
     estateId,
   } as const;
 
+  await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
+
   // Generate unique Slack user IDs per test run to avoid conflicts between tests
   // Format: TEST_{unique-suffix}_{name} to identify as test users
   // Use a combination of inputSlug and timestamp to ensure uniqueness across tests
@@ -526,3 +528,18 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
     scorers: opts.scorers.map(braintrustScorerWrapper),
   });
 }
+
+export const createDisposer = () => {
+  const disposeFns: Array<() => Promise<void>> = [];
+  return {
+    fns: disposeFns,
+    [Symbol.asyncDispose]: async () => {
+      const errors: unknown[] = [];
+      for (const fn of disposeFns.toReversed()) {
+        await fn().catch((err) => errors.push(err));
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
+    },
+  };
+};

@@ -171,24 +171,21 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return super.ingestBackgroundLogs(input);
   }
 
+  async mockSlackAPI() {
+    this.slackAPI = createSlackAPIMock<WebClient>();
+  }
+
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
-    const timestamp = extractTimestampFromDurableObjectName(params.record.durableObjectName);
-    if (timestamp.length === 4) {
-      this.slackAPI = createSlackAPIMock<WebClient>();
-      return;
-    }
 
     const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
-    if (!slackAccount) {
-      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
+    if (slackAccount) {
+      this.slackAPI = new WebClient(slackAccount.accessToken, {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+      });
     }
-    // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccount.accessToken, {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-    });
   }
 
   protected getSlices(): SlackAgentSlices {
