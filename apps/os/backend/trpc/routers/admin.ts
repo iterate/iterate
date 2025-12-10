@@ -626,13 +626,11 @@ export const adminRouter = router({
     pokeOutboxClientDirectly: adminProcedure
       .input(z.object({ message: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        return ctx.db.transaction(async (tx) => {
-          // eslint-disable-next-line iterate/drizzle-conventions -- this is just to demo using the lower-level outbox client directly
-          await outboxClient.sendEvent({ transaction: tx, parent: ctx.db }, "testing:poke", {
-            message: `${input.message} at ${new Date().toISOString()}`,
-          });
-          return { done: true };
+        await outboxClient.createEvent(ctx.db, "testing:poke", async (tx) => {
+          const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
+          return { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` };
         });
+        return { done: true };
       }),
     peek: adminProcedure
       .meta({
