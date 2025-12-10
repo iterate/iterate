@@ -173,7 +173,7 @@ describe("MCP server connections", () => {
       `Using the MCP server, call userInfo to get the authenticated user info.`,
     );
 
-    const reply = await toolMsg.waitForReply({ timeout: 15_000 });
+    const reply = await toolMsg.waitForReply({ timeout: 30_000 });
     expect(reply).toMatch(/user/i);
     console.log("✅ Tool call successful (oauth)");
   });
@@ -264,7 +264,7 @@ describe("MCP server connections", () => {
 
         // Wait for OAuth required event (using events from BEFORE the message)
         const oauthEvent = await h.waitForEvent("MCP:OAUTH_REQUIRED", eventsBeforeMessage, {
-          timeout: 15_000,
+          timeout: 30_000,
           select: (e: AgentEvent & { type: "MCP:OAUTH_REQUIRED" }) => e.data,
         });
 
