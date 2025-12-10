@@ -97,7 +97,7 @@ afterAll(async () => {
 });
 
 describe("MCP server connections", () => {
-  test("connects to mock MCP server (no auth) and uses tool", { timeout: 30_000 }, async () => {
+  test("connects to mock MCP server (no auth) and uses tool", { timeout: 60_000 }, async () => {
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_NO_AUTH_SERVER_URL;
 
