@@ -4,7 +4,6 @@ name: run evals
 on:
   push:
     branches:
-      - "**/*eval*"
       - "*eval*"
   workflow_dispatch: {}
 permissions:

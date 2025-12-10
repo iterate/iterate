@@ -6,7 +6,7 @@ export default workflow({
   name: "run evals",
   on: {
     push: {
-      branches: ["**/*eval*", "*eval*"],
+      branches: ["*eval*"],
     },
     workflow_dispatch: {},
   },
