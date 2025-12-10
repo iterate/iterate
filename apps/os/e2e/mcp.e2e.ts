@@ -7,7 +7,7 @@ import {
   getServiceAuthCredentials,
   getImpersonatedTrpcClient,
   type AgentEvent,
-} from "../evals/helpers.ts";
+} from "./helpers.ts";
 
 /**
  * MCP E2E Tests

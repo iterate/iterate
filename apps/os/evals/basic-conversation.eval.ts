@@ -5,7 +5,7 @@ import {
   multiTurnScorer,
   evaliterate,
   createDisposer,
-} from "./helpers.ts";
+} from "../e2e/helpers.ts";
 
 evaliterate("agent knows when to end their turn", {
   trialCount: Number(process.env.EVAL_TRIAL_COUNT) || undefined,

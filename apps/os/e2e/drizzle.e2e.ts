@@ -1,7 +1,7 @@
 import { test, expect } from "vitest";
 import { asc, desc, eq } from "drizzle-orm";
 import { db } from "../sdk/cli/cli-db.ts";
-import * as schema from "./db/schema.ts";
+import * as schema from "../backend/db/schema.ts";
 
 const setupTestEstate = async (now = Date.now()) => {
   const [org] = await db

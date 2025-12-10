@@ -1,5 +1,5 @@
 import { test, expect, vi } from "vitest";
-import { createDisposer, createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
+import { createDisposer, createTestHelper, getAuthedTrpcClient } from "./helpers.ts";
 
 /**
  * End-to-End Onboarding Test

@@ -16,7 +16,7 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import type { ExplainedScoreResult } from "./scorer.ts";
+import type { ExplainedScoreResult } from "../evals/scorer.ts";
 
 // TODO: duplicated here because there's some weird circular dependency issue with the slack utils in tests
 function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
@@ -24,7 +24,7 @@ function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: str
   return `ts-${threadTs}-${suffix}`;
 }
 
-export * from "./scorer.ts";
+export * from "../evals/scorer.ts";
 
 export type AgentEvent = (AgentCoreEvent | MCPEvent | SlackSliceEvent) & {
   eventIndex: number;

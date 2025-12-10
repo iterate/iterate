@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { createDisposer, createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
+import { createDisposer, createTestHelper, getAuthedTrpcClient } from "./helpers.ts";
 
 test("slack agent", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
