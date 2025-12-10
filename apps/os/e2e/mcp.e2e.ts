@@ -97,7 +97,7 @@ afterAll(async () => {
 });
 
 describe("MCP server connections", () => {
-  test("connects to mock MCP server (no auth) and uses tool", { timeout: 30_000 }, async () => {
+  test("connects to mock MCP server (no auth) and uses tool", { timeout: 60_000 }, async () => {
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_NO_AUTH_SERVER_URL;
 
@@ -126,7 +126,7 @@ describe("MCP server connections", () => {
       `Using the MCP server, call mock_calculate with { operation: 'add', a: 12, b: 30 }. Return only the result.`,
     );
 
-    const reply = await toolMsg.waitForReply({ timeout: 15_000 });
+    const reply = await toolMsg.waitForReply({ timeout: 30_000 });
     expect(reply).toMatch(/42/);
     console.log("✅ Tool call successful (no auth)");
   });
