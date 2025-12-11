@@ -9,7 +9,7 @@ import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import { z } from "zod/v4";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import { getContainer } from "@cloudflare/containers";
-import type { CloudflareEnv } from "../env.ts";
+import { env, type CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -341,7 +341,10 @@ export default class extends WorkerEntrypoint {
           if (result !== "0 messages processed")
             logger.info("Scheduled outbox queue processing completed", result);
         } catch (error) {
-          logger.error("Scheduled outbox queue processing failed:", error);
+          logger.error(
+            `Scheduled outbox queue processing failed. pg connection string is ${env.ITERATE_POSTGRES.connectionString}`,
+            error,
+          );
         }
         break;
       }
