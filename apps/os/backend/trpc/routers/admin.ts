@@ -620,13 +620,13 @@ export const adminRouter = router({
         return ctx.db.transaction(async (tx) => {
           const [{ now: dbtime }] = await tx.execute(sql`select now()`);
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
-          return ctx.sendToOutbox(tx, { dbtime, reply });
+          return ctx.sendTrpc(tx, { dbtime, reply });
         });
       }),
     pokeOutboxClientDirectly: adminProcedure
       .input(z.object({ message: z.string() }))
       .mutation(async ({ ctx, input }) => {
-        await outboxClient.createEvent(ctx.db, "testing:poke", async (tx) => {
+        await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
           const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
           return { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` };
         });
