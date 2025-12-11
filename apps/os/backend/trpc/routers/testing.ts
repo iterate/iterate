@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, ne, inArray } from "drizzle-orm";
+import { eq, ne, inArray, ilike, sql, or } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { protectedProcedureWithNoEstateRestrictions, publicProcedure, router } from "../trpc.ts";
@@ -142,12 +142,12 @@ export const deleteOrganization = testingProcedure
         where: eq(schema.estate.organizationId, input.organizationId),
       });
       await tx.delete(schema.estate).where(eq(schema.estate.organizationId, input.organizationId));
-      await tx.delete(schema.systemTasks).where(
-        inArray(
-          schema.systemTasks.aggregateId,
-          estates.map((estate) => estate.id),
-        ),
-      );
+      const deleteableSystemTaskIds = estates
+        .map((estate) => estate.id)
+        .concat([input.organizationId]);
+      await tx
+        .delete(schema.systemTasks)
+        .where(inArray(schema.systemTasks.aggregateId, deleteableSystemTaskIds));
       await tx.delete(schema.organization).where(eq(schema.organization.id, input.organizationId));
     });
   });

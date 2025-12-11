@@ -464,7 +464,7 @@ describe("OpenAI Fixture Server", () => {
               type: "message",
               id: "msg_test",
               role: "assistant",
-              content: [{ type: "output_text", text: "Hello!" }],
+              content: [{ type: "output_text", text: "Hello mate!" }],
             },
           ],
         },
@@ -514,5 +514,6 @@ describe("OpenAI Fixture Server", () => {
     expect(events.length).toBeGreaterThan(0);
     expect(events.map((e) => e.type)).toContain("response.created");
     expect(events.map((e) => e.type)).toContain("response.completed");
+    expect(JSON.stringify(events, null, 2)).toContain("Hello mate!");
   });
 });

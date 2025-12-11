@@ -73,6 +73,7 @@ export interface ReplayResponse {
  * Replace with placeholders to maintain structure for debugging.
  */
 function sanitizeResponseChunks(chunks: unknown[]): unknown[] {
+  return chunks;
   return chunks.map((chunk) => {
     if (typeof chunk !== "object" || chunk === null) {
       return chunk;

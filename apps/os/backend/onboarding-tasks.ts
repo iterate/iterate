@@ -37,7 +37,7 @@ async function handleStripeCustomerCreation(db: DB, event: typeof schema.systemT
   const organization = await db.query.organization.findFirst({
     where: eq(schema.organization.id, organizationId!),
   });
-  if (!organization) throw new Error("Missing org");
+  if (!organization) throw new Error("Missing org " + organizationId);
 
   const ownerMembership = await db.query.organizationUserMembership.findFirst({
     where: (m, { eq }) => and(eq(m.organizationId, organization.id), eq(m.role, "owner")),

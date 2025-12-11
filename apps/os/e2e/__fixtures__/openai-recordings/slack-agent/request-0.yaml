@@ -225,11 +225,11 @@ request:
 
           <slack_user_mappings>
             {
-              "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE": {
+              "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE": {
                 "name": "Alice",
-                "email": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-alice@test.iterate.com",
-                "slackUserId": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE",
-                "iterateUserID": "usr_01kc4q6a1zeshrxs59kb7c1q1k",
+                "email": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-alice@test.iterate.com",
+                "slackUserId": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE",
+                "iterateUserID": "usr_01kc6c669hfaj8rjbne09045vf",
                 "role": "member"
               },
               "UBOT": {
@@ -248,8 +248,8 @@ request:
         role: developer
         content:
           - type: input_text
-            text: "User Alice (id: usr_01kc4q6a1zeshrxs59kb7c1q1k, email:
-              test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-alice@test.iterate.com,
+            text: "User Alice (id: usr_01kc6c669hfaj8rjbne09045vf, email:
+              test_slack_user_01kc6c668zecvtzvz82w55z7hx-alice@test.iterate.com,
               role: member) joined the conversation"
       - type: message
         role: developer
@@ -259,10 +259,10 @@ request:
               User message via Slack webhook:
 
               {
-                "user": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE",
+                "user": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE",
                 "text": "what is 1+2",
-                "ts": "1765390100861",
-                "createdAt": "2025-12-10T18:08:20.927Z"
+                "ts": "1765445671330",
+                "createdAt": "2025-12-11T09:34:31.538Z"
               }
     parallel_tool_calls: true
     tools:
@@ -759,21 +759,21 @@ response:
     alt-svc: h3=":443"; ma=86400
     connection: keep-alive
     content-type: text/event-stream; charset=utf-8
-    date: Wed, 10 Dec 2025 18:08:21 GMT
+    date: Thu, 11 Dec 2025 09:34:31 GMT
     openai-project: proj_gOF3Hgx3cTWaTde6EvbZUkMk
     openai-version: 2020-10-01
     server: cloudflare
     strict-transport-security: max-age=31536000; includeSubDomains; preload
     transfer-encoding: chunked
     x-content-type-options: nosniff
-    x-envoy-upstream-service-time: "97"
+    x-envoy-upstream-service-time: "85"
   chunks:
     - type: response.created
       sequence_number: 0
       response:
-        id: __STRIPPED_ID__
+        id: resp_01d35dc1b62cd61600693a9027cc6c8196b2bfee20cdd1dbfd
         object: response
-        created_at: __STRIPPED_CREATED_AT__
+        created_at: 1765445671
         status: in_progress
         background: false
         error: null
@@ -991,11 +991,11 @@ response:
 
               <slack_user_mappings>
                 {
-                  "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE": {
+                  "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE": {
                     "name": "Alice",
-                    "email": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-alice@test.iterate.com",
-                    "slackUserId": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE",
-                    "iterateUserID": "usr_01kc4q6a1zeshrxs59kb7c1q1k",
+                    "email": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-alice@test.iterate.com",
+                    "slackUserId": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE",
+                    "iterateUserID": "usr_01kc6c669hfaj8rjbne09045vf",
                     "role": "member"
                   },
                   "UBOT": {
@@ -1440,9 +1440,9 @@ response:
     - type: response.in_progress
       sequence_number: 1
       response:
-        id: __STRIPPED_ID__
+        id: resp_01d35dc1b62cd61600693a9027cc6c8196b2bfee20cdd1dbfd
         object: response
-        created_at: __STRIPPED_CREATED_AT__
+        created_at: 1765445671
         status: in_progress
         background: false
         error: null
@@ -1660,11 +1660,11 @@ response:
 
               <slack_user_mappings>
                 {
-                  "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE": {
+                  "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE": {
                     "name": "Alice",
-                    "email": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-alice@test.iterate.com",
-                    "slackUserId": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE",
-                    "iterateUserID": "usr_01kc4q6a1zeshrxs59kb7c1q1k",
+                    "email": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-alice@test.iterate.com",
+                    "slackUserId": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE",
+                    "iterateUserID": "usr_01kc6c669hfaj8rjbne09045vf",
                     "role": "member"
                   },
                   "UBOT": {
@@ -2110,107 +2110,107 @@ response:
       sequence_number: 2
       output_index: 0
       item:
-        id: __STRIPPED_ID__
+        id: rs_01d35dc1b62cd61600693a902844808196be4a3006ee6e6fa7
         type: reasoning
         summary: []
     - type: response.output_item.done
       sequence_number: 3
       output_index: 0
       item:
-        id: __STRIPPED_ID__
+        id: rs_01d35dc1b62cd61600693a902844808196be4a3006ee6e6fa7
         type: reasoning
         summary: []
     - type: response.output_item.added
       sequence_number: 4
       output_index: 1
       item:
-        id: __STRIPPED_ID__
+        id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
         type: function_call
         status: in_progress
         arguments: ""
-        call_id: call_YScZy3SsOF1iFirlmaKrcij1
+        call_id: call_OFP80eGZit8JL6f8DFL5478o
         name: sendSlackMessage
     - type: response.function_call_arguments.delta
       sequence_number: 5
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: '{"'
-      obfuscation: B68aK0sOQ9YOy2
+      obfuscation: h8ry1FsVc681ka
     - type: response.function_call_arguments.delta
       sequence_number: 6
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: text
-      obfuscation: lwPANope4Yd9
+      obfuscation: utVGEWxY3GOf
     - type: response.function_call_arguments.delta
       sequence_number: 7
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: '":"'
-      obfuscation: i6gfr4NdvEsop
+      obfuscation: rm08iWgjGOnOv
     - type: response.function_call_arguments.delta
       sequence_number: 8
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: "3"
-      obfuscation: QVly4BIEW85dWza
+      obfuscation: EyXqTponRfSki6a
     - type: response.function_call_arguments.delta
       sequence_number: 9
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: '","'
-      obfuscation: bkCf4ECd6nPjB
+      obfuscation: yDvB4lIpvb2n0
     - type: response.function_call_arguments.delta
       sequence_number: 10
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: end
-      obfuscation: Jf3YVXmUwLa9G
+      obfuscation: PoArsbqItjrb3
     - type: response.function_call_arguments.delta
       sequence_number: 11
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: Turn
-      obfuscation: IjeLxtJHz0jI
+      obfuscation: kjp8aPmiDPyM
     - type: response.function_call_arguments.delta
       sequence_number: 12
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: '":'
-      obfuscation: FpCHQjyhsYvDAp
+      obfuscation: Sb71493Ar72HUS
     - type: response.function_call_arguments.delta
       sequence_number: 13
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: "true"
-      obfuscation: 9QlOnm6G5xLJ
+      obfuscation: fgmgjdJtpZAo
     - type: response.function_call_arguments.delta
       sequence_number: 14
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       delta: "}"
-      obfuscation: 5KiUE186bURgd8u
+      obfuscation: Z7KYAYJyYGY8uWs
     - type: response.function_call_arguments.done
       sequence_number: 15
-      item_id: fc_0b55439e8775c208006939b715a258819680497978cd5d93d8
+      item_id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
       output_index: 1
       arguments: '{"text":"3","endTurn":true}'
     - type: response.output_item.done
       sequence_number: 16
       output_index: 1
       item:
-        id: __STRIPPED_ID__
+        id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
         type: function_call
         status: completed
         arguments: '{"text":"3","endTurn":true}'
-        call_id: call_YScZy3SsOF1iFirlmaKrcij1
+        call_id: call_OFP80eGZit8JL6f8DFL5478o
         name: sendSlackMessage
     - type: response.completed
       sequence_number: 17
       response:
-        id: __STRIPPED_ID__
+        id: resp_01d35dc1b62cd61600693a9027cc6c8196b2bfee20cdd1dbfd
         object: response
-        created_at: __STRIPPED_CREATED_AT__
+        created_at: 1765445671
         status: completed
         background: false
         error: null
@@ -2428,11 +2428,11 @@ response:
 
               <slack_user_mappings>
                 {
-                  "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE": {
+                  "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE": {
                     "name": "Alice",
-                    "email": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-alice@test.iterate.com",
-                    "slackUserId": "test_slack_user_01kc4q6a1kexvtcp0xq6wja13e-ALICE",
-                    "iterateUserID": "usr_01kc4q6a1zeshrxs59kb7c1q1k",
+                    "email": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-alice@test.iterate.com",
+                    "slackUserId": "test_slack_user_01kc6c668zecvtzvz82w55z7hx-ALICE",
+                    "iterateUserID": "usr_01kc6c669hfaj8rjbne09045vf",
                     "role": "member"
                   },
                   "UBOT": {
@@ -2450,14 +2450,14 @@ response:
         max_tool_calls: null
         model: gpt-5-2025-08-07
         output:
-          - id: __STRIPPED_ID__
+          - id: rs_01d35dc1b62cd61600693a902844808196be4a3006ee6e6fa7
             type: reasoning
             summary: []
-          - id: __STRIPPED_ID__
+          - id: fc_01d35dc1b62cd61600693a90286ce8819687eb0917e91f10fe
             type: function_call
             status: completed
             arguments: '{"text":"3","endTurn":true}'
-            call_id: call_YScZy3SsOF1iFirlmaKrcij1
+            call_id: call_OFP80eGZit8JL6f8DFL5478o
             name: sendSlackMessage
         parallel_tool_calls: true
         previous_response_id: null
@@ -2881,13 +2881,13 @@ response:
         top_p: 1
         truncation: disabled
         usage:
-          input_tokens: 5524
+          input_tokens: 5496
           input_tokens_details:
-            cached_tokens: 4864
+            cached_tokens: 1408
           output_tokens: 26
           output_tokens_details:
             reasoning_tokens: 0
-          total_tokens: 5550
+          total_tokens: 5522
         user: null
         metadata: {}
-recordedAt: 2025-12-10T18:08:21.988Z
+recordedAt: 2025-12-11T09:34:32.730Z

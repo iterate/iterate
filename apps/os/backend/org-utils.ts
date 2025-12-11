@@ -109,6 +109,7 @@ export async function createOrganizationAndEstate(
   // Kick task processing in background; cron also processes
   waitUntil(
     (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1000)); // sometimes e2e tests immediately clean up stuff, give it a chance to delete associated system tasks too
       await processSystemTasks(db, result.estate.id);
     })(),
   );
