@@ -1,3 +1,4 @@
+import { beforeAll } from "vitest";
 import {
   createTestHelper,
   getAuthedTrpcClient,
@@ -44,11 +45,11 @@ evaliterate("agent knows when to end their turn", {
       await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
     });
 
-    const { trpcClient } = await impersonate(testUser.id);
+    const { trpcClient: userTrpc } = await impersonate(testUser.id);
 
     const h = await createTestHelper({
-      trpcClient,
-      inputSlug: input.slug,
+      inputSlug: "onboarding-e2e",
+      trpcClient: userTrpc,
       braintrustSpanExportedId,
     });
     const scorer = multiTurnScorer({ braintrustSpanExportedId });

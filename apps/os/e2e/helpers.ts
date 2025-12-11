@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import * as path from "node:path";
 import { inspect } from "util";
 import { z } from "zod";
 import { expect, inject, vi } from "vitest";
@@ -10,6 +11,7 @@ import { init, type Span } from "braintrust";
 import { evalite } from "evalite";
 import type { Evalite } from "evalite/types";
 import { match, P } from "ts-pattern";
+import { typeid } from "typeid-js";
 import type { AppRouter } from "../backend/trpc/root.ts";
 import type { AgentCoreEvent } from "../backend/agent/agent-core-schemas.ts";
 import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
@@ -17,6 +19,7 @@ import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 import type { ExplainedScoreResult } from "../evals/scorer.ts";
+import { createFixtureServer, type FixtureServerOptions } from "./openai-fixture-server.ts";
 
 // TODO: duplicated here because there's some weird circular dependency issue with the slack utils in tests
 function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
@@ -174,10 +177,10 @@ export async function createTestHelper({
   // Generate unique Slack user IDs per test run to avoid conflicts between tests
   // Format: TEST_{unique-suffix}_{name} to identify as test users
   // Use a combination of inputSlug and timestamp to ensure uniqueness across tests
-  const uniqueSuffix = `${inputSlug.slice(0, 8)}_${Date.now().toString(36)}`;
+  const uniqueSuffix = `${typeid("test_slack_user")}`;
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
-  const aliceId = `TEST_${uniqueSuffix}_ALICE`;
-  const bobId = `TEST_${uniqueSuffix}_BOB`;
+  const aliceId = `${uniqueSuffix}-ALICE`;
+  const bobId = `${uniqueSuffix}-BOB`;
   fakeSlackUsers[aliceId] = { name: "Alice", id: aliceId };
   fakeSlackUsers[bobId] = { name: "Bob", id: bobId };
 
@@ -378,8 +381,41 @@ export async function createTestHelper({
     return result.debugURL;
   };
 
+  /**
+   * Enable OpenAI record/replay mode for this agent.
+   * By default, uses 'replay' mode unless OPENAI_RECORD_MODE=record is set.
+   *
+   * @param fixtureServerUrl - URL of the fixture server (from startOpenAIFixtureServer)
+   */
+  const enableOpenAIRecordReplay = async (fixtureServerUrl: string) => {
+    const currentTestName = expect.getState().currentTestName;
+    if (!currentTestName) {
+      throw new Error("enableOpenAIRecordReplay must be called within a test");
+    }
+
+    // Slugify test name for use as directory name
+    const testName = slugify(currentTestName);
+
+    // Initialize test session on fixture server (resets request counter)
+    await fetch(`${fixtureServerUrl}/start-test`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ testName }),
+    });
+
+    const mode = (process.env.OPENAI_RECORD_MODE as RecordReplayMode) || "replay";
+    await adminTrpcClient.testing.setOpenAIRecordReplayMode.mutate({
+      ...agentProcedureProps,
+      mode,
+      fixtureServerUrl,
+      testName,
+    });
+    return { mode, testName };
+  };
+
   return {
     estateId,
+    agentInstanceName: agentName,
     addEvents,
     getEvents,
     // getState,
@@ -389,6 +425,7 @@ export async function createTestHelper({
     getAgentDebugURL,
     addToolSpec,
     braintrustSpanExportedId,
+    enableOpenAIRecordReplay,
   };
 }
 export type WaitUntilOptions = {
@@ -539,8 +576,63 @@ export const createDisposer = () => {
         await fn().catch((err) => errors.push(err));
       }
       if (errors.length === 1) throw errors[0];
-      if (errors.length > 0)
-        throw new Error("Multiple disposers failed:\n" + errors.join("\n"), { cause: errors });
+      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
     },
   };
 };
+
+// ============================================================================
+// OpenAI Record/Replay Fixture Server Helpers
+// ============================================================================
+
+export type RecordReplayMode = "record" | "replay" | "passthrough";
+
+/**
+ * Convert a string to a slug suitable for use as a directory name.
+ */
+function slugify(str: string): string {
+  return str
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+const DEFAULT_FIXTURE_SERVER_PORT = 9876;
+const DEFAULT_FIXTURES_DIR = path.join(import.meta.dirname, "__fixtures__", "openai-recordings");
+
+let fixtureServerInstance: ReturnType<typeof createFixtureServer> | null = null;
+
+/**
+ * Start the OpenAI fixture server for e2e tests.
+ * This should be called in beforeAll() of your test file.
+ *
+ * @returns The fixture server URL and a stop function
+ */
+export async function startOpenAIFixtureServer(
+  options?: Partial<FixtureServerOptions>,
+): Promise<{ fixtureServerUrl: string; stop: () => Promise<void> }> {
+  const port = options?.port ?? DEFAULT_FIXTURE_SERVER_PORT;
+  const fixturesDir = options?.fixturesDir ?? DEFAULT_FIXTURES_DIR;
+
+  // Reuse existing server if already running
+  if (fixtureServerInstance) {
+    return {
+      fixtureServerUrl: `http://localhost:${port}`,
+      stop: async () => {
+        await fixtureServerInstance?.stop();
+        fixtureServerInstance = null;
+      },
+    };
+  }
+
+  fixtureServerInstance = createFixtureServer({ port, fixturesDir });
+  await fixtureServerInstance.start();
+
+  return {
+    fixtureServerUrl: `http://localhost:${port}`,
+    stop: async () => {
+      await fixtureServerInstance?.stop();
+      fixtureServerInstance = null;
+    },
+  };
+}

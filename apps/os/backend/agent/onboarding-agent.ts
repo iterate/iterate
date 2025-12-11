@@ -79,6 +79,7 @@ export class OnboardingAgent
 
   override async onStart(): Promise<void> {
     await super.onStart();
+    if (!process.env.ENABLE_EXPERIMENTAL_ONBOARDING_AGENT) return;
 
     // Ash: if you add something here, it'll kick off every time the durable object boots
     if (!this.state.ashsStuffRan) {

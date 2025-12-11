@@ -61,9 +61,7 @@ export default {
       needs: ["variables"],
       // @ts-expect-error - is jlarky wrong here? https://github.com/JLarky/gha-ts/pull/46
       secrets: "inherit",
-      with: {
-        stage: "${{ needs.variables.outputs.stage }}",
-      },
+      with: { stage: "${{ needs.variables.outputs.stage }}" },
     },
     release: {
       needs: ["variables", "deploy"],
@@ -72,9 +70,7 @@ export default {
         {
           name: "Checkout code",
           uses: "actions/checkout@v4",
-          with: {
-            "fetch-depth": 0,
-          },
+          with: { "fetch-depth": 0 },
         },
         {
           name: "Write last release",

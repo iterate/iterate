@@ -221,6 +221,7 @@ export class TagLogger {
    * If you want to keep the prefix as a record, override this method.
    */
   memories() {
+    return [];
     if (this.context.logs.length === 0) return [];
     return [
       "memories:",
