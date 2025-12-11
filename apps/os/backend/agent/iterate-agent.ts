@@ -1678,7 +1678,7 @@ export class IterateAgent<
     const taskRun = await createDeepResearchTask({
       query: input.query,
       processor: input.processor,
-      outputFormat: "auto",
+      outputFormat: "text",
     });
 
     // Calculate timeout based on processor tier (under pro: 20 min, pro+: 60 min)
@@ -1692,7 +1692,7 @@ export class IterateAgent<
       runId: taskRun.run_id,
       query: input.query,
       processor: input.processor,
-      outputFormat: "auto",
+      outputFormat: "text",
       pollUntil: Date.now() + maxPollTime,
       pollCount: 0,
     });
@@ -1767,7 +1767,7 @@ export class IterateAgent<
         const nextPollCount = data.pollCount + 1;
 
         // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
-        if (sendProgressMessage && nextPollCount % 4 === 0) {
+        if (sendProgressMessage && nextPollCount % 8 === 0) {
           const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
           addDeveloperMessage({
             text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
@@ -1787,19 +1787,13 @@ export class IterateAgent<
 
       if (result.status === "completed") {
         // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
-        const rawOutput = result.data ? JSON.stringify(result.data, null, 2) : "(no data returned)";
-
-        // Truncate if too long (keep first 50k chars)
-        const truncatedOutput =
-          rawOutput.length > 50000
-            ? rawOutput.slice(0, 50000) +
-              "\n\n... (truncated, full output was " +
-              rawOutput.length +
-              " chars)"
-            : rawOutput;
+        const rawOutput = result.data as unknown as { output?: { content?: string } } | null;
+        const content =
+          rawOutput?.output?.content ??
+          (result.data ? JSON.stringify(result.data) : "(no data returned)");
 
         addDeveloperMessage({
-          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${truncatedOutput}`,
+          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${content}`,
           triggerLLMRequest: true,
         });
         return;
