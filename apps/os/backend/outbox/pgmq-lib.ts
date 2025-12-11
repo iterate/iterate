@@ -493,7 +493,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return parent.transaction(async (tx) => {
       return logger.run({ transactionForEvent: eventName }, async () => {
         const payload = await callback(tx);
-        // eslint-disable-next-line iterate/drizzle-conventions -- we need to pass the parent here
+         
         await send({ transaction: tx, parent }, eventName, payload);
         return payload;
       });

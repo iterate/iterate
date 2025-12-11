@@ -7,8 +7,8 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
+import { outboxClient } from "./outbox/client.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
   organizationId: string;
@@ -43,55 +43,6 @@ export const createGithubRepoInEstatePool = async (metadata: {
 // not great thing 3: onboardingAgentName shouldn't really be a column on the estate table.
 export const getDefaultOnboardingAgentName = (estateId: string) => `${estateId}-Onboarding`;
 
-async function createOrganizationAndEstateInTransaction(
-  tx: DBLike,
-  params: {
-    organizationName: string;
-    ownerUserId: string;
-    estateName?: string;
-  },
-): Promise<{
-  organization: typeof schema.organization.$inferSelect;
-  estate: typeof schema.estate.$inferSelect;
-}> {
-  const { organizationName, ownerUserId, estateName } = params;
-
-  const [organization] = await tx
-    .insert(schema.organization)
-    .values({ name: organizationName })
-    .returning();
-  if (!organization) throw new Error("Failed to create organization");
-
-  await tx.insert(schema.organizationUserMembership).values({
-    organizationId: organization.id,
-    userId: ownerUserId,
-    role: "owner",
-  });
-
-  const [estate] = await tx
-    .insert(schema.estate)
-    .values({
-      name: estateName ?? `${organizationName} Estate`,
-      organizationId: organization.id,
-    })
-    .returning();
-  if (!estate) throw new Error("Failed to create estate");
-
-  const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
-  await tx
-    .update(schema.estate)
-    .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
-    .where(eq(schema.estate.id, estate.id));
-
-  await initializeOnboardingForEstateInTransaction(tx, {
-    estateId: estate.id,
-    organizationId: organization.id,
-    onboardingAgentName,
-  });
-
-  return { organization, estate };
-}
-
 export async function createOrganizationAndEstate(
   db: DB,
   params: {
@@ -103,16 +54,55 @@ export async function createOrganizationAndEstate(
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  const result = await db.transaction(async (tx) => {
-    return createOrganizationAndEstateInTransaction(tx, params);
+  const { organizationName, ownerUserId, estateName } = params;
+
+  return db.transaction(async (tx) => {
+    const [organization] = await tx
+      .insert(schema.organization)
+      .values({ name: organizationName })
+      .returning();
+    if (!organization) throw new Error("Failed to create organization");
+
+    await tx.insert(schema.organizationUserMembership).values({
+      organizationId: organization.id,
+      userId: ownerUserId,
+      role: "owner",
+    });
+
+    const [estate] = await tx
+      .insert(schema.estate)
+      .values({
+        name: estateName ?? `${organizationName} Estate`,
+        organizationId: organization.id,
+      })
+      .returning();
+    if (!estate) throw new Error("Failed to create estate");
+
+    const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
+    await tx
+      .update(schema.estate)
+      .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
+      .where(eq(schema.estate.id, estate.id));
+
+    // Insert the EstateCreated tracking event
+    await tx
+      .insert(schema.estateOnboardingEvent)
+      .values({
+        estateId: estate.id,
+        organizationId: organization.id,
+        eventType: "EstateCreated",
+        category: "system",
+        detail: `Onboarding agent: ${onboardingAgentName}`,
+      })
+
+      .onConflictDoNothing();
+
+    await outboxClient.send({ transaction: tx, parent: db }, "estate:created", {
+      estateId: estate.id,
+    });
+
+    return { organization, estate };
   });
-  // Kick task processing in background; cron also processes
-  waitUntil(
-    (async () => {
-      await processSystemTasks(db, result.estate.id);
-    })(),
-  );
-  return result;
 }
 
 // Function to create organization and estate for new users
@@ -165,75 +155,6 @@ export const createUserOrganizationAndEstate = async (
   }
   return result;
 };
-
-type DBLike = Pick<DB, "insert" | "update" | "query">;
-
-export type SystemTaskUnion =
-  | {
-      taskType: "CreateStripeCustomer";
-      payload: {
-        organizationId: string;
-        estateId: string;
-      };
-    }
-  | {
-      taskType: "WarmOnboardingAgent";
-      payload: {
-        estateId: string;
-        onboardingAgentName: string;
-      };
-    }
-  | {
-      taskType: "CreateGithubRepo";
-      payload: {
-        estateId: string;
-      };
-    };
-
-export type EstateOnboardingEventShape<Op extends "Select" | "Insert" = "Select"> = Omit<
-  (typeof schema.systemTasks)[`$infer${Op}`],
-  "taskType" | "payload"
-> &
-  SystemTaskUnion;
-
-export async function initializeOnboardingForEstateInTransaction(
-  tx: DBLike,
-  params: { estateId: string; organizationId: string; onboardingAgentName: string },
-) {
-  const { estateId, organizationId, onboardingAgentName } = params;
-
-  await tx
-    .insert(schema.estateOnboardingEvent)
-    .values({
-      estateId,
-      organizationId,
-      eventType: "EstateCreated",
-      category: "system",
-      detail: `Onboarding agent: ${onboardingAgentName}`,
-    })
-    .onConflictDoNothing();
-
-  await tx.insert(schema.systemTasks).values([
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateGithubRepo",
-      payload: { estateId },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateStripeCustomer",
-      payload: { organizationId, estateId },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "WarmOnboardingAgent",
-      payload: { estateId, onboardingAgentName },
-    },
-  ] satisfies EstateOnboardingEventShape<"Insert">[]);
-}
 
 async function sendEstateCreatedNotificationToSlack(
   organization: typeof schema.organization.$inferSelect,

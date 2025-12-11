@@ -420,6 +420,8 @@ export default defineConfig([
                   esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
                     const used = context.sourceCode.getText(m);
                     if (m !== node.callee.object && parentReference === used) {
+                      // @ts-expect-error -- lots of ?.
+                      if (m.parent?.key?.name === "parent") return; // special case: outboxClient.send({ tx, parent: db }, '...', {...})
                       context.report({
                         node: m,
                         message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
