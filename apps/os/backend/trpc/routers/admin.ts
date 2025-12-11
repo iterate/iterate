@@ -628,7 +628,9 @@ export const adminRouter = router({
       .mutation(async ({ ctx, input }) => {
         await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
           const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
-          return { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` };
+          return {
+            payload: { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` },
+          };
         });
         return { done: true };
       }),

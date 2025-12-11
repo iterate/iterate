@@ -56,7 +56,7 @@ export async function createOrganizationAndEstate(
 }> {
   const { organizationName, ownerUserId, estateName } = params;
 
-  return db.transaction(async (tx) => {
+  return outboxClient.sendTx(db, "estate:created", async (tx) => {
     const [organization] = await tx
       .insert(schema.organization)
       .values({ name: organizationName })
@@ -97,11 +97,7 @@ export async function createOrganizationAndEstate(
 
       .onConflictDoNothing();
 
-    await outboxClient.send({ transaction: tx, parent: db }, "estate:created", {
-      estateId: estate.id,
-    });
-
-    return { organization, estate };
+    return { payload: { estateId: estate.id }, organization, estate };
   });
 }
 

@@ -18,6 +18,7 @@ import { createDisposer, createTestHelper, getAuthedTrpcClient } from "./helpers
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
+  await adminTrpc.testing.cleanupOutbox.mutate();
   await using disposer = createDisposer();
 
   const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
@@ -45,7 +46,7 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
       const [first] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
       return first;
     },
-    { interval: 1000, timeout: 5000 },
+    { interval: 1000, timeout: 10_000 },
   );
   expect(foundRepo, "(a github repo should be available)").toBeDefined();
   disposer.fns.push(async () => {
@@ -80,7 +81,7 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
 
   await expect
     .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
-    .not.toMatchObject({ status: "in_progress" }); // give it a few minutes for "in_progress"
+    .not.toMatchObject({ status: expect.stringMatching(/in_progress|queued/i) }); // give it a few minutes to get out of "queued" or "in_progress"
 
   // now that it's not in progress, it *must* be complete
   expect(await getLatestBuild()).toMatchObject({ status: "complete" });

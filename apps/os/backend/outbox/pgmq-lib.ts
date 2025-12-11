@@ -485,20 +485,38 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
   };
 
   /** Send an event in a db transaction. Takes a callback which will receive a transaction reference, which can be used to insert/update database rows. The outbox event will then be inserted in the same transaction */
-  const sendTx = <D extends DBLike, Name extends EventName>(
-    parent: Transactable<D>,
-    eventName: Name,
-    callback: (db: D) => Promise<EventTypes[Name]>,
-  ) => {
-    return parent.transaction(async (tx) => {
+  async function sendTx<
+    D extends DBLike,
+    Name extends EventName,
+    T extends { payload: EventTypes[Name] },
+  >(parent: Transactable<D>, eventName: Name, callback: (db: D) => Promise<T>): Promise<T> {
+    const { addResult, result } = await parent.transaction(async (tx) => {
       return logger.run({ transactionForEvent: eventName }, async () => {
-        const payload = await callback(tx);
-         
-        await send({ transaction: tx, parent }, eventName, payload);
-        return payload;
+        const result = await callback(tx);
+
+        const addResult = await queuer.enqueue(tx as {} as DBConnection, {
+          name: eventName,
+          payload: result.payload as never,
+        });
+
+        return { addResult, result };
       });
     });
-  };
+
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(
+        logger.run({ queuedEventId: addResult.eventId }, async () => {
+          // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
+          // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
+          // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return queuer.processQueue(parent as DBConnection);
+        }),
+      );
+    }
+
+    return result;
+  }
 
   return {
     registerConsumer,

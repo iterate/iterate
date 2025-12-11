@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, ne, inArray } from "drizzle-orm";
+import { eq, ne, inArray, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { protectedProcedureWithNoEstateRestrictions, publicProcedure, router } from "../trpc.ts";
@@ -11,6 +11,7 @@ import { env } from "../../../env.ts";
 import { saveSlackUsersToDatabase } from "../../integrations/slack/slack.ts";
 import { AGENT_CLASS_NAMES, getAgentStubByName } from "../../agent/agents/stub-getters.ts";
 import type { IterateAgent, SlackAgent } from "../../worker.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
 
 const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -137,6 +138,7 @@ export const createOrganizationAndEstate = testingProcedure
 export const deleteOrganization = testingProcedure
   .input(z.object({ organizationId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    await queuer.processQueue(ctx.db);
     await ctx.db.transaction(async (tx) => {
       const estates = await tx.query.estate.findMany({
         where: eq(schema.estate.organizationId, input.organizationId),
@@ -288,6 +290,14 @@ export const testingRouter = router({
     });
     await (agent as {} as SlackAgent).mockSlackAPI();
     return { success: true };
+  }),
+  cleanupOutbox: testingProcedure.mutation(async ({ ctx }) => {
+    await ctx.db.execute(sql`
+      delete from pgmq.q_consumer_job_queue
+      where
+        message->'event_payload'->>'estateId' is not null
+        and message->'event_payload'->>'estateId' not in (select id from estate)
+    `);
   }),
   setUserRole,
   createTestUser,
