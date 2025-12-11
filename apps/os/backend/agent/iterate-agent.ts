@@ -23,7 +23,12 @@ import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
 import { signUrl } from "../utils/url-signing.ts";
-import { searchWeb, getURLContent } from "../default-tools.ts";
+import {
+  searchWeb,
+  getURLContent,
+  createDeepResearchTask,
+  checkDeepResearchStatus,
+} from "../default-tools.ts";
 import {
   getFileContent,
   getFilePublicURL,
@@ -79,6 +84,9 @@ import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
 import { toolNameToJsIdentifier } from "./codemode.ts";
+
+// Deep research processors that have shorter timeout (20 min vs 60 min for pro+)
+const UNDER_PRO_PROCESSORS = ["lite", "base", "core", "core2x"] as const;
 
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
@@ -1664,6 +1672,152 @@ export class IterateAgent<
       })),
       totalResults: result.results.length,
     };
+  }
+
+  async deepResearch(input: Inputs["deepResearch"]) {
+    const taskRun = await createDeepResearchTask({
+      query: input.query,
+      processor: input.processor,
+      outputFormat: "auto",
+    });
+
+    // Calculate timeout based on processor tier (under pro: 20 min, pro+: 60 min)
+    const maxPollTime = UNDER_PRO_PROCESSORS.includes(
+      input.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+    )
+      ? 20 * 60 * 1000
+      : 60 * 60 * 1000;
+
+    await this.schedule(5, "pollForDeepResearch", {
+      runId: taskRun.run_id,
+      query: input.query,
+      processor: input.processor,
+      outputFormat: "auto",
+      pollUntil: Date.now() + maxPollTime,
+      pollCount: 0,
+    });
+
+    return {
+      status: "queued",
+      runId: taskRun.run_id,
+      message:
+        "The deep research has been queued. I will poll the API every 15 seconds and share the results as soon as they're ready. This may take several minutes.",
+    };
+  }
+
+  async pollForDeepResearch(data: {
+    runId: string;
+    query: string;
+    processor: string;
+    outputFormat: string;
+    pollUntil: number;
+    pollCount: number;
+  }) {
+    // Helper function to add developer messages
+    const addDeveloperMessage = ({
+      text,
+      triggerLLMRequest,
+    }: {
+      text: string;
+      triggerLLMRequest: boolean;
+    }) => {
+      this.agentCore.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text,
+            },
+          ],
+        },
+        triggerLLMRequest,
+      });
+    };
+
+    // Check if we've exceeded the polling time limit
+    if (Date.now() > data.pollUntil) {
+      // Under pro: 20 min timeout, pro+: 60 min timeout
+      const expectedMinutes = UNDER_PRO_PROCESSORS.includes(
+        data.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+      )
+        ? 20
+        : 60;
+
+      logger.info("deep research polling timeout reached:", {
+        runId: data.runId,
+        processor: data.processor,
+      });
+      addDeveloperMessage({
+        text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>${expectedMinutes} minutes for ${data.processor} processor). The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    try {
+      const result = await checkDeepResearchStatus(data.runId);
+
+      // Helper to schedule next poll with incremented count
+      // Each poll can take up to 15 seconds (long polling timeout), then we schedule next poll after 5s
+      const POLL_TIMEOUT_SECONDS = 15;
+      const scheduleNextPoll = async (sendProgressMessage = false) => {
+        const nextPollCount = data.pollCount + 1;
+
+        // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
+        if (sendProgressMessage && nextPollCount % 4 === 0) {
+          const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
+          addDeveloperMessage({
+            text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
+            triggerLLMRequest: false, // Don't trigger a new turn, just inform
+          });
+        }
+
+        await this.schedule(5, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
+      };
+
+      // Check result status
+      if (result.status === "running") {
+        // Still running - schedule next poll
+        await scheduleNextPoll(true);
+        return;
+      }
+
+      if (result.status === "completed") {
+        // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
+        const rawOutput = result.data ? JSON.stringify(result.data, null, 2) : "(no data returned)";
+
+        // Truncate if too long (keep first 50k chars)
+        const truncatedOutput =
+          rawOutput.length > 50000
+            ? rawOutput.slice(0, 50000) +
+              "\n\n... (truncated, full output was " +
+              rawOutput.length +
+              " chars)"
+            : rawOutput;
+
+        addDeveloperMessage({
+          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${truncatedOutput}`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+
+      // Unknown status - log and continue polling
+      logger.info("deep research unknown response, continuing to poll:", {
+        runId: data.runId,
+        result,
+      });
+      await scheduleNextPoll(true);
+    } catch (err) {
+      logger.error("deep research polling error:", err);
+      addDeveloperMessage({
+        text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+    }
   }
 
   async generateImage(input: Inputs["generateImage"]) {

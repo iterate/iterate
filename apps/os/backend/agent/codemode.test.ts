@@ -679,6 +679,25 @@ test("iterate agent tools", async () => {
      */
     declare function searchWeb(input: searchWeb.Input): Promise<unknown>
 
+    /** Namespace containing the input type for the deepResearch tool. */
+    declare namespace deepResearch {
+      export interface Input {
+        /**
+         * A detailed research question or topic to investigate. Be specific and include relevant context for better results - ask the user for clarification or elaboration first. Keep under 15,000 characters.
+         */
+        query: string;
+        /**
+         * Research processor. lite/base/core for quick lookups (10s-5min). pro for exploratory research (2-10min). ultra for advanced multi-source research (5-25min). ultra2x/4x/8x for very difficult research (up to 2hr). Add '-fast' suffix (pro-fast, ultra-fast) for 2-5x faster but slightly less accurate results.
+         */
+        processor?: ("lite" | "base" | "core" | "core2x" | "pro" | "pro-fast" | "ultra" | "ultra-fast" | "ultra2x" | "ultra4x" | "ultra8x");
+      }
+    }
+
+    /**
+     * Conduct comprehensive deep research on a topic using Parallel AI. This tool performs multi-step web exploration across authoritative sources and synthesizes findings into a structured report with citations. Best for open-ended research questions that require analyst-grade intelligence. Note: Deep research can take several minutes to complete, so clarify user needs first.
+     */
+    declare function deepResearch(input: deepResearch.Input): Promise<unknown>
+
     /** Namespace containing the input type for the generateImage tool. */
     declare namespace generateImage {
       export interface Input {
