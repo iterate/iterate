@@ -15,6 +15,7 @@ import { mcpConnectionParam } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { MCPParam } from "../tool-schemas.ts";
+import { waitUntil } from "../../../env.ts";
 import { MCPOAuthProvider } from "./mcp-oauth-provider.ts";
 import {
   getConnectionKey,
@@ -47,6 +48,7 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   estateId: string;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
+  storage: DurableObjectStorage;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -260,7 +262,9 @@ export async function handleMCPConnectRequest(
     isReconnecting: !!reconnect,
   });
 
-  const manager = new MCPClientManager("iterate-agent", "1.0.0");
+  const manager = new MCPClientManager("iterate-agent", "1.0.0", {
+    storage: params.storage,
+  });
 
   let result: Awaited<ReturnType<typeof manager.connect>>;
 
@@ -347,11 +351,20 @@ export async function handleMCPConnectRequest(
     prompts.length === 0 &&
     resources.length === 0
   ) {
-    try {
-      await manager.closeConnection(result.id);
-    } catch {
-      // Ignore cleanup errors
-    }
+    waitUntil(
+      (async () => {
+        const results = await Promise.allSettled([
+          manager.closeConnection(result.id),
+          oauthProvider?.resetTokens(),
+        ]);
+        const errors = results
+          .filter((result) => result.status === "rejected")
+          .map((result) => result.reason);
+        if (errors.length > 0) {
+          throw new Error(`Failed to close connection and reset tokens: ${errors.join(", ")}`);
+        }
+      })(),
+    );
     events.push({
       type: "MCP:CONNECTION_ERROR",
       data: {
@@ -523,6 +536,7 @@ export async function getOrCreateMCPConnection(params: {
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
+  storage: DurableObjectStorage;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -554,6 +568,7 @@ export async function getOrCreateMCPConnection(params: {
           estateId: params.estateId,
           mcpConnectionCache,
           mcpConnectionQueues,
+          storage: params.storage,
           getFinalRedirectUrl: params.getFinalRedirectUrl,
         });
 
@@ -616,6 +631,7 @@ export async function rehydrateExistingMCPConnection(params: {
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
+  storage: DurableObjectStorage;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
