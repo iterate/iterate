@@ -43,8 +43,8 @@ export const createGithubRepoInEstatePool = async (metadata: {
 // not great thing 3: onboardingAgentName shouldn't really be a column on the estate table.
 export const getDefaultOnboardingAgentName = (estateId: string) => `${estateId}-Onboarding`;
 
-export async function createOrganizationAndEstate(
-  db: DB,
+async function createOrganizationAndEstateInTransaction(
+  tx: DBLike,
   params: {
     organizationName: string;
     ownerUserId: string;
@@ -56,48 +56,63 @@ export async function createOrganizationAndEstate(
 }> {
   const { organizationName, ownerUserId, estateName } = params;
 
-  return outboxClient.sendTx(db, "estate:created", async (tx) => {
-    const [organization] = await tx
-      .insert(schema.organization)
-      .values({ name: organizationName })
-      .returning();
-    if (!organization) throw new Error("Failed to create organization");
+  const [organization] = await tx
+    .insert(schema.organization)
+    .values({ name: organizationName })
+    .returning();
+  if (!organization) throw new Error("Failed to create organization");
 
-    await tx.insert(schema.organizationUserMembership).values({
+  await tx.insert(schema.organizationUserMembership).values({
+    organizationId: organization.id,
+    userId: ownerUserId,
+    role: "owner",
+  });
+
+  const [estate] = await tx
+    .insert(schema.estate)
+    .values({
+      name: estateName ?? `${organizationName} Estate`,
       organizationId: organization.id,
-      userId: ownerUserId,
-      role: "owner",
-    });
+    })
+    .returning();
+  if (!estate) throw new Error("Failed to create estate");
 
-    const [estate] = await tx
-      .insert(schema.estate)
-      .values({
-        name: estateName ?? `${organizationName} Estate`,
-        organizationId: organization.id,
-      })
-      .returning();
-    if (!estate) throw new Error("Failed to create estate");
+  const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
+  await tx
+    .update(schema.estate)
+    .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
+    .where(eq(schema.estate.id, estate.id));
 
-    const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
-    await tx
-      .update(schema.estate)
-      .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
-      .where(eq(schema.estate.id, estate.id));
+  // Insert the EstateCreated tracking event
+  await tx
+    .insert(schema.estateOnboardingEvent)
+    .values({
+      estateId: estate.id,
+      organizationId: organization.id,
+      eventType: "EstateCreated",
+      category: "system",
+      detail: `Onboarding agent: ${onboardingAgentName}`,
+    })
 
-    // Insert the EstateCreated tracking event
-    await tx
-      .insert(schema.estateOnboardingEvent)
-      .values({
-        estateId: estate.id,
-        organizationId: organization.id,
-        eventType: "EstateCreated",
-        category: "system",
-        detail: `Onboarding agent: ${onboardingAgentName}`,
-      })
+    .onConflictDoNothing();
 
-      .onConflictDoNothing();
+  return { organization, estate };
+}
 
-    return { payload: { estateId: estate.id }, organization, estate };
+export async function createOrganizationAndEstate(
+  db: DB,
+  params: {
+    organizationName: string;
+    ownerUserId: string;
+    estateName?: string;
+  },
+): Promise<{
+  organization: typeof schema.organization.$inferSelect;
+  estate: typeof schema.estate.$inferSelect;
+}> {
+  return outboxClient.sendTx(db, "estate:created", async (tx) => {
+    const result = await createOrganizationAndEstateInTransaction(tx, params);
+    return { payload: { estateId: result.estate.id }, ...result };
   });
 }
 
@@ -151,6 +166,8 @@ export const createUserOrganizationAndEstate = async (
   }
   return result;
 };
+
+type DBLike = Pick<DB, "insert" | "update" | "query">;
 
 async function sendEstateCreatedNotificationToSlack(
   organization: typeof schema.organization.$inferSelect,
