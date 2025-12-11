@@ -185,6 +185,9 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         rejectRateLimitedCalls: true,
         retryConfig: { retries: 0 },
       });
+    } else if (import.meta.env.VITE_APP_STAGE === "prd") {
+      // in prd, it's never legitimate to have a slack agent without a token
+      logger.error("No Slack integration found for this estate", params.record);
     }
   }
 
