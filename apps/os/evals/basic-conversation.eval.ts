@@ -44,11 +44,11 @@ evaliterate("agent knows when to end their turn", {
       await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
     });
 
-    const { trpcClient: userTrpc } = await impersonate(testUser.id);
+    const { trpcClient } = await impersonate(testUser.id);
 
     const h = await createTestHelper({
-      inputSlug: "onboarding-e2e",
-      trpcClient: userTrpc,
+      trpcClient,
+      inputSlug: input.slug,
       braintrustSpanExportedId,
     });
     const scorer = multiTurnScorer({ braintrustSpanExportedId });
