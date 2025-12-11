@@ -142,6 +142,7 @@
     "@tanstack/react-devtools": "^0.8.2",
     "@tanstack/react-router-devtools": "^1.139.12",
     "@types/better-sqlite3": "7.6.13",
+    "@types/git-diff": "2.0.7",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
