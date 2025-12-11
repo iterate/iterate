@@ -554,6 +554,7 @@ export const mcpConnectionParam = pgTable(
   (t) => ({
     id: iterateId("mcp"),
     connectionKey: t.text().notNull(),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     estateId: t
       .text()
       .notNull()
@@ -564,7 +565,7 @@ export const mcpConnectionParam = pgTable(
     ...withTimestamps,
   }),
   (t) => [
-    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType),
+    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType, t.userId),
     index().on(t.estateId),
     index().on(t.connectionKey),
   ],
@@ -574,6 +575,10 @@ export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one 
   estate: one(estate, {
     fields: [mcpConnectionParam.estateId],
     references: [estate.id],
+  }),
+  user: one(user, {
+    fields: [mcpConnectionParam.userId],
+    references: [user.id],
   }),
 }));
 

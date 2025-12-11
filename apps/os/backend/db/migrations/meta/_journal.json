@@ -197,6 +197,13 @@
       "when": 1764345634953,
       "tag": "0027_parallel_stepford_cuckoos",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1765460932560,
+      "tag": "0028_panoramic_pretty_boy",
+      "breakpoints": true
     }
   ]
 }
