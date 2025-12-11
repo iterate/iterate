@@ -7,8 +7,8 @@
  * Fixtures are organized by test name, with sequential request numbering:
  *   __fixtures__/openai-recordings/
  *     my-test-name/
- *       request-0.json
- *       request-1.json
+ *       request-0.yaml
+ *       request-1.yaml
  *
  * Endpoints:
  * - POST /start-test - Initialize a test session (resets request counter)
@@ -16,7 +16,6 @@
  * - POST /replay - Look up a fixture by test name and request index, with diff on mismatch
  * - GET /health - Health check
  */
-import * as assert from "node:assert";
 import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -114,12 +113,6 @@ function getRequestDiff(expected: unknown, actual: unknown): string | null {
     return null;
   }
   return gitDiff(YAML.stringify(actual), YAML.stringify(expected), { color: true });
-  try {
-    assert.equal(YAML.stringify(actual), YAML.stringify(expected));
-    return null;
-  } catch (err) {
-    return (err as Error).message;
-  }
 }
 
 /**
