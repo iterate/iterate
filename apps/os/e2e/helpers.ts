@@ -514,8 +514,8 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
 
       const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan?.log({
-        scores: { [scorerOpts.name]: score },
-        metadata: { [scorerOpts.name]: metadata },
+        scores: { [String(scorerOpts.name)]: score },
+        metadata: { [String(scorerOpts.name)]: metadata },
       });
       await braintrustSpan?.flush();
 

@@ -643,6 +643,7 @@ export class IterateAgent<
               estateId: this.databaseRecord.estateId,
               mcpConnectionCache: this.mcpManagerCache,
               mcpConnectionQueues: this.mcpConnectionQueues,
+              storage: this.ctx.storage,
               getFinalRedirectUrl: deps.getFinalRedirectUrl!,
             }).then((eventsToAdd) => {
               for (const eventToAdd of eventsToAdd) {
@@ -726,6 +727,7 @@ export class IterateAgent<
         getReducedState: () => this.agentCore.state,
         mcpConnectionCache: this.mcpManagerCache,
         mcpConnectionQueues: this.mcpConnectionQueues,
+        storage: this.ctx.storage,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
         },
@@ -1606,6 +1608,7 @@ export class IterateAgent<
       reducedState: this.getReducedState(),
       mcpConnectionCache: this.mcpManagerCache,
       mcpConnectionQueues: this.mcpConnectionQueues,
+      storage: this.ctx.storage,
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
