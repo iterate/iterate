@@ -281,8 +281,8 @@ importers:
         specifier: ^7.7.1
         version: 7.7.1
       agents:
-        specifier: 0.2.21
-        version: 0.2.21(@cfworker/json-schema@4.1.1)(@cloudflare/workers-types@4.20251128.0)(react@19.2.0)(typescript@5.9.3)
+        specifier: 0.2.31
+        version: 0.2.31(@cloudflare/workers-types@4.20251128.0)(react@19.2.0)(typescript@5.9.3)
       ai:
         specifier: ^5.0.104
         version: 5.0.104(zod@4.1.12)
@@ -908,6 +908,12 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/gateway@2.0.16':
+    resolution: {integrity: sha512-qiIaVs1w1XcNiFG6cjhOwolPuMFSvy6ZxDeLaPlEK/kSmNGfd+gUA2CTpBPWWT3qN6Zxfdrwq+ti4BfkdmLIJQ==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/gateway@2.0.17':
     resolution: {integrity: sha512-oVAG6q72KsjKlrYdLhWjRO7rcqAR8CjokAbYuyVZoCO4Uh2PH/VzZoxZav71w2ipwlXhHCNaInGYWNs889MMDA==}
     engines: {node: '>=18'}
@@ -920,8 +926,20 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/openai@2.0.73':
+    resolution: {integrity: sha512-TOGoxkeJMgcxq80ZfyCAqKcfvGPgFsEQEK8SgI/w3He0fqi16KlnZVMexOlg8HOLumF6szweg/YrOmQixsPVGw==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/provider-utils@3.0.12':
     resolution: {integrity: sha512-ZtbdvYxdMoria+2SlNarEk6Hlgyf+zzcznlD55EAl+7VZvJaSg2sqPvwArY7L6TfDEDJsnCq0fdhBSkYo0Xqdg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/provider-utils@3.0.17':
+    resolution: {integrity: sha512-TR3Gs4I3Tym4Ll+EPdzRdvo/rc8Js6c4nVhFLuvGLX/Y4V9ZcQMa/HTiYsHEgmYrf1zVi6Q145UEZUfleOwOjw==}
     engines: {node: '>=18'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -4833,9 +4851,28 @@ packages:
       x402:
         optional: true
 
+  agents@0.2.31:
+    resolution: {integrity: sha512-YhZYc8HjwNz/CqFKRcSlhEwKhGF6NKeZLpViqGNQOVDfgBS9XLBfiz9Eiz7cEWn/ae9pMosk2j6nuTJzkTl/vA==}
+    hasBin: true
+    peerDependencies:
+      react: '*'
+      viem: '*'
+      x402: '*'
+    peerDependenciesMeta:
+      viem:
+        optional: true
+      x402:
+        optional: true
+
   aggregate-error@4.0.1:
     resolution: {integrity: sha512-0poP0T7el6Vq3rstR8Mn4V/IQrpBLO6POkUSrN7RhyY+GF/InCFShQzsQ39T25gkHhLgSLByyAz+Kjb+c2L98w==}
     engines: {node: '>=12'}
+
+  ai@5.0.103:
+    resolution: {integrity: sha512-TpaeKAzSFHQkUZ5cwkvGZCzElVDY0W7nJNT9Oq31R30PTmCtU8A5ll4IRm+CmolPSYbpXRHHPkgADxGyqex9eg==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
 
   ai@5.0.104:
     resolution: {integrity: sha512-MZOkL9++nY5PfkpWKBR3Rv+Oygxpb9S16ctv8h91GvrSif7UnNEdPMVZe3bUyMd2djxf0AtBk/csBixP0WwWZQ==}
@@ -5491,6 +5528,10 @@ packages:
   cron-schedule@5.0.4:
     resolution: {integrity: sha512-nH0a49E/kSVk6BeFgKZy4uUsy6D2A16p120h5bYD9ILBhQu7o2sJFH+WI4R731TSBQ0dB1Ik7inB/dRAB4C8QQ==}
     engines: {node: '>=18'}
+
+  cron-schedule@6.0.0:
+    resolution: {integrity: sha512-BoZaseYGXOo5j5HUwTaegIog3JJbuH4BbrY9A1ArLjXpy+RWb3mV28F/9Gv1dDA7E2L8kngWva4NWisnLTyfgQ==}
+    engines: {node: '>=20'}
 
   cross-fetch@4.1.0:
     resolution: {integrity: sha512-uKm5PU+MHTootlWEY+mZ4vvXoCn4fLQxT9dSc1sXVMSFkINTJVN8cAQROpwcKm8bJ/c7rgZVIBWzH5T78sNZZw==}
@@ -10024,6 +10065,13 @@ snapshots:
       '@vercel/oidc': 3.0.3
       zod: 3.25.76
 
+  '@ai-sdk/gateway@2.0.16(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.0
+      '@ai-sdk/provider-utils': 3.0.17(zod@3.25.76)
+      '@vercel/oidc': 3.0.5
+      zod: 3.25.76
+
   '@ai-sdk/gateway@2.0.17(zod@4.1.12)':
     dependencies:
       '@ai-sdk/provider': 2.0.0
@@ -10037,7 +10085,20 @@ snapshots:
       '@ai-sdk/provider-utils': 3.0.12(zod@3.25.76)
       zod: 3.25.76
 
+  '@ai-sdk/openai@2.0.73(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.0
+      '@ai-sdk/provider-utils': 3.0.17(zod@3.25.76)
+      zod: 3.25.76
+
   '@ai-sdk/provider-utils@3.0.12(zod@3.25.76)':
+    dependencies:
+      '@ai-sdk/provider': 2.0.0
+      '@standard-schema/spec': 1.0.0
+      eventsource-parser: 3.0.6
+      zod: 3.25.76
+
+  '@ai-sdk/provider-utils@3.0.17(zod@3.25.76)':
     dependencies:
       '@ai-sdk/provider': 2.0.0
       '@standard-schema/spec': 1.0.0
@@ -14819,10 +14880,40 @@ snapshots:
       - supports-color
       - typescript
 
+  agents@0.2.31(@cloudflare/workers-types@4.20251128.0)(react@19.2.0)(typescript@5.9.3):
+    dependencies:
+      '@ai-sdk/openai': 2.0.73(zod@3.25.76)
+      '@cfworker/json-schema': 4.1.1
+      '@modelcontextprotocol/sdk': 1.23.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
+      ai: 5.0.103(zod@3.25.76)
+      cron-schedule: 6.0.0
+      json-schema: 0.4.0
+      json-schema-to-typescript: 15.0.4
+      mimetext: 3.0.27
+      nanoid: 5.1.6
+      partyserver: 0.0.75(@cloudflare/workers-types@4.20251128.0)
+      partysocket: 1.1.6
+      react: 19.2.0
+      yargs: 18.0.0
+      zod: 3.25.76
+      zod-to-ts: 2.0.0(typescript@5.9.3)(zod@3.25.76)
+    transitivePeerDependencies:
+      - '@cloudflare/workers-types'
+      - supports-color
+      - typescript
+
   aggregate-error@4.0.1:
     dependencies:
       clean-stack: 4.2.0
       indent-string: 5.0.0
+
+  ai@5.0.103(zod@3.25.76):
+    dependencies:
+      '@ai-sdk/gateway': 2.0.16(zod@3.25.76)
+      '@ai-sdk/provider': 2.0.0
+      '@ai-sdk/provider-utils': 3.0.17(zod@3.25.76)
+      '@opentelemetry/api': 1.9.0
+      zod: 3.25.76
 
   ai@5.0.104(zod@4.1.12):
     dependencies:
@@ -15569,6 +15660,8 @@ snapshots:
   crelt@1.0.6: {}
 
   cron-schedule@5.0.4: {}
+
+  cron-schedule@6.0.0: {}
 
   cross-fetch@4.1.0:
     dependencies:
@@ -20614,6 +20707,11 @@ snapshots:
       zod: 4.1.12
 
   zod-to-ts@1.2.0(typescript@5.9.3)(zod@3.25.76):
+    dependencies:
+      typescript: 5.9.3
+      zod: 3.25.76
+
+  zod-to-ts@2.0.0(typescript@5.9.3)(zod@3.25.76):
     dependencies:
       typescript: 5.9.3
       zod: 3.25.76
