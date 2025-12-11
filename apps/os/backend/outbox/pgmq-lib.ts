@@ -493,7 +493,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return parent.transaction(async (tx) => {
       return logger.run({ transactionForEvent: eventName }, async () => {
         const payload = await callback(tx);
-         
+
         await send({ transaction: tx, parent }, eventName, payload);
         return payload;
       });
