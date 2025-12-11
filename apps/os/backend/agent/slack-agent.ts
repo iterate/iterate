@@ -171,24 +171,24 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return super.ingestBackgroundLogs(input);
   }
 
+  async mockSlackAPI() {
+    this.slackAPI = createSlackAPIMock<WebClient>();
+  }
+
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
-    const timestamp = extractTimestampFromDurableObjectName(params.record.durableObjectName);
-    if (timestamp.length === 4) {
-      this.slackAPI = createSlackAPIMock<WebClient>();
-      return;
-    }
 
     const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
-    if (!slackAccount) {
-      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
+    if (slackAccount) {
+      this.slackAPI = new WebClient(slackAccount.accessToken, {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+      });
+    } else if (import.meta.env.VITE_APP_STAGE === "prd") {
+      // in prd, it's never legitimate to have a slack agent without a token
+      logger.error("No Slack integration found for this estate", params.record);
     }
-    // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccount.accessToken, {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-    });
   }
 
   protected getSlices(): SlackAgentSlices {
@@ -1438,19 +1438,4 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         "This function no longer exists - but we need it here because otherwise the agent would be bricked",
     };
   }
-}
-
-/**
- * Extracts the timestamp from a durable object name.
- * Format: SlackAgent-ts-{timestamp}-slack-...
- */
-function extractTimestampFromDurableObjectName(name: string): string {
-  const parts = name.split("ts-");
-  if (parts.length < 2) return "";
-
-  const afterTs = parts[1];
-  const endIndex = afterTs.indexOf("-slack");
-  if (endIndex === -1) return "";
-
-  return afterTs.substring(0, endIndex);
 }

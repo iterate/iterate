@@ -16,7 +16,7 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import type { ExplainedScoreResult } from "./scorer.ts";
+import type { ExplainedScoreResult } from "../evals/scorer.ts";
 
 // TODO: duplicated here because there's some weird circular dependency issue with the slack utils in tests
 function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
@@ -24,7 +24,7 @@ function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: str
   return `ts-${threadTs}-${suffix}`;
 }
 
-export * from "./scorer.ts";
+export * from "../evals/scorer.ts";
 
 export type AgentEvent = (AgentCoreEvent | MCPEvent | SlackSliceEvent) & {
   eventIndex: number;
@@ -168,6 +168,8 @@ export async function createTestHelper({
     agentClassName: "SlackAgent",
     estateId,
   } as const;
+
+  await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
 
   // Generate unique Slack user IDs per test run to avoid conflicts between tests
   // Format: TEST_{unique-suffix}_{name} to identify as test users
@@ -475,8 +477,8 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
 
       const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan?.log({
-        scores: { [scorerOpts.name]: score },
-        metadata: { [scorerOpts.name]: metadata },
+        scores: { [String(scorerOpts.name)]: score },
+        metadata: { [String(scorerOpts.name)]: metadata },
       });
       await braintrustSpan?.flush();
 
@@ -526,3 +528,19 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
     scorers: opts.scorers.map(braintrustScorerWrapper),
   });
 }
+
+export const createDisposer = () => {
+  const disposeFns: Array<() => Promise<void>> = [];
+  return {
+    fns: disposeFns,
+    [Symbol.asyncDispose]: async () => {
+      const errors: unknown[] = [];
+      for (const fn of disposeFns.toReversed()) {
+        await fn().catch((err) => errors.push(err));
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 0)
+        throw new Error("Multiple disposers failed:\n" + errors.join("\n"), { cause: errors });
+    },
+  };
+};

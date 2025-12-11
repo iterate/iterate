@@ -9,6 +9,8 @@ import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { getOctokitForInstallation } from "../../integrations/github/github-utils.ts";
 import { env } from "../../../env.ts";
 import { saveSlackUsersToDatabase } from "../../integrations/slack/slack.ts";
+import { AGENT_CLASS_NAMES, getAgentStubByName } from "../../agent/agents/stub-getters.ts";
+import type { IterateAgent, SlackAgent } from "../../worker.ts";
 
 const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -25,6 +27,43 @@ const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, 
   }
   return next({ ctx });
 });
+
+const testingAgentProcedure = testingProcedure
+  .input(
+    z.object({
+      estateId: z.string(),
+      agentClassName: z.enum(AGENT_CLASS_NAMES),
+      agentInstanceName: z.string(),
+    }),
+  )
+  .use(async ({ input, ctx, next }) => {
+    const estateId = input.estateId;
+
+    const agent = await getAgentStubByName(input.agentClassName, {
+      db: ctx.db,
+      agentInstanceName: input.agentInstanceName,
+      estateId,
+    }).catch((err) => {
+      // todo: effect!
+      if (String(err).includes("not found")) {
+        throw new TRPCError({ code: "NOT_FOUND", message: String(err), cause: err });
+      }
+      throw err;
+    });
+
+    // agent.getEvents() is "never" at this point because of cloudflare's helpful type restrictions. we want it to be correctly inferred as "some subclass of IterateAgent"
+
+    return next({
+      ctx: {
+        ...ctx,
+        agent: agent as {} as Omit<typeof agent, "getEvents"> & {
+          // todo: figure out why cloudflare doesn't like the return type of getEvents - it neverifies it becaue of something that can't cross the boundary?
+          // although this is still useful anyway, to help remind us to always call `await` even though if calling getEvents in-process, it's synchronous
+          getEvents: () => Promise<ReturnType<IterateAgent["getEvents"]>>;
+        },
+      },
+    });
+  });
 
 const setUserRole = testingProcedure
   .input(
@@ -241,6 +280,15 @@ export const testingRouter = router({
         .returning();
       return { created: true, user: newUser };
     }),
+  mockSlackAPI: testingAgentProcedure.mutation(async ({ ctx, input }) => {
+    const agent = await getAgentStubByName(input.agentClassName, {
+      db: ctx.db,
+      agentInstanceName: input.agentInstanceName,
+      estateId: input.estateId,
+    });
+    await (agent as {} as SlackAgent).mockSlackAPI();
+    return { success: true };
+  }),
   setUserRole,
   createTestUser,
   createOrganizationAndEstate,

@@ -1,12 +1,10 @@
-import { beforeAll } from "vitest";
-import { createTestHelper, getAuthedTrpcClient, multiTurnScorer, evaliterate } from "./helpers.ts";
-
-let trpcClient!: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
-
-beforeAll(async () => {
-  const authed = await getAuthedTrpcClient();
-  trpcClient = authed.client;
-});
+import {
+  createTestHelper,
+  getAuthedTrpcClient,
+  multiTurnScorer,
+  evaliterate,
+  createDisposer,
+} from "../e2e/helpers.ts";
 
 evaliterate("agent knows when to end their turn", {
   trialCount: Number(process.env.EVAL_TRIAL_COUNT) || undefined,
@@ -31,6 +29,23 @@ evaliterate("agent knows when to end their turn", {
     ];
   },
   task: async ({ braintrustSpanExportedId, input }) => {
+    const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
+    await using disposer = createDisposer();
+
+    const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
+    disposer.fns.push(async () => {
+      await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
+    });
+
+    const { organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+      userId: testUser.id,
+    });
+    disposer.fns.push(async () => {
+      await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
+    });
+
+    const { trpcClient } = await impersonate(testUser.id);
+
     const h = await createTestHelper({
       trpcClient,
       inputSlug: input.slug,

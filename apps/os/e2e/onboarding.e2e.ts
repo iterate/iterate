@@ -1,5 +1,5 @@
 import { test, expect, vi } from "vitest";
-import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
+import { createDisposer, createTestHelper, getAuthedTrpcClient } from "./helpers.ts";
 
 /**
  * End-to-End Onboarding Test
@@ -15,21 +15,6 @@ import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
  * 8. Verify the bot responds
  * 9. Clean up the created repository
  */
-
-const createDisposer = () => {
-  const disposeFns: Array<() => Promise<void>> = [];
-  return {
-    fns: disposeFns,
-    [Symbol.asyncDispose]: async () => {
-      const errors: unknown[] = [];
-      for (const fn of disposeFns.toReversed()) {
-        await fn().catch((err) => errors.push(err));
-      }
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
-    },
-  };
-};
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
