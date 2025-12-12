@@ -1,13 +1,7 @@
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { z } from "zod/v4";
 import { chromium, type Browser } from "playwright";
-import {
-  createTestHelper,
-  getAuthedTrpcClient,
-  getServiceAuthCredentials,
-  getImpersonatedTrpcClient,
-  type AgentEvent,
-} from "./helpers.ts";
+import { createE2EHelper, type AgentEvent } from "./helpers.ts";
 
 /**
  * MCP E2E Tests
@@ -53,75 +47,23 @@ function resolveServerUrl(base: string, path: string): string {
   return new URL(normalizedPath, base).toString();
 }
 
-interface TestContext {
-  adminTrpc: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
-  userTrpc: Awaited<ReturnType<typeof getImpersonatedTrpcClient>>["trpcClient"];
-  impersonationCookies: string;
-  testUserId: string;
-  estateId: string;
-  cleanup: () => Promise<void>;
-}
-
-let ctx: TestContext;
-
-beforeAll(async () => {
-  const { client: adminTrpc } = await getAuthedTrpcClient();
-  const { sessionCookies } = await getServiceAuthCredentials();
-
-  // Create test user with organization and estate
-  const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
-  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
-    userId: testUser.id,
-  });
-
-  const { trpcClient: userTrpc, impersonationCookies } = await getImpersonatedTrpcClient({
-    userId: testUser.id,
-    adminSessionCookes: sessionCookies,
-  });
-
-  ctx = {
-    adminTrpc,
-    userTrpc,
-    impersonationCookies,
-    testUserId: testUser.id,
-    estateId: estate.id,
-    cleanup: async () => {
-      await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
-      await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
-    },
-  };
-});
-
-afterAll(async () => {
-  await ctx?.cleanup();
-});
-
 describe("MCP server connections", () => {
   test("connects to mock MCP server (no auth) and uses tool", { timeout: 60_000 }, async () => {
+    await using h = await createE2EHelper("mcp-no-auth");
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_NO_AUTH_SERVER_URL;
 
-    const h = await createTestHelper({
-      trpcClient: ctx.userTrpc,
-      inputSlug: "mcp-no-auth",
-      userId: ctx.testUserId,
-    });
-
-    // Save events BEFORE sending the message
     const eventsBeforeMessage = await h.getEvents();
 
-    // Ask the agent to connect to the MCP server
     const _connectMsg = await h.sendUserMessage(
       `Connect to the MCP server at ${serverUrl}. It doesn't require authentication.`,
     );
 
-    // Wait for connection established (using events from BEFORE the message)
     await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeMessage, {
       timeout: 15_000,
     });
     console.log("MCP connection established (no auth)");
 
-    // Ask the agent to use a tool
     const toolMsg = await h.sendUserMessage(
       `Using the MCP server, call mock_calculate with { operation: 'add', a: 12, b: 30 }. Return only the result.`,
     );
@@ -132,22 +74,14 @@ describe("MCP server connections", () => {
   });
 
   test("connects to mock MCP server (oauth) and uses tool", { timeout: 60_000 }, async () => {
+    await using h = await createE2EHelper("mcp-oauth");
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_OAUTH_SERVER_URL;
 
-    const h = await createTestHelper({
-      trpcClient: ctx.userTrpc,
-      inputSlug: "mcp-oauth",
-      userId: ctx.testUserId,
-    });
-
-    // Save events BEFORE sending the message
     const eventsBeforeMessage = await h.getEvents();
 
-    // Ask the agent to connect to the MCP server
     await h.sendUserMessage(`Connect to the MCP server at ${serverUrl}. It uses OAuth.`);
 
-    // Wait for OAuth required event (using events from BEFORE the message)
     const oauthEvent = await h.waitForEvent("MCP:OAUTH_REQUIRED", eventsBeforeMessage, {
       timeout: 15_000,
       select: (e: AgentEvent & { type: "MCP:OAUTH_REQUIRED" }) => e.data,
@@ -155,20 +89,16 @@ describe("MCP server connections", () => {
 
     console.log("Got OAuth URL:", oauthEvent.oauthUrl);
 
-    // Save events BEFORE completing OAuth so we can detect new events after
     const eventsBeforeOAuth = await h.getEvents();
 
-    // Complete OAuth flow
-    await completeOAuthFlow(oauthEvent.oauthUrl, ctx.impersonationCookies);
+    await completeOAuthFlow(oauthEvent.oauthUrl, h.impersonationCookies);
     console.log("Completed OAuth flow");
 
-    // Wait for connection established (using events from BEFORE OAuth was completed)
     await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeOAuth, {
       timeout: 10_000,
     });
     console.log("MCP connection established (oauth)");
 
-    // Ask the agent to use a tool
     const toolMsg = await h.sendUserMessage(
       `Using the MCP server, call userInfo to get the authenticated user info.`,
     );
@@ -179,24 +109,16 @@ describe("MCP server connections", () => {
   });
 
   test("connects to mock MCP server (bearer) and uses tool", { timeout: 60_000 }, async () => {
+    await using h = await createE2EHelper("mcp-bearer");
     const env = parseEnv();
     const serverUrl = `${env.MOCK_MCP_BEARER_SERVER_URL}?expected=test`;
 
-    const h = await createTestHelper({
-      trpcClient: ctx.userTrpc,
-      inputSlug: "mcp-bearer",
-      userId: ctx.testUserId,
-    });
-
-    // Save events BEFORE sending the message
     const eventsBeforeMessage = await h.getEvents();
 
-    // Ask the agent to connect to the MCP server with bearer auth requirement
     await h.sendUserMessage(
       `Connect to the MCP server at ${serverUrl}. It requires an Authorization header with Bearer token.`,
     );
 
-    // Wait for params required event (using events from BEFORE the message)
     const paramsEvent = await h.waitForEvent("MCP:PARAMS_REQUIRED", eventsBeforeMessage, {
       timeout: 15_000,
       select: (e: AgentEvent & { type: "MCP:PARAMS_REQUIRED" }) => e.data,
@@ -204,20 +126,16 @@ describe("MCP server connections", () => {
 
     console.log("Got params URL:", paramsEvent.paramsCollectionUrl);
 
-    // Save events BEFORE filling bearer token so we can detect new events after
     const eventsBeforeBearer = await h.getEvents();
 
-    // Fill in Bearer token via Playwright
-    await fillBearerTokenViaPlaywright(paramsEvent.paramsCollectionUrl, ctx.impersonationCookies);
+    await fillBearerTokenViaPlaywright(paramsEvent.paramsCollectionUrl, h.impersonationCookies);
     console.log("Bearer token configured");
 
-    // Wait for connection established (using events from BEFORE bearer was configured)
     await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeBearer, {
       timeout: 15_000,
     });
     console.log("MCP connection established (bearer)");
 
-    // Ask the agent to use a tool
     const toolMsg = await h.sendUserMessage(
       `Using the MCP server, call mock_calculate with { operation: 'multiply', a: 7, b: 8 }. Return only the result.`,
     );
@@ -231,81 +149,44 @@ describe("MCP server connections", () => {
     "refreshes OAuth token when expired and continues to work",
     { timeout: 3 * 60 * 1000 },
     async () => {
+      await using h = await createE2EHelper("mcp-token-refresh");
       const env = parseEnv();
       const serverUrl = env.MOCK_MCP_OAUTH_SERVER_URL;
       const tokenExpirySeconds = 60; // Cloudflare KV minimum TTL
 
-      // Create a fresh user context for this test to avoid OAuth token conflicts
-      // with other tests that use the same OAuth endpoint
-      const { sessionCookies } = await getServiceAuthCredentials();
-      const { user: tokenRefreshUser } = await ctx.adminTrpc.testing.createTestUser.mutate({});
-      const { estate: _tokenRefreshEstate, organization: tokenRefreshOrg } =
-        await ctx.adminTrpc.testing.createOrganizationAndEstate.mutate({
-          userId: tokenRefreshUser.id,
-        });
-      const { trpcClient: tokenRefreshTrpc, impersonationCookies: tokenRefreshCookies } =
-        await getImpersonatedTrpcClient({
-          userId: tokenRefreshUser.id,
-          adminSessionCookes: sessionCookies,
-        });
+      const eventsBeforeMessage = await h.getEvents();
 
-      try {
-        const h = await createTestHelper({
-          trpcClient: tokenRefreshTrpc,
-          inputSlug: "mcp-token-refresh",
-          userId: tokenRefreshUser.id,
-        });
+      await h.sendUserMessage(`Connect to the MCP server at ${serverUrl}. It uses OAuth.`);
 
-        // Save events BEFORE sending the message
-        const eventsBeforeMessage = await h.getEvents();
+      const oauthEvent = await h.waitForEvent("MCP:OAUTH_REQUIRED", eventsBeforeMessage, {
+        timeout: 30_000,
+        select: (e: AgentEvent & { type: "MCP:OAUTH_REQUIRED" }) => e.data,
+      });
 
-        // Ask the agent to connect to the MCP server
-        await h.sendUserMessage(`Connect to the MCP server at ${serverUrl}. It uses OAuth.`);
+      const eventsBeforeOAuth = await h.getEvents();
 
-        // Wait for OAuth required event (using events from BEFORE the message)
-        const oauthEvent = await h.waitForEvent("MCP:OAUTH_REQUIRED", eventsBeforeMessage, {
-          timeout: 30_000,
-          select: (e: AgentEvent & { type: "MCP:OAUTH_REQUIRED" }) => e.data,
-        });
+      await completeOAuthFlow(oauthEvent.oauthUrl, h.impersonationCookies, tokenExpirySeconds);
+      console.log(`Completed OAuth flow with ${tokenExpirySeconds}s token expiry`);
 
-        // Save events BEFORE completing OAuth
-        const eventsBeforeOAuth = await h.getEvents();
+      await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeOAuth, {
+        timeout: 10_000,
+      });
+      console.log("MCP connection established");
 
-        // Complete OAuth with short expiry
-        await completeOAuthFlow(oauthEvent.oauthUrl, tokenRefreshCookies, tokenExpirySeconds);
-        console.log(`Completed OAuth flow with ${tokenExpirySeconds}s token expiry`);
+      const firstMsg = await h.sendUserMessage(`Using the MCP server, call userInfo.`);
+      const firstReply = await firstMsg.waitForReply({ timeout: 15_000 });
+      expect(firstReply).toMatch(/user/i);
+      console.log("✅ First tool call successful (fresh token)");
 
-        // Wait for connection established (using events from BEFORE OAuth was completed)
-        await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeOAuth, {
-          timeout: 10_000,
-        });
-        console.log("MCP connection established");
+      console.log(`Waiting ${tokenExpirySeconds + 10}s for token to expire...`);
+      await new Promise((resolve) => setTimeout(resolve, (tokenExpirySeconds + 10) * 1000));
 
-        // First tool call - fresh token
-        const firstMsg = await h.sendUserMessage(`Using the MCP server, call userInfo.`);
-        const firstReply = await firstMsg.waitForReply({ timeout: 15_000 });
-        expect(firstReply).toMatch(/user/i);
-        console.log("✅ First tool call successful (fresh token)");
-
-        // Wait for token to expire
-        console.log(`Waiting ${tokenExpirySeconds + 10}s for token to expire...`);
-        await new Promise((resolve) => setTimeout(resolve, (tokenExpirySeconds + 10) * 1000));
-
-        // Second tool call - should trigger token refresh
-        const secondMsg = await h.sendUserMessage(
-          `Using the MCP server, call greet with formal=true.`,
-        );
-        // Give more time for token refresh flow
-        const secondReply = await secondMsg.waitForReply({ timeout: 30_000 });
-        expect(secondReply).toMatch(/good day|hello|greet/i);
-        console.log("✅ Second tool call successful (token was refreshed)");
-      } finally {
-        // Cleanup the token refresh test user and organization
-        await ctx.adminTrpc.testing.deleteOrganization.mutate({
-          organizationId: tokenRefreshOrg.id,
-        });
-        await ctx.adminTrpc.admin.deleteUserByEmail.mutate({ email: tokenRefreshUser.email });
-      }
+      const secondMsg = await h.sendUserMessage(
+        `Using the MCP server, call greet with formal=true.`,
+      );
+      const secondReply = await secondMsg.waitForReply({ timeout: 30_000 });
+      expect(secondReply).toMatch(/good day|hello|greet/i);
+      console.log("✅ Second tool call successful (token was refreshed)");
     },
   );
 });
@@ -356,19 +237,15 @@ async function completeOAuthFlow(
     throw new Error(`OAuth authorize failed: ${oauthResponse.status}, ${body.slice(0, 500)}`);
   }
 
-  // Follow redirects back to our app
   const currentUrl = oauthResponse.headers.get("location");
   console.log("[OAuth] Step 4: Following redirects, first URL:", currentUrl);
   const _redirectCount = 0;
 
-  // Only follow the callback redirect - after that, the token is saved
-  // and we don't need to follow UI navigation redirects
   if (currentUrl) {
     const absoluteUrl = currentUrl.startsWith("http")
       ? currentUrl
       : `${process.env.VITE_PUBLIC_URL}${currentUrl}`;
 
-    // Only follow the callback URL (contains /api/auth/integrations/callback)
     if (absoluteUrl.includes("/api/auth/integrations/callback")) {
       console.log(`[OAuth] Following callback: ${absoluteUrl}`);
       const response = await fetch(absoluteUrl, {
@@ -383,7 +260,6 @@ async function completeOAuthFlow(
   }
 
   console.log("[OAuth] Flow complete, waiting for agent to process...");
-  // Give the agent time to process
   await new Promise((resolve) => setTimeout(resolve, 2000));
   console.log("[OAuth] Done");
 }
@@ -403,7 +279,6 @@ async function fillBearerTokenViaPlaywright(paramsUrl: string, cookies: string):
     const appURL = new URL(paramsUrl);
 
     console.log("[Bearer] Adding cookies for domain:", appURL.hostname);
-    // Parse cookies and add them
     // Note: For localhost, we need to use the URL directly rather than setting domain
     const isLocalhost = appURL.hostname === "localhost" || appURL.hostname === "127.0.0.1";
 
@@ -443,7 +318,6 @@ async function fillBearerTokenViaPlaywright(paramsUrl: string, cookies: string):
 
     const page = await context.newPage();
 
-    // Add request/response debugging
     page.on("request", (req) => console.log("[Bearer] Request:", req.method(), req.url()));
     page.on("response", (res) => console.log("[Bearer] Response:", res.status(), res.url()));
     page.on("requestfailed", (req) =>
