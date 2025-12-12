@@ -123,10 +123,10 @@ export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
       })
       .returning();
 
-    return { buildId: build.id, ...payload };
+    return { payload: { buildId: build.id, ...payload } };
   });
 
   // stupid circular type problem
-  const id: string = res.buildId;
+  const id: string = res.payload.buildId;
   return { id };
 }

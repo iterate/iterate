@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, ne, inArray } from "drizzle-orm";
+import { eq, ne, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
 import { protectedProcedureWithNoEstateRestrictions, publicProcedure, router } from "../trpc.ts";
@@ -11,6 +11,7 @@ import { env } from "../../../env.ts";
 import { saveSlackUsersToDatabase } from "../../integrations/slack/slack.ts";
 import { AGENT_CLASS_NAMES, getAgentStubByName } from "../../agent/agents/stub-getters.ts";
 import type { IterateAgent, SlackAgent } from "../../worker.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
 
 const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
@@ -137,18 +138,31 @@ export const createOrganizationAndEstate = testingProcedure
 export const deleteOrganization = testingProcedure
   .input(z.object({ organizationId: z.string() }))
   .mutation(async ({ ctx, input }) => {
+    await queuer.processQueue(ctx.db);
     await ctx.db.transaction(async (tx) => {
       const estates = await tx.query.estate.findMany({
         where: eq(schema.estate.organizationId, input.organizationId),
       });
-      await tx.delete(schema.estate).where(eq(schema.estate.organizationId, input.organizationId));
-      await tx.delete(schema.systemTasks).where(
-        inArray(
-          schema.systemTasks.aggregateId,
-          estates.map((estate) => estate.id),
-        ),
-      );
-      await tx.delete(schema.organization).where(eq(schema.organization.id, input.organizationId));
+      const estatesDeleted = await tx
+        .delete(schema.estate)
+        .where(eq(schema.estate.organizationId, input.organizationId))
+        .returning();
+      const consumerJobs = await tx.execute(sql`
+        delete from pgmq.q_consumer_job_queue
+        where
+          -- https://www.postgresql.org/docs/9.4/functions-json.html#FUNCTIONS-JSONB-OP-TABLE
+          ${JSON.stringify(estates.map((e) => e.id))}::jsonb ? (message->'event_payload'->>'estateId')
+        returning *
+      `);
+      const organizationDeleted = await tx
+        .delete(schema.organization)
+        .where(eq(schema.organization.id, input.organizationId))
+        .returning();
+      return {
+        estatesDeleted: estatesDeleted.length,
+        consumerJobs: consumerJobs.length,
+        organizationDeleted: organizationDeleted.length,
+      };
     });
   });
 
@@ -245,7 +259,6 @@ export const setupTeamId = testingProcedure
 export const testingRouter = router({
   nuke: testingProcedure.mutation(async ({ ctx }) => {
     await ctx.db.transaction(async (tx) => {
-      await tx.delete(schema.systemTasks);
       await tx.delete(schema.estateOnboardingEvent);
       await tx.delete(schema.organization);
       await tx.delete(schema.user).where(ne(schema.user.id, ctx.user.id));
@@ -288,6 +301,14 @@ export const testingRouter = router({
     });
     await (agent as {} as SlackAgent).mockSlackAPI();
     return { success: true };
+  }),
+  cleanupOutbox: testingProcedure.mutation(async ({ ctx }) => {
+    await ctx.db.execute(sql`
+      delete from pgmq.q_consumer_job_queue
+      where
+        message->'event_payload'->>'estateId' is not null
+        and message->'event_payload'->>'estateId' not in (select id from estate)
+    `);
   }),
   setUserRole,
   createTestUser,

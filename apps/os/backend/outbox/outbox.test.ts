@@ -27,12 +27,26 @@ test("internal event types", () => {
     { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" },
   );
 
-  expectTypeOf(outboxClient.send).toBeCallableWith(
-    { transaction: db, parent: db },
-    "testing:poke",
-    // @ts-expect-error - typo in payload
-    { messageTYPO: "hello" },
-  );
+  expectTypeOf(outboxClient)
+    .map((client) =>
+      client.send({ transaction: db, parent: db }, "testing:poke", {
+        dbtime: "2000-01-01T00:00:00.000Z",
+        message: "hello",
+      }),
+    )
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number }>();
+
+  expectTypeOf(outboxClient)
+    .map((client) =>
+      client.send(
+        { transaction: db, parent: db },
+        "testing:poke",
+        // @ts-expect-error - typo in payload
+        { dbtime: "2000-01-01T00:00:00.000Z", messageTYPO: "hello" },
+      ),
+    )
+    .resolves.toEqualTypeOf<{ eventId: string; matchedConsumers: number }>();
+
   expectTypeOf(outboxClient.send).toBeCallableWith(
     { transaction: db, parent: db },
     // @ts-expect-error - typo in event name
@@ -49,8 +63,8 @@ test("sendTx", () => {
         expectTypeOf(
           tx.query.outboxEvent.findFirst({ columns: { id: true } }),
         ).resolves.toEqualTypeOf<{ id: number } | undefined>();
-        return { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" };
+        return { payload: { dbtime: "2000-01-01T00:00:00.000Z", message: "hello" } };
       });
     })
-    .resolves.toEqualTypeOf<{ dbtime: string; message: string }>();
+    .resolves.toEqualTypeOf<{ payload: { dbtime: string; message: string } }>();
 });

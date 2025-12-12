@@ -7,8 +7,8 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
+import { outboxClient } from "./outbox/client.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
   organizationId: string;
@@ -83,11 +83,18 @@ async function createOrganizationAndEstateInTransaction(
     .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
     .where(eq(schema.estate.id, estate.id));
 
-  await initializeOnboardingForEstateInTransaction(tx, {
-    estateId: estate.id,
-    organizationId: organization.id,
-    onboardingAgentName,
-  });
+  // Insert the EstateCreated tracking event
+  await tx
+    .insert(schema.estateOnboardingEvent)
+    .values({
+      estateId: estate.id,
+      organizationId: organization.id,
+      eventType: "EstateCreated",
+      category: "system",
+      detail: `Onboarding agent: ${onboardingAgentName}`,
+    })
+
+    .onConflictDoNothing();
 
   return { organization, estate };
 }
@@ -103,16 +110,10 @@ export async function createOrganizationAndEstate(
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  const result = await db.transaction(async (tx) => {
-    return createOrganizationAndEstateInTransaction(tx, params);
+  return outboxClient.sendTx(db, "estate:created", async (tx) => {
+    const result = await createOrganizationAndEstateInTransaction(tx, params);
+    return { payload: { estateId: result.estate.id }, ...result };
   });
-  // Kick task processing in background; cron also processes
-  waitUntil(
-    (async () => {
-      await processSystemTasks(db, result.estate.id);
-    })(),
-  );
-  return result;
 }
 
 // Function to create organization and estate for new users
@@ -167,73 +168,6 @@ export const createUserOrganizationAndEstate = async (
 };
 
 type DBLike = Pick<DB, "insert" | "update" | "query">;
-
-export type SystemTaskUnion =
-  | {
-      taskType: "CreateStripeCustomer";
-      payload: {
-        organizationId: string;
-        estateId: string;
-      };
-    }
-  | {
-      taskType: "WarmOnboardingAgent";
-      payload: {
-        estateId: string;
-        onboardingAgentName: string;
-      };
-    }
-  | {
-      taskType: "CreateGithubRepo";
-      payload: {
-        estateId: string;
-      };
-    };
-
-export type EstateOnboardingEventShape<Op extends "Select" | "Insert" = "Select"> = Omit<
-  (typeof schema.systemTasks)[`$infer${Op}`],
-  "taskType" | "payload"
-> &
-  SystemTaskUnion;
-
-export async function initializeOnboardingForEstateInTransaction(
-  tx: DBLike,
-  params: { estateId: string; organizationId: string; onboardingAgentName: string },
-) {
-  const { estateId, organizationId, onboardingAgentName } = params;
-
-  await tx
-    .insert(schema.estateOnboardingEvent)
-    .values({
-      estateId,
-      organizationId,
-      eventType: "EstateCreated",
-      category: "system",
-      detail: `Onboarding agent: ${onboardingAgentName}`,
-    })
-    .onConflictDoNothing();
-
-  await tx.insert(schema.systemTasks).values([
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateGithubRepo",
-      payload: { estateId },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateStripeCustomer",
-      payload: { organizationId, estateId },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "WarmOnboardingAgent",
-      payload: { estateId, onboardingAgentName },
-    },
-  ] satisfies EstateOnboardingEventShape<"Insert">[]);
-}
 
 async function sendEstateCreatedNotificationToSlack(
   organization: typeof schema.organization.$inferSelect,
