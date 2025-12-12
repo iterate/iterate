@@ -148,7 +148,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
           await db.execute(sql`
             select pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
           `);
-          logger.info(`DONE. Result: ${result}`);
+          logger.info(`DONE. Result: ${result ?? null}`);
         } catch (e) {
           const retry = consumer.retry(job);
           const retryMessage = Object.entries(retry)
