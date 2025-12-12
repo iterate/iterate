@@ -26,7 +26,7 @@ export const Route = createFileRoute(
   validateSearch: z.object({
     serverUrl: z.string(),
     mode: z.enum(["personal", "company"]),
-    connectionKey: z.string(),
+    connectionId: z.string().optional(),
     requiredParams: z.array(MCPParam),
     agentDurableObject: AgentDurableObjectInfo.optional(),
     integrationSlug: z.string(),
@@ -51,7 +51,7 @@ function MCPParams() {
   const {
     serverUrl,
     mode,
-    connectionKey,
+    connectionId,
     requiredParams,
     agentDurableObject: durableObject,
     integrationSlug,
@@ -116,7 +116,10 @@ function MCPParams() {
     try {
       await saveParams({
         estateId,
-        connectionKey,
+        connectionId,
+        serverUrl,
+        mode: mode as "personal" | "company",
+        integrationSlug,
         params: requiredParams.map((param) => ({
           key: param.key,
           value: formValues[param.key],

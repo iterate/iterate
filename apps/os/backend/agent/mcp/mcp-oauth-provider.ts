@@ -150,6 +150,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       ),
     });
 
+    let accountId: string;
+
     if (existingAccount) {
       await this.params.db
         .update(schema.account)
@@ -159,13 +161,14 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           accessTokenExpiresAt: expiresAt,
         })
         .where(eq(schema.account.id, existingAccount.id));
+      accountId = existingAccount.id;
     } else {
       const clientInformation = await this.clientInformation();
       if (!clientInformation) {
         throw new Error("Cannot save tokens without client information");
       }
-      await this.params.db.transaction(async (tx) => {
-        const [newAccount] = await tx
+      const newAccount = await this.params.db.transaction(async (tx) => {
+        const [acc] = await tx
           .insert(schema.account)
           .values({
             accountId: clientInformation.client_id,
@@ -179,10 +182,45 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           .returning();
 
         await tx.insert(schema.estateAccountsPermissions).values({
-          accountId: newAccount.id,
+          accountId: acc.id,
           estateId: this.params.estateId,
         });
-        return newAccount;
+        return acc;
+      });
+      accountId = newAccount.id;
+    }
+
+    // Create or update the mcpConnection row for this OAuth connection
+    const existingConnection = await this.params.db.query.mcpConnection.findFirst({
+      where: and(
+        eq(schema.mcpConnection.estateId, this.params.estateId),
+        eq(schema.mcpConnection.serverUrl, this.params.serverUrl),
+        eq(schema.mcpConnection.mode, "personal"),
+        eq(schema.mcpConnection.userId, this.params.userId),
+      ),
+    });
+
+    if (existingConnection) {
+      // Update the connection to link to the account and set authType to oauth
+      await this.params.db
+        .update(schema.mcpConnection)
+        .set({
+          accountId,
+          authType: "oauth",
+          connectedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.mcpConnection.id, existingConnection.id));
+    } else {
+      // Create new mcpConnection row
+      await this.params.db.insert(schema.mcpConnection).values({
+        serverUrl: this.params.serverUrl,
+        mode: "personal", // OAuth connections are always personal
+        userId: this.params.userId,
+        estateId: this.params.estateId,
+        accountId,
+        authType: "oauth",
+        integrationSlug: this.params.integrationSlug,
       });
     }
 
@@ -326,6 +364,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
 
     return verification.value;
   }
+
   async checkState(state: string): Promise<{ valid: boolean; serverId?: string; error?: string }> {
     const verification = await this.params.db.query.verification.findFirst({
       where: eq(schema.verification.identifier, state),
