@@ -802,7 +802,7 @@ describe("mcp-tool-mapping", () => {
         getReducedState: () => ({ mcpConnections: {} }) as any,
         mcpConnectionCache: mockCache,
         mcpConnectionQueues: mockConnectionQueues,
-        storage: {} as any,
+        storage: {} as DurableObjectStorage,
       };
 
       const runtimeTool = createRuntimeToolFromMCPTool({

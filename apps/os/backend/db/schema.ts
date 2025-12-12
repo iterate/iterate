@@ -8,7 +8,7 @@ import {
   bigserial,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { isNull, relations } from "drizzle-orm";
+import { isNull, relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
@@ -184,7 +184,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   slackWebhookEvents: many(slackWebhookEvent),
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
-  mcpConnectionParam: many(mcpConnectionParam),
+  mcpConnections: many(mcpConnection),
   slackChannels: many(slackChannel),
   slackChannelEstateOverrides: many(slackChannelEstateOverride),
 }));
@@ -549,31 +549,79 @@ export const buildsRelations = relations(builds, ({ one }) => ({
   }),
 }));
 
-export const mcpConnectionParam = pgTable(
-  "mcp_connection_param",
+// MCP Connection - single source of truth for all MCP server connections
+export const mcpConnection = pgTable(
+  "mcp_connection",
   (t) => ({
-    id: iterateId("mcp"),
-    connectionKey: t.text().notNull(),
+    id: iterateId("mcpc"),
+    serverUrl: t.text().notNull(),
+    mode: t.text({ enum: ["personal", "company"] }).notNull(),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
     estateId: t
       .text()
       .notNull()
       .references(() => estate.id, { onDelete: "cascade" }),
+    authType: t.text({ enum: ["oauth", "params"] }).notNull(),
+    // For OAuth connections - link to account table
+    accountId: t.text().references(() => account.id, { onDelete: "cascade" }),
+    integrationSlug: t.text().notNull(), // e.g. "linear", "posthog"
+    connectedAt: t.timestamp().defaultNow().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Personal connections: unique per user per server
+    uniqueIndex("mcp_conn_personal_unique")
+      .on(t.estateId, t.serverUrl, t.userId)
+      .where(sql`${t.mode} = 'personal'`),
+    // Company connections: unique per estate per server
+    uniqueIndex("mcp_conn_company_unique")
+      .on(t.estateId, t.serverUrl)
+      .where(sql`${t.mode} = 'company'`),
+    index("mcp_conn_estate_idx").on(t.estateId),
+    index("mcp_conn_user_idx").on(t.userId),
+  ],
+);
+
+export const mcpConnectionRelations = relations(mcpConnection, ({ one, many }) => ({
+  estate: one(estate, {
+    fields: [mcpConnection.estateId],
+    references: [estate.id],
+  }),
+  user: one(user, {
+    fields: [mcpConnection.userId],
+    references: [user.id],
+  }),
+  account: one(account, {
+    fields: [mcpConnection.accountId],
+    references: [account.id],
+  }),
+  params: many(mcpConnectionParam),
+}));
+
+// MCP Connection Params - only for params-based auth (API keys, headers)
+export const mcpConnectionParam = pgTable(
+  "mcp_connection_param",
+  (t) => ({
+    id: iterateId("mcpp"),
+    connectionId: t
+      .text()
+      .notNull()
+      .references(() => mcpConnection.id, { onDelete: "cascade" }),
     paramKey: t.text().notNull(),
     paramValue: t.text().notNull(),
     paramType: t.text({ enum: ["header", "query_param"] }).notNull(),
     ...withTimestamps,
   }),
   (t) => [
-    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType),
-    index().on(t.estateId),
-    index().on(t.connectionKey),
+    uniqueIndex("mcp_param_unique").on(t.connectionId, t.paramKey, t.paramType),
+    index("mcp_param_conn_idx").on(t.connectionId),
   ],
 );
 
 export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one }) => ({
-  estate: one(estate, {
-    fields: [mcpConnectionParam.estateId],
-    references: [estate.id],
+  connection: one(mcpConnection, {
+    fields: [mcpConnectionParam.connectionId],
+    references: [mcpConnection.id],
   }),
 }));
 

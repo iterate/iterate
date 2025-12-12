@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { eq, and, inArray, sql } from "drizzle-orm";
+import { eq, and, inArray, or } from "drizzle-orm";
 import { generateRandomString } from "better-auth/crypto";
 import { TRPCError } from "@trpc/server";
 import { WebClient } from "@slack/web-api";
@@ -78,8 +78,6 @@ export const integrationsRouter = router({
       .from(account)
       .where(eq(account.userId, ctx.user.id));
 
-    const knownOAuthProviders = ["github-app", "slack-bot", "google", "slack"];
-
     // Group accounts by provider and track connection type
     const accountsByProvider: Record<
       string,
@@ -141,91 +139,49 @@ export const integrationsRouter = router({
       };
     });
 
-    // Get MCP connections
-    // 1. Get param-based MCP connections from mcpConnectionParam
-    const mcpParams = await ctx.db.query.mcpConnectionParam.findMany({
-      where: eq(schema.mcpConnectionParam.estateId, estateId),
+    // Get MCP connections from unified mcpConnection table
+    // Filter: company connections (visible to all) OR personal connections for the current user
+    const mcpConnections = await ctx.db.query.mcpConnection.findMany({
+      where: or(
+        and(eq(schema.mcpConnection.estateId, estateId), eq(schema.mcpConnection.mode, "company")),
+        and(
+          eq(schema.mcpConnection.estateId, estateId),
+          eq(schema.mcpConnection.mode, "personal"),
+          eq(schema.mcpConnection.userId, ctx.user.id),
+        ),
+      ),
+      with: {
+        params: true,
+        account: true,
+      },
     });
 
-    // Group by connectionKey
-    const mcpParamsByKey = mcpParams.reduce(
-      (acc, param) => {
-        if (!acc[param.connectionKey]) {
-          acc[param.connectionKey] = {
-            connectionKey: param.connectionKey,
-            params: [],
-            createdAt: param.createdAt,
-          };
-        }
-        acc[param.connectionKey].params.push({
-          key: param.paramKey,
-          type: param.paramType,
-        });
-        // Keep the earliest createdAt
-        if (param.createdAt < acc[param.connectionKey].createdAt) {
-          acc[param.connectionKey].createdAt = param.createdAt;
-        }
-        return acc;
-      },
-      {} as Record<
-        string,
-        { connectionKey: string; params: Array<{ key: string; type: string }>; createdAt: Date }
-      >,
-    );
-
-    // 2. Get OAuth-based MCP connections (accounts with providerId not in known list)
-    // OAuth connections are always personal since they're user-specific authentication
-    const mcpOAuthConnections = [
-      ...estateAccounts
-        .filter(({ account: acc }) => acc && !knownOAuthProviders.includes(acc.providerId))
-        .map(({ account: acc }) => ({
-          type: "mcp-oauth" as const,
-          id: acc!.id,
-          name: acc!.providerId,
-          providerId: acc!.providerId,
-          mode: "personal" as const,
-          scope: acc!.scope,
-          connectedAt: acc!.createdAt,
-        })),
-      ...personalAccounts
-        .filter((acc) => !knownOAuthProviders.includes(acc.providerId))
-        .filter((acc) => !estateAccounts.some(({ account: estateAcc }) => estateAcc?.id === acc.id))
-        .map((acc) => ({
-          type: "mcp-oauth" as const,
-          id: acc.id,
-          name: acc.providerId,
-          providerId: acc.providerId,
-          mode: "personal" as const,
-          scope: acc.scope,
-          connectedAt: acc.createdAt,
-        })),
-    ];
-
-    // Format param-based MCP connections
-    const mcpParamConnections = Object.values(mcpParamsByKey).map((conn) => {
-      const [serverUrl, mode, userId] = conn.connectionKey.split("::");
-      let displayName = serverUrl;
+    // Format MCP connections for the frontend
+    const formattedMcpConnections = mcpConnections.map((conn) => {
+      let displayName = conn.serverUrl;
       try {
-        displayName = new URL(serverUrl).hostname;
+        displayName = new URL(conn.serverUrl).hostname;
       } catch {
         // If URL parsing fails, use serverUrl as is
       }
 
       return {
-        type: "mcp-params" as const,
-        id: conn.connectionKey,
+        id: conn.id,
         name: displayName,
-        serverUrl,
-        mode,
-        userId: userId || null,
-        paramCount: conn.params.length,
-        connectedAt: conn.createdAt,
+        serverUrl: conn.serverUrl,
+        mode: conn.mode,
+        authType: conn.authType,
+        integrationSlug: conn.integrationSlug,
+        userId: conn.userId,
+        paramCount: conn.params?.length || 0,
+        scope: conn.account?.scope || null,
+        connectedAt: conn.connectedAt,
       };
     });
 
     return {
       oauthIntegrations: integrations,
-      mcpConnections: [...mcpOAuthConnections, ...mcpParamConnections],
+      mcpConnections: formattedMcpConnections,
     };
   }),
 
@@ -710,53 +666,52 @@ export const integrationsRouter = router({
     .input(
       z.object({
         connectionId: z.string(),
-        connectionType: z.enum(["mcp-oauth", "mcp-params"]),
-        mode: z.enum(["company", "personal"]),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { estateId, connectionId, connectionType } = input;
+      const { estateId, connectionId } = input;
 
-      if (connectionType === "mcp-params") {
-        // Delete from mcpConnectionParam table
-        await ctx.db
-          .delete(schema.mcpConnectionParam)
-          .where(eq(schema.mcpConnectionParam.connectionKey, connectionId));
-      } else {
-        // Delete from account table (OAuth)
-        // First check if this account is linked to this estate
-        const estatePermission = await ctx.db.query.estateAccountsPermissions.findFirst({
-          where: and(
-            eq(estateAccountsPermissions.estateId, estateId),
-            eq(estateAccountsPermissions.accountId, connectionId),
+      // Find the connection first to verify access and get details
+      const connection = await ctx.db.query.mcpConnection.findFirst({
+        where: and(
+          eq(schema.mcpConnection.id, connectionId),
+          eq(schema.mcpConnection.estateId, estateId),
+          // Only allow disconnecting own personal connections or any company connections
+          or(
+            eq(schema.mcpConnection.mode, "company"),
+            and(
+              eq(schema.mcpConnection.mode, "personal"),
+              eq(schema.mcpConnection.userId, ctx.user.id),
+            ),
           ),
+        ),
+        with: {
+          account: true,
+        },
+      });
+
+      if (!connection) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Connection not found or access denied",
         });
+      }
 
-        // Remove estate permission if it exists
-        if (estatePermission) {
-          await ctx.db
-            .delete(estateAccountsPermissions)
-            .where(
-              and(
-                eq(estateAccountsPermissions.estateId, estateId),
-                eq(estateAccountsPermissions.accountId, connectionId),
-              ),
-            );
-        }
+      await ctx.db.transaction(async (tx) => {
+        // Delete the mcpConnection (params will cascade delete)
+        await tx.delete(schema.mcpConnection).where(eq(schema.mcpConnection.id, connectionId));
 
-        // Check if account is used by other estates
-        const otherEstates = await ctx.db.query.estateAccountsPermissions.findFirst({
-          where: eq(estateAccountsPermissions.accountId, connectionId),
-        });
-
-        // Only delete the account if it's not used by any other estate
-        if (!otherEstates) {
-          const acc = await ctx.db.query.account.findFirst({
-            where: eq(account.id, connectionId),
-          });
-
+        // For OAuth connections, also clean up the account if it's not used elsewhere
+        if (connection.authType === "oauth" && connection.accountId) {
+          const acc = connection.account;
           if (acc && acc.userId === ctx.user.id) {
-            await ctx.db.transaction(async (tx) => {
+            // Check if this account is used by other MCP connections
+            const otherConnections = await tx.query.mcpConnection.findFirst({
+              where: eq(schema.mcpConnection.accountId, connection.accountId),
+            });
+
+            if (!otherConnections) {
+              // Clean up dynamic client info and verification
               const clientInfo = await tx.query.dynamicClientInfo.findFirst({
                 where: and(
                   eq(schema.dynamicClientInfo.providerId, acc.providerId),
@@ -765,7 +720,6 @@ export const integrationsRouter = router({
               });
               if (clientInfo) {
                 const verificationKey = getMCPVerificationKey(acc.providerId, clientInfo.clientId);
-
                 await tx
                   .delete(schema.verification)
                   .where(eq(schema.verification.identifier, verificationKey));
@@ -774,11 +728,12 @@ export const integrationsRouter = router({
                   .where(eq(schema.dynamicClientInfo.id, clientInfo.id));
               }
 
-              await tx.delete(schema.account).where(eq(account.id, connectionId));
-            });
+              // Delete the account
+              await tx.delete(schema.account).where(eq(account.id, connection.accountId));
+            }
           }
         }
-      }
+      });
 
       return { success: true };
     }),
@@ -787,55 +742,69 @@ export const integrationsRouter = router({
     .input(
       z.object({
         connectionId: z.string(),
-        connectionType: z.enum(["mcp-oauth", "mcp-params"]),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { estateId, connectionId, connectionType } = input;
+      const { estateId, connectionId } = input;
 
-      if (connectionType === "mcp-params") {
-        // Get params for param-based connection
-        const params = await ctx.db.query.mcpConnectionParam.findMany({
-          where: and(
-            eq(schema.mcpConnectionParam.estateId, estateId),
-            eq(schema.mcpConnectionParam.connectionKey, connectionId),
+      // Get connection with params and account
+      const connection = await ctx.db.query.mcpConnection.findFirst({
+        where: and(
+          eq(schema.mcpConnection.id, connectionId),
+          eq(schema.mcpConnection.estateId, estateId),
+          or(
+            eq(schema.mcpConnection.mode, "company"),
+            and(
+              eq(schema.mcpConnection.mode, "personal"),
+              eq(schema.mcpConnection.userId, ctx.user.id),
+            ),
           ),
-        });
+        ),
+        with: {
+          params: true,
+          account: true,
+        },
+      });
 
+      if (!connection) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Connection not found",
+        });
+      }
+
+      if (connection.authType === "params") {
         return {
           type: "params" as const,
-          params: params.map((p) => ({
+          serverUrl: connection.serverUrl,
+          integrationSlug: connection.integrationSlug,
+          params: connection.params.map((p) => ({
             key: p.paramKey,
             value: p.paramValue,
             type: p.paramType,
           })),
         };
       } else {
-        // Get dynamic client info for OAuth connection
-        const acc = await ctx.db.query.account.findFirst({
-          where: eq(account.id, connectionId),
-        });
-
-        if (!acc) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "Connection not found",
+        // OAuth connection
+        let clientInfo = null;
+        if (connection.account) {
+          const dynamicClient = await ctx.db.query.dynamicClientInfo.findFirst({
+            where: and(
+              eq(schema.dynamicClientInfo.providerId, connection.account.providerId),
+              eq(schema.dynamicClientInfo.userId, connection.account.userId),
+            ),
           });
+          clientInfo = dynamicClient?.clientInfo || null;
         }
-
-        const dynamicClient = await ctx.db.query.dynamicClientInfo.findFirst({
-          where: and(
-            eq(schema.dynamicClientInfo.providerId, acc.providerId),
-            eq(schema.dynamicClientInfo.userId, acc.userId),
-          ),
-        });
 
         return {
           type: "oauth" as const,
-          providerId: acc.providerId,
-          scope: acc.scope,
-          clientInfo: dynamicClient?.clientInfo || null,
-          connectedAt: acc.createdAt,
+          serverUrl: connection.serverUrl,
+          integrationSlug: connection.integrationSlug,
+          providerId: connection.account?.providerId || null,
+          scope: connection.account?.scope || null,
+          clientInfo,
+          connectedAt: connection.connectedAt,
         };
       }
     }),
@@ -843,7 +812,7 @@ export const integrationsRouter = router({
   updateMCPConnectionParams: estateProtectedProcedure
     .input(
       z.object({
-        connectionKey: z.string(),
+        connectionId: z.string(),
         params: z.array(
           z.object({
             key: z.string(),
@@ -854,25 +823,41 @@ export const integrationsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { estateId, connectionKey, params } = input;
+      const { estateId, connectionId, params } = input;
+
+      // Verify access to the connection
+      const connection = await ctx.db.query.mcpConnection.findFirst({
+        where: and(
+          eq(schema.mcpConnection.id, connectionId),
+          eq(schema.mcpConnection.estateId, estateId),
+          or(
+            eq(schema.mcpConnection.mode, "company"),
+            and(
+              eq(schema.mcpConnection.mode, "personal"),
+              eq(schema.mcpConnection.userId, ctx.user.id),
+            ),
+          ),
+        ),
+      });
+
+      if (!connection) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Connection not found or access denied",
+        });
+      }
 
       await ctx.db.transaction(async (tx) => {
         // Delete existing params
         await tx
           .delete(schema.mcpConnectionParam)
-          .where(
-            and(
-              eq(schema.mcpConnectionParam.estateId, estateId),
-              eq(schema.mcpConnectionParam.connectionKey, connectionKey),
-            ),
-          );
+          .where(eq(schema.mcpConnectionParam.connectionId, connectionId));
 
         // Insert new params
         if (params.length > 0) {
           await tx.insert(schema.mcpConnectionParam).values(
             params.map((param) => ({
-              estateId,
-              connectionKey,
+              connectionId,
               paramKey: param.key,
               paramValue: param.value,
               paramType: param.type,
@@ -887,7 +872,11 @@ export const integrationsRouter = router({
   saveMCPConnectionParams: estateProtectedProcedure
     .input(
       z.object({
-        connectionKey: z.string(),
+        connectionId: z.string().optional(),
+        // For creating new connections (backward compat with connectionKey)
+        serverUrl: z.string().optional(),
+        mode: z.enum(["personal", "company"]).optional(),
+        integrationSlug: z.string().optional(),
         params: z.array(
           z.object({
             key: z.string(),
@@ -898,40 +887,107 @@ export const integrationsRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { estateId, connectionKey, params } = input;
+      const { estateId, connectionId, serverUrl, mode, integrationSlug, params } = input;
+
+      let connId = connectionId;
 
       await ctx.db.transaction(async (tx) => {
-        if (params.length > 0) {
-          const paramValues = params.map((param) => ({
-            estateId,
-            connectionKey,
-            paramKey: param.key,
-            paramValue: param.value,
-            paramType: param.type,
-          }));
+        // If no connectionId, find or create a connection
+        if (!connId && serverUrl && mode) {
+          const slug =
+            integrationSlug || serverUrl.replace(/[^a-zA-Z0-9]/g, "-").replace(/-+/g, "-");
 
-          await tx
-            .insert(schema.mcpConnectionParam)
-            .values(paramValues)
-            .onConflictDoUpdate({
-              target: [
-                schema.mcpConnectionParam.estateId,
-                schema.mcpConnectionParam.connectionKey,
-                schema.mcpConnectionParam.paramKey,
-                schema.mcpConnectionParam.paramType,
-              ],
-              set: {
-                paramValue: sql`excluded.param_value`,
-                updatedAt: new Date(),
-              },
+          // Try to insert, ignoring conflicts (handles race conditions)
+          const [insertedConn] = await tx
+            .insert(schema.mcpConnection)
+            .values({
+              serverUrl,
+              mode,
+              userId: mode === "personal" ? ctx.user.id : null,
+              estateId,
+              authType: "params",
+              integrationSlug: slug,
+            })
+            .onConflictDoNothing()
+            .returning({ id: schema.mcpConnection.id });
+
+          if (insertedConn) {
+            connId = insertedConn.id;
+          } else {
+            // Insert was a no-op due to conflict, fetch the existing connection
+            const existingConn = await tx.query.mcpConnection.findFirst({
+              where: and(
+                eq(schema.mcpConnection.estateId, estateId),
+                eq(schema.mcpConnection.serverUrl, serverUrl),
+                mode === "personal"
+                  ? and(
+                      eq(schema.mcpConnection.mode, "personal"),
+                      eq(schema.mcpConnection.userId, ctx.user.id),
+                    )
+                  : eq(schema.mcpConnection.mode, "company"),
+              ),
             });
+            connId = existingConn?.id;
+          }
+        }
 
+        if (!connId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Either connectionId or serverUrl+mode must be provided",
+          });
+        }
+
+        // Verify access to the connection
+        const connection = await tx.query.mcpConnection.findFirst({
+          where: and(
+            eq(schema.mcpConnection.id, connId),
+            eq(schema.mcpConnection.estateId, estateId),
+            or(
+              eq(schema.mcpConnection.mode, "company"),
+              and(
+                eq(schema.mcpConnection.mode, "personal"),
+                eq(schema.mcpConnection.userId, ctx.user.id),
+              ),
+            ),
+          ),
+        });
+
+        if (!connection) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Connection not found or access denied",
+          });
+        }
+
+        if (params.length > 0) {
+          // Upsert params
+          for (const param of params) {
+            await tx
+              .insert(schema.mcpConnectionParam)
+              .values({
+                connectionId: connId,
+                paramKey: param.key,
+                paramValue: param.value,
+                paramType: param.type,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  schema.mcpConnectionParam.connectionId,
+                  schema.mcpConnectionParam.paramKey,
+                  schema.mcpConnectionParam.paramType,
+                ],
+                set: {
+                  paramValue: param.value,
+                  updatedAt: new Date(),
+                },
+              });
+          }
+
+          // Delete params that are no longer present
           const currentParamKeys = params.map((p) => `${p.key}:${p.type}`);
           const existingParams = await tx.query.mcpConnectionParam.findMany({
-            where: and(
-              eq(schema.mcpConnectionParam.estateId, estateId),
-              eq(schema.mcpConnectionParam.connectionKey, connectionKey),
-            ),
+            where: eq(schema.mcpConnectionParam.connectionId, connId),
           });
 
           const paramsToDelete = existingParams.filter(
@@ -945,14 +1001,10 @@ export const integrationsRouter = router({
               .where(inArray(schema.mcpConnectionParam.id, idsToDelete));
           }
         } else {
+          // Delete all params if none provided
           await tx
             .delete(schema.mcpConnectionParam)
-            .where(
-              and(
-                eq(schema.mcpConnectionParam.estateId, estateId),
-                eq(schema.mcpConnectionParam.connectionKey, connectionKey),
-              ),
-            );
+            .where(eq(schema.mcpConnectionParam.connectionId, connId));
         }
       });
 
@@ -962,18 +1014,38 @@ export const integrationsRouter = router({
   getMCPConnectionParams: estateProtectedProcedure
     .input(
       z.object({
-        connectionKey: z.string(),
+        connectionId: z.string(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { estateId, connectionKey } = input;
-      const params = await ctx.db.query.mcpConnectionParam.findMany({
+      const { estateId, connectionId } = input;
+
+      // Verify access to the connection
+      const connection = await ctx.db.query.mcpConnection.findFirst({
         where: and(
-          eq(schema.mcpConnectionParam.estateId, estateId),
-          eq(schema.mcpConnectionParam.connectionKey, connectionKey),
+          eq(schema.mcpConnection.id, connectionId),
+          eq(schema.mcpConnection.estateId, estateId),
+          or(
+            eq(schema.mcpConnection.mode, "company"),
+            and(
+              eq(schema.mcpConnection.mode, "personal"),
+              eq(schema.mcpConnection.userId, ctx.user.id),
+            ),
+          ),
         ),
+        with: {
+          params: true,
+        },
       });
-      return params.map((param) => ({
+
+      if (!connection) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Connection not found or access denied",
+        });
+      }
+
+      return connection.params.map((param) => ({
         key: param.paramKey,
         value: param.paramValue,
         type: param.paramType,

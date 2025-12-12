@@ -103,15 +103,15 @@ function ScopesList({ scope }: { scope: string }) {
 }
 
 type MCPConnection = {
-  type: "mcp-oauth" | "mcp-params";
   id: string;
   name: string;
-  providerId?: string;
-  serverUrl?: string;
+  serverUrl: string;
   mode: "company" | "personal";
-  scope?: string | null;
+  authType: "oauth" | "params";
+  integrationSlug: string;
   userId?: string | null;
   paramCount?: number;
+  scope?: string | null;
   connectedAt: Date | string;
 };
 
@@ -219,8 +219,6 @@ function Integrations() {
       await disconnectMCP({
         estateId: estateId,
         connectionId: connection.id,
-        connectionType: connection.type,
-        mode: connection.mode,
       });
       await refetch();
     } catch (error) {
@@ -413,7 +411,6 @@ function MCPConnectionsTable({
     ...trpc.integrations.getMCPConnectionDetails.queryOptions({
       estateId,
       connectionId: selectedConnection?.id || "",
-      connectionType: selectedConnection?.type || "mcp-params",
     }),
     enabled: !!selectedConnection,
   });
@@ -432,10 +429,10 @@ function MCPConnectionsTable({
   };
 
   const handleSaveParams = async () => {
-    if (selectedConnection?.type === "mcp-params") {
+    if (selectedConnection?.authType === "params") {
       await updateParams({
         estateId,
-        connectionKey: selectedConnection.id,
+        connectionId: selectedConnection.id,
         params: params.map((p) => ({
           key: p.key,
           value: p.value,
@@ -449,7 +446,7 @@ function MCPConnectionsTable({
 
   // Initialize params when details load
   useEffect(() => {
-    if (connectionDetails?.type === "params" && connectionDetails.params.length > 0) {
+    if (connectionDetails?.type === "params") {
       setParams(connectionDetails.params);
     }
   }, [connectionDetails]);
@@ -475,15 +472,11 @@ function MCPConnectionsTable({
                   onClick={() => handleRowClick(connection)}
                 >
                   <TableCell className="px-4 py-3">
-                    <code className="text-sm">
-                      {connection.type === "mcp-params"
-                        ? connection.serverUrl
-                        : connection.providerId}
-                    </code>
+                    <code className="text-sm">{connection.serverUrl}</code>
                   </TableCell>
                   <TableCell className="px-4 py-3">
                     <Badge variant="outline">
-                      {connection.type === "mcp-oauth" ? "OAuth" : "Params"}
+                      {connection.authType === "oauth" ? "OAuth" : "Params"}
                     </Badge>
                   </TableCell>
                   <TableCell className="px-4 py-3 text-sm text-muted-foreground">
@@ -530,7 +523,7 @@ function MCPConnectionsTable({
           <DialogHeader>
             <DialogTitle>Connection Details</DialogTitle>
             <DialogDescription>
-              {selectedConnection?.type === "mcp-params"
+              {selectedConnection?.authType === "params"
                 ? "View and edit connection parameters"
                 : "View OAuth client information"}
             </DialogDescription>
@@ -696,7 +689,7 @@ function MCPConnectionsTable({
             </FieldGroup>
           ) : null}
 
-          {selectedConnection?.type === "mcp-params" && (
+          {selectedConnection?.authType === "params" && (
             <CardFooter className="justify-end">
               <Button onClick={handleSaveParams} disabled={isUpdating}>
                 {isUpdating ? "Saving..." : "Save Changes"}
@@ -716,12 +709,8 @@ function MCPConnectionsTable({
             <AlertDialogTitle>Disconnect MCP Server</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to disconnect from{" "}
-              <code className="font-semibold">
-                {connectionToDisconnect?.type === "mcp-params"
-                  ? connectionToDisconnect?.serverUrl
-                  : connectionToDisconnect?.providerId}
-              </code>
-              ? This action cannot be undone.
+              <code className="font-semibold">{connectionToDisconnect?.serverUrl}</code>? This
+              action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

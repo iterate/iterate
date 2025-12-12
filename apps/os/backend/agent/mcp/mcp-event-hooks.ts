@@ -2,7 +2,7 @@ import { setTimeout as setTimeoutPromise } from "node:timers/promises";
 import { MCPClientManager } from "agents/mcp/client";
 import PQueue from "p-queue";
 import pRace from "p-suite/p-race";
-import { eq, and } from "drizzle-orm";
+import { eq, and, or } from "drizzle-orm";
 import * as R from "remeda";
 import { exhaustiveMatchingGuard, type Result } from "../../utils/type-helpers.ts";
 import { logger } from "../../tag-logger.ts";
@@ -11,7 +11,6 @@ import type { CoreAgentSlices } from "../iterate-agent.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { getDb, type DB } from "../../db/client.ts";
-import { mcpConnectionParam } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import { IntegrationMode } from "../tool-schemas.ts";
 import type { MCPParam } from "../tool-schemas.ts";
@@ -97,6 +96,7 @@ async function getMCPParamsCollectionURL(params: {
   serverUrl: string;
   mode: IntegrationMode;
   connectionKey: string;
+  connectionId?: string;
   requiredParams: MCPParam[];
   agentDurableObject: AgentDurableObjectInfo;
   estateId: string;
@@ -119,7 +119,10 @@ async function getMCPParamsCollectionURL(params: {
   );
   url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);
-  url.searchParams.set("connectionKey", params.connectionKey);
+  // Include connectionId if we have an existing connection
+  if (params.connectionId) {
+    url.searchParams.set("connectionId", params.connectionId);
+  }
   url.searchParams.set("requiredParams", JSON.stringify(params.requiredParams));
   url.searchParams.set("integrationSlug", params.integrationSlug);
   url.searchParams.set("agentDurableObject", JSON.stringify(params.agentDurableObject));
@@ -187,12 +190,22 @@ export async function handleMCPConnectRequest(
   });
 
   if (requiresParams && requiresParams.length > 0) {
-    const storedParams = await db.query.mcpConnectionParam.findMany({
+    // Find the existing connection with its params
+    const existingConnection = await db.query.mcpConnection.findFirst({
       where: and(
-        eq(mcpConnectionParam.estateId, estateId),
-        eq(mcpConnectionParam.connectionKey, connectionKey),
+        eq(schema.mcpConnection.estateId, estateId),
+        eq(schema.mcpConnection.serverUrl, serverUrl),
+        or(
+          eq(schema.mcpConnection.mode, "company"),
+          and(eq(schema.mcpConnection.mode, "personal"), eq(schema.mcpConnection.userId, userId)),
+        ),
       ),
+      with: {
+        params: true,
+      },
     });
+
+    const storedParams = existingConnection?.params || [];
 
     const missingParams = requiresParams.filter(
       (required) =>
@@ -207,6 +220,7 @@ export async function handleMCPConnectRequest(
         serverUrl,
         mode,
         connectionKey,
+        connectionId: existingConnection?.id,
         requiredParams: missingParams,
         agentDurableObject,
         estateId,
@@ -381,6 +395,40 @@ export async function handleMCPConnectRequest(
   }
 
   mcpConnectionCache.managers.set(cacheKey, manager);
+
+  // Ensure mcpConnection row exists for this connection
+  // Uses insert with onConflictDoNothing to handle race conditions, then updates if exists
+  const [insertedConn] = await db
+    .insert(schema.mcpConnection)
+    .values({
+      serverUrl,
+      mode,
+      userId: mode === "personal" ? userId : null,
+      estateId,
+      authType: "params", // Will be updated to 'oauth' if OAuth is used later
+      integrationSlug: guaranteedIntegrationSlug,
+    })
+    .onConflictDoNothing()
+    .returning({ id: schema.mcpConnection.id });
+
+  // If insert was a no-op (connection already exists), update the connected_at timestamp
+  if (!insertedConn) {
+    await db
+      .update(schema.mcpConnection)
+      .set({ connectedAt: new Date(), updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.mcpConnection.estateId, estateId),
+          eq(schema.mcpConnection.serverUrl, serverUrl),
+          mode === "personal"
+            ? and(
+                eq(schema.mcpConnection.mode, "personal"),
+                eq(schema.mcpConnection.userId, userId),
+              )
+            : eq(schema.mcpConnection.mode, "company"),
+        ),
+      );
+  }
 
   const filteredTools = allowedTools ? tools.filter((t) => allowedTools.includes(t.name)) : tools;
   const filteredPrompts = allowedPrompts
