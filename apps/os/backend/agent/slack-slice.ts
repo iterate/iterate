@@ -181,8 +181,9 @@ export const slackSlice = defineAgentCoreSlice<{
           );
 
           // hack to make evals/e2e tests get responses for now
-          // TODO: remove! we need to just send the approrpriate add participant events for the test users
-          if (slackUserId === "UALICE" || slackUserId === "UBOB") userIsJoinedParticipant = true;
+          // TODO: remove! we need to just send the appropriate add participant events for the test users
+          // Test users have IDs starting with "TEST_" (e.g., TEST_abc12345_ALICE)
+          if (slackUserId.startsWith("TEST_")) userIsJoinedParticipant = true;
         }
 
         const finalTrigger = shouldTriggerLLM && !next.paused && userIsJoinedParticipant;

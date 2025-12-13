@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHmac } from "node:crypto";
 import { inspect } from "util";
 import { z } from "zod";
 import { expect, inject, vi } from "vitest";
@@ -16,9 +16,15 @@ import type { MCPEvent } from "../backend/agent/mcp/mcp-slice.ts";
 import { type SlackSliceEvent } from "../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../backend/agent/slack.types.ts";
 import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
-import type { ExplainedScoreResult } from "./scorer.ts";
+import type { ExplainedScoreResult } from "../evals/scorer.ts";
 
-export * from "./scorer.ts";
+// TODO: duplicated here because there's some weird circular dependency issue with the slack utils in tests
+function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
+  const suffix = `slack-${estateId}`;
+  return `ts-${threadTs}-${suffix}`;
+}
+
+export * from "../evals/scorer.ts";
 
 export type AgentEvent = (AgentCoreEvent | MCPEvent | SlackSliceEvent) & {
   eventIndex: number;
@@ -30,13 +36,6 @@ export const authClient = createAuthClient({
   baseURL: `${baseURL}/api/auth`,
   plugins: [adminClient()],
 });
-
-/** Gets an agent name based on the currently running test name and some (text) input */
-export function testAgentRoutingKey(input: string) {
-  const testName = expect.getState().currentTestName!.split(" > ").slice(0, -1).join(" > "); // evalite duplicates the test name, so remove the last breadcrumb thing
-  const suffix = `${input.split(" ")[0].replaceAll(/\W/g, "").slice(0, 6)}-${createHash("md5").update(input).digest("hex").slice(0, 6)}`;
-  return `mock_slack ${testName} | ${suffix} | ${Date.now()}`;
-}
 
 export async function getAuthedTrpcClient() {
   const { sessionCookies } = await getServiceAuthCredentials();
@@ -125,16 +124,35 @@ export async function createTestHelper({
   inputSlug,
   braintrustSpanExportedId,
   logger = console,
+  /** The user ID to link Slack users to. If provided, fake Slack users will be linked to this user. */
+  userId,
 }: {
   trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
   inputSlug: string;
   braintrustSpanExportedId?: string;
   logger?: Pick<Console, "info" | "error">;
+  /** The user ID to link Slack users to. If provided, fake Slack users will be linked to this user. */
+  userId?: string;
 }) {
-  const agentRoutingKey = testAgentRoutingKey(inputSlug);
+  const { client: adminTrpcClient } = await getAuthedTrpcClient();
+
+  // Get estateId first since we need it for the routing key
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();
+
+  // Create threadTs and channel before the routing key since the webhook handler
+  // uses a LIKE query to find agents by threadTs and "-slack-" pattern
+  const channel = "C0123456789";
+  // TODO, we are using magical 4 digit timestamps for the test. This should be replaced with a mapping table.
+  const threadTs = "0234";
+
+  // Build a routing key that matches what the webhook handler expects:
+  // - Must contain threadTs (for LIKE %{threadTs}% query)
+  // - Must contain "-slack-" (for LIKE %-slack-% query)
+  // - Add "test-" prefix so we can identify it came from a test
+
+  const agentRoutingKey = getRoutingKey({ estateId, threadTs });
   expect(agentRoutingKey).toBeTruthy();
 
   const { info } = await trpcClient.agents.getOrCreateAgent.mutate({
@@ -144,18 +162,47 @@ export async function createTestHelper({
     reason: `Agent created for test ${expect.getState().currentTestName}`,
   });
   const agentName = info.durableObjectName;
+  console.log("Got agent name", agentName);
   const agentProcedureProps = {
     agentInstanceName: agentName,
     agentClassName: "SlackAgent",
     estateId,
   } as const;
 
-  const channel = "C0123456789";
-  const threadTs = Date.now().toString();
+  await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
 
+  // Generate unique Slack user IDs per test run to avoid conflicts between tests
+  // Format: TEST_{unique-suffix}_{name} to identify as test users
+  // Use a combination of inputSlug and timestamp to ensure uniqueness across tests
+  const uniqueSuffix = `${inputSlug.slice(0, 8)}_${Date.now().toString(36)}`;
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
-  fakeSlackUsers["UALICE"] = { name: "Alice", id: "UALICE" };
-  fakeSlackUsers["UBOB"] = { name: "Bob", id: "UBOB" };
+  const aliceId = `TEST_${uniqueSuffix}_ALICE`;
+  const bobId = `TEST_${uniqueSuffix}_BOB`;
+  fakeSlackUsers[aliceId] = { name: "Alice", id: aliceId };
+  fakeSlackUsers[bobId] = { name: "Bob", id: bobId };
+
+  // Add fake slack users to the estate database so they can be looked up
+  const fakeMembers = Object.values(fakeSlackUsers).map((user) => ({
+    id: user.id,
+    name: user.name,
+    real_name: user.name,
+    is_bot: false,
+    profile: {
+      email: `${user.id.toLowerCase()}@test.iterate.com`,
+    },
+  }));
+
+  const teamId = "TEST_TEAM";
+  await adminTrpcClient.testing.addSlackUsersToEstate.mutate({
+    estateId,
+    members: fakeMembers,
+    // Link the fake Slack users to the test user if userId is provided
+    ...(userId && { linkToUserId: userId }),
+  });
+  await adminTrpcClient.testing.setupTeamId.mutate({
+    estateId,
+    teamId,
+  });
 
   if (braintrustSpanExportedId)
     await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
@@ -239,7 +286,7 @@ export async function createTestHelper({
       text: message,
       channel: "DEADBEEF",
       subtype: undefined,
-      user: fakeSlackUsers["UALICE"].id,
+      user: fakeSlackUsers[aliceId].id,
       thread_ts: threadTs,
       ts: ts,
       event_ts: ts,
@@ -253,18 +300,41 @@ export async function createTestHelper({
     override: (event: MessageEvent) => MessageEvent = (ev) => ev,
   ) => {
     logger.info(`[${agentName}] Sending user message: ${message}`);
-    const added = await addEvents([
-      {
-        type: "SLACK:WEBHOOK_EVENT_RECEIVED",
-        data: {
-          payload: { event: override(buildSlackMessageEvent(message)) },
-        },
-        triggerLLMRequest: true,
+
+    // Call the webhook handler directly
+    const event = override(buildSlackMessageEvent(message));
+    const rawBody = JSON.stringify({
+      event,
+      team_id: teamId,
+      authorizations: [{ is_bot: true, user_id: "UBOT" }],
+    } satisfies SlackWebhookPayload);
+    const signingSecret = process.env?.SLACK_SIGNING_SECRET;
+
+    if (!signingSecret) {
+      throw new Error("SLACK_SIGNING_SECRET not configured");
+    }
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const sigBaseString = `v0:${timestamp}:${rawBody}`;
+    const hmac = createHmac("sha256", signingSecret);
+
+    hmac.update(sigBaseString);
+    const signature = `v0=${hmac.digest("hex")}`;
+
+    await fetch(`${baseURL}/api/integrations/slack/webhook`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-slack-signature": signature,
+        "x-slack-request-timestamp": timestamp.toString(),
       },
-    ]);
+      body: rawBody,
+    });
+
+    const eventsAtSend = await getEvents();
 
     const waitForReply = async (options?: WaitUntilOptions) => {
-      const reply = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", added, {
+      const reply = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", eventsAtSend, {
         select: (e) => {
           if (e.data.call.status !== "completed" || e.data.call.name !== "sendSlackMessage") return;
           const { text, endTurn } = JSON.parse(e.data.call.arguments) as {
@@ -279,7 +349,7 @@ export async function createTestHelper({
       return reply;
     };
 
-    return { events: added, waitForReply };
+    return { events: eventsAtSend, waitForReply };
   };
 
   const waitForCompletedToolCall = async <T>(
@@ -407,8 +477,8 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
 
       const braintrustSpan = spanMap[hash(result.input)];
       braintrustSpan?.log({
-        scores: { [scorerOpts.name]: score },
-        metadata: { [scorerOpts.name]: metadata },
+        scores: { [String(scorerOpts.name)]: score },
+        metadata: { [String(scorerOpts.name)]: metadata },
       });
       await braintrustSpan?.flush();
 
@@ -457,4 +527,73 @@ export function evaliterate<TInput extends { slug: string }, TExpected>(
     },
     scorers: opts.scorers.map(braintrustScorerWrapper),
   });
+}
+
+export const createDisposer = () => {
+  const disposeFns: Array<() => Promise<void>> = [];
+  return {
+    fns: disposeFns,
+    [Symbol.asyncDispose]: async () => {
+      const errors: unknown[] = [];
+      for (const fn of disposeFns.toReversed()) {
+        await fn().catch((err) => errors.push(err));
+      }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 0)
+        throw new Error("Multiple disposers failed:\n" + errors.join("\n"), { cause: errors });
+    },
+  };
+};
+
+/**
+ * Consolidated E2E test helper that sets up everything needed for most e2e tests:
+ * - Admin trpc client (authenticated via service auth)
+ * - Test user with organization and estate
+ * - User trpc client (impersonated as the test user)
+ * - Mocked Slack API
+ * - Auto-cleanup via Symbol.asyncDispose
+ *
+ * Usage:
+ * ```ts
+ * await using h = await createE2EHelper('my-test-slug')
+ * // h.adminTrpc, h.userTrpc, h.user, h.estate, h.organization, etc.
+ * ```
+ */
+export async function createE2EHelper(inputSlug: string) {
+  const disposer = createDisposer();
+
+  const { client: adminTrpc, impersonate, sessionCookies } = await getAuthedTrpcClient();
+
+  const { user } = await adminTrpc.testing.createTestUser.mutate({});
+  disposer.fns.push(async () => {
+    await adminTrpc.admin.deleteUserByEmail.mutate({ email: user.email });
+  });
+
+  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+    userId: user.id,
+  });
+  disposer.fns.push(async () => {
+    await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
+  });
+
+  const { trpcClient: userTrpc, impersonationCookies } = await impersonate(user.id);
+
+  const testHelper = await createTestHelper({
+    inputSlug,
+    trpcClient: userTrpc,
+    userId: user.id,
+  });
+
+  return {
+    ...testHelper,
+    adminTrpc,
+    userTrpc,
+    user,
+    estate,
+    organization,
+    impersonationCookies,
+    sessionCookies,
+    onDispose: (fn: () => Promise<void>) => disposer.fns.push(fn),
+    [Symbol.asyncDispose]: disposer[Symbol.asyncDispose],
+  };
 }

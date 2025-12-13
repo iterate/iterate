@@ -7,8 +7,8 @@ import * as schema from "./db/schema.ts";
 import { logger } from "./tag-logger.ts";
 import { sendNotificationToIterateSlack } from "./integrations/slack/slack-utils.ts";
 import { getUserOrganizations } from "./trpc/trpc.ts";
-import { processSystemTasks } from "./onboarding-tasks.ts";
 import { getOctokitForInstallation } from "./integrations/github/github-utils.ts";
+import { outboxClient } from "./outbox/client.ts";
 
 export const createGithubRepoInEstatePool = async (metadata: {
   organizationId: string;
@@ -49,13 +49,12 @@ async function createOrganizationAndEstateInTransaction(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  const { organizationName, ownerUserId, estateName, connectedRepo } = params;
+  const { organizationName, ownerUserId, estateName } = params;
 
   const [organization] = await tx
     .insert(schema.organization)
@@ -74,9 +73,6 @@ async function createOrganizationAndEstateInTransaction(
     .values({
       name: estateName ?? `${organizationName} Estate`,
       organizationId: organization.id,
-      connectedRepoId: connectedRepo?.id ?? null,
-      connectedRepoRef: connectedRepo?.defaultBranch ?? null,
-      connectedRepoPath: connectedRepo?.path ?? "/",
     })
     .returning();
   if (!estate) throw new Error("Failed to create estate");
@@ -84,14 +80,21 @@ async function createOrganizationAndEstateInTransaction(
   const onboardingAgentName = getDefaultOnboardingAgentName(estate.id);
   await tx
     .update(schema.estate)
-    .set({ onboardingAgentName })
+    .set({ onboardingAgentName }) // todo: mv onboardingAgentName off the estate table, it's messy having to insert and then immediately update the estate row
     .where(eq(schema.estate.id, estate.id));
 
-  await initializeOnboardingForEstateInTransaction(tx, {
-    estateId: estate.id,
-    organizationId: organization.id,
-    onboardingAgentName,
-  });
+  // Insert the EstateCreated tracking event
+  await tx
+    .insert(schema.estateOnboardingEvent)
+    .values({
+      estateId: estate.id,
+      organizationId: organization.id,
+      eventType: "EstateCreated",
+      category: "system",
+      detail: `Onboarding agent: ${onboardingAgentName}`,
+    })
+
+    .onConflictDoNothing();
 
   return { organization, estate };
 }
@@ -102,26 +105,15 @@ export async function createOrganizationAndEstate(
     organizationName: string;
     ownerUserId: string;
     estateName?: string;
-    connectedRepo?: { id: number; defaultBranch?: string | null; path?: string | null } | null;
   },
 ): Promise<{
   organization: typeof schema.organization.$inferSelect;
   estate: typeof schema.estate.$inferSelect;
 }> {
-  let result!: {
-    organization: typeof schema.organization.$inferSelect;
-    estate: typeof schema.estate.$inferSelect;
-  };
-  await db.transaction(async (tx) => {
-    result = await createOrganizationAndEstateInTransaction(tx, params);
+  return outboxClient.sendTx(db, "estate:created", async (tx) => {
+    const result = await createOrganizationAndEstateInTransaction(tx, params);
+    return { payload: { estateId: result.estate.id }, ...result };
   });
-  // Kick task processing in background; cron also processes
-  waitUntil(
-    (async () => {
-      await processSystemTasks(db);
-    })(),
-  );
-  return result;
 }
 
 // Function to create organization and estate for new users
@@ -148,17 +140,12 @@ export const createUserOrganizationAndEstate = async (
 
   // Create repo first, then centralize DB work via shared helper
   const provisionalOrgName = `${user.email}'s Organization`;
-  // Create the repo optimistically with provisional org name; updated during tx
-  const repo = await createGithubRepoInEstatePool({
-    organizationName: provisionalOrgName,
-    organizationId: "pending",
-  });
+  // todo: create an iterate-estates/ repo in a consumer
 
   const { organization, estate } = await createOrganizationAndEstate(db, {
     organizationName: provisionalOrgName,
     ownerUserId: user.id,
     estateName: `${user.email}'s primary estate`,
-    connectedRepo: { id: repo.id, defaultBranch: repo.default_branch, path: "/" },
   });
 
   const result = { organization, estate };
@@ -181,54 +168,6 @@ export const createUserOrganizationAndEstate = async (
 };
 
 type DBLike = Pick<DB, "insert" | "update" | "query">;
-
-export type EstateOnboardingEventShape<Op extends "Select" | "Insert" = "Select"> = Omit<
-  (typeof schema.systemTasks)[`$infer${Op}`],
-  "taskType" | "payload"
-> &
-  (
-    | {
-        taskType: "CreateStripeCustomer";
-        payload: { organizationId: string; estateId: string };
-      }
-    | {
-        taskType: "WarmOnboardingAgent";
-        payload: { estateId: string; onboardingAgentName: string };
-      }
-  );
-
-export async function initializeOnboardingForEstateInTransaction(
-  tx: DBLike,
-  params: { estateId: string; organizationId: string; onboardingAgentName: string },
-) {
-  const { estateId, organizationId, onboardingAgentName } = params;
-
-  await tx
-    .insert(schema.estateOnboardingEvent)
-    .values({
-      estateId,
-      organizationId,
-      eventType: "EstateCreated",
-      category: "system",
-      detail: `Onboarding agent: ${onboardingAgentName}`,
-    })
-    .onConflictDoNothing();
-
-  await tx.insert(schema.systemTasks).values([
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "CreateStripeCustomer",
-      payload: { organizationId, estateId },
-    },
-    {
-      aggregateType: "estate",
-      aggregateId: estateId,
-      taskType: "WarmOnboardingAgent",
-      payload: { estateId, onboardingAgentName },
-    },
-  ] satisfies EstateOnboardingEventShape<"Insert">[]);
-}
 
 async function sendEstateCreatedNotificationToSlack(
   organization: typeof schema.organization.$inferSelect,

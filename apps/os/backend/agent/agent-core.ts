@@ -318,40 +318,51 @@ export class AgentCore<
       rawKeys: Object.keys(inputState),
     };
 
+    let enabledContextRulesString = "";
+
     const setEnabledContextRules = () => {
       const enabledContextRules = Object.values(next.contextRules).filter((contextRule) => {
         const matchAgainst = this.deps.getRuleMatchData(next);
         return evaluateContextRuleMatchers({ contextRule, matchAgainst });
       });
+      const newEnabledContextRulesString = JSON.stringify(enabledContextRules.map((r) => [r.key]));
+      if (newEnabledContextRulesString === enabledContextRulesString) {
+        const codemodeified = this.codemodeifyState(next);
+        // shortcut: rule-enabling didn't change anything, so we can return early, but codemode might have changed something
+        return { modified: codemodeified.modified };
+      }
+
+      enabledContextRulesString = newEnabledContextRulesString;
       next.enabledContextRules = enabledContextRules;
       // Include prompts from enabled context rules as ephemeral prompt fragments so they are rendered
       // into the LLM instructions for this request. These are ephemeral and recomputed per request.
-      next.ephemeralPromptFragments = {
-        ...next.ephemeralPromptFragments,
-        ...Object.fromEntries(
-          enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
-        ),
-      };
+      next.ephemeralPromptFragments = Object.fromEntries(
+        enabledContextRules.flatMap((r) => (r.prompt ? [[r.key, r.prompt] as const] : [])),
+      );
       const updatedContextRulesTools = enabledContextRules.flatMap((rule) => rule.tools || []);
       next.groupedRuntimeTools = {
         ...next.groupedRuntimeTools,
         "context-rule": this.deps.toolSpecsToImplementations(updatedContextRulesTools),
       };
-      next.toolSpecs = [...next.toolSpecs, ...updatedContextRulesTools];
+      next.toolSpecs = [...updatedContextRulesTools];
       next.mcpServers = [...next.mcpServers];
+      // todo: figure out how to deduplicate these in case of name collisions?
+      next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
+
+      // todo: change matchers.hasTool so that this doesn't empty out the runtimeTools array, making it always return false
+      this.codemodeifyState(next);
+
+      return { modified: true };
     };
 
-    next.ephemeralPromptFragments = {};
-
-    setEnabledContextRules();
-
-    // todo: figure out how to deduplicate these in case of name collisions?
-    next.runtimeTools = Object.values(next.groupedRuntimeTools).flat();
-
-    const codemodeified = this.codemodeifyState(next);
-
-    if (codemodeified.modified) {
-      setEnabledContextRules();
+    for (let i = 10; i >= 0; i--) {
+      const { modified } = setEnabledContextRules();
+      if (!modified) break;
+      if (i === 0)
+        logger.error(
+          "Enabled context rules loop did not converge after 10 iterations, this may be an insanely complex set of matchers but is probably a bug",
+          next,
+        );
     }
 
     return next as MergedStateForSlices<Slices> &

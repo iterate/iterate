@@ -3,12 +3,7 @@ import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import {
-  protectedProcedure,
-  protectedProcedureWithNoEstateRestrictions,
-  queuer,
-  router,
-} from "../trpc.ts";
+import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
@@ -24,6 +19,9 @@ import {
   getIterateSlackEstateId,
 } from "../../utils/trial-channel-setup.ts";
 import { env } from "../../../env.ts";
+import { recentActiveSources } from "../../db/helpers.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { deleteUserAccount } from "./user.ts";
 
 // don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
@@ -278,6 +276,7 @@ export const adminRouter = router({
             },
           },
         },
+        ...recentActiveSources,
       },
       orderBy: desc(schema.estate.updatedAt),
     });
@@ -290,9 +289,9 @@ export const adminRouter = router({
       ownerEmail: estate.organization.members[0]?.user.email,
       ownerName: estate.organization.members[0]?.user.name,
       ownerId: estate.organization.members[0]?.user.id,
-      connectedRepoId: estate.connectedRepoId,
-      connectedRepoPath: estate.connectedRepoPath,
-      connectedRepoRef: estate.connectedRepoRef,
+      connectedRepoId: estate.sources?.[0]?.repoId ?? null,
+      connectedRepoPath: estate.sources?.[0]?.path ?? null,
+      connectedRepoRef: estate.sources?.[0]?.branch ?? null,
       createdAt: estate.createdAt,
       updatedAt: estate.updatedAt,
     }));
@@ -302,9 +301,17 @@ export const adminRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { triggerEstateRebuild } = await import("./estate.ts");
 
-      const estateData = await ctx.db.query.estate.findFirst({
+      const _estateData = await ctx.db.query.estate.findFirst({
         where: eq(schema.estate.id, input.estateId),
+        with: recentActiveSources,
       });
+
+      const estateData = {
+        ..._estateData,
+        connectedRepoId: _estateData?.sources?.[0]?.repoId ?? null,
+        connectedRepoRef: _estateData?.sources?.[0]?.branch ?? null,
+        connectedRepoPath: _estateData?.sources?.[0]?.path ?? null,
+      };
 
       if (!estateData) {
         throw new TRPCError({
@@ -335,13 +342,13 @@ export const adminRouter = router({
     const { triggerEstateRebuild } = await import("./estate.ts");
 
     const estates = await ctx.db.query.estate.findMany({
-      where: eq(schema.estate.connectedRepoId, schema.estate.connectedRepoId),
+      with: recentActiveSources,
     });
 
     const results = [];
 
     for (const estate of estates) {
-      if (!estate.connectedRepoId) {
+      if (!estate.sources.at(0)?.repoId) {
         results.push({
           estateId: estate.id,
           estateName: estate.name,
@@ -356,7 +363,7 @@ export const adminRouter = router({
           db: ctx.db,
           env: ctx.env,
           estateId: estate.id,
-          commitHash: estate.connectedRepoRef || "main",
+          commitHash: estate.sources.at(0)?.branch || "main",
           commitMessage: "Bulk rebuild triggered by admin",
           isManual: true,
         });
@@ -613,8 +620,19 @@ export const adminRouter = router({
         return ctx.db.transaction(async (tx) => {
           const [{ now: dbtime }] = await tx.execute(sql`select now()`);
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
-          return ctx.sendToOutbox(tx, { dbtime, reply });
+          return ctx.sendTrpc(tx, { dbtime, reply });
         });
+      }),
+    pokeOutboxClientDirectly: adminProcedure
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
+          const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
+          return {
+            payload: { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` },
+          };
+        });
+        return { done: true };
       }),
     peek: adminProcedure
       .meta({

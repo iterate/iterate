@@ -331,7 +331,7 @@ describe("mcp-slice", () => {
             properties: { query: { type: "string" } },
           },
           strict: false,
-          execute: vi.fn(),
+          execute: vi.fn() as any,
           metadata: {
             source: "mcp" as const,
           },
@@ -461,7 +461,7 @@ describe("mcp-slice", () => {
             description: "Search repositories",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -548,7 +548,7 @@ describe("mcp-slice", () => {
             description: "Search repositories",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -584,7 +584,7 @@ describe("mcp-slice", () => {
             description: "Search repositories",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -595,7 +595,7 @@ describe("mcp-slice", () => {
             description: "Create issue",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -908,7 +908,7 @@ describe("mcp-slice", () => {
             description: "Search repositories",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -960,7 +960,7 @@ describe("mcp-slice", () => {
             description: "Search repositories",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -999,7 +999,7 @@ describe("mcp-slice", () => {
             description: "Create issue",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -1117,7 +1117,7 @@ describe("mcp-slice", () => {
             description: "Admin tool",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -1153,7 +1153,7 @@ describe("mcp-slice", () => {
             description: "Admin tool",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -1164,7 +1164,7 @@ describe("mcp-slice", () => {
             description: "User tool",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -1222,7 +1222,7 @@ describe("mcp-slice", () => {
             description: "Tool v1",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },
@@ -1278,7 +1278,7 @@ describe("mcp-slice", () => {
             description: "Tool v2",
             parameters: { type: "object" },
             strict: false,
-            execute: vi.fn(),
+            execute: vi.fn() as any,
             metadata: {
               source: "mcp" as const,
             },

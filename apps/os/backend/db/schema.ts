@@ -8,7 +8,7 @@ import {
   bigserial,
 } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations } from "drizzle-orm";
+import { isNull, relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
@@ -166,9 +166,6 @@ export const estate = pgTable("estate", (t) => ({
     .text()
     .notNull()
     .references(() => organization.id, { onDelete: "cascade" }),
-  connectedRepoId: t.integer(),
-  connectedRepoRef: t.text(),
-  connectedRepoPath: t.text(),
   // Onboarding agent name. Semantics: if null, user is done with onboarding.
   // If not null, use that agent to get onboarding information from it.
   onboardingAgentName: t.text(),
@@ -180,6 +177,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
     fields: [estate.organizationId],
     references: [organization.id],
   }),
+  sources: many(iterateConfigSource),
   estateAccountsPermissions: many(estateAccountsPermissions),
   files: many(files),
   providerSpecificEstateMapping: many(providerEstateMapping),
@@ -464,11 +462,43 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
   }),
 }));
 
+export const iterateConfigSource = pgTable(
+  "iterate_config_source",
+  (t) => ({
+    id: iterateId("ics"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    provider: t.text({ enum: ["github"] }).notNull(),
+    /** keep track of which account is responsible for this source. sometimes it's iterate-managed, sometimes it's a user-managed account. also, conceivably, there could be multiple accounts for the same estate */
+    accountId: t.text().notNull(), // todo: make this stricter somehow. maybe using estateAccountsPermissions table?
+    repoId: t.integer().notNull(),
+    branch: t.text().notNull(),
+    path: t.text(),
+    deactivatedAt: t.timestamp(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId, t.provider).where(isNull(t.deactivatedAt))],
+);
+
+export const iterateConfigSourceRelations = relations(iterateConfigSource, ({ one }) => ({
+  estate: one(estate, {
+    fields: [iterateConfigSource.estateId],
+    references: [estate.id],
+  }),
+}));
+
 export const iterateConfig = pgTable(
   "iterate_config",
   (t) => ({
     id: iterateId("icfg"),
-    config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+    // sourceId: t.text().references(() => iterateConfigSource.id, { onDelete: "set null" }),
+    /** the build which contains the config json */
+    buildId: t
+      .text()
+      .notNull()
+      .references(() => builds.id, { onDelete: "cascade" }),
     estateId: t
       .text()
       .notNull()
@@ -483,13 +513,24 @@ export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
     fields: [iterateConfig.estateId],
     references: [estate.id],
   }),
+  // source: one(iterateConfigSource, {
+  //   fields: [iterateConfig.sourceId],
+  //   references: [iterateConfigSource.id],
+  // }),
+  build: one(builds, {
+    fields: [iterateConfig.buildId],
+    references: [builds.id],
+  }),
 }));
 
 export const builds = pgTable("builds", (t) => ({
   id: iterateId("build"),
-  status: t.text({ enum: ["complete", "failed", "in_progress"] }).notNull(),
+  status: t.text({ enum: ["complete", "failed", "in_progress", "queued"] }).notNull(),
   commitHash: t.text().notNull(),
   commitMessage: t.text().notNull(),
+  files: t.jsonb().$type<{ path: string; content: string }[]>().notNull(),
+  /** note: config *is* nullable because we don't have it until the end of the build */
+  config: t.jsonb().$type<{ contextRules?: any[] } | null>(),
   iterateWorkflowRunId: t.text(),
   webhookIterateId: t.text().notNull(),
   estateId: t
@@ -561,22 +602,6 @@ export const estateOnboardingEvent = pgTable(
     index().on(t.estateId, t.category),
     index().on(t.category),
   ],
-);
-
-export const systemTasks = pgTable(
-  "system_tasks",
-  (t) => ({
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    aggregateType: t.text().notNull(),
-    aggregateId: t.text().notNull(),
-    taskType: t.text().notNull(),
-    payload: jsonb().$type<Record<string, unknown>>().default({}),
-    processedAt: t.timestamp(),
-    attempts: t.integer().default(0).notNull(),
-    error: t.text(),
-    ...withTimestamps,
-  }),
-  (t) => [index().on(t.processedAt), index().on(t.aggregateType), index().on(t.aggregateId)],
 );
 
 export const outboxEvent = pgTable("outbox_event", (t) => ({

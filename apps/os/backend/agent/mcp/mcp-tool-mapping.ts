@@ -351,6 +351,7 @@ export interface LazyConnectionDeps {
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
+  storage: DurableObjectStorage;
   getFinalRedirectUrl?: (payload: {
     durableObjectInstanceName: string;
   }) => Promise<string | undefined>;
@@ -482,6 +483,7 @@ export function createRuntimeToolFromMCPTool(params: {
           reducedState: reducedState,
           mcpConnectionCache: params.lazyConnectionDeps.mcpConnectionCache,
           mcpConnectionQueues: params.lazyConnectionDeps.mcpConnectionQueues,
+          storage: params.lazyConnectionDeps.storage,
           getFinalRedirectUrl: params.lazyConnectionDeps.getFinalRedirectUrl,
         });
 

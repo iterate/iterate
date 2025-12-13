@@ -28,6 +28,7 @@ export default {
   },
   jobs: {
     "deploy-os": {
+      name: "deploy-os ${{ inputs.stage }}",
       "timeout-minutes": 15,
       ...utils.runsOn,
       outputs: {

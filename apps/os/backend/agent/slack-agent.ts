@@ -171,24 +171,24 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     return super.ingestBackgroundLogs(input);
   }
 
+  async mockSlackAPI() {
+    this.slackAPI = createSlackAPIMock<WebClient>();
+  }
+
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
 
-    if (params.record.durableObjectName.includes("mock_slack")) {
-      this.slackAPI = createSlackAPIMock<WebClient>();
-      return;
-    }
-
     const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
-    if (!slackAccount) {
-      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
+    if (slackAccount) {
+      this.slackAPI = new WebClient(slackAccount.accessToken, {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+      });
+    } else if (import.meta.env.VITE_APP_STAGE === "prd") {
+      // in prd, it's never legitimate to have a slack agent without a token
+      logger.error("No Slack integration found for this estate", params.record);
     }
-    // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccount.accessToken, {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-    });
   }
 
   protected getSlices(): SlackAgentSlices {
@@ -541,6 +541,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         getReducedState: () => this.agentCore.state,
         mcpConnectionCache: this.mcpManagerCache,
         mcpConnectionQueues: this.mcpConnectionQueues,
+        storage: this.ctx.storage,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();
         },

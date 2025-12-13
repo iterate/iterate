@@ -1,13 +1,12 @@
 import { Container } from "@cloudflare/containers";
 import { ms } from "itty-time";
 import { typeid } from "typeid-js";
-import { and, eq, lt } from "drizzle-orm";
+import { and, eq, lt, or } from "drizzle-orm";
 import { waitUntil, type CloudflareEnv } from "../../env.ts";
 import { intoImmediateSSEResponse } from "../utils/sse-utils.ts";
 import { getDb } from "../db/client.ts";
 import * as schemas from "../db/schema.ts";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
-import { logger } from "../tag-logger.ts";
 
 const RETENTION_TIME = ms("30 days");
 const TIMEOUT_TIME = ms("10 minutes");
@@ -18,11 +17,10 @@ type BuildInput = {
   branch: string;
   path: string;
   authToken?: string;
-  isRetry?: boolean;
 };
 
 export type Log = {
-  event: "info" | "stdout" | "output" | "error" | "complete";
+  event: "info" | "stdout" | "files" | "output" | "error" | "complete";
   data: string;
 };
 
@@ -39,6 +37,15 @@ export class EstateBuildManager extends Container {
 
   constructor(ctx: DurableObjectState<{}>, env: CloudflareEnv) {
     super(ctx, env);
+
+    const tableInfo = this._sql
+      .exec<{ name: string; type: string }>("pragma table_info(build_logs)")
+      .toArray();
+
+    if (tableInfo.some((col) => col.name === "log_lines")) {
+      this._sql.exec(`drop table build_logs`);
+    }
+
     this._sql.exec(`
         CREATE TABLE IF NOT EXISTS builds (
             id TEXT PRIMARY KEY NOT NULL,
@@ -51,7 +58,14 @@ export class EstateBuildManager extends Container {
         CREATE TABLE IF NOT EXISTS build_logs (
             id TEXT PRIMARY KEY NOT NULL,
             build_id TEXT NOT NULL,
-            log_lines TEXT NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS build_log_lines (
+            build_id TEXT NOT NULL,
+            data TEXT NOT NULL,
+            idx INTEGER NOT NULL,
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
@@ -59,8 +73,6 @@ export class EstateBuildManager extends Container {
 
     waitUntil(
       (async () => {
-        // Handle retries
-        await this.handleRetries();
         // Sync logs for all ongoing builds
         await this.syncLogsForAllOngoingBuilds();
         // Act on the synced logs to update the build status and iterate config
@@ -73,8 +85,12 @@ export class EstateBuildManager extends Container {
     );
   }
 
-  public async build({ buildId, repo, branch, path, authToken, isRetry = false }: BuildInput) {
-    if (!isRetry) {
+  public async build({ buildId, repo, branch, path, authToken }: BuildInput) {
+    const buildExists =
+      this._sql.exec<{ id: string }>("SELECT id FROM builds WHERE id = ?", buildId).toArray()
+        .length > 0;
+
+    if (!buildExists) {
       this._sql.exec(
         `INSERT INTO builds (id, status, repo_meta) VALUES (?, ?, ?)`,
         buildId,
@@ -82,67 +98,43 @@ export class EstateBuildManager extends Container {
         JSON.stringify({ repo, branch, path, authToken }),
       );
       const logId = typeid("build_log").toString();
-      this._sql.exec(
-        `INSERT INTO build_logs (id, build_id, log_lines) VALUES (?, ?, ?)`,
-        logId,
-        buildId,
-        JSON.stringify([]),
-      );
+      this._sql.exec(`INSERT INTO build_logs (id, build_id) VALUES (?, ?)`, logId, buildId);
     }
 
-    try {
-      await this.startAndWaitForPorts({
-        startOptions: {
-          enableInternet: true,
-        },
-        ports: [3000],
-      });
+    await this.startAndWaitForPorts({
+      startOptions: {
+        enableInternet: true,
+      },
+      ports: [3000],
+    });
 
-      const request = new Request(`http://localhost:3000/trigger-build`, {
-        method: "POST",
-        body: JSON.stringify({
-          buildId,
-          repo,
-          branch,
-          path,
-          authToken,
-        }),
-        headers: {
-          "Content-Type": "application/json",
-        },
-      });
-
-      const response = await this.containerFetch(request, 3000);
-      if (!response.ok || !response.body)
-        throw new Error(`Failed to run config: ${response.statusText} ${await response.text()}`);
-      const res = await response.text();
-
-      // Attach build waiters to the ongoing builds to wait for the builds to complete
-      waitUntil(this.attachBuildWaiters());
-
-      return {
-        success: true,
-        message: res,
+    const request = new Request(`http://localhost:3000/trigger-build`, {
+      method: "POST",
+      body: JSON.stringify({
         buildId,
-      };
-    } catch (error) {
-      // don't retry if this is a retry
-      if (isRetry) throw error;
+        repo,
+        branch,
+        path,
+        authToken,
+      }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
 
-      logger.error(`Error Triggering Build`, error);
-      const existingRetries =
-        this.ctx.storage.kv.get<{ buildInput: BuildInput }[]>(`build-retries`) || [];
-      this.ctx.storage.kv.put<{ buildInput: BuildInput }[]>(`build-retries`, [
-        ...existingRetries,
-        { buildInput: { buildId, repo, branch, path, authToken } },
-      ]);
-      return {
-        // Lets just say it succeeded, so that the caller can retry the build
-        success: true,
-        message: `Error triggering build: ${String(error)}, build will be retried after a delay`,
-        buildId,
-      };
-    }
+    const response = await this.containerFetch(request, 3000);
+    if (!response.ok || !response.body)
+      throw new Error(`Failed to run config: ${response.statusText} ${await response.text()}`);
+    const res = await response.text();
+
+    // Attach build waiters to the ongoing builds to wait for the builds to complete
+    waitUntil(this.attachBuildWaiters());
+
+    return {
+      success: true,
+      message: res,
+      buildId,
+    };
   }
 
   public async getSSELogStream(buildId: string) {
@@ -175,7 +167,6 @@ export class EstateBuildManager extends Container {
     await this.syncLogsForAllOngoingBuilds();
     await this.handleTerminatingLogs();
     await this.housekeeping();
-    await this.handleRetries();
 
     const buildsInProgress = this._sql
       .exec<{ id: string }>("SELECT id FROM builds WHERE status = 'in_progress'")
@@ -188,23 +179,13 @@ export class EstateBuildManager extends Container {
     }
   }
 
-  private async handleRetries() {
-    const retries = this.ctx.storage.kv.get<{ buildInput: BuildInput }[]>(`build-retries`) || [];
-    // retry once only, so delete the entries
-    this.ctx.storage.kv.delete(`build-retries`);
-    for (const { buildInput } of retries) {
-      await this.build({ ...buildInput, isRetry: true });
-    }
-  }
-
   private getLogsFromDatabase(buildId: string) {
     try {
-      const log = this._sql
-        .exec("SELECT log_lines FROM build_logs WHERE build_id = ?", buildId)
-        .one();
-      const logLines = log?.log_lines;
-      if (typeof logLines !== "string") return [];
-      return JSON.parse(logLines) as Array<Log>;
+      const lines = this._sql
+        .exec("select data, idx from build_log_lines where build_id = ?", buildId)
+        .toArray()
+        .sort((a, b) => Number(a.idx) - Number(b.idx)); // for some reason order by in the sql statement makes the whole thing fail
+      return lines.map((line) => JSON.parse(line.data as string) as Log);
     } catch {
       return [];
     }
@@ -257,11 +238,15 @@ export class EstateBuildManager extends Container {
     );
 
     for (const { buildId, logs } of logsResponse) {
-      this._sql.exec(
-        "UPDATE build_logs SET log_lines = ?, updated_at = CURRENT_TIMESTAMP WHERE build_id = ?",
-        JSON.stringify(logs),
-        buildId,
-      );
+      this._sql.exec(`delete from build_log_lines where build_id = ?`, buildId);
+      for (const [index, data] of logs.entries()) {
+        this._sql.exec(
+          `insert into build_log_lines (build_id, data, idx) values (?, ?, ?)`,
+          buildId,
+          JSON.stringify(data),
+          index,
+        );
+      }
     }
   }
 
@@ -288,12 +273,13 @@ export class EstateBuildManager extends Container {
     }));
     const newestTriggeredBuild = allLogs.sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))[0]!;
 
-    await Promise.all(
+    const results = await Promise.allSettled(
       allLogs.map(async ({ buildId, logs }) => {
         const terminatingLog = logs.find(
           (log) => log.event === "complete" || log.event === "error",
         );
         const outputLog = logs.find((log) => log.event === "output");
+        const filesLog = logs.find((log) => log.event === "files");
         if (terminatingLog) {
           const status = terminatingLog.event === "complete" ? "complete" : "failed";
           this._sql.exec(
@@ -301,25 +287,43 @@ export class EstateBuildManager extends Container {
             status,
             buildId,
           );
+
+          const buildUpdate: Partial<typeof schemas.builds.$inferSelect> = { status };
+
+          if (filesLog) {
+            const files = JSON.parse(filesLog.data);
+            buildUpdate.files = files;
+          }
+          if (outputLog) {
+            const config = JSON.parse(outputLog.data);
+            buildUpdate.config = config;
+          }
+
           await this.db
             .update(schemas.builds)
-            .set({ status })
+            .set(buildUpdate)
             .where(eq(schemas.builds.id, buildId));
 
           // Update the iterate config in the database if this is the newest triggered build
-          if (outputLog && buildId === newestTriggeredBuild.buildId) {
-            const config = JSON.parse(outputLog.data);
+          if (buildId === newestTriggeredBuild.buildId && status === "complete") {
             await this.db
               .insert(schemas.iterateConfig)
-              .values({ estateId, config })
+              .values({ estateId, buildId })
               .onConflictDoUpdate({
                 target: [schemas.iterateConfig.estateId],
-                set: { config },
+                set: { buildId },
               });
           }
         }
       }),
     );
+
+    const errors = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : [],
+    );
+    if (errors.length === 1) throw errors[0];
+    if (errors.length)
+      throw new AggregateError(errors, `Failed to update ${errors.length} build statuses`);
 
     await invalidateOrganizationQueries(this.env, orgId, {
       type: "INVALIDATE",
@@ -385,6 +389,7 @@ export class EstateBuildManager extends Container {
 
     // Delete old build logs
     this._sql.exec(`DELETE FROM build_logs WHERE created_at < ?`, retentionThreshold);
+    this._sql.exec(`DELETE FROM build_log_lines WHERE created_at < ?`, retentionThreshold);
 
     // Timeout in-progress builds that have been running for too long
     this._sql.exec(
@@ -392,14 +397,19 @@ export class EstateBuildManager extends Container {
       timeoutThreshold,
     );
 
-    await this.db
-      .update(schemas.builds)
-      .set({ status: "failed", failureReason: "Build timed out" })
-      .where(
-        and(
-          eq(schemas.builds.status, "in_progress"),
-          lt(schemas.builds.updatedAt, new Date(Date.now() - TIMEOUT_TIME)),
-        ),
-      );
+    const { estateId } = await this.getBuilderMetadata().catch(() => ({ estateId: null }));
+
+    if (estateId) {
+      await this.db
+        .update(schemas.builds)
+        .set({ status: "failed", failureReason: "Build timed out" })
+        .where(
+          and(
+            eq(schemas.builds.estateId, estateId),
+            or(eq(schemas.builds.status, "in_progress"), eq(schemas.builds.status, "queued")),
+            lt(schemas.builds.updatedAt, new Date(Date.now() - TIMEOUT_TIME)),
+          ),
+        );
+    }
   }
 }

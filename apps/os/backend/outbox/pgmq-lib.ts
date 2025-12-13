@@ -1,8 +1,14 @@
+// outbox "library" implementation using pgmq. it could be split out into a separate package some day.
+// it also has a trpc plugin for easily registering consumers and sending events from procedures.
+// before splitting out we'd probably want to abstract out things like drizzle first
+
+// before using, you should create a table using pgmq, e.g. `select pgmq.create('my_consumer_job_queue')`
+
 import { sql } from "drizzle-orm";
 import { initTRPC, AnyTRPCRouter, AnyTRPCProcedure } from "@trpc/server";
 import { z } from "zod";
-import type { DB } from "../client.ts";
-import { logger } from "../../tag-logger.ts";
+import type { DB } from "../db/client.ts";
+import { logger } from "../tag-logger.ts";
 
 export const ConsumerEvent = z.object({
   event_name: z.string(),
@@ -34,6 +40,9 @@ export type WhenFn<Payload> = (params: { payload: Payload }) => boolean | null |
 export type DelayFn<Payload> = (params: { payload: Payload }) => number;
 
 export type DBLike = Pick<DB, "execute">;
+export type Transactable<D extends DBLike> = DBLike & {
+  transaction: <T>(callback: (tx: D) => Promise<T>) => Promise<T>;
+};
 
 type RetryFn = (
   job: ConsumerJobQueueMessage,
@@ -41,24 +50,23 @@ type RetryFn = (
   | { retry: false; reason: string; delay?: never }
   | { retry: true; reason: string; delay: number };
 
-export type ConsumersForEvent = Record<
-  `consumerName:${string}`,
-  {
-    /** consumer name */
-    name: string;
-    when: WhenFn<{ input: unknown; output: unknown }>;
-    /** delay before processing in seconds. if not specified, will process immediately */
-    delay: DelayFn<{ input: unknown; output: unknown }>;
-    retry: RetryFn;
-    /** handler function */
-    handler: (params: {
-      eventName: string;
-      eventId: number;
-      payload: { input: unknown; output: unknown };
-      job: { id: number | string; attempt: number };
-    }) => Promise<void | string>;
-  }
->;
+export type ConsumerDefinition<Payload> = {
+  /** consumer name */
+  name: string;
+  when: WhenFn<Payload>;
+  /** delay before processing in seconds. if not specified, will process immediately */
+  delay: DelayFn<Payload>;
+  retry: RetryFn;
+  /** handler function */
+  handler: (params: {
+    eventName: string;
+    eventId: number;
+    payload: Payload;
+    job: { id: number | string; attempt: number };
+  }) => Promise<void | string>;
+};
+
+export type ConsumersForEvent = Record<`consumerName:${string}`, ConsumerDefinition<{}>>;
 
 export type ConsumersRecord = Record<`eventName:${string}`, ConsumersForEvent>;
 
@@ -68,7 +76,7 @@ export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
-  addToQueue: (
+  enqueue: (
     db: DBConnection,
     params: { name: string; payload: { input: unknown; output: unknown } },
   ) => Promise<{ eventId: string; matchedConsumers: number }>;
@@ -191,7 +199,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const consumers: Queuer<DBLike>["consumers"] = {};
 
-  const addToQueue: Queuer<DBLike>["addToQueue"] = async (db, params) => {
+  const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`adding to pgmq:${params.name}`);
     const [_eventInsertion] = await db.execute(sql`
       insert into outbox_event (name, payload)
@@ -231,7 +239,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
   return {
     $types: { db: {} as DBLike },
     consumers,
-    addToQueue,
+    enqueue,
     processQueue: (db) => logger.run("processQueue", () => processQueue(db)),
     peekQueue: async (db, options = {}) => {
       // just a basic query, go to drizzle studio to filter based on read count, visibility time, event name, consumer name, etc.
@@ -261,6 +269,9 @@ export type ConsumerPluginCtx = {
   calls?: Record<string, string[]>;
 };
 
+/** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `import {waitUntil} from 'cloudflare:workers'` or `import {after} from 'next/server'` */
+export type WaitUntilFn = (promise: Promise<unknown>) => undefined | void;
+
 /**
  example usage:
 
@@ -269,7 +280,7 @@ const t = initTRPC.context<MyContext>().create();
 
 const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 
-// `concat`-ing the plugin just injects a `sendToOutbox` helper function into the context, which is used to send events to the outbox
+// `concat`-ing the plugin just injects a `sendTrpc` helper function into the context, which is used to send events to the outbox
 // note that you should always use this helper function on the return value of the procedure, otherwise you won't be able to subscribe to the event
 const publicProcedure = t.procedure.concat(
   createPostProcedureConsumerPlugin(queuer, {
@@ -288,17 +299,17 @@ const appRouter = t.router({
           .values({ name: input.name })
           .returning();
 
-        return ctx.sendToOutbox(tx, { user });
+        return ctx.sendTrpc(tx, { user });
       });
     }),
   }
 })
 
-const consumer = createTrpcConsumer<typeof appRouter, typeof queuer.$types.db>(queuer);
+const consumer = createConsumerClient<TrpcEventTypes<typeof appRouter>, typeof queuer.$types.db>(queuer);
 
 consumer.registerConsumer({
 name: "sendWelcomeEmail",
-on: "users.createUser",
+on: "trpc:users.createUser",
 handler: async ({ eventName, eventId, payload, job }) => {
     await myEmailService.sendEmail({
       to: payload.input.user.email,
@@ -309,13 +320,13 @@ handler: async ({ eventName, eventId, payload, job }) => {
 });
 ```
  */
-export const createPostProcedureConsumerPlugin = <DBConnection>(
-  queuer: Queuer<DBConnection>,
-  {
-    /** A function that instructs the runtime/platform to not die until the promise is completed. e.g. `waitUntil` from `cloudflare:workers` or `after` from 'next/server' */
-    waitUntil = (promise: Promise<unknown>): undefined | void => void promise,
-  } = {},
+export const createPostProcedureConsumerPlugin = <
+  EventTypes extends Record<string, {}>,
+  DBConnection,
+>(
+  ...args: Parameters<typeof createConsumerClient<EventTypes, DBConnection>>
 ) => {
+  const consumerClient = createConsumerClient(...args);
   const pluginTrpc = initTRPC.context<{ db: DBConnection }>().create();
 
   return (
@@ -324,23 +335,15 @@ export const createPostProcedureConsumerPlugin = <DBConnection>(
     pluginTrpc.procedure.use(async ({ getRawInput, next, ctx: _ctx, path }) => {
       return next({
         ctx: {
-          sendToOutbox: async <T extends {}>(db: DBConnection, output: T) => {
+          sendTrpc: async <T extends {}>(db: DBConnection, output: T) => {
             const input = await getRawInput();
             const payload = { input, output };
             return logger.run({ consumerPlugin: "true", path }, async () => {
-              const queueResult = await queuer.addToQueue(db, { name: `trpc:${path}`, payload });
-
-              if (queueResult.matchedConsumers > 0) {
-                waitUntil(
-                  logger.run({ queuedEventId: queueResult.eventId }, async () => {
-                    // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
-                    // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
-                    // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
-                    await new Promise((resolve) => setTimeout(resolve, 20));
-                    return queuer.processQueue(_ctx.db);
-                  }),
-                );
-              }
+              await consumerClient.send(
+                { transaction: db as DBLike, parent: _ctx.db as DBLike },
+                `trpc:${path}`,
+                payload,
+              );
 
               return output as T & { $enqueued: true };
             });
@@ -386,9 +389,144 @@ type ProcUnion<P, Prefix extends string = ""> = {
     : ProcUnion<P[K], `${Prefix}${Extract<K, string>}.`>;
 }[keyof P];
 
-export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
+/**
+ * Create a client that will allow registering consumers and sending events from procedures. Generics should be specified explicitly, e.g.
+ *
+ * ```ts
+ * import { waitUntil } from "./wait-until.ts";
+ *
+ * type MyEvents = {
+ *   "application:userCreated": { userId: string };
+ * }
+ *
+ * const consumerClient = createConsumerClient<MyEvents, typeof queuer.$types.db>(queuer, { waitUntil });
+ *
+ * consumerClient.registerConsumer({
+ *   name: "sendWelcomeEmail",
+ *   on: "application:userCreated",
+ *   handler: async ({ eventName, eventId, payload, job }) => {
+ *     const user = await findUser(payload.userId);
+ *     await sendWelcomeEmail({ to: user.email, subject: "Welcome to our app", body: "We think you will like it here" });
+ *   },
+ * });
+ *
+ * const addUser = async (db: DB, email: string) => {
+ *   return myDb.transaction(async tx => {
+ *     const [user] = await tx.insert(schema.user).values({ email }).returning();
+ *     await consumerClient.send({ transaction: tx, parent: db }, "application:userCreated", { userId: user.id });
+ *   })
+ * }
+ * ```
+ */
+export const createConsumerClient = <EventTypes extends Record<string, {}>, DBConnection>(
   queuer: Queuer<DBConnection>,
+  { waitUntil = ((promise) => void promise) as WaitUntilFn } = {},
 ) => {
+  type EventName = Extract<keyof EventTypes, string>;
+  const registerConsumer = <P extends EventName>(options: {
+    name: string;
+    on: P;
+    when?: WhenFn<EventTypes[P]>;
+    delay?: DelayFn<EventTypes[P]>;
+    retry?: RetryFn;
+    handler: (params: {
+      eventName: P;
+      eventId: number;
+      payload: EventTypes[P];
+      job: { id: string | number; attempt: number };
+    }) => string | void | Promise<string | void>;
+  }) => {
+    queuer.consumers[`eventName:${options.on}`] ||= {};
+    const consumersForEvent: ConsumersForEvent = queuer.consumers[`eventName:${options.on}`];
+    consumersForEvent[`consumerName:${options.name}`] = {
+      name: options.name,
+      when: (options.when as WhenFn<{}>) ?? (() => true),
+      delay: (options.delay as DelayFn<{}>) ?? (() => 0),
+      retry: options.retry ?? defaultRetryFn,
+      handler: async (params) => {
+        return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
+          return options.handler({
+            eventName: options.on,
+            eventId: params.eventId,
+            job: params.job,
+            payload: params.payload as EventTypes[P],
+          });
+        });
+      },
+    };
+  };
+
+  const send = async <Name extends EventName>(
+    connections: {
+      /** the transaction reference that will be used to insert the event record into the databse */
+      transaction: DBLike;
+      /** the parent database connection that will be used to process consumers for the event *after* the event is committed */
+      parent: DBLike;
+    },
+    eventName: Name,
+    payload: EventTypes[Name],
+  ) => {
+    const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
+      name: eventName,
+      payload: payload as never,
+    });
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(
+        logger.run({ queuedEventId: addResult.eventId }, async () => {
+          // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
+          // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
+          // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return queuer.processQueue(connections.parent as DBConnection);
+        }),
+      );
+    }
+    return addResult;
+  };
+
+  /** Send an event in a db transaction. Takes a callback which will receive a transaction reference, which can be used to insert/update database rows. The outbox event will then be inserted in the same transaction */
+  async function sendTx<
+    D extends DBLike,
+    Name extends EventName,
+    T extends { payload: EventTypes[Name] },
+  >(parent: Transactable<D>, eventName: Name, callback: (db: D) => Promise<T>): Promise<T> {
+    const { addResult, result } = await parent.transaction(async (tx) => {
+      return logger.run({ transactionForEvent: eventName }, async () => {
+        const result = await callback(tx);
+
+        const addResult = await queuer.enqueue(tx as {} as DBConnection, {
+          name: eventName,
+          payload: result.payload as never,
+        });
+
+        return { addResult, result };
+      });
+    });
+
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(
+        logger.run({ queuedEventId: addResult.eventId }, async () => {
+          // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
+          // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
+          // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return queuer.processQueue(parent as DBConnection);
+        }),
+      );
+    }
+
+    return result;
+  }
+
+  return {
+    registerConsumer,
+    send,
+    sendTx,
+  };
+};
+
+/** A rare *types-only* function! */
+export const getTrpcEventTypes = <R extends AnyTRPCRouter>() => {
   type FlatProcedures = FlattenProcedures<R["_def"]["procedures"]>;
   type ProcedureTypes<P extends keyof FlatProcedures> = FlatProcedures[P] extends {
     _def: { $types: { input: infer I; output: infer O } };
@@ -402,50 +540,13 @@ export const createTrpcConsumer = <R extends AnyTRPCRouter, DBConnection>(
       : never;
   }[keyof FlatProcedures];
 
-  const registerConsumer = <P extends EventableProcedureName>(options: {
-    name: string;
-    on: `trpc:${P}`;
-    when?: WhenFn<ProcedureTypes<P>>;
-    delay?: DelayFn<ProcedureTypes<P>>;
-    retry?: RetryFn;
-    handler: (params: {
-      eventName: `trpc:${P}`;
-      eventId: number;
-      payload: ProcedureTypes<P>;
-      job: { id: string | number; attempt: number };
-    }) => void | string | Promise<void | string>;
-  }) => {
-    queuer.consumers[`eventName:${options.on}`] ||= {};
-
-    // for some reason without the explicit type annotation you get "Type 'ConsumersRecord[`eventName:${P}`]' is generic and can only be indexed for reading"
-    const consumersForEvent: ConsumersForEvent = queuer.consumers[`eventName:${options.on}`];
-    consumersForEvent[`consumerName:${options.name}`] = {
-      name: options.name,
-      when: (options.when as WhenFn<{ input: unknown; output: unknown }>) ?? (() => true),
-      delay: (options.delay as DelayFn<{ input: unknown; output: unknown }>) ?? (() => 0),
-      retry: options.retry ?? defaultRetryFn,
-      handler: async (params) => {
-        return logger.run({ consumer: options.name, eventId: String(params.eventId) }, async () => {
-          return options.handler({
-            eventName: options.on,
-            eventId: params.eventId,
-            job: params.job,
-            payload: params.payload as ProcedureTypes<P>,
-          });
-        });
-      },
-    };
+  type EventTypes = {
+    [K in EventableProcedureName as `trpc:${K}`]: ProcedureTypes<K>;
   };
 
-  return {
-    /** compile-time only helper types */
-    $types: {
-      /** flattened object shape of all procedures in the router */
-      FlatProcedures: {} as FlatProcedures,
-      /** record whose keys are the names of all "eventable" procedures in the router (procedure paths which can be subscribed to by consumers) */
-      EventableProcedureName: {} as Record<EventableProcedureName, true>,
-    },
-    registerConsumer,
-    queuer,
-  };
+  return { EventTypes: {} as EventTypes };
 };
+
+export type TrpcEventTypes<R extends AnyTRPCRouter> = ReturnType<
+  typeof getTrpcEventTypes<R>
+>["EventTypes"];

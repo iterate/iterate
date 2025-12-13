@@ -421,11 +421,7 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
   - Make sure you have a clear idea of which tools you'd use to do something before suggesting that you can do it.
 `;
 
-const experimentalCodemodeMatcher = matchers.or(
-  // testing out codemode in specific channels
-  matchers.slackChannel("misha-test"),
-  matchers.slackChannel("test-codemode"),
-);
+const experimentalCodemodeMatcher = matchers.slackChannel("test-codemode");
 
 export const defaultContextRules = defineRules([
   {
@@ -451,6 +447,7 @@ export const defaultContextRules = defineRules([
           }),
         ),
       }),
+      iterateAgentTool.deepResearch(),
       iterateAgentTool.generateImage(),
       iterateAgentTool.generateVideo(),
       slackAgentTool.sendSlackMessage({
@@ -555,6 +552,71 @@ export const defaultContextRules = defineRules([
       - Never show raw Notion URLs in results - always wrap them in Slack link format
     `,
     match: matchers.hasMCPConnection("mcp.notion.com"),
+  },
+  {
+    key: "deep-research-guidelines",
+    prompt: dedent`
+      ### Deep Research Tool
+
+      You have access to the deepResearch tool which uses Parallel AI to conduct comprehensive multi-step web research.
+
+      **CRITICAL: BEFORE using deepResearch, ALWAYS ask for clarification first:**
+      - If the user's request is vague or could be interpreted multiple ways, ask what specifically they want to know
+      - You MUST always ask for more specific details. 
+      - If you think it's relevant, ask whether they need a quick answer (use searchWeb or lite/base processor) or a comprehensive report (use pro/ultra). Otherwise try to infer from the context of the conversation.
+
+      **When to use deepResearch vs searchWeb:**
+      - Use \`searchWeb\` for quick lookups, finding specific facts, or getting a list of relevant links
+      - Use \`deepResearch\` for comprehensive research questions that require:
+        - Synthesizing information from multiple authoritative sources
+        - Market research, competitive analysis, or industry reports
+        - In-depth investigation of complex topics
+        - Research that would take a human analyst hours to complete
+
+      **Important: Deep research runs in the background**
+      - When you call deepResearch, it returns immediately with a "queued" status
+      - The research runs in the background and can take minutes to hours depending on processor
+      - You will receive the results via a developer message when complete
+      - Tell the user the research is underway and you'll share results when ready
+      - You can continue other work while waiting
+
+      **Processor options - match speed to user needs:**
+      | Processor | Latency | Best for |
+      |-----------|---------|----------|
+      | lite | 10s-60s | Quick facts, basic lookups |
+      | base | 15s-100s | Standard enrichments - good default for simple questions |
+      | core | 60s-5min | Cross-referenced, moderately complex topics |
+      | pro | 2-10min | Exploratory web research - good balance of speed and depth |
+      | pro-fast | ~1-5min | Use when user wants depth but is time-sensitive |
+      | ultra | 5-25min | Advanced multi-source deep research - only for thorough reports |
+      | ultra-fast | ~2-12min | Faster ultra - when user wants comprehensive but not willing to wait 25min |
+      | ultra2x/4x/8x | 5min-2hr | Only for explicitly requested exhaustive research |
+
+      **Usage guidelines:**
+      - Be specific in your query - include relevant context, time frames, and specific aspects to investigate
+      - The output includes citations with confidence levels - share key sources with the user
+      - Remember to ALWAYS check with the user for any clarifications or additional details before calling deepResearch.
+
+      **Example flow:**
+      User: "I want some recommendations for a new laptop"
+      Agent: "What specific features are you looking for? What's your budget? Linux or Windows?"
+      User: "I'm looking for a Windows laptop with a 16GB RAM and a 1TB SSD, budget is $1,500"
+      Agent: "I'll start researching the best Windows laptops with 16GB RAM and a 1TB SSD under $1,500. This will take a few minutes..."
+      Agent: "I've found the best Windows laptops with 16GB RAM and a 1TB SSD under $1,500. Here are the results:"
+      Agent: "Here are the results:
+      - The best Windows laptops with 16GB RAM and a 1TB SSD under $1,500 are the Lenovo ThinkPad X1 Carbon Gen 10 and the Dell Latitude 9440."
+      Agent: "**TL;DR:** The best Windows laptops with 16GB RAM and a 1TB SSD under $1,500 are the Lenovo ThinkPad X1 Carbon Gen 10 and the Dell Latitude 9440."
+
+      **Presenting results:**
+       ALWAYS give a quick TL;DR of the results at the bottom, then give the full results with INLINE sources.
+       Example output:
+       \`\`\` text
+       **Full results:**
+       Paris is the capital of France (https://en.wikipedia.org/wiki/Paris), and has been since the 10th century (Source: https://en.wikipedia.org/wiki/France)
+       **TL;DR:** The capital of France is Paris.
+       \`\`\`
+    `,
+    match: matchers.hasTool("deepResearch"),
   },
   {
     key: "sandbox-starting",

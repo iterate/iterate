@@ -1,5 +1,5 @@
 import { createPrivateKey } from "crypto";
-import { eq, and } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { SignJWT } from "jose";
 import { db, schema } from "./cli-db.ts";
 
@@ -29,9 +29,6 @@ export async function getRepoAccessToken(estateId: string) {
     .select({
       estateId: schema.estate.id,
       accountId: schema.account.accountId,
-      repoId: schema.estate.connectedRepoId,
-      repoRef: schema.estate.connectedRepoRef,
-      repoPath: schema.estate.connectedRepoPath,
     })
     .from(schema.estate)
     .innerJoin(
@@ -40,6 +37,7 @@ export async function getRepoAccessToken(estateId: string) {
     )
     .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
     .where(and(eq(schema.estate.id, estateId), eq(schema.account.providerId, "github-app")))
+    .orderBy(desc(schema.account.createdAt))
     .limit(1);
 
   if (!result) {
@@ -64,5 +62,9 @@ export async function getRepoAccessToken(estateId: string) {
     throw new Error(`Failed to fetch installation token: ${tokenRes.statusText}`);
   }
   const { token } = (await tokenRes.json()) as { token: string };
-  return { token, repoId: result.repoId, repoRef: result.repoRef, repoPath: result.repoPath };
+  const source = await db.query.iterateConfigSource.findFirst({
+    where: eq(schema.iterateConfigSource.estateId, estateId),
+    orderBy: desc(schema.iterateConfigSource.createdAt),
+  });
+  return { token, repoId: source?.repoId, repoRef: source?.branch, repoPath: source?.path };
 }

@@ -60,6 +60,11 @@ export default workflow({
           },
         },
         {
+          name: "Install Playwright browsers",
+          "working-directory": "apps/os",
+          run: "pnpm exec playwright install && pnpm exec playwright install-deps",
+        },
+        {
           name: "Run E2E Tests",
           id: "tests",
           uses: "nick-fields/retry@v3",
@@ -67,7 +72,8 @@ export default workflow({
             timeout_minutes: 15,
             max_attempts: 3,
             retry_wait_seconds: 30,
-            command: "doppler run --config ${{ inputs.stage }} -- pnpm os e2e",
+            command:
+              "doppler run --config ${{ inputs.stage }} -- pnpm os e2e --reporter default --reporter html",
           },
           env: {
             WORKER_URL: "${{ inputs.worker_url }}",
@@ -79,7 +85,7 @@ export default workflow({
           if: "failure()",
           ...uses("actions/upload-artifact@v4", {
             name: "e2e-logs",
-            path: "apps/os/ignoreme/e2e-logs",
+            path: "apps/os/e2e-ignoreme",
           }),
         },
       ],

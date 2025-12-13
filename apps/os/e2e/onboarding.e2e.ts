@@ -1,5 +1,5 @@
-import { test, expect } from "vitest";
-import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
+import { test, expect, vi } from "vitest";
+import { createE2EHelper } from "./helpers.ts";
 
 /**
  * End-to-End Onboarding Test
@@ -14,53 +14,21 @@ import { createTestHelper, getAuthedTrpcClient } from "../evals/helpers.ts";
  * 7. Send a message to Slack
  * 8. Verify the bot responds
  * 9. Clean up the created repository
- *
- * Prerequisites:
- * - GitHub App must be installed for the test organization
  */
 
-const createDisposer = () => {
-  const disposeFns: Array<() => Promise<void>> = [];
-  return {
-    add: (fn: () => Promise<void>) => disposeFns.push(fn),
-    [Symbol.asyncDispose]: async () => {
-      const errors: unknown[] = [];
-      for (const fn of disposeFns.toReversed()) {
-        await fn().catch((err) => errors.push(err));
-      }
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 0) throw new Error("Multiple disposers failed", { cause: errors });
-    },
-  };
-};
-
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
-  const { client: adminTrpc, impersonate } = await getAuthedTrpcClient();
-  await using disposer = createDisposer();
-
-  const { user: testUser } = await adminTrpc.testing.createTestUser.mutate({});
-  disposer.add(async () => {
-    await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
-  });
-
-  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
-    userId: testUser.id,
-  });
-  disposer.add(async () => {
-    await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
-  });
-
-  const { trpcClient: userTrpc } = await impersonate(testUser.id);
-
-  const h = await createTestHelper({
-    inputSlug: "onboarding-e2e",
-    trpcClient: userTrpc,
-  });
-
-  const estateId = estate.id;
-  const [foundRepo] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
-  expect(foundRepo).toBeDefined();
-  disposer.add(async () => {
+  await using h = await createE2EHelper("onboarding-e2e");
+  const { adminTrpc, userTrpc, estate, estateId } = h;
+  await adminTrpc.testing.cleanupOutbox.mutate();
+  const foundRepo = await vi.waitUntil(
+    async () => {
+      const [first] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
+      return first;
+    },
+    { interval: 1000, timeout: 10_000 },
+  );
+  expect(foundRepo, "(a github repo should be available)").toBeDefined();
+  h.onDispose(async () => {
     if (!foundRepo?.full_name) return;
     await adminTrpc.testing.deleteIterateManagedRepo.mutate({ repoFullName: foundRepo.full_name });
   });
@@ -92,7 +60,7 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
 
   await expect
     .poll(getLatestBuild, { timeout: buildTimeout, interval: pollInterval })
-    .not.toMatchObject({ status: "in_progress" }); // give it a few minutes for "in_progress"
+    .not.toMatchObject({ status: expect.stringMatching(/in_progress|queued/i) }); // give it a few minutes to get out of "queued" or "in_progress"
 
   // now that it's not in progress, it *must* be complete
   expect(await getLatestBuild()).toMatchObject({ status: "complete" });

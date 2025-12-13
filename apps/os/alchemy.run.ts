@@ -104,6 +104,7 @@ const Env = z.object({
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_PRICING_PLAN_ID: Required,
   SERVICE_AUTH_TOKEN: Required,
+  PARALLEL_AI_API_KEY: Required,
 
   // optional keys
   ADMIN_EMAIL_HOSTS: Optional,
@@ -119,7 +120,6 @@ const Env = z.object({
   // Vite environment variables
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
-  VITE_ENABLE_TEST_ADMIN_USER: Optional,
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,

@@ -1,6 +1,4 @@
 export const workerCrons = {
-  /* every minute */
-  processSystemTasks: "*/1 * * * *",
   /* every day at midnight */
   slackSync: "0 0 * * *",
 

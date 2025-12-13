@@ -5,8 +5,10 @@ import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import { logger } from "../tag-logger.ts";
-import { createPostProcedureConsumerPlugin, createPgmqQueuer } from "../db/outbox/events.ts";
+import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
 import { waitUntil } from "../../env.ts";
+import { recentActiveSources } from "../db/helpers.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -70,10 +72,7 @@ const t = initTRPC.context<Context>().create({
   },
 });
 
-export const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
-export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, {
-  waitUntil,
-});
+export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, { waitUntil });
 
 // Base router and procedure helpers
 export const router = t.router;
@@ -114,7 +113,7 @@ export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type })
   return result;
 });
 
-// Protected procedure that requires authentication
+/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any estate-specific resources */
 export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
@@ -193,7 +192,7 @@ export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
     with: {
       organization: {
         with: {
-          estates: true,
+          estates: { with: recentActiveSources },
         },
       },
     },
@@ -232,13 +231,7 @@ export async function getUserEstateAccess(
 ) {
   const userWithEstates = await db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
-    with: {
-      organization: {
-        with: {
-          estates: true,
-        },
-      },
-    },
+    with: { organization: { with: { estates: { with: recentActiveSources } } } },
   });
 
   if (!userWithEstates?.length) {
@@ -248,7 +241,14 @@ export async function getUserEstateAccess(
   const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
 
   // Check if the estate belongs to the user's organization
-  const userEstate = allEstates.find((e) => e.id === estateId);
+  const _userEstate = allEstates.find((e) => e.id === estateId);
+  const userEstate = _userEstate && {
+    ..._userEstate,
+    connectedRepoId: _userEstate?.sources?.[0]?.repoId,
+    connectedRepoPath: _userEstate?.sources?.[0]?.path,
+    connectedRepoRef: _userEstate?.sources?.[0]?.branch,
+    connectedRepoAccountId: _userEstate?.sources?.[0]?.accountId,
+  };
 
   if (!userEstate) {
     return { hasAccess: false, estate: null } as const;

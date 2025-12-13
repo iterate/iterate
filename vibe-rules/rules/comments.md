@@ -1,0 +1,1 @@
+Don't write comments. You should instead aim to write self-descriptive code. If you are doing something exceptionally strange, you can write a comment explaing why you're doing something so bizarre. Otherwise, don't write a comment. Assume the code will be read by someone experienced and intelligent, so there's no need to tell them what the line below is doing.

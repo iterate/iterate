@@ -326,4 +326,41 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
 
     return verification.value;
   }
+  async checkState(state: string): Promise<{ valid: boolean; serverId?: string; error?: string }> {
+    const verification = await this.params.db.query.verification.findFirst({
+      where: eq(schema.verification.identifier, state),
+    });
+
+    if (!verification?.value) {
+      return { valid: false, error: "State not found" };
+    }
+
+    if (verification.expiresAt && new Date(verification.expiresAt) < new Date()) {
+      return { valid: false, error: "State expired" };
+    }
+
+    try {
+      const stateData = JSON.parse(verification.value) as { serverId?: string };
+      return { valid: true, serverId: stateData.serverId };
+    } catch {
+      return { valid: false, error: "Invalid state data" };
+    }
+  }
+
+  async consumeState(state: string): Promise<void> {
+    await this.params.db
+      .delete(schema.verification)
+      .where(eq(schema.verification.identifier, state));
+  }
+
+  async deleteCodeVerifier(): Promise<void> {
+    const clientInformation = await this.clientInformation();
+    if (!clientInformation) {
+      return;
+    }
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
+    await this.params.db
+      .delete(schema.verification)
+      .where(eq(schema.verification.identifier, verificationKey));
+  }
 }

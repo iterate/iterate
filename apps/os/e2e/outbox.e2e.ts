@@ -1,24 +1,12 @@
-import { inspect } from "node:util";
 import { test, expect, vi } from "vitest";
-import { z } from "zod";
 import { and, eq, ilike, sql } from "drizzle-orm";
 import { db } from "../sdk/cli/cli-db.ts";
-import { makeVitestTrpcClient } from "./utils/test-helpers/vitest/e2e/vitest-trpc-client.ts";
-import * as schema from "./db/schema.ts";
-
-const TestEnv = z.object({
-  WORKER_URL: z.url(),
-  SERVICE_AUTH_TOKEN: z.string(),
-});
+import * as schema from "../backend/db/schema.ts";
+import { createE2EHelper } from "./helpers.ts";
 
 test("outbox basic", { timeout: 15 * 60 * 1000 }, async () => {
-  const env = TestEnv.parse({
-    WORKER_URL: process.env.WORKER_URL,
-    SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
-  } satisfies Partial<z.input<typeof TestEnv>>);
-  const workerUrl = env.WORKER_URL;
-
-  const adminTrpc = await makeAdminTrpcClient(workerUrl, env);
+  await using h = await createE2EHelper("outbox-basic");
+  const { adminTrpc } = h;
 
   const random = String(Date.now() + Math.random());
   await adminTrpc.admin.outbox.poke.mutate({ message: "bonjour" + random }); // consumer filters by message.includes("hi")
@@ -78,13 +66,8 @@ test("outbox basic", { timeout: 15 * 60 * 1000 }, async () => {
 });
 
 test("outbox retries", { timeout: 60_000 }, async () => {
-  const env = TestEnv.parse({
-    WORKER_URL: process.env.WORKER_URL,
-    SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
-  } satisfies Partial<z.input<typeof TestEnv>>);
-  const workerUrl = env.WORKER_URL;
-
-  const adminTrpc = await makeAdminTrpcClient(workerUrl, env);
+  await using h = await createE2EHelper("outbox-retries");
+  const { adminTrpc } = h;
 
   const secret = String(Date.now() + Math.random());
   await adminTrpc.admin.outbox.poke.mutate({ message: "unstable" + secret }); // consumer filters by message.includes("unstable")
@@ -135,16 +118,11 @@ test("outbox retries", { timeout: 60_000 }, async () => {
 });
 
 test("outbox give up (DLQ-like behaviour)", { timeout: 2 * 60_000 }, async () => {
-  const env = TestEnv.parse({
-    WORKER_URL: process.env.WORKER_URL,
-    SERVICE_AUTH_TOKEN: process.env.SERVICE_AUTH_TOKEN,
-  } satisfies Partial<z.input<typeof TestEnv>>);
-  const workerUrl = env.WORKER_URL;
-
-  const adminTrpc = await makeAdminTrpcClient(workerUrl, env);
+  await using h = await createE2EHelper("outbox-dlq");
+  const { adminTrpc } = h;
 
   const secret = String(Date.now() + Math.random());
-  await adminTrpc.admin.outbox.poke.mutate({ message: "fail" + secret }); // consumer filters by message.includes("unstable")
+  await adminTrpc.admin.outbox.poke.mutate({ message: "fail" + secret }); // consumer filters by message.includes("fail")
 
   const event = await vi.waitUntil(async () => {
     return db.query.outboxEvent.findFirst({
@@ -194,36 +172,51 @@ test("outbox give up (DLQ-like behaviour)", { timeout: 2 * 60_000 }, async () =>
   });
 });
 
-async function makeAdminTrpcClient(
-  workerUrl: string,
-  env: { WORKER_URL: string; SERVICE_AUTH_TOKEN: string },
-) {
-  // Use service auth to get session for super user
-  const serviceAuthResponse = await fetch(`${workerUrl}/api/auth/service-auth/create-session`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ serviceAuthToken: env.SERVICE_AUTH_TOKEN }),
+test("use lower-level outbox client directly", { timeout: 15 * 60 * 1000 }, async () => {
+  await using h = await createE2EHelper("outbox-direct");
+  const { adminTrpc } = h;
+
+  const ts = Date.now();
+  await adminTrpc.admin.outbox.pokeOutboxClientDirectly.mutate({ message: "hi" + ts });
+
+  const event = await vi.waitUntil(async () => {
+    return db.query.outboxEvent.findFirst({
+      where: and(
+        eq(schema.outboxEvent.name, "testing:poke"),
+        ilike(sql`${schema.outboxEvent.payload}::text`, `%hi${ts}%`),
+      ),
+    });
   });
 
-  if (!serviceAuthResponse.ok) {
-    const error = await serviceAuthResponse.text();
-    const headers = inspect(serviceAuthResponse.headers);
-    throw new Error(
-      `Failed to authenticate with service auth: ${error}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
-    );
-  }
-
-  const sessionCookies = serviceAuthResponse.headers.get("set-cookie");
-  if (!sessionCookies) {
-    const text = await serviceAuthResponse.text();
-    const headers = inspect(serviceAuthResponse.headers);
-    throw new Error(
-      `Failed to get session cookies from service auth. Response: ${text}. Status ${serviceAuthResponse.status}. Headers: ${headers}`,
-    );
-  }
-
-  return makeVitestTrpcClient({
-    url: `${workerUrl}/api/trpc`,
-    headers: { cookie: sessionCookies },
+  expect(event).toMatchObject({
+    name: "testing:poke",
+    payload: { message: expect.stringContaining(`hi${ts} at ${new Date().getFullYear()}`) },
   });
-}
+
+  const result = await vi.waitUntil(
+    async () => {
+      await adminTrpc.admin.outbox.process.mutate();
+      const archive = await adminTrpc.admin.outbox.peekArchive.query();
+      return archive.find((m) => m.message.event_id === event.id);
+    },
+    { timeout: 60_000, interval: 2000 },
+  );
+
+  expect(result).toMatchObject({
+    enqueued_at: expect.any(String),
+    message: {
+      consumer_name: "logPoke",
+      event_id: event.id,
+      event_name: "testing:poke",
+      event_payload: {
+        message: expect.stringContaining(`hi${ts}`),
+      },
+      processing_results: expect.arrayContaining([
+        expect.stringContaining(`received message: hi${ts} at ${new Date().getFullYear()}`),
+      ]),
+    },
+    msg_id: expect.any(String),
+    read_ct: 1,
+    vt: expect.any(String),
+  });
+});

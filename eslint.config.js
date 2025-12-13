@@ -178,9 +178,8 @@ export default defineConfig([
       ],
     },
   },
-  {
-    ignores: [".tmp-ci-build*"],
-  },
+  { ignores: ["**/evalite-export/**"] },
+  { ignores: [".tmp-ci-build*"] },
   // Override for React Router route files
   {
     files: ["**/routes/**", "**/app/root.tsx"],
@@ -385,15 +384,18 @@ export default defineConfig([
               const dbMutateEnforcementListeners = {};
               for (const m of dbMutateMethods) {
                 const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
+                const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
                 dbMutateEnforcementListeners[selector] = (node) => {
-                  const before = node.arguments[0].name;
-                  const after = `schema.${node.arguments[0].name}`;
+                  const before = context.sourceCode.getText(node.arguments[0]);
+                  const after = before.startsWith("schemas.")
+                    ? before.replace("schemas.", "schema.")
+                    : `schema.${node.arguments[0].name}`;
                   if (
-                    m === "delete" &&
+                    (m === "delete" || m === "update") &&
                     node.callee.object.name !== "db" &&
                     node.callee.object.name !== "tx"
                   ) {
-                    return; // too many false positives for Maps
+                    return; // too many false positives for Maps, hmac.update, etc.
                   }
                   context.report({
                     node: node.arguments[0],
@@ -406,6 +408,7 @@ export default defineConfig([
                     ],
                   });
                 };
+                dbMutateEnforcementListeners[selector2] = dbMutateEnforcementListeners[selector];
               }
 
               return {
@@ -417,6 +420,8 @@ export default defineConfig([
                   esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
                     const used = context.sourceCode.getText(m);
                     if (m !== node.callee.object && parentReference === used) {
+                      // @ts-expect-error -- lots of ?.
+                      if (m.parent?.key?.name === "parent") return; // special case: outboxClient.send({ tx, parent: db }, '...', {...})
                       context.report({
                         node: m,
                         message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
