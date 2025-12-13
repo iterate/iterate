@@ -1,0 +1,4 @@
+DROP INDEX "mcp_connection_param_estate_id_connection_key_param_key_param_type_index";--> statement-breakpoint
+ALTER TABLE "mcp_connection_param" ADD COLUMN "user_id" text;--> statement-breakpoint
+ALTER TABLE "mcp_connection_param" ADD CONSTRAINT "mcp_connection_param_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+CREATE UNIQUE INDEX "mcp_connection_param_estate_id_connection_key_param_key_param_type_user_id_index" ON "mcp_connection_param" USING btree ("estate_id","connection_key","param_key","param_type","user_id");

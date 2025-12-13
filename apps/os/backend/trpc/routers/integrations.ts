@@ -908,6 +908,7 @@ export const integrationsRouter = router({
             paramKey: param.key,
             paramValue: param.value,
             paramType: param.type,
+            userId: null,
           }));
 
           await tx
@@ -919,6 +920,7 @@ export const integrationsRouter = router({
                 schema.mcpConnectionParam.connectionKey,
                 schema.mcpConnectionParam.paramKey,
                 schema.mcpConnectionParam.paramType,
+                schema.mcpConnectionParam.userId,
               ],
               set: {
                 paramValue: sql`excluded.param_value`,
