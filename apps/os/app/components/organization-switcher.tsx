@@ -1,9 +1,8 @@
 import { ChevronsUpDown, Plus } from "lucide-react";
-import { useSuspenseQuery } from "@tanstack/react-query";
-import { useNavigate, useRouteLoaderData } from "react-router";
+import { useQuery } from "@tanstack/react-query";
+import { getRouteApi, useNavigate } from "@tanstack/react-router";
 import { useTRPC } from "../lib/trpc.ts";
-import { useOrganizationId } from "../hooks/use-estate.ts";
-import type { loader as orgLoader } from "../routes/org/loader.tsx";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,30 +12,32 @@ import {
 } from "./ui/dropdown-menu.tsx";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
 
+const orgRoute = getRouteApi("/_auth.layout/$organizationId");
 export function OrganizationSwitcher() {
   const trpc = useTRPC();
   const navigate = useNavigate();
-  const currentOrganizationId = useOrganizationId();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
-  const { data: allOrganizations } = useSuspenseQuery({
-    ...trpc.organization.list.queryOptions(),
-    initialData: loaderData?.organizations,
-  });
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
-
-  // Only show organizations where user is owner or member
-  const organizations = allOrganizations.filter(
-    (org) => org.role === "owner" || org.role === "member",
+  const loaderData = orgRoute.useLoaderData();
+  const organizationsQuery = useQuery(
+    trpc.organization.list.queryOptions(void 0, {
+      initialData: loaderData?.organizations ?? [],
+      // Organizations are not likely to change frequently, cache for 5 minutes
+      staleTime: 1000 * 60 * 5,
+    }),
   );
 
-  const currentOrganization = organizations.find((org) => org.id === currentOrganizationId);
+  const user = useSessionUser();
+
+  // Only show organizations where user is owner or member
+  const organizations = organizationsQuery.data.filter(
+    (org) => org.role === "owner" || org.role === "member",
+  );
 
   // If there are no organizations, show a prompt to create one
   if (organizations.length === 0) {
     return (
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton size="lg" onClick={() => navigate("/new-organization")}>
+          <SidebarMenuButton size="lg" onClick={() => navigate({ to: "/new-organization" })}>
             <div className="flex aspect-square size-8 items-center justify-center rounded-lg border border-dashed">
               <Plus className="size-4" />
             </div>
@@ -52,7 +53,7 @@ export function OrganizationSwitcher() {
 
   const handleOrganizationSwitch = (organizationId: string) => {
     // Navigate to the organization page (which will redirect to first estate)
-    navigate(`/${organizationId}`);
+    navigate({ to: `/$organizationId`, params: { organizationId } });
   };
 
   return (
@@ -70,14 +71,14 @@ export function OrganizationSwitcher() {
               <div className="grid flex-1 text-left text-sm leading-tight">
                 <span className="truncate font-semibold">iterate</span>
                 <span className="truncate text-xs">
-                  {currentOrganization?.name || "Select Organization"}
+                  {loaderData?.organization.name || "Select Organization"}
                 </span>
               </div>
               <ChevronsUpDown className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
           <DropdownMenuContent
-            className="w-[--radix-dropdown-menu-trigger-width] min-w-56 rounded-lg"
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
             align="start"
             side="bottom"
             sideOffset={4}
@@ -102,7 +103,7 @@ export function OrganizationSwitcher() {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   className="gap-2 p-2"
-                  onClick={() => navigate("/new-organization")}
+                  onClick={() => navigate({ to: "/new-organization" })}
                 >
                   <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
                     <Plus className="size-4" />

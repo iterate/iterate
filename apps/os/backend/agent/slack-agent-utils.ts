@@ -20,6 +20,12 @@ export function isBotMentionedInMessage(
     return false;
   }
 
+  // app_mention events are always mentions of the bot
+  if (slackEvent.type === "app_mention") {
+    return true;
+  }
+
+  // For message events, check if the text contains a mention
   if (slackEvent.type === "message") {
     if ("text" in slackEvent && slackEvent.text) {
       return getMentionedExternalUserIds(slackEvent.text).includes(botUserId);

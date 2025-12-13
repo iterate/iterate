@@ -24,15 +24,13 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import type OpenAI from "openai";
-import type {
-  AgentCoreEvent,
-  AugmentedCoreReducedState,
-} from "../../backend/agent/agent-core-schemas.ts";
-import type { SlackSliceEvent, SlackSliceState } from "../../backend/agent/slack-slice.ts";
+import type { AugmentedCoreReducedState } from "../../backend/agent/agent-core-schemas.ts";
+import type { SlackSliceState } from "../../backend/agent/slack-slice.ts";
 import type { SlackWebhookPayload } from "../../backend/agent/slack.types.ts";
 import { isThinking } from "../../backend/agent/agent-core-schemas.ts";
 import { fulltextSearchInObject } from "../../backend/utils/type-helpers.ts";
 import { resolveEmoji } from "../lib/emoji-mapping.ts";
+import type { AgentEvent } from "../../backend/agent/agents-router.ts";
 import { Button } from "./ui/button.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Alert, AlertDescription } from "./ui/alert.tsx";
@@ -67,8 +65,6 @@ import { SerializedObjectCodeBlock } from "./serialized-object-code-block.tsx";
 import { AgentReducedState } from "./agent-reduced-state.tsx";
 import { PagerDialog } from "./pager-dialog.tsx";
 
-type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
-
 export interface AgentDetailDataGetters {
   getFileUrl: (iterateFileId: string, disposition?: "inline" | "attachment") => string;
   getReducedStateAtEventIndex: (
@@ -90,7 +86,7 @@ export interface AgentDetailProps {
   events: AgentEvent[];
   estateId: string;
   agentClassName: string;
-  reducedState: AugmentedCoreReducedState;
+  reducedState: AugmentedCoreReducedState | null;
   isWebsocketConnected?: boolean;
   getters: AgentDetailDataGetters;
   actions?: AgentDetailActions;
@@ -400,6 +396,7 @@ function MetaEventWrapper({
               className="flex items-center gap-2 cursor-pointer group py-0.5 px-1 rounded hover:bg-muted/30 hover:text-muted-foreground"
               onClick={() => onEventClick?.(event.eventIndex ?? 0)}
             >
+              #{index}
               {index > 0 && (
                 <span
                   title={`${msSinceLast}ms since previous event`}
@@ -830,9 +827,13 @@ function CoreEventRenderer({
 
       const toolState = isSuccess ? "output-available" : "output-error";
 
+      const type: Parameters<typeof ToolHeader>[0]["type"] =
+        "statusIndicatorText" in parsedArguments
+          ? `tool-${call.name} (${parsedArguments.statusIndicatorText})`
+          : `tool-${call.name}`;
       return (
         <Tool defaultOpen={false}>
-          <ToolHeader type={`tool-${call.name}`} state={toolState} />
+          <ToolHeader type={type} state={toolState} />
           <ToolContent>
             <ToolInput input={parsedArguments} />
             <ToolOutput
@@ -963,7 +964,7 @@ function CoreEventRenderer({
                   {payload.event && "channel" in payload.event
                     ? typeof payload.event.channel === "string"
                       ? payload.event.channel.slice(-8)
-                      : payload.event.channel.id?.slice(-8)
+                      : payload.event.channel?.id?.slice(-8)
                     : "Unknown"}
                 </Badge>
                 <Badge variant="outline" className="text-xs">
@@ -1197,12 +1198,12 @@ export function AgentDetailRenderer({
 
   const isAgentThinking = reducedState ? isThinking(reducedState) : false;
   const botUserId =
-    agentClassName === "SlackAgent" ? (reducedState as SlackSliceState).botUserId : undefined;
+    agentClassName === "SlackAgent" ? (reducedState as SlackSliceState)?.botUserId : undefined;
 
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] overflow-hidden -m-6">
       {/* Header */}
-      <div className="flex-shrink-0 flex items-center gap-2 py-2 px-4 border-b">
+      <div className="shrink-0 flex items-center gap-2 py-2 px-4 border-b">
         {headerLeft}
 
         <div className="flex items-center gap-2 ml-auto">
@@ -1255,7 +1256,7 @@ export function AgentDetailRenderer({
         {/* Events feed */}
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {events.length > 0 && (
-            <div className="flex-shrink-0 px-4 py-2 border-b">
+            <div className="shrink-0 px-4 py-2 border-b">
               <FilterBar
                 value={searchText}
                 onChange={setSearchText}
@@ -1338,7 +1339,7 @@ export function AgentDetailRenderer({
 
       {/* Message input */}
       {actions && (
-        <div className="flex-shrink-0 border-t bg-background">
+        <div className="shrink-0 border-t bg-background">
           <div className="px-4 py-3">
             <PromptInput onSubmit={handleSendMessage}>
               <PromptInputBody>

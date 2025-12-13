@@ -1,9 +1,9 @@
-import { z } from "zod/v4";
-import { and, eq, desc } from "drizzle-orm";
+import { z } from "zod";
+import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import { protectedProcedure, router } from "../trpc.ts";
+import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
@@ -14,9 +14,18 @@ import { getAuth } from "../../auth/auth.ts";
 import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
 import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
+import {
+  createTrialSlackConnectChannel,
+  getIterateSlackEstateId,
+} from "../../utils/trial-channel-setup.ts";
+import { env } from "../../../env.ts";
+import { recentActiveSources } from "../../db/helpers.ts";
+import { queuer } from "../../outbox/outbox-queuer.ts";
+import { outboxClient } from "../../outbox/client.ts";
 import { deleteUserAccount } from "./user.ts";
 
-const adminProcedure = protectedProcedure.use(({ ctx, next }) => {
+// don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
+const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -33,6 +42,26 @@ const findUserByEmail = adminProcedure
       where: eq(schema.user.email, input.email),
     });
     return user;
+  });
+
+const searchUsersByEmail = adminProcedure
+  .input(
+    z.object({
+      searchEmail: z.string(),
+    }),
+  )
+  .query(async ({ ctx, input }) => {
+    const users = await ctx.db.query.user.findMany({
+      where: like(schema.user.email, `%${input.searchEmail}%`),
+      columns: {
+        id: true,
+        email: true,
+        name: true,
+      },
+      limit: 10,
+    });
+
+    return users;
   });
 
 const getEstateOwner = adminProcedure
@@ -117,7 +146,7 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
     try {
       const seedData = E2ETestParams.parse(JSON.parse(ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS));
 
-      const [_userAccount, botAccount, githubAccount] = await ctx.db
+      const [_userAccount, botAccount] = await ctx.db
         .insert(schema.account)
         .values([
           {
@@ -131,12 +160,6 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
             userId: user.id,
             accountId: seedData.slack.bot.id,
             accessToken: seedData.slack.bot.accessToken,
-          },
-          {
-            providerId: "github-app",
-            userId: user.id,
-            accountId: seedData.github.installationId.toString(),
-            accessToken: seedData.github.accessToken,
           },
         ])
         .onConflictDoNothing()
@@ -163,10 +186,6 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
             accountId: botAccount.id,
             estateId: estate.id,
           },
-          {
-            accountId: githubAccount.id,
-            estateId: estate.id,
-          },
         ])
         .onConflictDoNothing();
 
@@ -178,6 +197,28 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
 
   return { user, organization, estate, hasSeedData };
 });
+
+const markTestUserAsOnboarded = adminProcedure
+  .input(
+    z.object({
+      organizationId: z.string(),
+      estateId: z.string(),
+    }),
+  )
+  .mutation(async ({ ctx, input }) => {
+    await ctx.db.insert(schema.estateOnboardingEvent).values({
+      estateId: input.estateId,
+      organizationId: input.organizationId,
+      eventType: "OnboardingCompleted",
+      category: "user",
+    });
+    await ctx.db
+      .update(schema.organization)
+      .set({
+        stripeCustomerId: "TEST_CUSTOMER_ID",
+      })
+      .where(eq(schema.organization.id, input.organizationId));
+  });
 
 const allProcedureInputs = adminProcedure.query(async () => {
   const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
@@ -192,9 +233,11 @@ const allProcedureInputs = adminProcedure.query(async () => {
 
 export const adminRouter = router({
   findUserByEmail,
+  searchUsersByEmail,
   getEstateOwner,
   deleteUserByEmail,
   setupTestOnboardingUser,
+  markTestUserAsOnboarded,
   allProcedureInputs,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information
@@ -233,6 +276,7 @@ export const adminRouter = router({
             },
           },
         },
+        ...recentActiveSources,
       },
       orderBy: desc(schema.estate.updatedAt),
     });
@@ -245,9 +289,9 @@ export const adminRouter = router({
       ownerEmail: estate.organization.members[0]?.user.email,
       ownerName: estate.organization.members[0]?.user.name,
       ownerId: estate.organization.members[0]?.user.id,
-      connectedRepoId: estate.connectedRepoId,
-      connectedRepoPath: estate.connectedRepoPath,
-      connectedRepoRef: estate.connectedRepoRef,
+      connectedRepoId: estate.sources?.[0]?.repoId ?? null,
+      connectedRepoPath: estate.sources?.[0]?.path ?? null,
+      connectedRepoRef: estate.sources?.[0]?.branch ?? null,
       createdAt: estate.createdAt,
       updatedAt: estate.updatedAt,
     }));
@@ -257,9 +301,17 @@ export const adminRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { triggerEstateRebuild } = await import("./estate.ts");
 
-      const estateData = await ctx.db.query.estate.findFirst({
+      const _estateData = await ctx.db.query.estate.findFirst({
         where: eq(schema.estate.id, input.estateId),
+        with: recentActiveSources,
       });
+
+      const estateData = {
+        ..._estateData,
+        connectedRepoId: _estateData?.sources?.[0]?.repoId ?? null,
+        connectedRepoRef: _estateData?.sources?.[0]?.branch ?? null,
+        connectedRepoPath: _estateData?.sources?.[0]?.path ?? null,
+      };
 
       if (!estateData) {
         throw new TRPCError({
@@ -290,13 +342,13 @@ export const adminRouter = router({
     const { triggerEstateRebuild } = await import("./estate.ts");
 
     const estates = await ctx.db.query.estate.findMany({
-      where: eq(schema.estate.connectedRepoId, schema.estate.connectedRepoId),
+      with: recentActiveSources,
     });
 
     const results = [];
 
     for (const estate of estates) {
-      if (!estate.connectedRepoId) {
+      if (!estate.sources.at(0)?.repoId) {
         results.push({
           estateId: estate.id,
           estateName: estate.name,
@@ -311,7 +363,7 @@ export const adminRouter = router({
           db: ctx.db,
           env: ctx.env,
           estateId: estate.id,
-          commitHash: estate.connectedRepoRef || "main",
+          commitHash: estate.sources.at(0)?.branch || "main",
           commitMessage: "Bulk rebuild triggered by admin",
           isManual: true,
         });
@@ -340,16 +392,36 @@ export const adminRouter = router({
   syncSlackForEstate: adminProcedure
     .input(z.object({ estateId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const slackToken = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
+      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
 
-      if (!slackToken) {
+      if (!slackAccount) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: "No Slack token found for this estate",
         });
       }
 
-      return await syncSlackForEstateInBackground(ctx.db, slackToken, input.estateId);
+      // Get team ID from provider estate mapping
+      const estateMapping = await ctx.db.query.providerEstateMapping.findFirst({
+        where: and(
+          eq(schema.providerEstateMapping.internalEstateId, input.estateId),
+          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        ),
+      });
+
+      if (!estateMapping) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "No Slack team mapping found for this estate",
+        });
+      }
+
+      return await syncSlackForEstateInBackground(
+        ctx.db,
+        slackAccount.accessToken,
+        input.estateId,
+        estateMapping.externalId,
+      );
     }),
   syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
     return await syncSlackForAllEstatesHelper(ctx.db);
@@ -417,6 +489,194 @@ export const adminRouter = router({
         stripeCustomerId: customer.id,
       };
     }),
+
+  /**
+   * Admin endpoint to manually create a trial Slack Connect channel
+   * Can create a new estate/org or use an existing one
+   */
+  createTrialSlackChannel: adminProcedure
+    .input(
+      z.object({
+        userEmail: z.email(),
+        userName: z.string().optional(),
+        existingEstateId: z.string().optional(),
+        createNewEstate: z.boolean().default(true),
+        estateName: z.string().optional(),
+        organizationName: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const {
+        userEmail,
+        userName,
+        existingEstateId,
+        createNewEstate,
+        estateName,
+        organizationName,
+      } = input;
+
+      let estateId = existingEstateId;
+      let organizationId: string | undefined;
+
+      // Create estate/org if needed
+      if (createNewEstate) {
+        const [org] = await ctx.db
+          .insert(schema.organization)
+          .values({
+            name: organizationName || `${userName || userEmail}'s Organization`,
+          })
+          .returning();
+
+        const [estate] = await ctx.db
+          .insert(schema.estate)
+          .values({
+            name: estateName || `${userName || userEmail}'s Estate`,
+            organizationId: org.id,
+          })
+          .returning();
+
+        estateId = estate.id;
+        organizationId = org.id;
+
+        logger.info(`Admin created new org ${org.id} and estate ${estate.id} for trial channel`);
+      } else if (!existingEstateId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Either createNewEstate must be true or existingEstateId must be provided",
+        });
+      } else {
+        // Get org ID from existing estate
+        const estate = await ctx.db.query.estate.findFirst({
+          where: eq(schema.estate.id, existingEstateId),
+        });
+        if (!estate) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Estate not found",
+          });
+        }
+        organizationId = estate.organizationId;
+      }
+
+      // Get iterate's Slack workspace estate
+      const iterateTeamId = env.SLACK_ITERATE_TEAM_ID;
+      if (!iterateTeamId) {
+        throw new Error("Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)");
+      }
+
+      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
+      if (!iterateEstateId) {
+        throw new Error("Iterate Slack workspace estate not found");
+      }
+
+      // Get iterate's bot account and token
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      if (!iterateBotAccount) {
+        throw new Error("Iterate Slack bot account not found");
+      }
+
+      // Link trial estate to iterate's bot account
+      await ctx.db
+        .insert(schema.estateAccountsPermissions)
+        .values({
+          accountId: iterateBotAccount.accountId,
+          estateId: estateId!,
+        })
+        .onConflictDoNothing();
+
+      logger.info(`Linked trial estate ${estateId} to iterate's bot account`);
+
+      // Create trial channel and send invite
+      const result = await createTrialSlackConnectChannel({
+        db: ctx.db,
+        userEstateId: estateId!,
+        userEmail,
+        userName: userName || userEmail.split("@")[0],
+        iterateTeamId,
+        iterateBotToken: iterateBotAccount.accessToken,
+      });
+
+      logger.info(
+        `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${estateId}`,
+      );
+
+      return {
+        success: true,
+        estateId: estateId!,
+        organizationId,
+        channelId: result.channelId,
+        channelName: result.channelName,
+      };
+    }),
+
+  outbox: {
+    poke: adminProcedure
+      .meta({
+        description:
+          "Emit a meaningless message into the outbox queue. Note that consumers are defined separately, so may or may not choose to subscribe to this mutation.",
+      })
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        return ctx.db.transaction(async (tx) => {
+          const [{ now: dbtime }] = await tx.execute(sql`select now()`);
+          const reply = `You used ${input.message.split(" ").length} words, well done.`;
+          return ctx.sendTrpc(tx, { dbtime, reply });
+        });
+      }),
+    pokeOutboxClientDirectly: adminProcedure
+      .input(z.object({ message: z.string() }))
+      .mutation(async ({ ctx, input }) => {
+        await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
+          const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
+          return {
+            payload: { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` },
+          };
+        });
+        return { done: true };
+      }),
+    peek: adminProcedure
+      .meta({
+        description:
+          "Peek at the outbox queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
+      })
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekQueue(ctx.db, input);
+      }),
+    peekArchive: adminProcedure
+      .meta({
+        description:
+          "Peek at the outbox archive queue. Use drizzle studio to filter based on read count, visibility time, event name, consumer name, look at archive queue etc.",
+      })
+      .input(
+        z
+          .object({
+            limit: z.number().optional(),
+            offset: z.number().optional(),
+            minReadCount: z.number().optional(),
+          })
+          .optional(),
+      )
+      .query(async ({ ctx, input }) => {
+        return await queuer.peekArchive(ctx.db, input);
+      }),
+    process: adminProcedure
+      .meta({
+        description:
+          "Process the outbox queue. This *shoulud* be happening automatically after events are added, and in a cron job",
+      })
+      .mutation(async ({ ctx }) => {
+        return await queuer.processQueue(ctx.db);
+      }),
+  },
 });
 
 /**
@@ -428,9 +688,9 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
 
   const syncPromises = estates.map(async (estate) => {
     try {
-      const slackToken = await getSlackAccessTokenForEstate(db, estate.id);
+      const slackAccount = await getSlackAccessTokenForEstate(db, estate.id);
 
-      if (!slackToken) {
+      if (!slackAccount) {
         return {
           estateId: estate.id,
           estateName: estate.name,
@@ -439,7 +699,29 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
         };
       }
 
-      const result = await syncSlackForEstateInBackground(db, slackToken, estate.id);
+      // Get team ID from provider estate mapping
+      const estateMapping = await db.query.providerEstateMapping.findFirst({
+        where: and(
+          eq(schema.providerEstateMapping.internalEstateId, estate.id),
+          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        ),
+      });
+
+      if (!estateMapping) {
+        return {
+          estateId: estate.id,
+          estateName: estate.name,
+          success: false,
+          error: "No Slack team mapping found",
+        };
+      }
+
+      const result = await syncSlackForEstateInBackground(
+        db,
+        slackAccount.accessToken,
+        estate.id,
+        estateMapping.externalId,
+      );
 
       return {
         estateId: estate.id,

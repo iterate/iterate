@@ -1,0 +1,72 @@
+import dedent from "dedent";
+import type { Workflow } from "@jlarky/gha-ts/workflow-types";
+import * as utils from "../utils/index.ts";
+
+export default {
+  name: "Push staging estate",
+  on: {
+    schedule: [
+      { cron: "0 4 * * *" }, // every day at 4am UTC
+    ],
+    push: {
+      paths: [
+        ".github/workflows/push-staging-estate.yml",
+        ".github/ts-workflows/workflows/push-staging-estate.ts",
+      ],
+    },
+  },
+  jobs: {
+    run: {
+      ...utils.runsOnUbuntuLatest,
+      steps: [
+        {
+          name: "Checkout code",
+          uses: "actions/checkout@v4",
+          with: {
+            ref: "main",
+            path: "source-branch",
+          },
+        },
+        {
+          name: "Checkout staging-estate branch",
+          uses: "actions/checkout@v4",
+          with: {
+            token: "${{ secrets.ITERATE_BOT_GITHUB_TOKEN }}",
+            ref: "staging-estate",
+            path: "staging-estate",
+          },
+        },
+        {
+          name: "Replace estate folder with contents from source-branch",
+          run: dedent`
+            rm -rf staging-estate/estates/iterate
+            mkdir -p staging-estate/estates
+            cp -r source-branch/estates/iterate staging-estate/estates/iterate
+            rm -rf staging-estate/estates/iterate/apps
+
+            source_branch_sha=$(cd source-branch && git log --pretty=format:'%h' -n 1)
+            echo "Using commit hash: $source_branch_sha"
+
+            # Replace workspace:* with pkg.pr.new URL
+            sed -i "s|\"@iterate-com/sdk\": \"workspace:\*\"|\"@iterate-com/sdk\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/sdk@$source_branch_sha\"|g" staging-estate/estates/iterate/package.json
+          `,
+        },
+        {
+          name: "Commit and push",
+          "working-directory": "staging-estate",
+          run: dedent`
+            git config user.name "\${{ github.actor }}"
+            git config user.email "\${{ github.actor }}@users.noreply.github.com"
+
+            git diff --exit-code || {
+              git add .
+              git commit -m "update staging estate"
+              git push
+            }
+
+          `,
+        },
+      ],
+    },
+  },
+} satisfies Workflow;

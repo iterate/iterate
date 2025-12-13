@@ -1,7 +1,7 @@
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useState, useMemo, useEffect, useRef } from "react";
-import { useNavigate, useSearchParams } from "react-router";
 import { useMutation } from "@tanstack/react-query";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
 import { Card, CardContent } from "../../../../components/ui/card.tsx";
@@ -19,41 +19,48 @@ import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { AgentDurableObjectInfo } from "../../../../../backend/auth/oauth-state-schemas.ts";
 import { MCPParam } from "../../../../../backend/agent/tool-schemas.ts";
 
-export function meta() {
-  return [
-    { title: "Configure MCP Server" },
-    {
-      name: "description",
-      content: "Configure authentication parameters for MCP server connection",
-    },
-  ];
-}
+export const Route = createFileRoute(
+  "/_auth.layout/$organizationId/$estateId/integrations/mcp-params",
+)({
+  component: MCPParams,
+  validateSearch: z.object({
+    serverUrl: z.string(),
+    mode: z.enum(["personal", "company"]),
+    connectionKey: z.string(),
+    requiredParams: z.array(MCPParam),
+    agentDurableObject: AgentDurableObjectInfo.optional(),
+    integrationSlug: z.string(),
+    finalRedirectUrl: z.string().optional(),
+  }),
+  head: () => ({
+    meta: [
+      {
+        title: "Configure MCP Server",
+      },
+      {
+        name: "description",
+        content: "Configure authentication parameters for MCP server connection",
+      },
+    ],
+  }),
+});
 
-export default function MCPParams() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+function MCPParams() {
+  const navigate = Route.useNavigate();
+  const searchParams = Route.useSearch();
+  const {
+    serverUrl,
+    mode,
+    connectionKey,
+    requiredParams,
+    agentDurableObject: durableObject,
+    integrationSlug,
+    finalRedirectUrl,
+  } = searchParams;
+
   const estateId = useEstateId();
   const trpc = useTRPC();
-
-  const serverUrl = searchParams.get("serverUrl") || "";
-  const mode = searchParams.get("mode") || "personal";
-  const connectionKey = searchParams.get("connectionKey") || "";
-  const requiredParamsStr = searchParams.get("requiredParams") || "[]";
-  const agentDurableObjectStr = searchParams.get("agentDurableObject");
-  const integrationSlug = searchParams.get("integrationSlug") || "";
-  const finalRedirectUrl = searchParams.get("finalRedirectUrl") || undefined;
-
-  const requiredParams = useMemo(
-    () => z.array(MCPParam).parse(JSON.parse(requiredParamsStr)),
-    [requiredParamsStr],
-  );
-  const durableObject = useMemo(
-    () =>
-      agentDurableObjectStr
-        ? AgentDurableObjectInfo.parse(JSON.parse(agentDurableObjectStr))
-        : null,
-    [agentDurableObjectStr],
-  );
+  const router = useRouter();
 
   const initialValues = useMemo(() => {
     const values: Record<string, string> = {};
@@ -68,6 +75,12 @@ export default function MCPParams() {
   const [formValues, setFormValues] = useState<Record<string, string>>(initialValues);
 
   const firstAuthInputRef = useRef<HTMLInputElement>(null);
+
+  // Track hydration state - button is disabled until JS is ready
+  const [isHydrated, setIsHydrated] = useState(false);
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   // Focus the first authorization input field on mount
   useEffect(() => {
@@ -147,7 +160,13 @@ export default function MCPParams() {
           </AlertDescription>
         </Alert>
         <div className="mt-4">
-          <Button onClick={() => navigate(-1)}>Go Back</Button>
+          <Button
+            onClick={() =>
+              router.history.canGoBack() ? router.history.back() : navigate({ to: "/" })
+            }
+          >
+            Go Back
+          </Button>
         </div>
       </div>
     );
@@ -164,7 +183,7 @@ export default function MCPParams() {
 
       <Card className="max-w-2xl">
         <CardContent>
-          <form onSubmit={handleSubmit}>
+          <form onSubmit={handleSubmit} action="javascript:void(0)" method="POST">
             <FieldSet>
               <FieldLegend>Authentication Parameters</FieldLegend>
               <FieldDescription>
@@ -223,14 +242,16 @@ export default function MCPParams() {
                   <Button
                     type="button"
                     variant="outline"
-                    onClick={() => navigate(-1)}
+                    onClick={() =>
+                      router.history.canGoBack() ? router.history.back() : navigate({ to: "/" })
+                    }
                     disabled={isPending}
                     className="flex-1"
                   >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={isPending} className="flex-1">
-                    {isPending ? "Saving..." : "Save and Connect"}
+                  <Button type="submit" disabled={!isHydrated || isPending} className="flex-1">
+                    {!isHydrated ? "Loading..." : isPending ? "Saving..." : "Save and Connect"}
                   </Button>
                 </div>
               </FieldGroup>

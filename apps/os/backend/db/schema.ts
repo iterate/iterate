@@ -1,6 +1,14 @@
-import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
+import {
+  pgTable,
+  timestamp,
+  text,
+  uniqueIndex,
+  jsonb,
+  index,
+  bigserial,
+} from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations } from "drizzle-orm";
+import { isNull, relations } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 import type { DynamicClientInfo } from "../auth/oauth-state-schemas.ts";
 
@@ -158,9 +166,6 @@ export const estate = pgTable("estate", (t) => ({
     .text()
     .notNull()
     .references(() => organization.id, { onDelete: "cascade" }),
-  connectedRepoId: t.integer(),
-  connectedRepoRef: t.text(),
-  connectedRepoPath: t.text(),
   // Onboarding agent name. Semantics: if null, user is done with onboarding.
   // If not null, use that agent to get onboarding information from it.
   onboardingAgentName: t.text(),
@@ -172,6 +177,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
     fields: [estate.organizationId],
     references: [organization.id],
   }),
+  sources: many(iterateConfigSource),
   estateAccountsPermissions: many(estateAccountsPermissions),
   files: many(files),
   providerSpecificEstateMapping: many(providerEstateMapping),
@@ -180,6 +186,7 @@ export const estateRelations = relations(estate, ({ one, many }) => ({
   agentInstances: many(agentInstance),
   mcpConnectionParam: many(mcpConnectionParam),
   slackChannels: many(slackChannel),
+  slackChannelEstateOverrides: many(slackChannelEstateOverride),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -232,11 +239,25 @@ export const providerUserMapping = pgTable(
       .text()
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    externalId: t.text().notNull(),
+    externalId: t.text().notNull(), // Slack user ID (e.g., U_NICK_123, USLACKBOT)
+    // OPTIONAL: Which estate's sync discovered/created this mapping
+    // This represents the "observing estate's perspective" on this user.
+    // Nullable to allow existing rows from before this field was added.
+    estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
+    // OPTIONAL: The user's actual home team ID, only set if external to the estate's workspace
+    // - null = user is from the estate's own OAuth'd workspace (internal user)
+    // - set = user is from a different workspace discovered via Slack Connect (external user)
+    // Example: Estate A (owns T_ITERATE) syncs Slack Connect user from T_STRIPE
+    //   → estateId = estate_A, externalUserTeamId = T_STRIPE
+    externalUserTeamId: t.text(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.providerId, t.externalId)],
+  (t) => [
+    // Global uniqueness: (provider, estate, externalId)
+    // Each external user can have only one mapping per estate
+    uniqueIndex().on(t.providerId, t.estateId, t.externalId),
+  ],
 );
 export const providerUserMappingRelations = relations(providerUserMapping, ({ one }) => ({
   internalUser: one(user, {
@@ -294,6 +315,55 @@ export const slackChannelRelations = relations(slackChannel, ({ one }) => ({
   }),
 }));
 
+/**
+ * Override table for routing Slack channels to specific estates.
+ * When a webhook is received for a channel with an entry in this table,
+ * the specified estate will be used instead of the default team_id → estate mapping.
+ *
+ * Use cases:
+ * - Route specific channels from a workspace to different estates
+ * - Handle shared Slack Connect channels with custom routing
+ * - Testing and development with specific channel routing
+ */
+export const slackChannelEstateOverride = pgTable(
+  "slack_channel_estate_override",
+  (t) => ({
+    id: iterateId("sceo"),
+    // The Slack channel ID to override routing for
+    slackChannelId: t.text().notNull(),
+    // The Slack team/workspace ID (for context/validation)
+    slackTeamId: t.text().notNull(),
+    // The estate ID to route this channel to
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    // Optional: reason for the override (for documentation)
+    reason: t.text(),
+    // Optional: metadata (e.g., who created it, when, why)
+    metadata: t.jsonb().default({}),
+    ...withTimestamps,
+  }),
+  (t) => [
+    // Ensure each channel can only have one override
+    uniqueIndex().on(t.slackChannelId, t.slackTeamId),
+    // Index for fast lookups by channel
+    index().on(t.slackChannelId),
+    // Index for finding all overrides for an estate
+    index().on(t.estateId),
+  ],
+);
+
+export const slackChannelEstateOverrideRelations = relations(
+  slackChannelEstateOverride,
+  ({ one }) => ({
+    estate: one(estate, {
+      fields: [slackChannelEstateOverride.estateId],
+      references: [estate.id],
+    }),
+  }),
+);
+
 export const organizationUserMembership = pgTable(
   "organization_user_membership",
   (t) => ({
@@ -339,6 +409,7 @@ export const agentInstance = pgTable(
     className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
+    routingKey: t.text().unique(), // todo: make not null?
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
@@ -352,32 +423,10 @@ export const agentInstance = pgTable(
   ],
 );
 
-export const agentInstanceRelations = relations(agentInstance, ({ one, many }) => ({
+export const agentInstanceRelations = relations(agentInstance, ({ one }) => ({
   estate: one(estate, {
     fields: [agentInstance.estateId],
     references: [estate.id],
-  }),
-  routes: many(agentInstanceRoute),
-}));
-
-export const agentInstanceRoute = pgTable(
-  "agent_instance_route",
-  (t) => ({
-    id: iterateId("ador"),
-    routingKey: t.text().notNull(), // e.g. "slack:{threadTs}"
-    agentInstanceId: t
-      .text()
-      .notNull()
-      .references(() => agentInstance.id, { onDelete: "cascade" }), // This is actually the `id` column
-    ...withTimestamps,
-  }),
-  (t) => [uniqueIndex().on(t.routingKey, t.agentInstanceId)],
-);
-
-export const agentInstanceRouteRelations = relations(agentInstanceRoute, ({ one }) => ({
-  agentInstance: one(agentInstance, {
-    fields: [agentInstanceRoute.agentInstanceId],
-    references: [agentInstance.id],
   }),
 }));
 
@@ -413,11 +462,43 @@ export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one })
   }),
 }));
 
+export const iterateConfigSource = pgTable(
+  "iterate_config_source",
+  (t) => ({
+    id: iterateId("ics"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    provider: t.text({ enum: ["github"] }).notNull(),
+    /** keep track of which account is responsible for this source. sometimes it's iterate-managed, sometimes it's a user-managed account. also, conceivably, there could be multiple accounts for the same estate */
+    accountId: t.text().notNull(), // todo: make this stricter somehow. maybe using estateAccountsPermissions table?
+    repoId: t.integer().notNull(),
+    branch: t.text().notNull(),
+    path: t.text(),
+    deactivatedAt: t.timestamp(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.estateId, t.provider).where(isNull(t.deactivatedAt))],
+);
+
+export const iterateConfigSourceRelations = relations(iterateConfigSource, ({ one }) => ({
+  estate: one(estate, {
+    fields: [iterateConfigSource.estateId],
+    references: [estate.id],
+  }),
+}));
+
 export const iterateConfig = pgTable(
   "iterate_config",
   (t) => ({
     id: iterateId("icfg"),
-    config: t.jsonb().$type<{ contextRules?: any[] }>().notNull(),
+    // sourceId: t.text().references(() => iterateConfigSource.id, { onDelete: "set null" }),
+    /** the build which contains the config json */
+    buildId: t
+      .text()
+      .notNull()
+      .references(() => builds.id, { onDelete: "cascade" }),
     estateId: t
       .text()
       .notNull()
@@ -432,13 +513,24 @@ export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
     fields: [iterateConfig.estateId],
     references: [estate.id],
   }),
+  // source: one(iterateConfigSource, {
+  //   fields: [iterateConfig.sourceId],
+  //   references: [iterateConfigSource.id],
+  // }),
+  build: one(builds, {
+    fields: [iterateConfig.buildId],
+    references: [builds.id],
+  }),
 }));
 
 export const builds = pgTable("builds", (t) => ({
   id: iterateId("build"),
-  status: t.text({ enum: ["complete", "failed", "in_progress"] }).notNull(),
+  status: t.text({ enum: ["complete", "failed", "in_progress", "queued"] }).notNull(),
   commitHash: t.text().notNull(),
   commitMessage: t.text().notNull(),
+  files: t.jsonb().$type<{ path: string; content: string }[]>().notNull(),
+  /** note: config *is* nullable because we don't have it until the end of the build */
+  config: t.jsonb().$type<{ contextRules?: any[] } | null>(),
   iterateWorkflowRunId: t.text(),
   webhookIterateId: t.text().notNull(),
   estateId: t
@@ -446,7 +538,7 @@ export const builds = pgTable("builds", (t) => ({
     .notNull()
     .references(() => estate.id, { onDelete: "cascade" }),
   completedAt: t.timestamp(),
-  output: t.jsonb().$type<{ stdout?: string; stderr?: string; exitCode?: number }>(),
+  failureReason: t.text(),
   ...withTimestamps,
 }));
 
@@ -483,4 +575,38 @@ export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one 
     fields: [mcpConnectionParam.estateId],
     references: [estate.id],
   }),
+}));
+
+// Estate events (append-only, immutable)
+export const estateOnboardingEvent = pgTable(
+  "estate_onboarding_event",
+  (t) => ({
+    id: iterateId("onbe"),
+    estateId: t
+      .text()
+      .notNull()
+      .references(() => estate.id, { onDelete: "cascade" }),
+    organizationId: t
+      .text()
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    eventType: t.text().notNull(),
+    category: t.text({ enum: ["system", "user"] }).notNull(),
+    detail: t.text(),
+    metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.estateId, t.eventType),
+    index().on(t.estateId),
+    index().on(t.estateId, t.category),
+    index().on(t.category),
+  ],
+);
+
+export const outboxEvent = pgTable("outbox_event", (t) => ({
+  id: bigserial("id", { mode: "number" }).primaryKey(),
+  name: t.text().notNull(),
+  payload: jsonb().$type<Record<string, unknown>>().notNull(),
+  ...withTimestamps,
 }));

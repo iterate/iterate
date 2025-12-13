@@ -1,10 +1,8 @@
 import { dirname, join, resolve } from "path";
-import { readFileSync, accessSync } from "fs";
+import { readFileSync, accessSync, globSync } from "fs";
 import { fileURLToPath } from "url";
-import { globSync } from "glob";
-import jsonataLib from "jsonata/sync";
+import jsonataLib from "@mmkal/jsonata/sync";
 import { parse as parseYaml } from "yaml";
-import { logger } from "../tag-logger.ts";
 import type {
   ContextRule,
   ContextRuleMatcher,
@@ -421,7 +419,8 @@ export function parseFrontMatter(content: string): {
 
     return { frontMatter: result, body };
   } catch (error) {
-    logger.error(`Failed to parse front matter as YAML:`, error);
+    // eslint-disable-next-line no-console -- SDK usage
+    console.error(`Failed to parse front matter as YAML:`, error);
     return { frontMatter: {}, body: content };
   }
 }
@@ -437,8 +436,8 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
     if (!configDir) {
       throw new Error("iterate.config.ts not found");
     }
-    const files = globSync(pattern, { cwd: configDir }) as string[];
-    return files.map((filePath: string) => {
+    const files = globSync(pattern, { cwd: configDir });
+    return files.map((filePath) => {
       const fileContent = readFileSync(join(configDir, filePath), "utf-8");
       const { frontMatter, body } = parseFrontMatter(fileContent);
 
@@ -452,7 +451,8 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       });
     });
   } catch (error) {
-    logger.error(`Error reading files with pattern ${pattern}:`, error);
+    // eslint-disable-next-line no-console -- SDK usage
+    console.error(`Error reading files with pattern ${pattern}:`, error);
     return [];
   }
 }

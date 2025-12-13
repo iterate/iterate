@@ -1,3 +1,4 @@
+import { createFileRoute } from "@tanstack/react-router";
 import Form from "@rjsf/core";
 import validator from "@rjsf/validator-ajv8";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
@@ -92,7 +93,12 @@ const ProcedureForm = (props: { path: string; inputs: AllProcedureInputs[number]
 
 // todo: some kind of way of scripting/use an output of one procedure as input to another
 // todo: other output renderering options. codemirror?
-export default function AdminForm() {
+
+export const Route = createFileRoute("/_auth.layout/admin/trpc-tools")({
+  component: AdminForm,
+});
+
+function AdminForm() {
   const inputs = useAllProcedureInputs();
   const [search, setSearch] = React.useState("admin.");
   const filteredInputs = React.useMemo(() => {
@@ -134,7 +140,7 @@ export default function AdminForm() {
             <details>
               <summary className="text-white">{procedurePath}</summary>
               <Card key={procedurePath} className="p-2">
-                <h5 className="break-words">{procedurePath}</h5>
+                <h5 className="wrap-break-words">{procedurePath}</h5>
                 <ErrorBoundary>
                   <ProcedureForm path={procedurePath} inputs={procedureInputs} />
                 </ErrorBoundary>

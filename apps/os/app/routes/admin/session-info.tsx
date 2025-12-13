@@ -1,7 +1,12 @@
+import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { useTRPC } from "../../lib/trpc.ts";
 
-export default function SessionInfoPage() {
+export const Route = createFileRoute("/_auth.layout/admin/session-info")({
+  component: SessionInfoPage,
+});
+
+function SessionInfoPage() {
   const trpc = useTRPC();
   const { data: sessionInfo } = useSuspenseQuery(trpc.admin.getSessionInfo.queryOptions());
 

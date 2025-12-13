@@ -1,4 +1,4 @@
-import z, { ZodError } from "zod/v4";
+import { z } from "zod";
 
 import type { $ZodType } from "zod/v4/core";
 import type { JSONSerializable } from "./type-helpers.ts";
@@ -275,57 +275,4 @@ export function stripNonSerializableProperties(value: any): JSONSerializable {
 
   // For any other type (functions, symbols, etc.), return undefined
   return undefined;
-}
-
-/**
- * typedParse
- * ----------
- * A thin, generic wrapper around `schema.parse()` that
- *   • infers the exact input type      ➜ IDE autocompletion
- *   • returns the correct output type  ➜ no casting needed
- *   • converts ZodError into a concise, developer‑friendly Error
- *
- * Usage:
- *   const user = typedParse(userSchema, { type: "user", name: "Ann" });
- *
- * Example:
- *   import { typedParse } from "@iterate-com/helpers/schema-helpers";
- *   import z from "zod/v4";
- *
- *   const userSchema = z.object({
- *     name: z.string(),
- *     role: z.string().default("user"),
- *     age: z.number().min(0)
- *   });
- *
- *   // TypeScript knows input type: { name: string; role?: string; age: number }
- *   // TypeScript knows output type: { name: string; role: string; age: number }
- *   const user = typedParse(userSchema, { name: "Alice", age: 25 });
- *
- *   // If validation fails, throws formatted error:
- *   // Validation failed:
- *   // ✖ Too small: expected number to be >=0
- *   //   → at age
- *   //
- *   // Payload:
- *   // { "name": "Bob", "age": -5 }
- */
-export function typedParse<S extends z.ZodTypeAny>(
-  schema: S,
-  data: z.input<S>, // <-- exact, validated input shape
-): z.output<S> {
-  // <-- exact, validated output shape
-  try {
-    // NOTE: `.parse` applies defaults AND (if `.strict()` is on the schema)
-    //       throws on excess properties.
-    return schema.parse(data);
-  } catch (err) {
-    if (err instanceof ZodError) {
-      // Use Zod's built-in prettifyError for better formatting
-      throw new Error(
-        `Validation failed:\n${z.prettifyError(err)}\n\nPayload:\n${JSON.stringify(data, null, 2)}`,
-      );
-    }
-    throw err; // non‑Zod errors bubble up unchanged
-  }
 }

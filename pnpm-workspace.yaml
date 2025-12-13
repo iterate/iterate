@@ -4,14 +4,19 @@ packages:
   - estates/*
   - estates/*/apps/*
   - vibe-rules
+  - .github/ts-workflows
+  - apps/os/backend/sandbox/scripts
+  - apps/os/build-manager
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
   - miniflare
   - wrangler
-  - better-wait-until
   - '@cloudflare/sandbox'
+  - alchemy
+  - '@mmkal/jsonata'
+  - '@mmkal/json-schema-to-typescript'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
@@ -19,3 +24,10 @@ onlyBuiltDependencies:
   - esbuild
   - sharp
   - workerd
+
+overrides:
+  # x402,viem are optional peer dependencies of agents sdk, which is source of lot of unnecessary/deprecated packages, removing them is fine
+  'agents>x402': '-'
+  'agents>viem': '-'
+  'quicktype-core>readable-stream': 'npm:vite-compatible-readable-stream@3.6.1'
+  'better-sqlite3': 'npm:libsql@0.5.22'

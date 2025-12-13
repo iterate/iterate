@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { executeLocalFunctionTool } from "../agent-core.ts";
+import { logger } from "../../tag-logger.ts";
 import {
   createCacheKey,
   createMCPManagerCache,
@@ -603,6 +605,7 @@ describe("mcp-tool-mapping", () => {
     });
 
     it("should skip tools with schema conflicts", () => {
+      logger.defaultStore = { level: "info", tags: {}, logs: [] };
       const mockUploadFile = createMockUploadFile();
       const tool1 = createMockTool("search");
       const tool2 = {
@@ -638,17 +641,19 @@ describe("mcp-tool-mapping", () => {
         ),
       };
 
-      // spy on console.error to verify the conflict is logged
-      const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-
       const result = generateRuntimeToolsFromConnections(connections, mockUploadFile);
 
       expect(result).toHaveLength(0);
-      expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining("[MCP] Schema conflict detected for tool github_search"),
+      expect(logger.context.logs).toMatchObject(
+        expect.arrayContaining([
+          expect.objectContaining({
+            level: "error",
+            args: [
+              "[MCP] Schema conflict detected for tool github_search. Skipping tool creation.",
+            ],
+          }),
+        ]),
       );
-
-      consoleSpy.mockRestore();
     });
 
     it("should handle empty connections", () => {
@@ -797,6 +802,7 @@ describe("mcp-tool-mapping", () => {
         getReducedState: () => ({ mcpConnections: {} }) as any,
         mcpConnectionCache: mockCache,
         mcpConnectionQueues: mockConnectionQueues,
+        storage: {} as any,
       };
 
       const runtimeTool = createRuntimeToolFromMCPTool({
@@ -808,7 +814,8 @@ describe("mcp-tool-mapping", () => {
         lazyConnectionDeps: mockLazyConnectionDeps,
       });
 
-      const result = await runtimeTool.execute(
+      const result = await executeLocalFunctionTool(
+        runtimeTool,
         { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
         { query: "test" },
       );
@@ -851,7 +858,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
           { query: "test" },
         ),
@@ -882,7 +890,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           {
             id: "call-123",
             name: "github_search_repos",
@@ -916,7 +925,8 @@ describe("mcp-tool-mapping", () => {
       });
 
       await expect(
-        runtimeTool.execute(
+        executeLocalFunctionTool(
+          runtimeTool,
           { id: "call-123", name: "github_search_repos", arguments: '{"query": "test"}' } as any,
           { query: "test" },
         ),

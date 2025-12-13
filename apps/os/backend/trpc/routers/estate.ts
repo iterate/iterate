@@ -1,21 +1,103 @@
+import * as path from "node:path";
+import { Readable } from "node:stream";
+import { createGunzip } from "node:zlib";
+import { inspect } from "node:util";
+import * as semver from "semver";
+import * as tarStream from "tar-stream";
+import * as fflate from "fflate/browser";
 import { z } from "zod";
-import { eq, desc, and } from "drizzle-orm";
+import { eq, desc, and, notInArray, or } from "drizzle-orm";
+import dedent from "dedent";
+import { TRPCError } from "@trpc/server";
 import {
   protectedProcedure,
   estateProtectedProcedure,
   getUserEstateAccess,
   router,
+  protectedProcedureWithNoEstateRestrictions,
 } from "../trpc.ts";
-import { estate, builds, agentInstance, iterateConfig } from "../../db/schema.ts";
 import {
-  getGithubInstallationForEstate,
-  getGithubInstallationToken,
+  estate,
+  agentInstance,
+  iterateConfig,
+  organizationUserMembership,
+  organization,
+} from "../../db/schema.ts";
+import {
+  getOctokitForInstallation,
+  githubAppInstance,
   triggerGithubBuild,
 } from "../../integrations/github/github-utils.ts";
-import type { DB } from "../../db/client.ts";
-import type { CloudflareEnv } from "../../../env.ts";
+import { schema, type DB } from "../../db/client.ts";
+import { type CloudflareEnv } from "../../../env.ts";
 import type { OnboardingData } from "../../agent/onboarding-agent.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
+import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
+import { logger } from "../../tag-logger.ts";
+import { recentActiveSources } from "../../db/helpers.ts";
+import { CreateCommitOnBranchInput } from "./github-schemas.ts";
+
+export const RepoData = z.object({
+  id: z.number(),
+  full_name: z.string(),
+  html_url: z.string(),
+  clone_url: z.string(),
+});
+
+const getInstallationScopedContext = async (options: {
+  db: DB;
+  estateId: string;
+  connectedRepoId: number;
+  connectedRepoAccountId: string;
+}) => {
+  const scopedOctokit = await getOctokitForInstallation(options.connectedRepoAccountId);
+
+  const repoRes = await scopedOctokit.request("GET /repositories/{repository_id}", {
+    repository_id: options.connectedRepoId,
+  });
+
+  if (repoRes.status !== 200) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Failed to fetch repository details",
+    });
+  }
+
+  const repoData = RepoData.parse(repoRes.data);
+
+  return {
+    octokit: scopedOctokit,
+    repoData,
+  };
+};
+
+const githubInstallationScopedProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
+  if (!ctx.estate.connectedRepoId)
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "No GitHub repository connected to this estate",
+    });
+
+  const { octokit, repoData } = await getInstallationScopedContext({
+    db: ctx.db,
+    estateId: ctx.estate.id,
+    connectedRepoId: ctx.estate.connectedRepoId,
+    connectedRepoAccountId: ctx.estate.connectedRepoAccountId,
+  });
+
+  return next({
+    ctx: {
+      ...ctx,
+      estate: { ...ctx.estate, connectedRepoId: ctx.estate.connectedRepoId },
+      github: octokit,
+      /** owner and repo in format needed for octokit.rest api */
+      repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
+      repoData,
+      connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, "") || "",
+      refName: ctx.estate.connectedRepoRef,
+    },
+  });
+});
 
 // Helper function to trigger a rebuild for a given commit
 export async function triggerEstateRebuild(params: {
@@ -26,60 +108,52 @@ export async function triggerEstateRebuild(params: {
   commitMessage: string;
   isManual?: boolean;
 }) {
-  const { db, env, estateId, commitHash, commitMessage, isManual = false } = params;
+  const { db, estateId, commitHash, commitMessage, isManual = false } = params;
 
   // Get the estate details
-  const estateWithRepo = await db.query.estate.findFirst({
+  const _estateWithRepo = await db.query.estate.findFirst({
     where: eq(estate.id, estateId),
+    with: recentActiveSources,
   });
 
-  if (!estateWithRepo?.connectedRepoId) {
+  const estateWithRepo = _estateWithRepo && {
+    ..._estateWithRepo,
+    connectedRepoId: _estateWithRepo?.sources?.[0]?.repoId,
+    connectedRepoPath: _estateWithRepo?.sources?.[0]?.path,
+    connectedRepoRef: _estateWithRepo?.sources?.[0]?.branch,
+    connectedRepoAccountId: _estateWithRepo?.sources?.[0]?.accountId,
+  };
+
+  if (!estateWithRepo?.connectedRepoId || !estateWithRepo?.connectedRepoAccountId) {
     throw new Error("No GitHub repository connected to this estate");
   }
 
-  // Get the GitHub installation
-  const githubInstallation = await getGithubInstallationForEstate(db, estateId);
-  if (!githubInstallation) {
-    throw new Error("GitHub installation not found for this estate");
+  const { repoData } = await getInstallationScopedContext({
+    db,
+    estateId,
+    connectedRepoId: estateWithRepo.connectedRepoId,
+    connectedRepoAccountId: estateWithRepo.connectedRepoAccountId,
+  });
+
+  const installationToken =
+    await githubAppInstance().octokit.rest.apps.createInstallationAccessToken({
+      installation_id: parseInt(estateWithRepo.connectedRepoAccountId),
+      repository_ids: [estateWithRepo.connectedRepoId],
+    });
+
+  if (installationToken.status !== 201) {
+    throw new Error(
+      `Failed to create installation token: ${installationToken.status} ${JSON.stringify(installationToken.data)}`,
+    );
   }
-
-  // Get installation token
-  const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-  // Get repository details
-  const repoResponse = await fetch(
-    `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}`,
-    {
-      headers: {
-        Authorization: `Bearer ${installationToken}`,
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Iterate OS",
-      },
-    },
-  );
-
-  if (!repoResponse.ok) {
-    throw new Error("Failed to fetch repository details");
-  }
-
-  const repoData = z
-    .object({
-      id: z.number(),
-      full_name: z.string(),
-      html_url: z.string(),
-      clone_url: z.string(),
-    })
-    .parse(await repoResponse.json());
 
   // Use the common build trigger function
   return await triggerGithubBuild({
-    db,
-    env,
     estateId,
     commitHash,
     commitMessage,
     repoUrl: repoData.clone_url,
-    installationToken,
+    installationToken: installationToken.data.token,
     connectedRepoPath: estateWithRepo.connectedRepoPath || "/",
     branch: estateWithRepo.connectedRepoRef || "main",
     isManual,
@@ -88,7 +162,7 @@ export async function triggerEstateRebuild(params: {
 
 export const estateRouter = router({
   // Check if user has access to a specific estate (non-throwing version)
-  checkAccess: protectedProcedure
+  checkAccess: protectedProcedureWithNoEstateRestrictions // we're going to carefully make sure we only give info to authorized users
     .input(
       z.object({
         estateId: z.string(),
@@ -128,23 +202,77 @@ export const estateRouter = router({
     // The estate is already validated and available in context
     const userEstate = ctx.estate;
 
+    // Fetch the organization
+    const org = await ctx.db.query.organization.findFirst({
+      where: eq(organization.id, userEstate.organizationId),
+    });
+
+    // Check if this is a trial estate
+    const isTrial = await slackChannelOverrideExists(ctx.db, userEstate.id);
+
     return {
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
       onboardingAgentName: userEstate.onboardingAgentName ?? null,
+      isTrialEstate: isTrial,
+      organization: org
+        ? {
+            id: org.id,
+            name: org.name,
+          }
+        : undefined,
       createdAt: userEstate.createdAt,
       updatedAt: userEstate.updatedAt,
     };
   }),
 
+  // List all estates the user has access to
+  listAllForUser: protectedProcedure.query(async ({ ctx }) => {
+    // Get all organizations the user is a member of (excluding external and guest roles)
+    const memberships = await ctx.db.query.organizationUserMembership.findMany({
+      where: and(
+        eq(organizationUserMembership.userId, ctx.user.id),
+        notInArray(organizationUserMembership.role, ["external", "guest"]),
+      ),
+      with: {
+        organization: {
+          with: {
+            estates: true,
+          },
+        },
+      },
+    });
+
+    // Flatten estates from all organizations and check trial status
+    const estates = await Promise.all(
+      memberships.flatMap((membership) =>
+        membership.organization.estates.map(async (est) => ({
+          id: est.id,
+          name: est.name,
+          organizationId: est.organizationId,
+          organization: {
+            id: membership.organization.id,
+            name: membership.organization.name,
+          },
+          isTrialEstate: await slackChannelOverrideExists(ctx.db, est.id),
+          createdAt: est.createdAt,
+          updatedAt: est.updatedAt,
+        })),
+      ),
+    );
+
+    return estates;
+  }),
+
   getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {
     const record = await ctx.db.query.iterateConfig.findFirst({
       where: eq(iterateConfig.estateId, ctx.estate.id),
+      with: { build: true },
     });
 
     return {
-      config: record?.config ?? null,
+      config: record?.build?.config ?? null,
       updatedAt: record?.updatedAt ?? null,
     };
   }),
@@ -183,6 +311,385 @@ export const estateRouter = router({
       };
     }),
 
+  updateRepo: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        commit: CreateCommitOnBranchInput,
+        format: z.enum(["base64", "plaintext"]),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      if (input.format === "plaintext") {
+        input.commit.fileChanges.additions?.forEach((addition) => {
+          addition.contents = Buffer.from(addition.contents).toString("base64");
+        });
+      }
+      input.commit.fileChanges.additions?.forEach((addition) => {
+        addition.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, addition.path);
+      });
+      input.commit.fileChanges.deletions?.forEach((deletion) => {
+        deletion.path = path.join(ctx.connectedRepoPathWithoutLeadingSlash, deletion.path);
+      });
+
+      const branchName = input.commit.branch.branchName;
+      const branch = await ctx.github.rest.repos
+        .getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: branchName,
+        })
+        .catch(() => null);
+
+      let sha = input.commit.expectedHeadOid;
+
+      if (!branch || branch.status !== 200) {
+        // create the branch
+        const defaultBranch = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: ctx.estate.connectedRepoRef!,
+        });
+        const { data: newRef } = await ctx.github.rest.git.createRef({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          ref: `refs/heads/${branchName}`,
+          sha: defaultBranch.data.commit.sha,
+        });
+        sha = newRef.object.sha;
+      }
+
+      const result = await ctx.github.graphql(
+        dedent`
+          mutation ($input: CreateCommitOnBranchInput!) {
+            createCommitOnBranch(input: $input) {
+              commit {
+                url
+              }
+            }
+          }
+        `,
+        {
+          input: {
+            ...input.commit,
+            branch: {
+              branchName: branchName,
+              repositoryNameWithOwner: ctx.repoData.full_name,
+            },
+            expectedHeadOid: sha,
+          } satisfies CreateCommitOnBranchInput,
+        },
+      );
+      return result;
+    }),
+  createPullRequest: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        fromBranch: z.string(),
+      }),
+    )
+    .mutation(async ({ input, ctx }) => {
+      try {
+        await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: input.fromBranch,
+        });
+      } catch (_error: unknown) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Branch not found: ${input.fromBranch}`,
+        });
+      }
+
+      const pullRequest = await ctx.github.rest.pulls.create({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        head: input.fromBranch,
+        base: ctx.refName ?? "main",
+        title: `Update from in-browser IDE (${input.fromBranch})`,
+      });
+
+      return pullRequest;
+    }),
+  getRepoFilesystem: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        branch: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const requestedBranch = input?.branch ?? ctx.refName ?? "main";
+      const defaultBranch = ctx.refName ?? "main";
+
+      // Check if the requested branch exists, fall back to default branch if not
+      let branch = requestedBranch;
+      let branchExists = true;
+      let sha: string | undefined;
+      try {
+        const branchResponse = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: requestedBranch,
+        });
+        sha = branchResponse.data?.commit?.sha;
+        if (branchResponse.status !== 200) {
+          branchExists = false;
+          branch = defaultBranch;
+        }
+      } catch (_error: unknown) {
+        // Branch doesn't exist (404) or other error, use default branch
+        branchExists = false;
+        branch = defaultBranch;
+      }
+
+      const zipball = await ctx.github.rest.repos.downloadZipballArchive({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        ref: branch,
+      });
+
+      if (!(zipball.data instanceof ArrayBuffer)) {
+        logger.error(
+          `Failed to download repo filesystem: ${inspect(zipball, { depth: null, colors: true })}`,
+        );
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to download repo filesystem`,
+        });
+      }
+
+      const unzipped = fflate.unzipSync(new Uint8Array(zipball.data));
+
+      const pathPrefix = "./" + ctx.connectedRepoPathWithoutLeadingSlash;
+      const filesystem: Record<string, string | null> = Object.fromEntries(
+        Object.entries(unzipped)
+          .map(([filename, data]) => [
+            filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+            fflate.strFromU8(data),
+          ])
+          .filter(([k, v]) => !k.endsWith("/") && v.trim())
+          .flatMap(([k, v]) => {
+            const relativePath = path.relative(pathPrefix, k);
+            if (relativePath.startsWith("..")) return [];
+            return [[relativePath, v] as const];
+          }),
+      );
+      sha ||= Object.keys(unzipped)[0].split("/")[0].split("-").pop()!;
+      return {
+        repoData: ctx.repoData,
+        pathPrefix,
+        filesystem,
+        sha,
+        branch,
+        requestedBranch: requestedBranch,
+        branchExists,
+        defaultBranch,
+      };
+    }),
+
+  listPulls: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        state: z.enum(["open", "closed", "all"]).default("open"),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { data: pulls } = await ctx.github.rest.pulls.list({ ...ctx.repo, state: input.state });
+      return pulls.filter((p) => p.head.ref.match(/\bide\//));
+    }),
+
+  mergePull: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        pullNumber: z.number(),
+        mergeMethod: z.enum(["merge", "squash", "rebase"]).default("squash"),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { data: pull } = await ctx.github.rest.pulls.merge({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        pull_number: input.pullNumber,
+        merge_method: input.mergeMethod,
+      });
+      return pull;
+    }),
+
+  closePull: githubInstallationScopedProcedure
+    .input(
+      z.object({
+        pullNumber: z.number(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { data: pull } = await ctx.github.rest.pulls.update({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        pull_number: input.pullNumber,
+        state: "closed",
+      });
+      return pull;
+    }),
+
+  getDTS: protectedProcedure
+    .meta({
+      description: `kinda like "pnpm install" - it recursively fetches all dependencies for a packageJson struct but only gives you the typescript definition, for usage in an in-browser mini-IDE. Doesn't handle many edge cases tho so types might be missing for some packages/uncommon specifiers`,
+    })
+    .input(
+      z.object({
+        packageJson: z.object({
+          dependencies: z.record(z.string(), z.string()).optional(),
+          devDependencies: z.record(z.string(), z.string()).optional(),
+        }),
+        overrides: z.record(z.string(), z.string()).optional(),
+      }),
+    )
+    .query(async ({ input }) => {
+      // todo: consider moving to frontend? will break api.github.com requests unless a cors proxy is used
+      // who needs pnpm when you can just fetch the tarball and extract the dts files?
+      const deps = { ...input.packageJson.dependencies, ...input.packageJson.devDependencies };
+      type GottenPackage = {
+        packageJson: import("type-fest").PackageJson;
+        files: Record<string, string>;
+      };
+      const getPackage = async (name: string, specifier: string): Promise<GottenPackage> => {
+        if (specifier.startsWith("github:")) {
+          const [ownerAndRepo, ref = "main"] = specifier.replace("github:", "").split("#");
+          const zipballUrl = `https://api.github.com/repos/${ownerAndRepo}/zipball/${ref}`;
+          const zipballResponse = await fetch(zipballUrl, {
+            headers: { "User-Agent": "iterate.com OS" },
+          });
+
+          if (!zipballResponse.ok) {
+            throw new Error(`Failed to fetch zipball: ${await zipballResponse.text()}`);
+          }
+
+          const zipball = await zipballResponse.arrayBuffer();
+          const unzipped = fflate.unzipSync(new Uint8Array(zipball));
+
+          const filesystem: Record<string, string> = Object.fromEntries(
+            Object.entries(unzipped)
+              .map(([zipballPath, data]) => {
+                const filename = zipballPath.split("/").slice(1).join("/"); // root dir is `${owner}-${repo}-${sha}`
+                return [filename, data] as const;
+              })
+              .filter(([filename]) => filename.endsWith(".d.ts") || filename === "package.json")
+              .map(([filename, data]) => [filename, fflate.strFromU8(data)])
+              .filter(([k, v]) => !k.endsWith("/") && v.trim()),
+          );
+          return { files: filesystem, packageJson: JSON.parse(filesystem["package.json"]!) };
+        }
+
+        let url: string;
+        if (`${name}@${specifier}` in (input.overrides || {})) {
+          const override = input.overrides![`${name}@${specifier}`];
+          url = override;
+        } else if (specifier?.match(/^https?:/)) {
+          url = specifier;
+        } else if (semver.validRange(specifier)) {
+          const packageInfo: { versions: Record<string, {}> } = await fetch(
+            `https://registry.npmjs.org/${name}`,
+          ).then((r) => r.json());
+          const allVersions = Object.keys(packageInfo.versions);
+          const resolvedVersion =
+            semver.maxSatisfying(allVersions, specifier) || specifier.replace(/^[~^]/, "");
+          url = `https://registry.npmjs.org/${name}/-/${name}-${resolvedVersion}.tgz`;
+        } else if (specifier.match(/^[\w-.]+$/)) {
+          // looks like a dist-tag to me
+          const packageInfo: {
+            "dist-tags": Record<string, string>;
+            versions: Record<string, { version: string }>;
+          } = await fetch(`https://registry.npmjs.org/${name}`).then((r) => r.json());
+
+          const distTagVersion = packageInfo["dist-tags"][specifier];
+          if (!distTagVersion) {
+            throw new Error(`No dist-tag "${specifier}" found for ${name}`);
+          }
+
+          const resolvedVersion = packageInfo.versions[distTagVersion]?.version;
+          if (!resolvedVersion) {
+            throw new Error(
+              `${name} dist-tag ${specifier} resolved to version ${distTagVersion} but that version wasn't found on the registry.`,
+            );
+          }
+
+          url = `https://registry.npmjs.org/${name}/-/${name}-${resolvedVersion}.tgz`;
+        } else {
+          throw new Error(`Unsupported package specifier: ${specifier}`);
+        }
+
+        const res = await fetch(url);
+        const extract = tarStream.extract({});
+
+        const files: Record<string, string> = {};
+
+        // Stream the response directly through gunzip into tar-stream
+        const nodeStream = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
+        const gunzip = createGunzip();
+        nodeStream.pipe(gunzip).pipe(extract);
+
+        for await (const entry of extract) {
+          const tgzPath = entry.header.name;
+          const filename = tgzPath.replace("package/", "");
+          const isInteresting = filename.endsWith(".d.ts") || filename === "package.json";
+          if (!isInteresting) {
+            entry.resume();
+            continue;
+          }
+          const chunks: Buffer[] = [];
+          for await (const chunk of entry) {
+            chunks.push(chunk);
+          }
+          const content = Buffer.concat(chunks).toString("utf-8");
+          files[filename] = content;
+        }
+
+        if (!files["package.json"]) {
+          throw new Error(`package.json not found in ${name}@${specifier}`);
+        }
+
+        const packageJson = JSON.parse(files["package.json"]) as import("type-fest").PackageJson;
+
+        if (!packageJson.name) {
+          throw new Error(`Couldn't find valid package.json for ${name}@${specifier}`);
+        }
+        return { packageJson, files };
+      };
+
+      const packages: GottenPackage[] = [];
+      const remainingDeps = { ...deps };
+      for (let i = 100; i >= 0 && Object.keys(remainingDeps).length > 0; i--) {
+        if (i === 0)
+          throw new Error("Too many dependencies: " + Object.keys(remainingDeps).join(", "));
+        for (const [name, version] of Object.entries(remainingDeps)) {
+          const existing = packages.find(
+            (p) => p.packageJson.name === name && semver.satisfies(p.packageJson.version!, version),
+          );
+          delete remainingDeps[name];
+          if (existing) {
+            logger.debug(
+              `package ${name}@${existing.packageJson.version} exists and matches ${version}`,
+            );
+            continue;
+          }
+          logger.debug(`package ${name}@${version} not found, getting it...`);
+          const pkg = await getPackage(name, version);
+          logger.debug(`package ${name}@${version} gotten.`);
+          packages.push(pkg);
+          for (const [depName, depVersion] of Object.entries(pkg.packageJson.dependencies ?? {})) {
+            logger.debug(
+              `adding dependency ${depName}@${depVersion} to remaining deps because it's a dependency of ${name}@${version}`,
+            );
+            remainingDeps[depName] = depVersion!;
+          }
+        }
+      }
+      logger.debug(
+        `got ${packages.length} packages: ${packages.map((p) => p.packageJson.name).join(", ")}`,
+      );
+      return packages;
+    }),
+
   // Get builds for an estate
   getBuilds: estateProtectedProcedure
     .input(
@@ -194,14 +701,17 @@ export const estateRouter = router({
       const { estateId } = input;
       const limit = input.limit || 20;
 
-      const estateBuilds = await ctx.db
-        .select()
-        .from(builds)
-        .where(eq(builds.estateId, estateId))
-        .orderBy(desc(builds.createdAt))
-        .limit(limit);
+      const builds = await ctx.db.query.builds.findMany({
+        where: eq(schema.builds.estateId, estateId),
+        orderBy: desc(schema.builds.createdAt),
+        with: { estate: { with: { iterateConfigs: true } } },
+        limit: limit,
+      });
 
-      return estateBuilds;
+      return builds.map(({ estate, ...b }) => ({
+        ...b,
+        isActive: b.id === estate.iterateConfigs[0]?.buildId,
+      }));
     }),
 
   getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
@@ -248,7 +758,7 @@ export const estateRouter = router({
         agentInstanceName: agent.durableObjectName,
       });
 
-      const response = await stub.fetch("http://do/state");
+      const response = await stub.raw.fetch("http://do/state" as never);
       const state = (await response.json()) as { onboardingData?: OnboardingData };
 
       return {
@@ -310,94 +820,70 @@ export const estateRouter = router({
     return { results: {} as Record<string, unknown> };
   }),
 
-  triggerRebuild: estateProtectedProcedure
+  triggerRebuild: githubInstallationScopedProcedure
     .input(
       z.object({
         target: z.string().min(1, "Target is required"),
         targetType: z.enum(["branch", "commit"]).default("branch"),
+        /** if true, will skip triggering a new build if one is already in progress for the same commit */
+        useExisting: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const { estateId, target, targetType } = input;
 
-      // Get the connected GitHub repo for this estate
-      const estateWithRepo = await ctx.db.query.estate.findFirst({
-        where: eq(estate.id, estateId),
-      });
-
-      if (!estateWithRepo?.connectedRepoId) {
-        throw new Error("No GitHub repository connected to this estate");
-      }
-
-      // Get the GitHub installation
-      const githubInstallation = await getGithubInstallationForEstate(ctx.db, estateId);
-      if (!githubInstallation) {
-        throw new Error("GitHub installation not found for this estate");
-      }
-
-      // Get installation token
-      const installationToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-      // GitHub API response schemas
-      const GitHubCommitResponse = z.object({
-        sha: z.string(),
-        commit: z.object({
-          message: z.string(),
-        }),
-      });
-
-      const GitHubBranchResponse = z.object({
-        commit: z.object({
-          sha: z.string(),
-          commit: z.object({
-            message: z.string(),
-          }),
-        }),
-      });
-
       let commitHash: string;
       let commitMessage: string;
 
       if (targetType === "commit") {
-        // Fetch the commit details
-        const commitResponse = await fetch(
-          `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}/commits/${target}`,
-          {
-            headers: {
-              Authorization: `Bearer ${installationToken}`,
-              Accept: "application/vnd.github+json",
-              "User-Agent": "Iterate OS",
-            },
-          },
-        );
+        const commitResponse = await ctx.github.rest.repos.getCommit({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          ref: target,
+        });
 
-        if (!commitResponse.ok) {
-          throw new Error(`Failed to fetch commit details: ${target}`);
+        if (commitResponse.status !== 200) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Failed to fetch commit details: ${target}`,
+          });
         }
 
-        const commitData = GitHubCommitResponse.parse(await commitResponse.json());
-        commitHash = commitData.sha;
-        commitMessage = commitData.commit.message;
+        commitHash = commitResponse.data.sha;
+        commitMessage = commitResponse.data.commit.message;
       } else {
-        // Fetch the latest commit on the branch
-        const branchResponse = await fetch(
-          `https://api.github.com/repositories/${estateWithRepo.connectedRepoId}/branches/${target}`,
-          {
-            headers: {
-              Authorization: `Bearer ${installationToken}`,
-              Accept: "application/vnd.github+json",
-              "User-Agent": "Iterate OS",
-            },
-          },
-        );
+        const branchResponse = await ctx.github.rest.repos.getBranch({
+          owner: ctx.repo.owner,
+          repo: ctx.repo.repo,
+          branch: target,
+        });
 
-        if (!branchResponse.ok) {
-          throw new Error(`Failed to fetch branch details: ${target}`);
+        if (branchResponse.status !== 200) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: `Failed to fetch branch details: ${target}`,
+          });
         }
 
-        const branchData = GitHubBranchResponse.parse(await branchResponse.json());
-        commitHash = branchData.commit.sha;
-        commitMessage = branchData.commit.commit.message;
+        commitHash = branchResponse.data.commit.sha;
+        commitMessage = branchResponse.data.commit.commit.message;
+      }
+
+      if (input.useExisting) {
+        const existing = await ctx.db.query.builds.findFirst({
+          where: and(
+            eq(schema.builds.estateId, estateId),
+            eq(schema.builds.commitHash, commitHash),
+            or(eq(schema.builds.status, "in_progress"), eq(schema.builds.status, "queued")),
+          ),
+        });
+        if (existing) {
+          return {
+            buildId: existing.id,
+            status: "in_progress",
+            message: existing.commitMessage,
+          };
+        }
       }
 
       // Use the helper function to trigger the rebuild
@@ -409,11 +895,62 @@ export const estateRouter = router({
         commitMessage,
         isManual: true,
       });
-
       return {
         buildId: build.id,
         status: "in_progress",
         message: "Build triggered successfully",
       };
+    }),
+
+  rollbackToBuild: githubInstallationScopedProcedure
+    .input(z.object({ buildId: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const { buildId } = input;
+      const updated = await ctx.db
+        .insert(schema.iterateConfig)
+        .values({ buildId, estateId: ctx.estate.id })
+        .onConflictDoUpdate({
+          target: [schema.iterateConfig.estateId],
+          set: { buildId },
+        })
+        .returning();
+      return { updated: updated.length };
+    }),
+
+  // Mark a user onboarding step as completed
+  completeUserOnboardingStep: estateProtectedProcedure
+    .input(
+      z.object({
+        step: z.enum(["confirm_org", "slack"]),
+        detail: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db.transaction(async (tx) => {
+        // Append immutable confirmation event
+        await tx
+          .insert(schema.estateOnboardingEvent)
+          .values({
+            estateId: ctx.estate.id,
+            organizationId: ctx.estate.organizationId,
+            eventType: input.step === "confirm_org" ? "OrgNameConfirmed" : "SlackAdded",
+            category: "user",
+            detail: input.detail ?? null,
+            metadata: { skipped: false },
+          })
+          .onConflictDoNothing();
+
+        await tx
+          .insert(schema.estateOnboardingEvent)
+          .values({
+            estateId: input.estateId,
+            organizationId: ctx.estate.organizationId,
+            eventType: "OnboardingCompleted",
+            category: "user",
+          })
+          .onConflictDoNothing();
+      });
+
+      return { success: true } as const;
     }),
 });

@@ -5,6 +5,10 @@ import { organizationUserMembership } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
 import { invalidateOrganizationQueries, notifyOrganization } from "../utils/websocket-utils.ts";
 import { logger } from "../tag-logger.ts";
+import { createPostProcedureConsumerPlugin } from "../outbox/pgmq-lib.ts";
+import { waitUntil } from "../../env.ts";
+import { recentActiveSources } from "../db/helpers.ts";
+import { queuer } from "../outbox/outbox-queuer.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -19,7 +23,6 @@ const t = initTRPC.context<Context>().create({
     const { shape, error } = opts;
 
     // Check if this is a ZodError and format it nicely
-    let formattedError = error.message;
     let zodFormatted: any;
 
     // Helper to extract ZodError from error or error.cause
@@ -27,14 +30,6 @@ const t = initTRPC.context<Context>().create({
       error.cause instanceof ZodError ? error.cause : error instanceof ZodError ? error : undefined;
 
     if (zodError) {
-      // Format the ZodError into a more readable structure
-      const formattedIssues = zodError.issues.map((issue, index) => {
-        const path = issue.path.length > 0 ? issue.path.join(".") : "root";
-        return `#${index + 1}: ${issue.message} (at ${path})`;
-      });
-
-      formattedError = `Validation error:\n${formattedIssues.join("\n")}`;
-
       // Create a structured error format similar to flattenError
       zodFormatted = {
         formErrors: zodError.issues
@@ -57,16 +52,6 @@ const t = initTRPC.context<Context>().create({
       };
     }
 
-    logger.error(`🚨 tRPC Error on ${opts.path ?? "<no-path>"}:`, {
-      code: error.code,
-      message: formattedError,
-      zodFormatted,
-      stack: error.stack,
-      cause: error.cause,
-      input: opts.input,
-      type: opts.type,
-    });
-
     return {
       ...shape,
       // zod errors are big and ugly, but it ships a built-in pretty printer, so let's override the `message` with a more useful one if we can.
@@ -87,10 +72,11 @@ const t = initTRPC.context<Context>().create({
   },
 });
 
+export const eventsProcedure = createPostProcedureConsumerPlugin(queuer, { waitUntil });
+
 // Base router and procedure helpers
 export const router = t.router;
-export const publicProcedure = t.procedure;
-
+export const publicProcedure = t.procedure.concat(eventsProcedure);
 // Type for authenticated context
 type AuthenticatedContext = Context & {
   user: NonNullable<Context["user"]>;
@@ -98,7 +84,7 @@ type AuthenticatedContext = Context & {
 };
 
 // Middleware to automatically invalidate queries after mutations
-const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
+export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
   const authCtx = ctx as AuthenticatedContext;
   const result = await next({ ctx: authCtx });
 
@@ -127,8 +113,8 @@ const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
   return result;
 });
 
-// Protected procedure that requires authentication
-export const protectedProcedure = t.procedure
+/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any estate-specific resources */
+export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -142,6 +128,10 @@ export const protectedProcedure = t.procedure
     });
   })
   .use(autoInvalidateMiddleware); // Add auto-invalidation to all protected procedures
+
+export const protectedProcedure = protectedProcedureWithNoEstateRestrictions.input(
+  z.object({ estateId: z.never().optional() }).optional(),
+);
 
 // Create a version of protectedProcedure without auto-invalidation for special cases
 export const protectedProcedureNoAutoInvalidate = t.procedure.use(({ ctx, next }) => {
@@ -202,7 +192,7 @@ export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
     with: {
       organization: {
         with: {
-          estates: true,
+          estates: { with: recentActiveSources },
         },
       },
     },
@@ -238,37 +228,38 @@ export async function getUserEstateAccess(
   userId: string,
   estateId: string,
   organizationId?: string,
-): Promise<{ hasAccess: boolean; estate: any | null }> {
+) {
   const userWithEstates = await db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
-    with: {
-      organization: {
-        with: {
-          estates: true,
-        },
-      },
-    },
+    with: { organization: { with: { estates: { with: recentActiveSources } } } },
   });
 
   if (!userWithEstates?.length) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
   const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
 
   // Check if the estate belongs to the user's organization
-  const userEstate = allEstates.find((e) => e.id === estateId);
+  const _userEstate = allEstates.find((e) => e.id === estateId);
+  const userEstate = _userEstate && {
+    ..._userEstate,
+    connectedRepoId: _userEstate?.sources?.[0]?.repoId,
+    connectedRepoPath: _userEstate?.sources?.[0]?.path,
+    connectedRepoRef: _userEstate?.sources?.[0]?.branch,
+    connectedRepoAccountId: _userEstate?.sources?.[0]?.accountId,
+  };
 
   if (!userEstate) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
   // If organizationId is provided, verify it matches
   if (organizationId && userEstate.organizationId !== organizationId) {
-    return { hasAccess: false, estate: null };
+    return { hasAccess: false, estate: null } as const;
   }
 
-  return { hasAccess: true, estate: userEstate };
+  return { hasAccess: true, estate: userEstate } as const;
 }
 
 // Organization protected procedure that requires both authentication and organization membership
@@ -348,7 +339,8 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
 });
 
 // Estate protected procedure that requires both authentication and estate access
-export const estateProtectedProcedure = protectedProcedure
+export const estateProtectedProcedure = protectedProcedureWithNoEstateRestrictions
+  .use(autoInvalidateMiddleware) // Add auto-invalidation to all protected procedures
   .input(z.object({ estateId: z.string() }))
   .use(async ({ ctx, input, next, path }) => {
     const { hasAccess, estate: userEstate } = await getUserEstateAccess(

@@ -10,6 +10,7 @@ import { search, searchKeymap } from "@codemirror/search";
 import { keymap } from "@codemirror/view";
 import { vsCodeDark, vsCodeLight } from "@fsegurai/codemirror-theme-bundle";
 import { useTheme } from "next-themes";
+import { foldService } from "@codemirror/language";
 import { Switch } from "./ui/switch.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip.js";
 
@@ -146,9 +147,11 @@ export function SerializedObjectCodeBlock({
     codeMirrorTheme,
     lang(),
     search({ top: true }),
+    foldPromptBlocks(),
     keymap.of(searchKeymap),
     EditorView.editable.of(false), // This is enough for readonly
     EditorView.contentAttributes.of({ tabindex: "0" }), // Make focusable for keyboard shortcutss
+    EditorView.lineWrapping,
   ];
 
   return (
@@ -297,9 +300,79 @@ export function YamlCodeBlock({
     <SerializedObjectCodeBlock
       data={data}
       className={className}
-      initialFormat="yaml"
       showToggle={showCopyAsYAMLButton && showCopyAsJSONButton}
       showCopyButton={showCopyAsYAMLButton || showCopyAsJSONButton}
     />
   );
+}
+
+function foldPromptBlocks() {
+  return foldService.of((state, lineStart, lineEnd) => {
+    const line = state.doc.lineAt(lineStart);
+
+    const collapseTo = (otherLine: typeof line) => {
+      const indent = otherLine.text.split(/\S/)[0];
+      return { from: lineEnd, to: otherLine.from + indent.length };
+    };
+
+    if (line.text.match(/^\s*<\S+>$/)) {
+      const closeTag = line.text.replace("<", "</"); // must be a perfect match including indent
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+
+        if (nextLine.text === closeTag) {
+          return collapseTo(nextLine);
+        }
+      }
+    }
+
+    if (line.text.match(/^\s*```\w*\s*$/)) {
+      const closeTag = line.text.slice(0, line.text.lastIndexOf("`") + 1);
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+
+        if (nextLine.text === closeTag) {
+          return collapseTo(nextLine);
+        }
+      }
+    }
+
+    const markdownHeadingRegex = /^\s*#+ \w/;
+    if (markdownHeadingRegex.test(line.text)) {
+      const startIndent = line.text.match(/^\s*/)?.[0] || "";
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const { text } = state.doc.line(i);
+        const lessIndentedThanStart = text.trim() && !text.startsWith(startIndent);
+
+        if (markdownHeadingRegex.test(text) || lessIndentedThanStart || i === state.doc.lines) {
+          return { from: lineEnd, to: state.doc.line(i - 1).from - 1 };
+        }
+      }
+    }
+
+    if (line.text.endsWith("/**")) {
+      for (let i = line.number + 1; i <= state.doc.lines; i++) {
+        const nextLine = state.doc.line(i);
+        if (nextLine.text.includes("*/")) {
+          return collapseTo(nextLine);
+        }
+      }
+    }
+
+    const pairs = ["{}", "[]"];
+    for (const pair of pairs) {
+      // very basic block folding - assumes you have correct indentation etc.
+      if (line.text.trimEnd().endsWith(pair[0])) {
+        const indent = line.text.match(/^\s*/)?.[0] || "";
+        for (let i = line.number + 1; i <= state.doc.lines; i++) {
+          const nextLine = state.doc.line(i);
+          if (nextLine.text === indent + pair[1]) {
+            return collapseTo(nextLine);
+          }
+        }
+      }
+    }
+
+    return null;
+  });
 }

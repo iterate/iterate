@@ -6,7 +6,7 @@ import { env } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
 
 export const stripeClient = new Stripe(env.STRIPE_SECRET_KEY, {
-  apiVersion: "2025-09-30.clover",
+  apiVersion: "2025-10-29.clover",
 });
 
 const V2_STRIPE_VERSION = "2025-09-30.preview";
@@ -69,7 +69,7 @@ export async function createStripeCustomer(organization: Organization, user: Use
     },
   });
 
-  logger.info("Stripe customer created", customer);
+  logger.debug("Stripe customer created", customer);
   return customer;
 }
 
@@ -86,7 +86,7 @@ export async function subscribeCustomerToPricingPlan(
   pricingPlanId: string,
   cadenceInterval: CadenceInterval = "month",
 ) {
-  logger.info("Starting subscription flow", { customerId, pricingPlanId, cadenceInterval });
+  logger.debug("Starting subscription flow", { customerId, pricingPlanId, cadenceInterval });
 
   // 1) Resolve pricing plan version
   const plan = await stripeV2JSON<{ latest_version: string }>(
@@ -99,7 +99,7 @@ export async function subscribeCustomerToPricingPlan(
     throw new Error("Could not determine pricing_plan_version");
   }
 
-  logger.info("Resolved pricing plan", { id: pricingPlanId, version: planVersion });
+  logger.debug("Resolved pricing plan", { id: pricingPlanId, version: planVersion });
 
   // 2) Resolve payment method (optional)
   const paymentMethods = await stripeClient.customers.listPaymentMethods(customerId);
@@ -119,7 +119,7 @@ export async function subscribeCustomerToPricingPlan(
     "/v2/billing/profiles",
     billingProfilePayload,
   );
-  logger.info("Created billing profile", billingProfile);
+  logger.debug("Created billing profile", billingProfile);
 
   // 4) Create Cadence
   const today = new Date();
@@ -148,7 +148,7 @@ export async function subscribeCustomerToPricingPlan(
     },
     billing_cycle: cadenceBillingCycle,
   });
-  logger.info("Created cadence", cadence);
+  logger.debug("Created cadence", cadence);
 
   // 5) Create Billing Intent with subscribe action
   const billingIntent = await stripeV2JSON<{ id: string }>("POST", "/v2/billing/intents", {
@@ -174,7 +174,7 @@ export async function subscribeCustomerToPricingPlan(
       },
     ],
   });
-  logger.info("Created billing intent", billingIntent);
+  logger.debug("Created billing intent", billingIntent);
 
   // 6) Reserve the billing intent
   const reserved = await stripeV2JSON<{ amount_details: { total: number } }>(
@@ -182,7 +182,7 @@ export async function subscribeCustomerToPricingPlan(
     `/v2/billing/intents/${billingIntent.id}/reserve`,
     {},
   );
-  logger.info("Reserved billing intent", reserved);
+  logger.debug("Reserved billing intent", reserved);
 
   let committed;
 
@@ -196,13 +196,13 @@ export async function subscribeCustomerToPricingPlan(
       customer: customerId,
       payment_method: paymentMethod.id,
     });
-    logger.info("Created payment intent", paymentIntent);
+    logger.debug("Created payment intent", paymentIntent);
 
     // 8) Confirm the payment intent
     const confirmedPaymentIntent = await stripeClient.paymentIntents.confirm(paymentIntent.id, {
       return_url: env.VITE_PUBLIC_URL,
     });
-    logger.info("Confirmed payment intent", confirmedPaymentIntent);
+    logger.debug("Confirmed payment intent", confirmedPaymentIntent);
 
     // 9) Commit the billing intent
     committed = await stripeV2JSON("POST", `/v2/billing/intents/${billingIntent.id}/commit`, {
@@ -213,7 +213,7 @@ export async function subscribeCustomerToPricingPlan(
     committed = await stripeV2JSON("POST", `/v2/billing/intents/${billingIntent.id}/commit`, {});
   }
 
-  logger.info("Committed billing intent", committed);
+  logger.debug("Committed billing intent", committed);
 
   return {
     pricingPlan: {
@@ -238,7 +238,7 @@ export async function createStripeCustomerAndSubscriptionForOrganization(
   user: User,
 ) {
   if (organization.stripeCustomerId) {
-    logger.info("Stripe customer already exists for organization - skipping", {
+    logger.debug("Stripe customer already exists for organization - skipping", {
       organizationId: organization.id,
     });
     return;

@@ -1,8 +1,8 @@
 import { useState, Suspense } from "react";
 import { Save, Info } from "lucide-react";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
-import { useRouteLoaderData } from "react-router";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { createFileRoute, getRouteApi } from "@tanstack/react-router";
 import { Spinner } from "../../components/ui/spinner.tsx";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
@@ -17,30 +17,34 @@ import {
   FieldLegend,
   FieldSet,
 } from "../../components/ui/field.tsx";
-import type { Route } from "./+types/settings.ts";
-import type { loader as orgLoader } from "./loader.tsx";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Organization Settings - Iterate" },
-    { name: "description", content: "Manage your organization settings" },
-  ];
-}
+const orgLayoutRoute = getRouteApi("/_auth.layout/$organizationId");
 
 function OrganizationSettingsContent({ organizationId }: { organizationId: string }) {
   const trpc = useTRPC();
-  const loaderData = useRouteLoaderData<typeof orgLoader>("routes/org/loader");
-  const { data: organization } = useSuspenseQuery({
-    ...trpc.organization.get.queryOptions({ organizationId }),
-    initialData: loaderData?.organization,
-  });
+  const loaderData = orgLayoutRoute.useLoaderData();
+  const { data: organization } = useQuery(
+    trpc.organization.get.queryOptions(
+      { organizationId },
+      {
+        initialData: loaderData?.organization,
+      },
+    ),
+  );
 
-  const [organizationName, setOrganizationName] = useState(organization.name);
+  const queryClient = useQueryClient();
+  const [organizationName, setOrganizationName] = useState(organization?.name ?? "");
 
   const updateOrganization = useMutation(
     trpc.organization.updateName.mutationOptions({
       onSuccess: (data) => {
         toast.success("Organization name updated successfully");
+        queryClient.invalidateQueries({
+          queryKey: [
+            trpc.organization.get.queryKey({ organizationId }),
+            trpc.organization.list.queryKey(),
+          ],
+        });
         setOrganizationName(data.name);
       },
       onError: (error) => {
@@ -57,7 +61,7 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
       return;
     }
 
-    if (organizationName === organization.name) {
+    if (organizationName === organization?.name) {
       toast.error("No changes to save");
       return;
     }
@@ -68,7 +72,7 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
     });
   };
 
-  const hasChanges = organizationName !== organization.name;
+  const hasChanges = organizationName !== organization?.name;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-5xl">
@@ -135,8 +139,23 @@ function OrganizationSettingsContent({ organizationId }: { organizationId: strin
   );
 }
 
-export default function OrganizationSettings({ params }: Route.ComponentProps) {
-  const { organizationId } = params;
+export const Route = createFileRoute("/_auth.layout/$organizationId/settings")({
+  component: OrganizationSettings,
+  head: () => ({
+    meta: [
+      {
+        title: "Organization Settings - Iterate",
+      },
+      {
+        name: "description",
+        content: "Manage your organization settings",
+      },
+    ],
+  }),
+});
+
+function OrganizationSettings() {
+  const { organizationId } = Route.useParams();
 
   if (!organizationId) {
     return (

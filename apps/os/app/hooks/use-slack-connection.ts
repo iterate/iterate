@@ -1,5 +1,5 @@
 import { toast } from "sonner";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
 import { useEstateId } from "./use-estate.ts";
@@ -8,12 +8,12 @@ export function useSlackConnection() {
   const estateId = useEstateId();
   const trpc = useTRPC();
 
-  const { data, refetch } = useSuspenseQuery(
-    trpc.integrations.list.queryOptions({ estateId: estateId }),
-  );
+  const integrationsQuery = useQuery(trpc.integrations.list.queryOptions({ estateId: estateId }));
 
   // Check if Slack bot is connected at the estate level
-  const slackBotIntegration = data.oauthIntegrations.find((i) => i.id === "slack-bot");
+  const slackBotIntegration = integrationsQuery.data?.oauthIntegrations.find(
+    (i) => i.id === "slack-bot",
+  );
   const isConnected = slackBotIntegration?.isConnected || false;
   const isEstateWide = slackBotIntegration?.isEstateWide || false;
   const isPersonal = slackBotIntegration?.isPersonal || false;
@@ -55,7 +55,7 @@ export function useSlackConnection() {
         disconnectType,
       });
       // Refetch the integrations list to update the UI
-      await refetch();
+      await integrationsQuery.refetch();
       toast.success("Slack disconnected successfully");
     } catch (error) {
       console.error("Failed to disconnect Slack:", error);
@@ -64,6 +64,7 @@ export function useSlackConnection() {
   };
 
   return {
+    integrationsQuery,
     isConnected,
     isEstateWide,
     isPersonal,

@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import dedent from "dedent";
 import * as yaml from "yaml";
 import { SearchRequest } from "../default-tools.ts";

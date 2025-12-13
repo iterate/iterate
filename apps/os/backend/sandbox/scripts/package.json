@@ -1,0 +1,15 @@
+{
+  "name": "@iterate-com/sandbox-scripts",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {},
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "packageManager": "pnpm@10.24.0",
+  "dependencies": {
+    "dedent": "^1.7.0",
+    "esbuild": "^0.25.12"
+  }
+}

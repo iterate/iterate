@@ -1,4 +1,4 @@
-import jsonata from "jsonata/sync";
+import jsonata from "@mmkal/jsonata/sync";
 
 export type SlackAPIMockOptions = {
   log: (message: string) => void;

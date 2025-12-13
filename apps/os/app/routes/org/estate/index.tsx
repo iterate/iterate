@@ -1,5 +1,6 @@
 import { useState, useMemo, Suspense } from "react";
-import { useNavigate } from "react-router";
+import { useNavigate } from "@tanstack/react-router";
+import { useQueryState } from "nuqs";
 import {
   Bot,
   Search,
@@ -12,8 +13,9 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { format, formatDistanceToNow } from "date-fns";
-import { useSuspenseQuery, useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { createFileRoute } from "@tanstack/react-router";
 import { Card, CardContent } from "../../../components/ui/card.tsx";
 import { Empty, EmptyDescription, EmptyMedia, EmptyTitle } from "../../../components/ui/empty.tsx";
 import {
@@ -50,14 +52,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { useSlackConnection } from "../../../hooks/use-slack-connection.ts";
-import type { Route } from "./+types/index.ts";
-
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Iterate Dashboard" },
-    { name: "description", content: "Iterate platform dashboard" },
-  ];
-}
+import { useSessionUser } from "../../../hooks/use-session-user.ts";
 
 type SortField = "name" | "createdAt" | "updatedAt";
 
@@ -108,14 +103,112 @@ function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }
   );
 }
 
-export default function Home() {
+function UpgradeTrialButton({ estateId }: { estateId: string }) {
+  const trpc = useTRPC();
+  const { connectSlackBot } = useSlackConnection();
+  const [dialogOpen, setDialogOpen] = useState(false);
+
+  const { mutateAsync: upgradeTrial, isPending } = useMutation(
+    trpc.integrations.upgradeTrialToFullInstallation.mutationOptions({}),
+  );
+
+  const handleUpgrade = async () => {
+    try {
+      await upgradeTrial({ estateId });
+      toast.success("Installing to Slack workspace... Redirecting to Slack...");
+      setDialogOpen(false);
+      // Trigger Slack bot installation flow
+      await connectSlackBot(window.location.pathname);
+    } catch (error) {
+      toast.error("Failed to install into Slack workspace. Please try again.");
+      console.error(error);
+    }
+  };
+
+  return (
+    <>
+      <Button
+        size="lg"
+        variant="outline"
+        className="text-lg px-8 py-3 h-auto"
+        onClick={() => setDialogOpen(true)}
+      >
+        Add @iterate to my Slack workspace
+      </Button>
+
+      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Upgrade to Full Slack Installation</DialogTitle>
+            <DialogDescription>
+              Ready to connect your own Slack workspace? This will disconnect from the trial setup
+              and redirect you to install iterate in your workspace.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="rounded-lg border border-yellow-200 bg-yellow-50 dark:border-yellow-900 dark:bg-yellow-950 p-4">
+              <p className="text-sm text-yellow-900 dark:text-yellow-100">
+                <strong>What happens:</strong> We'll remove the Slack Connect and take you to Slack
+                to install the iterate bot in your own workspace.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={isPending}>
+                Cancel
+              </Button>
+              <Button onClick={handleUpgrade} disabled={isPending}>
+                {isPending ? "Upgrading..." : "Upgrade Now"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+function slackUrlTheadTs(filter: string): string | undefined {
+  let url: URL | undefined;
+  try {
+    url = filter.match(/^https?:\/\//) ? new URL(filter) : undefined;
+  } catch {}
+  if (url?.hostname.endsWith(".slack.com") && url.pathname.startsWith("/archives/")) {
+    const threadTsParam = url.searchParams.get("thread_ts");
+    if (threadTsParam) return threadTsParam;
+
+    // no thread_ts, looks like a top-level message, parse thusly: https://stackoverflow.com/q/46355373
+    // Quoth the user: "So, what I've found is that the p1234567898000159 value in [https://myworkspace.slack.com/archives/CqwertGU/p1234567898000159] is almost the message's ts value, but not quite (the Slack API won't accept it): the leading p needs to be removed, also there has to be a . inserted after the 10th digit: 1234567898.000159"
+    const lastPart = url.pathname.split("/").filter(Boolean).at(-1);
+    if (lastPart?.match(/^p\d+$/)) {
+      return `${lastPart.slice(1, 11)}.${lastPart.slice(11)}`;
+    }
+  }
+
+  return undefined;
+}
+
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/")({
+  component: Home,
+  head: () => ({
+    meta: [
+      { title: "Iterate Dashboard" },
+      { name: "description", content: "Iterate platform dashboard" },
+    ],
+  }),
+});
+
+function Home() {
   const navigate = useNavigate();
   const estateId = useEstateId();
   const getEstateUrl = useEstateUrl();
   const trpc = useTRPC();
   const { openSlackApp } = useSlackConnection();
 
-  const [filter, setFilter] = useState("");
+  const [agentNameFilter, setAgentNameFilter] = useQueryState("agent-name-filter", {
+    defaultValue: "",
+  });
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [agentName, setAgentName] = useState("");
@@ -125,9 +218,15 @@ export default function Home() {
   const [firstMessage, setFirstMessage] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
 
-  const { data: agents } = useSuspenseQuery(trpc.agents.list.queryOptions({ estateId }));
-  const { data: estateInfo } = useSuspenseQuery(trpc.estate.get.queryOptions({ estateId }));
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const nameSubstring = slackUrlTheadTs(agentNameFilter || "") || agentNameFilter;
+  const { data: agents } = useQuery(
+    trpc.agents.list.queryOptions({
+      estateId,
+      agentNameLike: nameSubstring ? `%${nameSubstring}%` : undefined,
+    }),
+  );
+  const { data: estateInfo } = useQuery(trpc.estate.get.queryOptions({ estateId }));
+  const user = useSessionUser();
 
   // Fetch Slack channels for the dialog
   const {
@@ -168,7 +267,7 @@ export default function Home() {
 
   const handleCreateAgent = () => {
     if (agentName.trim()) {
-      navigate(getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`));
+      navigate({ to: getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`) });
     }
   };
 
@@ -192,12 +291,9 @@ export default function Home() {
     });
   };
 
-  const sortedAndFilteredAgents = useMemo(() => {
-    const filtered = agents.filter((agent) =>
-      agent.durableObjectName.toLowerCase().includes(filter.toLowerCase()),
-    );
-
-    filtered.sort((a, b) => {
+  const sortedAgents = useMemo(() => {
+    if (!agents) return [];
+    return agents.toSorted((a, b) => {
       let aValue: string | Date;
       let bValue: string | Date;
 
@@ -226,9 +322,7 @@ export default function Home() {
       }
       return 0;
     });
-
-    return filtered;
-  }, [agents, filter, sortField, sortDirection]);
+  }, [agents, sortField, sortDirection]);
 
   const getSortIcon = (field: SortField) => {
     if (sortField !== field) {
@@ -253,12 +347,15 @@ export default function Home() {
                 The main way to interact with iterate is by mentioning @iterate in Slack.
               </p>
             </div>
-            <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
-              <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
-              Message @iterate on Slack
-            </Button>
+            <div className="flex gap-3 flex-wrap">
+              <Button size="lg" className="text-lg px-8 py-3 h-auto" onClick={openSlackApp}>
+                <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
+                Message @iterate on Slack
+              </Button>
+              {estateInfo?.isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
+            </div>
 
-            {estateInfo.onboardingAgentName && user.debugMode ? (
+            {estateInfo?.onboardingAgentName && user?.debugMode ? (
               <div className="pt-4">
                 <Suspense fallback={<Skeleton className="h-[120px] w-full" />}>
                   <OnboardingHero estateId={estateId} />
@@ -270,7 +367,7 @@ export default function Home() {
       </Card>
 
       {/* Debug Features */}
-      {user.debugMode && (
+      {user?.debugMode && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <Card variant="muted">
             <CardContent>
@@ -330,7 +427,7 @@ export default function Home() {
               </div>
               <Button
                 variant="outline"
-                onClick={() => navigate(getEstateUrl("/agents/offline"))}
+                onClick={() => navigate({ to: getEstateUrl("/agents/offline") })}
                 className="w-full"
               >
                 <Archive className="h-4 w-4 mr-2" />
@@ -483,8 +580,8 @@ export default function Home() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold">Active Agents</h2>
             <Badge variant="secondary">
-              {sortedAndFilteredAgents.length} of {agents.length} agent
-              {sortedAndFilteredAgents.length !== 1 ? "s" : ""}
+              {sortedAgents.length} of {agents?.length || 0} agent
+              {sortedAgents.length !== 1 ? "s" : ""}
             </Badge>
           </div>
 
@@ -492,14 +589,16 @@ export default function Home() {
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
-              placeholder="Filter agents by name..."
-              value={filter}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setFilter(e.target.value)}
+              placeholder="Filter agents by name or Slack message link..."
+              value={agentNameFilter}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setAgentNameFilter(e.target.value)
+              }
               className="pl-10"
             />
           </div>
 
-          {agents.length === 0 ? (
+          {agents?.length === 0 ? (
             <Empty>
               <EmptyMedia variant="icon">
                 <Bot className="h-12 w-12" />
@@ -548,15 +647,17 @@ export default function Home() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {sortedAndFilteredAgents.map((agent) => (
+                  {sortedAgents.map((agent) => (
                     <TableRow key={agent.id} className="hover:bg-muted/50">
                       <TableCell className="px-4 py-3">
                         <AgentNameCell
                           name={agent.durableObjectName}
                           onClick={() => {
-                            navigate(
-                              getEstateUrl(`/agents/${agent.className}/${agent.durableObjectName}`),
-                            );
+                            navigate({
+                              to: getEstateUrl(
+                                `/agents/${agent.className}/${agent.durableObjectName}`,
+                              ),
+                            });
                           }}
                         />
                       </TableCell>
@@ -575,9 +676,11 @@ export default function Home() {
                           variant="outline"
                           size="sm"
                           onClick={() => {
-                            navigate(
-                              getEstateUrl(`/agents/${agent.className}/${agent.durableObjectName}`),
-                            );
+                            navigate({
+                              to: getEstateUrl(
+                                `/agents/${agent.className}/${agent.durableObjectName}`,
+                              ),
+                            });
                           }}
                         >
                           <Eye className="h-4 w-4 mr-2" />
@@ -598,7 +701,7 @@ export default function Home() {
 
 function OnboardingHero({ estateId }: { estateId: string }) {
   const trpc = useTRPC();
-  const { data } = useSuspenseQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
+  const { data } = useQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
 
   const results = data?.results ?? {};
 
@@ -607,7 +710,7 @@ function OnboardingHero({ estateId }: { estateId: string }) {
       <Alert>
         <AlertCircle className="h-4 w-4" />
         <AlertDescription>
-          We’re gathering onboarding insights. Check back in a moment.
+          We're gathering onboarding insights. Check back in a moment.
         </AlertDescription>
       </Alert>
     );
@@ -616,7 +719,7 @@ function OnboardingHero({ estateId }: { estateId: string }) {
   return (
     <div className="space-y-2">
       <div className="text-lg font-semibold">Onboarding Data</div>
-      <SerializedObjectCodeBlock data={results} initialFormat="yaml" className="h-64" />
+      <SerializedObjectCodeBlock data={results} className="h-64" />
     </div>
   );
 }

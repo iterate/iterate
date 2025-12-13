@@ -4,6 +4,9 @@ node_modules
 
 # React Router
 .react-router
+
+# TanStack
+.tanstack
 build
 dist
 
@@ -11,7 +14,7 @@ dist
 .mf
 .wrangler
 .dev.vars*
-
+.alchemy
 
 !.dev.vars.example
 .env*
@@ -27,3 +30,4 @@ CLAUDE.md
 
 # ad-hoc ignored files/paths
 *ignoreme*
+evalite-export

@@ -1,9 +1,10 @@
 import type { SlackEvent } from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import { and, asc, eq, or, inArray, lt } from "drizzle-orm";
+import * as YAML from "yaml";
 import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
-import { waitUntil } from "../../env.ts";
+import { env as _env, waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
 import * as schema from "../db/schema.ts";
@@ -16,6 +17,9 @@ import {
   user,
 } from "../db/schema.ts";
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
+import { ensureUserSynced } from "../integrations/slack/slack.ts";
+import { slackChannelOverrideExists } from "../utils/trial-channel-setup.ts";
+import { getDefaultOnboardingAgentName } from "../org-utils.ts";
 import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -23,12 +27,12 @@ import { CORE_AGENT_SLICES, IterateAgent } from "./iterate-agent.ts";
 import { slackAgentTools } from "./slack-agent-tools.ts";
 import { slackSlice, type SlackSliceState } from "./slack-slice.ts";
 import { shouldUnfurlSlackMessage } from "./slack-agent-utils.ts";
-import { getConnectionKey } from "./mcp/mcp-slice.ts";
-import type {
-  AgentCoreEvent,
-  CoreReducedState,
-  ParticipantJoinedEvent,
-  ParticipantMentionedEvent,
+import {
+  ApprovalKey,
+  type AgentCoreEvent,
+  type CoreReducedState,
+  type ParticipantJoinedEvent,
+  type ParticipantMentionedEvent,
 } from "./agent-core-schemas.ts";
 import type { SlackWebhookPayload } from "./slack.types.ts";
 import {
@@ -40,8 +44,11 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
-import { getOrCreateAgentStubByName } from "./agents/stub-getters.ts";
+import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 import type { ContextRule } from "./context-schemas.ts";
+import type { AgentInitParams } from "./iterate-agent.ts";
+import { getConnectionKey } from "./mcp/mcp-slice.ts";
+
 // Inherit generic static helpers from IterateAgent
 
 // memorySlice removed for now
@@ -50,8 +57,6 @@ export type SlackAgentSlices = typeof slackAgentSlices;
 
 type ToolsInterface = typeof slackAgentTools.$infer.interface;
 type Inputs = typeof slackAgentTools.$infer.inputTypes;
-import type { AgentInitParams } from "./iterate-agent.ts";
-
 export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsInterface {
   protected slackAPI!: WebClient;
   private slackStatusClearTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -83,10 +88,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   // The loading_messages are a new crazy bot thing that shows a shimmering bot avatar while
   // your bot is thinking and cycles through an array of string status that appear where the message will
   // later appear.
-  private updateSlackThreadStatus = pDebounce((params: { status: string | null | undefined }) => {
-    const { status } = params;
-    try {
-      void this.slackAPI.assistant.threads.setStatus({
+  private updateSlackThreadStatus = pDebounce(
+    async (params: { status: string | null | undefined }) => {
+      const { status } = params;
+      const result = await this.slackAPI.assistant.threads.setStatus({
         channel_id: this.slackChannelId,
         thread_ts: this.slackThreadId,
 
@@ -118,6 +123,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         ...(status ? { loading_messages: [`${status}...`] } : {}),
       });
 
+      if (!result.ok) {
+        // log error but don't crash DO
+        logger.error(`Failed to update Slack status`, result.error);
+        return;
+      }
+
       if (this.slackStatusClearTimeout) {
         clearTimeout(this.slackStatusClearTimeout);
       }
@@ -129,37 +140,55 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             return;
           }
           this.slackStatusClearTimeout = null;
-          this.updateSlackThreadStatus({ status: undefined });
+          void this.updateSlackThreadStatus({ status: undefined });
         };
 
         this.slackStatusClearTimeout = setTimeout(scheduleClear, 300);
       } else {
         this.slackStatusClearTimeout = null;
       }
-    } catch (error) {
-      // log error but don't crash DO
-      logger.error("Failed to update Slack status:", error);
+    },
+    100,
+  );
+
+  override async ingestBackgroundLogs(
+    input: Parameters<IterateAgent<SlackAgentSlices>["ingestBackgroundLogs"]>[0],
+  ) {
+    for (let i = input.logs.length - 1; i >= 0; i--) {
+      const log = input.logs[i];
+      if (log.message?.startsWith(`{"type"`) && log.message.includes(`"text":`)) {
+        try {
+          const json = JSON.parse(log.message);
+          const text = json.item?.text?.replaceAll?.("**", "").slice(0, 50);
+          if (text && this._isInitialized) {
+            waitUntil(this.updateSlackThreadStatus({ status: text }));
+            break;
+          }
+        } catch {}
+      }
     }
-  }, 100);
+
+    return super.ingestBackgroundLogs(input);
+  }
+
+  async mockSlackAPI() {
+    this.slackAPI = createSlackAPIMock<WebClient>();
+  }
 
   // This gets run between the synchronous durable object constructor and the asynchronous onStart method of the agents SDK
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
 
-    if (params.record.durableObjectName.includes("mock_slack")) {
-      this.slackAPI = createSlackAPIMock<WebClient>();
-      return;
+    const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
+    if (slackAccount) {
+      this.slackAPI = new WebClient(slackAccount.accessToken, {
+        rejectRateLimitedCalls: true,
+        retryConfig: { retries: 0 },
+      });
+    } else if (import.meta.env.VITE_APP_STAGE === "prd") {
+      // in prd, it's never legitimate to have a slack agent without a token
+      logger.error("No Slack integration found for this estate", params.record);
     }
-
-    const slackAccessToken = await getSlackAccessTokenForEstate(this.db, params.record.estateId);
-    if (!slackAccessToken) {
-      throw new Error(`Slack access token not set for estate ${params.record.estateId}.`);
-    }
-    // For now we want to make errors maximally visible
-    this.slackAPI = new WebClient(slackAccessToken, {
-      rejectRateLimitedCalls: true,
-      retryConfig: { retries: 0 },
-    });
   }
 
   protected getSlices(): SlackAgentSlices {
@@ -180,10 +209,11 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     if (this.estate.onboardingAgentName) {
       try {
         // Get a stub for the onboarding agent
-        const onboardingAgentStub = await getOrCreateAgentStubByName("OnboardingAgent", {
+        const onboardingAgentStub = await getOrCreateAgentStubByRoute("OnboardingAgent", {
           db: this.db,
           estateId: this.estate.id,
-          agentInstanceName: this.estate.onboardingAgentName,
+          route: getDefaultOnboardingAgentName(this.estate.id),
+          reason: `Getting onboarding agent for context rules - not expected to create a new one here`,
         });
 
         // Call onboardingPromptFragment on the stub
@@ -204,6 +234,16 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   protected getExtraDependencies(deps: AgentCoreDeps) {
     return {
+      setupCodemode: (functions) => {
+        const base = deps.setupCodemode(functions);
+        return {
+          ...base,
+          eval: async (code, statusIndicatorText) => {
+            waitUntil(this.updateSlackThreadStatus({ status: `🛠️ ${statusIndicatorText}...` }));
+            return base.eval(code, statusIndicatorText);
+          },
+        };
+      },
       onLLMStreamResponseStreamingChunk: (chunk: ResponseStreamEvent) => {
         deps?.onLLMStreamResponseStreamingChunk?.(chunk);
         // console.log(chunk.type);
@@ -212,9 +252,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
             switch (chunk.item.type) {
               case "function_call": {
                 const toolName = chunk.item.name;
+                if (
+                  toolName === "codemode" ||
+                  this.agentCore.state.codemodeEnabledTools.includes(toolName)
+                ) {
+                  // codemode tool call status indicators handled separately
+                  break;
+                }
                 const tool = this.agentCore.state.runtimeTools.find(
                   (t) => t.type === "function" && t.name === toolName,
                 );
+
                 const statusText =
                   tool && tool.type === "function" && tool.statusIndicatorText
                     ? tool.statusIndicatorText
@@ -242,27 +290,30 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
         const event = payload.event as MergedEventForSlices<SlackAgentSlices>;
         switch (event.type) {
+          case "CORE:PAUSE_LLM_REQUESTS": {
+            const reason = event.data?.reason;
+            if (reason) {
+              waitUntil(
+                Promise.resolve().then(async () => {
+                  const debug = await this.getAgentDebugURL().catch((error) => {
+                    return { error, debugURL: import.meta.env.VITE_PUBLIC_URL };
+                  });
+                  const text = `🚫 LLM requests will be paused: ${reason}. <${debug.debugURL}|Debug URL>`;
+                  await this.sendSlackMessage({ text });
+                  if ("error" in debug) throw debug.error;
+                }),
+              );
+            }
+            break;
+          }
           case "CORE:LLM_REQUEST_START":
             this.updateSlackThreadStatus({ status: "🧠 thinking" });
             break;
 
-          case "CORE:FILE_SHARED": {
-            const fileSharedEvent = payload.event as AgentCoreEvent & { type: "CORE:FILE_SHARED" };
-            if (fileSharedEvent.data.direction === "from-agent-to-user") {
-              void this.shareFileWithSlack({
-                iterateFileId: fileSharedEvent.data.iterateFileId,
-                originalFilename: fileSharedEvent.data.originalFilename,
-              }).catch((error) => {
-                logger.warn(
-                  `[SlackAgent] Failed automatically sharing file ${fileSharedEvent.data.iterateFileId} in Slack:`,
-                  error,
-                );
-              });
-            }
+          case "CORE:FILE_SHARED":
+            // no-op: files are not auto-shared; use the shareFileWithSlack tool explicitly
             break;
-          }
           case "CORE:INTERNAL_ERROR": {
-            logger.error("[SlackAgent] Internal Error:", payload.event);
             const errorEvent = payload.event as AgentCoreEvent & { type: "CORE:INTERNAL_ERROR" };
             const errorMessage = errorEvent.data?.error || "Unknown error";
             void this.getAgentDebugURL().then((url) =>
@@ -437,17 +488,65 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
         return await this.getSlackPermalink();
       },
+      requestApprovalForToolCall: async (
+        payload: Parameters<NonNullable<AgentCoreDeps["requestApprovalForToolCall"]>>[0],
+      ) => {
+        const prettyArgs = YAML.stringify(payload.args || {}, (key, value) => {
+          if (key === "impersonateUserId") return undefined;
+          return value;
+        }).trim();
+
+        let message = `Approval needed to call tool *${payload.toolName}*. Approve or reject with the buttons below.`;
+        if (prettyArgs !== "{}") {
+          message += `\n\nArguments:\n\n\`\`\`\n${prettyArgs}\`\`\``;
+        }
+
+        const result = await this.sendSlackMessage({ text: message });
+        if (!result.ts) throw new Error("Failed to send approval request message");
+
+        // add the options ahead of time to make it easy to react (not parallely pls, so they always show up in the right order)
+        await this.addSlackReaction({ messageTs: result.ts!, name: "+1" });
+        await this.addSlackReaction({ messageTs: result.ts!, name: "-1" });
+
+        return ApprovalKey.parse(result.ts);
+      },
+      onToolCallApproved: async ({ data, replayToolCall }) => {
+        const messageTs = data.approvalKey;
+        const removeReactions = () =>
+          Promise.all([
+            this.removeSlackReaction({ messageTs, name: "+1" }),
+            this.removeSlackReaction({ messageTs, name: "-1" }),
+          ]);
+        if (!data.approved) {
+          await Promise.all([
+            removeReactions(),
+            this.addSlackReaction({ messageTs, name: "no_entry" }),
+          ]);
+        }
+
+        await Promise.all([
+          removeReactions(),
+          this.addSlackReaction({ messageTs, name: "eyes" }),
+          replayToolCall(),
+        ])
+          .then(() => this.addSlackReaction({ messageTs, name: "white_check_mark" }))
+          .catch((e) =>
+            this.addSlackReaction({ messageTs, name: "x" }).then(() => Promise.reject(e)),
+          )
+          .finally(() => this.removeSlackReaction({ messageTs, name: "eyes" }));
+      },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
         getEstateId: () => this.databaseRecord.estateId,
         getReducedState: () => this.agentCore.state,
         mcpConnectionCache: this.mcpManagerCache,
         mcpConnectionQueues: this.mcpConnectionQueues,
+        storage: this.ctx.storage,
         getFinalRedirectUrl: async (_payload: { durableObjectInstanceName: string }) => {
           return await this.getSlackPermalink();
         },
       },
-    };
+    } satisfies Partial<AgentCoreDeps> & Record<string, unknown>;
   }
 
   // Turn any files shared with the bot into iterate files that can be used by the LLM
@@ -479,7 +578,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
               Authorization: `Bearer ${this.slackAPI.token}`,
             },
           });
-          logger.log("File record", fileRecord);
           return {
             iterateFileId: fileRecord.id,
             originalFilename: fileRecord.filename ?? undefined,
@@ -579,10 +677,15 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
 
     const eventsLists = await Promise.all([
-      slackEvent?.type === "message" && "user" in slackEvent && slackEvent.user
+      // Handle both 'message' and 'app_mention' events for participant joining
+      (slackEvent?.type === "message" || slackEvent?.type === "app_mention") &&
+      "user" in slackEvent &&
+      slackEvent.user
         ? this.getParticipantJoinedEvents(slackEvent.user, botUserId)
         : Promise.resolve([]),
-      slackEvent?.type === "message" && "text" in slackEvent && slackEvent.text
+      (slackEvent?.type === "message" || slackEvent?.type === "app_mention") &&
+      "text" in slackEvent &&
+      slackEvent.text
         ? this.getParticipantMentionedEvents(
             slackEvent.text,
             "user" in slackEvent ? slackEvent.user : undefined,
@@ -593,30 +696,29 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     ]);
     events.push(...eventsLists.flat());
 
+    // Determine if we should trigger LLM for this event
+    // Support both 'message' and 'app_mention' event types
+    const shouldTriggerLLMForThisEvent =
+      shouldTriggerLLM &&
+      (slackEvent.type === "message" || slackEvent.type === "app_mention") &&
+      !isBotMessageThatShouldBeIgnored;
+
     events.push({
       type: "SLACK:WEBHOOK_EVENT_RECEIVED",
       data: {
         payload: slackWebhookPayload as {},
         updateThreadIds: true,
       },
-      triggerLLMRequest:
-        shouldTriggerLLM && slackEvent.type === "message" && !isBotMessageThatShouldBeIgnored,
+      triggerLLMRequest: shouldTriggerLLMForThisEvent,
       idempotencyKey: slackWebhookEventToIdempotencyKey(slackWebhookPayload),
     });
 
     return events;
   }
 
-  /**
-   * Adds a participant to the conversation when they send a message.
-   * This is crucial for MCP personal connections to work properly.
-   */
-  public async getParticipantJoinedEvents(
-    slackUserId: string,
-    botUserId?: string,
-  ): Promise<ParticipantJoinedEvent[]> {
+  private async getUserInfo(slackUserId: string, botUserId: string | undefined) {
     if (slackUserId === botUserId) {
-      return [];
+      return null;
     }
     const currentState = this.agentCore.state;
 
@@ -624,7 +726,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
     );
     if (existingParticipant) {
-      return [];
+      return {
+        status: "existing-participant" as const,
+        userId: existingParticipant.internalUserId,
+        userEmail: existingParticipant.email,
+        userName: existingParticipant.displayName,
+        orgRole: existingParticipant.role,
+      };
     }
 
     const estateId = this.databaseRecord.estateId;
@@ -647,6 +755,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         and(
           eq(providerUserMapping.providerId, "slack-bot"),
           eq(providerUserMapping.externalId, slackUserId),
+          eq(providerUserMapping.estateId, estateId),
           eq(estate.id, estateId),
         ),
       )
@@ -654,17 +763,167 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, user either doesn't exist or doesn't have access to this estate
     if (!result[0]) {
-      logger.info(
-        `[SlackAgent] User ${slackUserId} does not exist or does not have access to estate ${estateId}`,
+      return null;
+    }
+
+    return {
+      status: "new-participant" as const,
+      ...result[0],
+    };
+  }
+
+  /**
+   * Gets the Slack team ID to use for syncing users.
+   * For regular estates, uses the estate's own provider mapping.
+   * For trial estates, finds the team ID via the channel override.
+   */
+  private async getSyncingTeamId(estateId: string): Promise<string | null> {
+    // First check if this is a trial estate (has a channel override)
+    const channelOverride = await this.db.query.slackChannelEstateOverride.findFirst({
+      where: eq(schema.slackChannelEstateOverride.estateId, estateId),
+      columns: { slackTeamId: true, slackChannelId: true },
+    });
+
+    if (channelOverride) {
+      // For trial estates, use the team ID from the channel override
+      return channelOverride.slackTeamId;
+    }
+
+    // For regular estates, use the provider estate mapping
+    const estateMapping = await this.db.query.providerEstateMapping.findFirst({
+      where: and(
+        eq(schema.providerEstateMapping.internalEstateId, estateId),
+        eq(schema.providerEstateMapping.providerId, "slack-bot"),
+      ),
+    });
+
+    return estateMapping?.externalId ?? null;
+  }
+
+  /**
+   * Helper function to query Slack users from the database.
+   *
+   * With the unique constraint on (providerId, estateId, externalId),
+   * each Slack user can have only one mapping per estate.
+   *
+   * Schema semantics:
+   * - estateId: The estate that discovered this user (always set)
+   * - externalUserTeamId: The user's home team, only set if external (Slack Connect)
+   *   - null = user is from estate's own workspace (internal)
+   *   - set = user is from different workspace (external)
+   */
+  private async querySlackUsersByExternalId(params: { slackUserIds: string[]; estateId: string }) {
+    const { slackUserIds, estateId } = params;
+
+    const results = await this.db
+      .select({
+        userId: user.id,
+        userEmail: user.email,
+        userName: user.name,
+        orgRole: organizationUserMembership.role,
+        slackUserId: providerUserMapping.externalId,
+        slackTeamId: providerUserMapping.externalUserTeamId,
+        mappingEstateId: providerUserMapping.estateId,
+        providerMetadata: providerUserMapping.providerMetadata,
+      })
+      .from(providerUserMapping)
+      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
+      .innerJoin(estate, eq(providerUserMapping.estateId, estate.id))
+      .innerJoin(organization, eq(estate.organizationId, organization.id))
+      .innerJoin(
+        organizationUserMembership,
+        and(
+          eq(user.id, organizationUserMembership.userId),
+          eq(organizationUserMembership.organizationId, organization.id),
+        ),
+      )
+      .where(
+        and(
+          eq(providerUserMapping.providerId, "slack-bot"),
+          eq(providerUserMapping.estateId, estateId),
+          eq(estate.id, estateId),
+          inArray(providerUserMapping.externalId, slackUserIds),
+        ),
       );
+
+    return results;
+  }
+
+  /**
+   * Adds a participant to the conversation when they send a message.
+   * This is crucial for MCP personal connections to work properly.
+   */
+
+  public async getParticipantJoinedEvents(
+    slackUserId: string,
+    botUserId?: string,
+  ): Promise<ParticipantJoinedEvent[]> {
+    if (slackUserId === botUserId) {
+      return [];
+    }
+    const currentState = this.agentCore.state;
+
+    const existingParticipant = Object.values(currentState.participants || {}).find(
+      (participant) => participant.externalUserMapping?.slack?.externalUserId === slackUserId,
+    );
+    if (existingParticipant) {
       return [];
     }
 
-    const userInfo = result[0];
+    const estateId = this.databaseRecord.estateId;
+
+    let results = await this.querySlackUsersByExternalId({
+      slackUserIds: [slackUserId],
+      estateId,
+    });
+
+    // If no result, try just-in-time sync before giving up
+    if (results.length === 0) {
+      // Get Slack token and team ID for this estate
+      const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
+      if (!slackAccount) {
+        return [];
+      }
+
+      // Get team ID (handles both regular and trial estates)
+      const syncingTeamId = await this.getSyncingTeamId(estateId);
+
+      if (!syncingTeamId) {
+        return [];
+      }
+
+      // Attempt JIT sync
+      await ensureUserSynced({
+        db: this.db,
+        estateId,
+        slackUserId,
+        botToken: slackAccount.accessToken,
+        syncingTeamId,
+      });
+
+      // Query again after sync attempt
+      results = await this.querySlackUsersByExternalId({
+        slackUserIds: [slackUserId],
+        estateId,
+      });
+
+      // If still no results after JIT sync, user doesn't exist or couldn't be synced
+      if (results.length === 0) {
+        return [];
+      }
+    }
+
+    const userInfo = results[0];
 
     if (currentState.participants[userInfo.userId]) {
       return [];
     }
+
+    const isTrial = await slackChannelOverrideExists(this.db, estateId);
+    const role =
+      isTrial && (userInfo.orgRole === "external" || userInfo.orgRole === "guest")
+        ? "member"
+        : userInfo.orgRole;
 
     const internalUser = {
       id: userInfo.userId,
@@ -681,7 +940,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           internalUserId: internalUser.id,
           email: internalUser.email,
           displayName: internalUser.name,
-          role: userInfo.orgRole,
+          role: role,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
@@ -734,36 +993,60 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     const estateId = this.databaseRecord.estateId;
 
-    const userMappings = await this.db
-      .select({
-        userId: user.id,
-        userEmail: user.email,
-        userName: user.name,
-        orgRole: organizationUserMembership.role,
-        slackUserId: providerUserMapping.externalId,
-        providerMetadata: providerUserMapping.providerMetadata,
-      })
-      .from(providerUserMapping)
-      .innerJoin(user, eq(providerUserMapping.internalUserId, user.id))
-      .innerJoin(organizationUserMembership, eq(user.id, organizationUserMembership.userId))
-      .innerJoin(organization, eq(organizationUserMembership.organizationId, organization.id))
-      .innerJoin(estate, eq(organization.id, estate.organizationId))
-      .where(
-        and(
-          eq(providerUserMapping.providerId, "slack-bot"),
-          inArray(providerUserMapping.externalId, newMentionedUserIds),
-          eq(estate.id, estateId),
-        ),
-      );
+    // Query users from the database
+    let userMappings = await this.querySlackUsersByExternalId({
+      slackUserIds: newMentionedUserIds,
+      estateId,
+    });
+
+    // If some mentioned users weren't found, try JIT sync for them
+    const foundUserIds = new Set(userMappings.map((m) => m.slackUserId));
+    const missingUserIds = newMentionedUserIds.filter((id) => !foundUserIds.has(id));
+
+    if (missingUserIds.length > 0) {
+      // Get Slack token and team ID for this estate
+      const slackAccount = await getSlackAccessTokenForEstate(this.db, estateId);
+      if (slackAccount) {
+        const syncingTeamId = await this.getSyncingTeamId(estateId);
+
+        if (syncingTeamId) {
+          // Try to sync each missing user
+          await Promise.all(
+            missingUserIds.map((slackUserId) =>
+              ensureUserSynced({
+                db: this.db,
+                estateId,
+                slackUserId,
+                botToken: slackAccount.accessToken,
+                syncingTeamId,
+              }),
+            ),
+          );
+
+          // Query again for all mentioned users after sync attempts
+          userMappings = await this.querySlackUsersByExternalId({
+            slackUserIds: newMentionedUserIds,
+            estateId,
+          });
+        }
+      }
+    }
+
+    const isTrial = await slackChannelOverrideExists(this.db, estateId);
 
     return userMappings.map((userMapping): ParticipantMentionedEvent => {
+      const role =
+        isTrial && (userMapping.orgRole === "external" || userMapping.orgRole === "guest")
+          ? "member"
+          : userMapping.orgRole;
+
       return {
         type: "CORE:PARTICIPANT_MENTIONED",
         data: {
           internalUserId: userMapping.userId,
           email: userMapping.userEmail,
           displayName: userMapping.userName,
-          role: userMapping.orgRole,
+          role: role,
           externalUserMapping: {
             slack: {
               integrationSlug: "slack",
@@ -816,6 +1099,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         slackChannelId: channelId,
         slackThreadId: threadTs,
         slackChannel,
+        estateName: this.estate.name,
       },
       triggerLLMRequest: false,
     });
@@ -926,6 +1210,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     ) {
       return;
     }
+
+    // Extract bot user ID from this webhook's authorizations
     const botUserId = extractBotUserIdFromAuthorizations(slackWebhookPayload);
 
     if (!botUserId) {
@@ -970,6 +1256,37 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // Process current webhook
     const currentEvents = await this.extractEventsFromWebhook(slackWebhookPayload, botUserId, true);
+
+    // Determine who authored the message and whether it mentions our bot
+    const isBotMessage =
+      botUserId &&
+      (("user" in slackEvent && slackEvent.user === botUserId) || "bot_id" in slackEvent);
+    const isFromOurBot = botUserId && "user" in slackEvent && slackEvent.user === botUserId;
+    // We always ignore our own bot's messages
+    // We ignore other bot messages unless they explicitly mention our bot - to avoid two bots getting in an infinite loop talking to each other
+    const isBotMessageThatShouldBeIgnored =
+      isFromOurBot || (isBotMessage && !isBotMentionedInMessage(slackEvent, botUserId));
+
+    if (
+      slackEvent.type === "reaction_added" &&
+      !isBotMessageThatShouldBeIgnored &&
+      slackEvent.item.ts in currentState.toolCallApprovals &&
+      currentState.toolCallApprovals[slackEvent.item.ts as ApprovalKey]?.status === "pending" &&
+      (slackEvent.reaction === "+1" || slackEvent.reaction === "-1")
+    ) {
+      const userInfo = await this.getUserInfo(slackEvent.user, botUserId);
+      if (userInfo) {
+        currentEvents.push({
+          type: "CORE:TOOL_CALL_APPROVED",
+          data: {
+            approvalKey: ApprovalKey.parse(slackEvent.item.ts),
+            approved: slackEvent.reaction === "+1",
+            approvedBy: userInfo,
+          },
+        });
+      }
+    }
+
     this.addEvents(currentEvents);
 
     return {
@@ -1005,21 +1322,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       throw new Error(`Failed to send Slack message: ${result.error}`);
     }
 
-    const magic: MagicAgentInstructions = {};
-    if (endTurn) {
-      magic.__triggerLLMRequest = false;
-    }
+    const magic: MagicAgentInstructions = input.endTurn ? { __triggerLLMRequest: false } : {};
 
-    // return an empty object to conserve tokens in the success case, plus magic flags if any
-    return {
-      ...(result.ok
-        ? {
-            // If we just return {} to save tokens, the LLM will sometimes try sending the message again
-            status: "message sent",
-          }
-        : result),
-      ...magic,
-    };
+    // don't include full slack API response to conserve tokens in the success case. need some properties though so the LLM knows the message was sent
+    return { ok: true, ts: result.ts, ...magic };
   }
 
   async addSlackReaction(input: Inputs["addSlackReaction"]) {
@@ -1047,18 +1353,17 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   }
 
   async stopRespondingUntilMentioned(_input: Inputs["stopRespondingUntilMentioned"]) {
-    try {
-      const channel = this.agentCore.state.slackChannelId;
-      const ts = await this.mostRecentSlackMessageTs();
-      if (channel && ts) {
-        await this.slackAPI.reactions.add({
-          channel,
-          timestamp: ts,
-          name: "zipper_mouth_face",
-        });
+    const channel = this.agentCore.state.slackChannelId;
+    const ts = await this.mostRecentSlackMessageTs();
+    if (channel && ts) {
+      const result = await this.slackAPI.reactions.add({
+        channel,
+        timestamp: ts,
+        name: "zipper_mouth_face",
+      });
+      if (!result.ok) {
+        logger.warn(`[SlackAgent] Failed adding zipper-mouth reaction: ${result.error}`);
       }
-    } catch (error) {
-      logger.warn("[SlackAgent] Failed adding zipper-mouth reaction:", error);
     }
     return {
       __pauseAgentUntilMentioned: true,

@@ -1,12 +1,12 @@
-import { toast } from "sonner";
-import { useSearchParams } from "react-router";
+import { MailIcon } from "lucide-react";
+import { useCallback, useEffect } from "react";
+import { useSearch } from "@tanstack/react-router";
 import { authClient } from "../lib/auth-client.ts";
-import { parseCredentials, testAdminUser } from "../../backend/auth/test-admin.ts";
 import { Button } from "./ui/button.tsx";
+import { Spinner } from "./ui/spinner.tsx";
 
 export function LoginProviders() {
-  const [searchParams] = useSearchParams();
-  const redirectUrl = searchParams.get("redirectUrl");
+  const { redirectUrl, autoSignin } = useSearch({ from: "/login" });
 
   const handleGoogleSignIn = async () => {
     try {
@@ -14,53 +14,61 @@ export function LoginProviders() {
 
       await authClient.signIn.social({
         provider: "google",
-        callbackURL: redirectUrl || "/", // Redirect to home after login
+        callbackURL: redirectUrl,
       });
     } catch (error) {
       console.error("❌ Google sign-in error:", error);
     }
   };
 
-  const handleSlackSignIn = async () => {
+  const handleSlackSignIn = useCallback(async () => {
     try {
       console.log("🚀 Attempting Slack sign-in...");
-      const result = await authClient.integrations.directLoginWithSlack({
-        query: {
-          callbackURL: redirectUrl || "/",
-        },
+      await authClient.signIn.social({
+        provider: "slack",
+        callbackURL: redirectUrl,
       });
-
-      if (!result || !("url" in result)) {
-        toast.error("Failed to sign in with Slack");
-        return;
-      }
-
-      window.location.href = result.url.toString();
     } catch (error) {
       console.error("❌ Slack sign-in error:", error);
     }
+  }, [redirectUrl]);
+
+  const handleEmailAuth = async () => {
+    const email = prompt("Enter your email");
+    if (!email) return;
+
+    await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+
+    const otp = prompt("Enter the OTP we sent to your email");
+    if (!otp) return;
+
+    await authClient.signIn.emailOtp({ email, otp });
+    window.location.href = "/";
   };
 
-  const handleTestAdminUserSignIn = async () => {
-    const credentials = prompt(
-      "Enter email and password (colon separated)",
-      testAdminUser.credentials || "",
+  useEffect(() => {
+    if (autoSignin === "slack") {
+      handleSlackSignIn();
+    }
+  }, [autoSignin, handleSlackSignIn]);
+
+  if (autoSignin === "slack") {
+    return (
+      <div className="flex items-center justify-center gap-2">
+        <Spinner /> <span className="font-medium">Redirecting to Slack...</span>
+      </div>
     );
-    if (!credentials) return;
-    const { email, password } = parseCredentials(credentials);
-    const result = await authClient.signIn.email({ email, password });
-    window.location.href = result?.url ?? "/";
-  };
+  }
 
   return (
-    <div className="w-full space-y-3">
+    <div className="w-full space-y-4">
       <Button
         onClick={handleGoogleSignIn}
         variant="outline"
         size="lg"
-        className="w-full h-12 text-base font-medium"
+        className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
       >
-        <svg className="mr-2 h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
+        <svg className="mr-3 h-6 w-6" viewBox="0 0 24 24" fill="currentColor">
           <path
             d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
             fill="#4285F4"
@@ -84,19 +92,15 @@ export function LoginProviders() {
         onClick={handleSlackSignIn}
         variant="outline"
         size="lg"
-        className="w-full h-12 text-base font-medium"
+        className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
       >
-        <img src="/slack.svg" alt="Slack" className="mr-2 h-5 w-5" />
+        <img src="/slack.svg" alt="Slack" className="mr-3 h-6 w-6" />
         Continue with Slack
       </Button>
-      {import.meta.env.VITE_ENABLE_TEST_ADMIN_USER && (
-        <Button
-          onClick={handleTestAdminUserSignIn}
-          variant="outline"
-          size="lg"
-          className="w-full h-12 text-base font-medium"
-        >
-          Continue as test admin user
+      {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
+        <Button onClick={handleEmailAuth} variant="outline" className="w-full h-12">
+          <MailIcon className="mr-2 h-5 w-5" />
+          Continue with Email
         </Button>
       )}
     </div>

@@ -82,6 +82,17 @@ export const TimeWindow = z.object({
     .optional(),
 });
 export type TimeWindow = z.infer<typeof TimeWindow>;
+
+export const ToolPolicy = z.object({
+  /** Whether the tool call requires a human to approve it before it's executed */
+  approvalRequired: z.boolean().optional(),
+  /** Whether the tool call should be executed via codemode */
+  codemode: z.boolean().optional(),
+  /** A JSONata expression for matching the tool. The data passed to the expression is the call object for the case of `approvalRequired`, and the tool itself for the case of `codemode` */
+  matcher: z.string().optional(),
+});
+export type ToolPolicy = z.infer<typeof ToolPolicy>;
+
 /**
  * Represents context (such as prompts and tool specs) to be provided to
  * an LLM via our AgentCore class
@@ -90,6 +101,7 @@ export type TimeWindow = z.infer<typeof TimeWindow>;
 export type ContextItem = RequireAtLeastOne<{
   prompt: PromptFragment;
   tools: ToolSpec[];
+  toolPolicies: ToolPolicy[];
 }> & {
   key: string;
   description?: string;
@@ -99,6 +111,7 @@ export const ContextItem = z.object({
   description: z.string().optional(),
   prompt: PromptFragment.optional(),
   tools: z.array(ToolSpec).optional(),
+  toolPolicies: ToolPolicy.array().optional(),
 }) satisfies z.ZodType<{
   [K in keyof ContextItem]: ContextItem[K];
 }>;

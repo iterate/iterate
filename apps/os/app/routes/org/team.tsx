@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Users, Search } from "lucide-react";
+import { createFileRoute } from "@tanstack/react-router";
 import { useTRPC } from "../../lib/trpc.ts";
 import { Card, CardContent } from "../../components/ui/card.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -16,14 +17,8 @@ import {
   AccordionTrigger,
 } from "../../components/ui/accordion.tsx";
 import { Separator } from "../../components/ui/separator.tsx";
-import type { Route } from "./+types/team.ts";
-
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Team Members - Iterate" },
-    { name: "description", content: "Manage your organization team members" },
-  ];
-}
+import { GlobalLoading } from "../../components/global-loading.tsx";
+import { useSessionUser } from "../../hooks/use-session-user.ts";
 
 const roleLabels: Record<string, string> = {
   owner: "Owner",
@@ -48,8 +43,8 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
-  const { data: currentUser } = useSuspenseQuery(trpc.user.me.queryOptions());
-  const { data: members } = useSuspenseQuery(
+  const currentUser = useSessionUser();
+  const { data: members, isLoading: isMembersLoading } = useQuery(
     trpc.organization.listMembers.queryOptions({ organizationId }),
   );
 
@@ -76,8 +71,12 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
     });
   };
 
+  if (isMembersLoading || !currentUser || !members) {
+    return <GlobalLoading />;
+  }
+
   // Filter function for search
-  const filterMember = (member: (typeof members)[number]) => {
+  const filterMember = (member: NonNullable<typeof members>[number]) => {
     if (!searchQuery.trim()) return true;
 
     const query = searchQuery.toLowerCase();
@@ -359,16 +358,17 @@ function OrganizationTeamContent({ organizationId }: { organizationId: string })
   );
 }
 
-export default function OrganizationTeam({ params }: Route.ComponentProps) {
-  const { organizationId } = params;
+export const Route = createFileRoute("/_auth.layout/$organizationId/team")({
+  component: OrganizationTeam,
+  head: () => ({
+    meta: [
+      { title: "Team Members - Iterate" },
+      { name: "description", content: "Manage your organization team members" },
+    ],
+  }),
+});
 
-  if (!organizationId) {
-    return (
-      <div className="p-6">
-        <div className="text-center text-destructive">Organization ID is required</div>
-      </div>
-    );
-  }
-
+function OrganizationTeam() {
+  const { organizationId } = Route.useParams();
   return <OrganizationTeamContent organizationId={organizationId} />;
 }

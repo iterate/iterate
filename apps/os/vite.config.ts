@@ -1,12 +1,20 @@
-import { reactRouter } from "@react-router/dev/vite";
-import { cloudflare } from "@cloudflare/vite-plugin";
-import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
-import tsconfigPaths from "vite-tsconfig-paths";
+import tailwindcss from "@tailwindcss/vite";
+import alchemy from "alchemy/cloudflare/tanstack-start";
+import { tanstackStart } from "@tanstack/react-start/plugin/vite";
+import viteReact from "@vitejs/plugin-react";
+import { devtools } from "@tanstack/devtools-vite";
 
 export default defineConfig({
+  resolve: {
+    dedupe: ["@cloudflare/sandbox", "agents", "react", "react-dom"],
+  },
   build: {
     sourcemap: true,
+    minify: "terser",
+    terserOptions: {
+      mangle: false,
+    },
   },
   server: {
     allowedHosts: [".dev.iterate.com"],
@@ -15,6 +23,7 @@ export default defineConfig({
     port: 5173,
   },
   plugins: [
+    devtools(),
     // This is needed because github apps oauth is dumb and broken
     // Even if you set redirect_uri to point to your ngrok host,
     // github will still redirect back to you using whatever the first URL in the app
@@ -43,9 +52,18 @@ export default defineConfig({
         });
       },
     },
-    cloudflare({ viteEnvironment: { name: "ssr" } }),
+    alchemy(),
     tailwindcss(),
-    reactRouter(),
-    tsconfigPaths(),
+    tanstackStart({
+      srcDirectory: "./app",
+      router: {
+        addExtensions: true,
+        virtualRouteConfig: "./app/routes.ts",
+      },
+    }),
+    viteReact(),
   ],
+  define: {
+    "import.meta.vitest": "undefined",
+  },
 });

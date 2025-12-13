@@ -1,4 +1,4 @@
-import { prettifyError, z } from "zod/v4";
+import { z } from "zod";
 import type { AnyProcedure, AnyTRPCRouter } from "@trpc/server";
 import { constructMergeSchema } from "../utils/schema-helpers.ts";
 import { logger } from "../tag-logger.ts";
@@ -143,11 +143,4 @@ const zodToJsonSchemaOverride: import("zod/v4/core").JSONSchemaGenerator["overri
   if (ctx.zodSchema instanceof z.ZodDate) {
     ctx.jsonSchema.format = "date-time";
   }
-};
-
-type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
-const _looksLikeStandardSchemaFailureResult = (
-  error: unknown,
-): error is StandardSchemaFailureResult => {
-  return typeof error === "object" && !!error && "issues" in error && Array.isArray(error.issues);
 };

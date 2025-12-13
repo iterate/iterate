@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import type { JSONSchema } from "zod/v4/core";
 import type { JSONSerializable } from "../utils/type-helpers.ts";
 import { makeJSONSchemaOpenAICompatible } from "./zod-to-openai-json-schema.ts";
@@ -107,7 +107,9 @@ export function toolSpecsToImplementations(params: {
     if (spec.type === "agent_durable_object_tool") {
       const { methodName, passThroughArgs } = spec;
       if (typeof (params.theDO as any)[methodName] !== "function") {
-        throw new Error(`methodName ${methodName} is not a function on the Durable Object`);
+        throw new Error(
+          `methodName ${methodName} is not a function on the Durable Object. ${params.theDO?.constructor?.name}`,
+        );
       }
 
       spec = { ...spec, overrideName: spec.overrideName || spec.methodName };
@@ -117,15 +119,17 @@ export function toolSpecsToImplementations(params: {
       }
       const def = toolDefinitions[methodName] as unknown as DOToolDef<{}, any>;
       const doToolRuntimeJsonSchema = doToolToRuntimeJsonSchema(def);
-      const inputJsonSchema = fiddleWithJsonSchema(
-        spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema,
-        spec,
-      );
+      const unfiddled = spec.overrideInputJSONSchema || doToolRuntimeJsonSchema.inputJsonSchema;
+      const inputJsonSchema = fiddleWithJsonSchema(unfiddled, spec);
       const tool: RuntimeTool = {
         name: spec.overrideName || sanitizeToolName(spec.methodName),
         type: "function",
         metadata: { source: "durable-object", toolSpecHash: hashToolSpec(spec) },
         parameters: inputJsonSchema,
+        unfiddledInputJSONSchema: () => unfiddled,
+        unfiddledOutputJSONSchema:
+          doToolRuntimeJsonSchema.outputJsonSchema &&
+          (() => doToolRuntimeJsonSchema.outputJsonSchema!),
         // we default strict mode to false because then we can allow the LLM to call us with "any object"
         strict: false,
         description: spec.overrideDescription || def?.description || null,

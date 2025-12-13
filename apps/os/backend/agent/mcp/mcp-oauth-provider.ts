@@ -10,6 +10,7 @@ import type { MCPOAuthState } from "../../auth/oauth-state-schemas.ts";
 import type { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import { DynamicClientInfo } from "../../auth/oauth-state-schemas.ts";
 import { env } from "../../../env.ts";
+import { getAgentStubByName, toAgentClassName } from "../agents/stub-getters.ts";
 
 /**
  * Connector between MCP OAuthClientProvider and our better auth plugin
@@ -17,6 +18,7 @@ import { env } from "../../../env.ts";
  * Inspired by agents SDK implementation: https://github.com/cloudflare/agents/blob/4e087816e8c011f87eedb3302db80724fe6080ac/packages/agents/src/index.ts
  * Durable Object version reference implementation: https://github.com/cloudflare/agents/blob/6db2cd6f1497705f8636b1761a2db364d49d4861/packages/agents/src/mcp/do-oauth-client-provider.ts
  *
+ * ## OAuth Flow
  * MCPClientManager requires reconnect argument with id (serverId from previos connect), oauthClientId, and oauthCode from oauth callback (cloudflare craft).
  * It turns out we don't need to pass the serverId and the reconnect will still work as expected.
  * This is good because we are creating a new MCPClientManager for each connect request (and a newserverId is generated every time).
@@ -33,6 +35,10 @@ import { env } from "../../../env.ts";
  * This time OAuthClientProvider will exchange the code for tokens and save them to the account table.
  * Then when it requires to get tokens(), it will get them from the account table.
  * Congrats, we successfully connected to the MCP server.
+ *
+ * ## Token Refresh
+ * Token refresh is handled by MCP SDK.
+ * https://github.com/modelcontextprotocol/typescript-sdk/blob/2da89dbfc5f61d92bfc3ef6663d8886911bd4666/src/client/auth.ts#L994
  */
 
 export function getMCPVerificationKey(providerId: string, clientId: string): string {
@@ -87,13 +93,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       ),
     });
 
-    if (!account || !account.accessToken) {
-      return undefined;
-    }
+    if (!account || !account.accessToken) return undefined;
 
-    // Refresh logic comes from mcp typescript sdk (we assume)
-    // https://github.com/modelcontextprotocol/typescript-sdk/blob/1d475bb3f75674a46d81dba881ea743a763cbc12/src/client/auth.ts#L980
-    // Set the clientId to the accountId so that clientInformation() will not early return
     return {
       access_token: account.accessToken,
       token_type: "Bearer",
@@ -184,6 +185,30 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
         return newAccount;
       });
     }
+
+    const agentStub = await getAgentStubByName(
+      toAgentClassName(this.params.agentDurableObject.className),
+      {
+        db: this.params.db,
+        agentInstanceName: this.params.agentDurableObject.durableObjectName,
+        estateId: this.params.estateId,
+      },
+    );
+
+    await agentStub.addEvents([
+      {
+        type: "MCP:TOKENS_UPDATED",
+        data: {
+          estateId: this.params.estateId,
+          serverUrl: this.params.serverUrl,
+          userId: this.params.userId,
+          clientId: this.clientId,
+          integrationSlug: this.params.integrationSlug,
+          tokenExpiresIn: tokens.expires_in ?? null,
+          hasRefreshToken: !!tokens.refresh_token,
+        },
+      },
+    ]);
   }
 
   async saveClientInformation(_info: unknown): Promise<void> {
@@ -300,5 +325,42 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     }
 
     return verification.value;
+  }
+  async checkState(state: string): Promise<{ valid: boolean; serverId?: string; error?: string }> {
+    const verification = await this.params.db.query.verification.findFirst({
+      where: eq(schema.verification.identifier, state),
+    });
+
+    if (!verification?.value) {
+      return { valid: false, error: "State not found" };
+    }
+
+    if (verification.expiresAt && new Date(verification.expiresAt) < new Date()) {
+      return { valid: false, error: "State expired" };
+    }
+
+    try {
+      const stateData = JSON.parse(verification.value) as { serverId?: string };
+      return { valid: true, serverId: stateData.serverId };
+    } catch {
+      return { valid: false, error: "Invalid state data" };
+    }
+  }
+
+  async consumeState(state: string): Promise<void> {
+    await this.params.db
+      .delete(schema.verification)
+      .where(eq(schema.verification.identifier, state));
+  }
+
+  async deleteCodeVerifier(): Promise<void> {
+    const clientInformation = await this.clientInformation();
+    if (!clientInformation) {
+      return;
+    }
+    const verificationKey = getMCPVerificationKey(this.providerId, clientInformation.client_id);
+    await this.params.db
+      .delete(schema.verification)
+      .where(eq(schema.verification.identifier, verificationKey));
   }
 }

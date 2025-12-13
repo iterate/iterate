@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { defineAgentCoreSlice } from "../agent-core.ts";
 import {
   agentCoreBaseEventFields,
@@ -6,7 +6,7 @@ import {
   type CoreReducedState,
 } from "../agent-core-schemas.ts";
 import type { ResponseInputItem } from "../openai-response-schemas.ts";
-import { IntegrationMode } from "../tool-schemas.ts";
+import { IntegrationMode, type RuntimeTool } from "../tool-schemas.ts";
 import { AgentDurableObjectInfo } from "../../auth/oauth-state-schemas.ts";
 import type { CloudflareEnv } from "../../../env.ts";
 import { MCPParam } from "../tool-schemas.ts";
@@ -190,6 +190,24 @@ export const MCPOAuthRequiredEvent = z.object({
   ...mcpOAuthRequiredFields,
 });
 
+const mcpTokenUpdatedFields = {
+  type: z.literal("MCP:TOKENS_UPDATED"),
+  data: z.object({
+    serverUrl: z.string(),
+    userId: z.string(),
+    estateId: z.string(),
+    clientId: z.string().optional(),
+    integrationSlug: z.string(),
+    hasRefreshToken: z.boolean(),
+    tokenExpiresIn: z.number().nullable(),
+  }),
+};
+
+export const MCPTokenUpdatedEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...mcpTokenUpdatedFields,
+});
+
 const mcpParamsRequiredFields = {
   type: z.literal("MCP:PARAMS_REQUIRED"),
   data: z.object({
@@ -218,6 +236,7 @@ export const MCPEvent = z.discriminatedUnion("type", [
   MCPToolsChanged,
   MCPConnectionErrorEvent,
   MCPOAuthRequiredEvent,
+  MCPTokenUpdatedEvent,
   MCPParamsRequiredEvent,
 ]);
 
@@ -228,6 +247,7 @@ export type MCPDisconnectRequestEvent = z.infer<typeof MCPDisconnectRequestEvent
 export type MCPConnectionEstablishedEvent = z.infer<typeof MCPConnectionEstablishedEvent>;
 export type MCPConnectionErrorEvent = z.infer<typeof MCPConnectionErrorEvent>;
 export type MCPOAuthRequiredEvent = z.infer<typeof MCPOAuthRequiredEvent>;
+export type MCPTokenUpdatedEvent = z.infer<typeof MCPTokenUpdatedEvent>;
 export type MCPParamsRequiredEvent = z.infer<typeof MCPParamsRequiredEvent>;
 
 export type MCPEvent = z.infer<typeof MCPEvent>;
@@ -275,7 +295,10 @@ function updateRuntimeTools<TEventInput = AgentCoreEvent>(params: {
     deps.lazyConnectionDeps,
   );
 
-  return { ...params.state.groupedRuntimeTools, mcp: newRuntimeTools };
+  return {
+    ...params.state.groupedRuntimeTools,
+    mcp: newRuntimeTools as RuntimeTool<TEventInput | AgentCoreEvent>[],
+  };
 }
 
 // ------------------------- Slice Dependencies -------------------------

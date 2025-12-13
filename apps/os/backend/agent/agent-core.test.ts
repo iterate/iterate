@@ -1,5 +1,6 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { pluckFields } from "../utils/test-helpers/test-utils.ts";
+import { logger, type TagLogger } from "../tag-logger.ts";
 import { AgentCore } from "./agent-core.ts";
 import { f } from "./prompt-fragments.ts";
 import {
@@ -9,9 +10,24 @@ import {
   makeResponseChunks,
   makeResponseCreatedChunk,
   makeUserInputTextEvent,
-  setupConsoleCaptureForTest,
 } from "./agent-core-test-harness.ts";
 import type { ContextItem } from "./context-schemas.ts";
+
+beforeEach(() => {
+  logger.defaultStore = { level: "info", tags: {}, logs: [] };
+});
+
+export const logsMatcher = (level: TagLogger.Level, matcher?: string | {}) =>
+  expect.arrayContaining([
+    expect.objectContaining({
+      level,
+      ...(matcher && {
+        args: expect.arrayContaining([
+          typeof matcher === "string" ? expect.stringContaining(matcher) : matcher,
+        ]),
+      }),
+    }),
+  ]);
 
 describe("AgentCore", () => {
   createAgentCoreTest([])("handles a simple user message and assistant response", async ({ h }) => {
@@ -413,7 +429,9 @@ describe("AgentCore", () => {
     // The first request should be cancelled
     const events = h.getEvents();
     const cancelEvents = events.filter((e) => e.type === "CORE:LLM_REQUEST_CANCEL");
-    expect(pluckFields(cancelEvents, ["data.reason"])).toMatchInlineSnapshot(`"["superseded"]"`);
+    expect(pluckFields(cancelEvents, ["data.reason"])).toMatchInlineSnapshot(
+      `"["#4 superseded by #6"]"`,
+    );
 
     // System-generated events should have empty metadata
     const cancelEvent = cancelEvents[0];
@@ -1113,9 +1131,7 @@ describe("AgentCore", () => {
   createAgentCoreTest([])(
     "creates internal error event when core reducer fails",
     async ({ h: _h }) => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const h = CoreTestHarness.create({ console: consoleCapture.console });
+      const h = CoreTestHarness.create({});
       h.begin("2024-01-01T00:00:00.000Z");
 
       // Initialize the agent
@@ -1164,9 +1180,7 @@ describe("AgentCore", () => {
   createAgentCoreTest([])(
     "atomic batch: when second event fails, no events from batch are added",
     async ({ h: _h }) => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const h = CoreTestHarness.create({ console: consoleCapture.console });
+      const h = CoreTestHarness.create({});
       h.begin("2024-01-01T00:00:00.000Z");
 
       // Initialize the agent
@@ -1649,9 +1663,7 @@ describe("Idempotency key deduplication", () => {
   createAgentCoreTest([])(
     "deduplicates events with the same idempotency key",
     async ({ h: _h }) => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const h = CoreTestHarness.create({ console: consoleCapture.console });
+      const h = CoreTestHarness.create({});
       h.begin("2024-01-01T00:00:00.000Z");
 
       // Initialize the agent
@@ -1683,10 +1695,8 @@ describe("Idempotency key deduplication", () => {
       expect(h.agentCore.state.systemPrompt).toBe("First prompt");
 
       // Check that a warning was logged
-      const warnings = consoleCapture.getLogs().filter((log) => log.startsWith("[WARN]"));
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain(
-        "[AgentCore] Skipping duplicate event with idempotencyKey: test-key-1",
+      expect(logger.context.logs).toMatchObject(
+        logsMatcher("warn", "Skipping duplicate event with idempotencyKey: test-key-1"),
       );
     },
   );
@@ -1721,8 +1731,7 @@ describe("Idempotency key deduplication", () => {
 
   createAgentCoreTest([])("deduplicates within a batch of events", async ({ h: _h }) => {
     // Setup console capture for this test
-    const consoleCapture = setupConsoleCaptureForTest();
-    const h = CoreTestHarness.create({ console: consoleCapture.console });
+    const h = CoreTestHarness.create({});
     h.begin("2024-01-01T00:00:00.000Z");
 
     // Initialize the agent
@@ -1767,19 +1776,15 @@ describe("Idempotency key deduplication", () => {
     expect(modelOptsEvents[2].data?.model).toBe("gpt-4.1-mini");
 
     // Check that a warning was logged for the duplicate
-    const warnings = consoleCapture.getLogs().filter((log) => log.startsWith("[WARN]"));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(
-      "[AgentCore] Skipping duplicate event with idempotencyKey: key-1",
+    expect(logger.context.logs).toMatchObject(
+      logsMatcher("warn", "Skipping duplicate event with idempotencyKey: key-1"),
     );
   });
 
   createAgentCoreTest([])(
     "tracks idempotency keys across multiple addEvents calls",
     async ({ h: _h }) => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const h = CoreTestHarness.create({ console: consoleCapture.console });
+      const h = CoreTestHarness.create({});
       h.begin("2024-01-01T00:00:00.000Z");
 
       // Initialize the agent
@@ -1838,19 +1843,15 @@ describe("Idempotency key deduplication", () => {
       expect(toolSpecEvents).toHaveLength(1);
 
       // Check warnings
-      const warnings = consoleCapture.getLogs().filter((log) => log.startsWith("[WARN]"));
-      expect(warnings).toHaveLength(2);
-      expect(warnings[0]).toContain("prompt-key");
-      expect(warnings[1]).toContain("model-key");
+      expect(logger.context.logs).toMatchObject(logsMatcher("warn", "prompt-key"));
+      expect(logger.context.logs).toMatchObject(logsMatcher("warn", "model-key"));
     },
   );
 
   createAgentCoreTest([])(
     "tracks idempotency keys from initializeWithEvents",
     async ({ h: _h }) => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const h = CoreTestHarness.create({ console: consoleCapture.console });
+      const h = CoreTestHarness.create({});
       h.begin("2024-01-01T00:00:00.000Z");
 
       // Initialize with events that have idempotency keys
@@ -1911,10 +1912,8 @@ describe("Idempotency key deduplication", () => {
       expect(toolSpecEvents).toHaveLength(1);
 
       // Check warnings for duplicates
-      const warnings = consoleCapture.getLogs().filter((log) => log.startsWith("[WARN]"));
-      expect(warnings).toHaveLength(2);
-      expect(warnings[0]).toContain("init-key-1");
-      expect(warnings[1]).toContain("init-key-2");
+      expect(logger.context.logs).toMatchObject(logsMatcher("warn", "init-key-1"));
+      expect(logger.context.logs).toMatchObject(logsMatcher("warn", "init-key-2"));
     },
   );
 
@@ -2097,18 +2096,16 @@ describe("CORE:FILE_SHARED event handling", () => {
   });
 
   createAgentCoreTest([])("resumes interrupted LLM request on initialization", async () => {
-    // Setup console capture for this test
-    const consoleCapture = setupConsoleCaptureForTest();
-    const hWithConsole = CoreTestHarness.create({ console: consoleCapture.console });
-    hWithConsole.begin("2024-01-01T00:00:00.000Z");
+    const harness = CoreTestHarness.create({});
+    harness.begin("2024-01-01T00:00:00.000Z");
 
     // Mock stream that will be used for the resumed request
-    const resumeStream = hWithConsole.enqueueMockOpenAIStream();
+    const resumeStream = harness.enqueueMockOpenAIStream();
     resumeStream.streamChunks(makeResponseChunks("Resumed response"));
     resumeStream.complete();
 
     // Initialize with events where an LLM request was started but never finished
-    await hWithConsole.agentCore.initializeWithEvents([
+    await harness.agentCore.initializeWithEvents([
       {
         type: "CORE:SET_SYSTEM_PROMPT",
         data: { prompt: "You are a helpful assistant." },
@@ -2149,32 +2146,29 @@ describe("CORE:FILE_SHARED event handling", () => {
     ]);
 
     // Wait for the resumed request to complete
-    await hWithConsole.waitUntilThinking();
-    await hWithConsole.waitUntilNotThinking();
+    await harness.waitUntilThinking();
+    await harness.waitUntilNotThinking();
 
     // Check that the LLM request was resumed
-    const events = hWithConsole.getEvents();
+    const events = harness.getEvents();
     const llmRequestEndEvents = events.filter((e) => e.type === "CORE:LLM_REQUEST_END");
     expect(llmRequestEndEvents).toHaveLength(1);
 
     // Check that warning log was written
-    const warnLogs = consoleCapture.getLogs().filter((log) => log.includes("[WARN]"));
-    expect(
-      warnLogs.some((log) => log.includes("Resuming interrupted LLM request at index 3")),
-    ).toBe(true);
+    expect(logger.context.logs).toMatchObject(
+      logsMatcher("warn", "Resuming interrupted LLM request at index 3"),
+    );
 
     // Verify the agent is no longer thinking
-    expect(hWithConsole.isComputing()).toBe(false);
+    expect(harness.isComputing()).toBe(false);
   });
 
   createAgentCoreTest([])("does not resume if no LLM request was in progress", async () => {
-    // Setup console capture for this test
-    const consoleCapture = setupConsoleCaptureForTest();
-    const hWithConsole = CoreTestHarness.create({ console: consoleCapture.console });
-    hWithConsole.begin("2024-01-01T00:00:00.000Z");
+    const harness = CoreTestHarness.create({});
+    harness.begin("2024-01-01T00:00:00.000Z");
 
     // Initialize with events where no LLM request was in progress
-    await hWithConsole.agentCore.initializeWithEvents([
+    await harness.agentCore.initializeWithEvents([
       {
         type: "CORE:SET_SYSTEM_PROMPT",
         data: { prompt: "You are a helpful assistant." },
@@ -2194,33 +2188,30 @@ describe("CORE:FILE_SHARED event handling", () => {
     ]);
 
     // Check that no resume warning log was written
-    const warnLogs = consoleCapture.getLogs().filter((log) => log.includes("[WARN]"));
-    expect(warnLogs.some((log) => log.includes("Resuming interrupted LLM request"))).toBe(false);
+    expect(logger.context.logs).not.toMatchObject(logsMatcher("warn"));
 
     // Verify no LLM request is running
-    expect(hWithConsole.isComputing()).toBe(false);
+    expect(harness.isComputing()).toBe(false);
   });
 
   createAgentCoreTest([])(
     "handles resume request failure gracefully",
     async () => {
-      // Setup console capture for this test
-      const consoleCapture = setupConsoleCaptureForTest();
-      const hWithConsole = CoreTestHarness.create({ console: consoleCapture.console });
-      hWithConsole.begin("2024-01-01T00:00:00.000Z");
+      const harness = CoreTestHarness.create({});
+      harness.begin("2024-01-01T00:00:00.000Z");
 
       // Track background promises manually
       const backgroundPromises: Promise<void>[] = [];
-      hWithConsole.backgroundMock.mockImplementation((fn: () => Promise<void>) => {
+      harness.backgroundMock.mockImplementation((fn: () => Promise<void>) => {
         const promise = fn();
         backgroundPromises.push(promise);
       });
 
       // Mock a failing OpenAI client
-      hWithConsole.getOpenAIClientMock.mockRejectedValue(new Error("OpenAI service unavailable"));
+      harness.getOpenAIClientMock.mockRejectedValue(new Error("OpenAI service unavailable"));
 
       // Initialize with events where an LLM request was started but never finished
-      await hWithConsole.agentCore.initializeWithEvents([
+      await harness.agentCore.initializeWithEvents([
         {
           type: "CORE:SET_SYSTEM_PROMPT",
           data: { prompt: "You are a helpful assistant." },
@@ -2245,11 +2236,12 @@ describe("CORE:FILE_SHARED event handling", () => {
       }
 
       // Check that error log was written
-      const errorLogs = consoleCapture.getLogs().filter((log) => log.includes("[ERROR]"));
-      expect(errorLogs.some((log) => log.includes("LLM request 1 failed"))).toBe(true);
+      expect(logger.context.logs).toMatchObject(
+        logsMatcher("error", expect.objectContaining({ message: "OpenAI service unavailable" })),
+      );
 
       // Check that error events were added
-      const events = hWithConsole.getEvents();
+      const events = harness.getEvents();
       const errorEvents = events.filter((e) => e.type === "CORE:INTERNAL_ERROR");
       const cancelEvents = events.filter((e) => e.type === "CORE:LLM_REQUEST_CANCEL");
 
@@ -2257,7 +2249,7 @@ describe("CORE:FILE_SHARED event handling", () => {
       expect(cancelEvents.length).toBeGreaterThan(0);
 
       // Verify the agent is no longer thinking
-      expect(hWithConsole.isComputing()).toBe(false);
+      expect(harness.isComputing()).toBe(false);
     },
     10000,
   ); // Increased timeout to 10 seconds
@@ -2363,7 +2355,6 @@ describe("Image generation handling", () => {
     // Create harness with uploadFile dependency
     const hWithUpload = CoreTestHarness.create({
       extraDeps: { uploadFile: uploadFileMock },
-      console: (h.agentCore as any).deps.console,
     });
     hWithUpload.begin("2024-01-01T00:00:00.000Z");
     await hWithUpload.initializeAgent();
@@ -2404,7 +2395,6 @@ describe("Image generation handling", () => {
 
     // Check events
     const events = hWithUpload.getEvents();
-    console.log("events", events);
     // Find the FILE:SHARED event
     const fileSharedEvent = events.find((e) => e.type === "CORE:FILE_SHARED");
 
@@ -2520,11 +2510,12 @@ describe("onEventAdded callback state timing", () => {
       getOpenAIClient: async () => {
         throw new Error("OpenAI client should not be requested in this test");
       },
-      toolSpecToImplementation: async () => {
-        throw new Error("toolSpecToImplementation should not be called in this test");
+      toolSpecsToImplementations: () => [],
+      getRuleMatchData: {} as never,
+      setupCodemode: () => {
+        throw new Error("setupCodemode should not be called in this test");
       },
-      console,
-    } as any;
+    } satisfies ConstructorParameters<typeof AgentCore>[0]["deps"];
 
     const agentCore = new AgentCore({
       deps: {
@@ -2571,11 +2562,12 @@ describe("onEventAdded callback state timing", () => {
       getOpenAIClient: async () => {
         throw new Error("OpenAI client should not be requested in this test");
       },
-      toolSpecToImplementation: async () => {
-        throw new Error("toolSpecToImplementation should not be called in this test");
+      toolSpecsToImplementations: () => [],
+      getRuleMatchData: {} as never,
+      setupCodemode: () => {
+        throw new Error("setupCodemode should not be called in this test");
       },
-      console,
-    } as any;
+    } satisfies ConstructorParameters<typeof AgentCore>[0]["deps"];
 
     const agentCore = new AgentCore({
       deps: {

@@ -1,19 +1,26 @@
+import { randomInt } from "node:crypto";
 import { betterAuth } from "better-auth";
-import { admin } from "better-auth/plugins";
+import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { stripe } from "@better-auth/stripe";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { env } from "../../env.ts";
+import { env, isNonProd } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import { stripeClient } from "../integrations/stripe/stripe.ts";
-import { integrationsPlugin } from "./integrations.ts";
+import { integrationsPlugin, SLACK_USER_AUTH_SCOPES } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
 
-export const getAuth = (db: DB) =>
-  betterAuth({
+// better-auth has an internal type that is not portable
+// turning on declaration causes it to give you a portable type error
+// so declaration is turned off, sdk builds work fine as tsdown handles it internally and doesn't rely on this type
+// Possibly related https://github.com/better-auth/better-auth/issues/5122
+export const getAuth = (db: DB) => {
+  return betterAuth({
     baseURL: env.VITE_PUBLIC_URL,
+    telemetry: { enabled: false },
+    secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [
       env.VITE_PUBLIC_URL,
       // This is needed for the stripe webhook to work in dev mode
@@ -44,12 +51,30 @@ export const getAuth = (db: DB) =>
         allowDifferentEmails: true,
       },
     },
-    // for now, we only want to enable email and password login if we know we need it for testing
-    ...(import.meta.env.VITE_ENABLE_TEST_ADMIN_USER
-      ? { emailAndPassword: { enabled: true } }
-      : ({} as never)), // need to cast to never to make typescript think we can call APIs like `auth.api.createUser` - but this will fail at runtime if we try to use it in production
     plugins: [
       admin(),
+      ...(import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN
+        ? [
+            emailOTP({
+              ...(isNonProd && {
+                generateOTP: (o) => {
+                  // magic: turns `bob+123456@nustom.com` into `123456`. or `alice+oct23.001001@nustom.com` into `001001`
+                  const getSpecialEmailOtp = (email: string) => {
+                    const [beforeAt, domain, ...rest] = email.split("@");
+                    if (domain !== "nustom.com") return null;
+                    if (rest.length !== 0) throw new Error("Invalid email " + email);
+                    const plusDigits = beforeAt.split("+").at(-1)?.split(/\D/).at(-1);
+                    return plusDigits?.match(/^\d{6}$/)?.[0];
+                  };
+                  return getSpecialEmailOtp(o.email) || randomInt(100000, 999999).toString();
+                },
+              }),
+              async sendVerificationOTP(data) {
+                logger.warn("Verification OTP needs to be sent to email", data.email, data.otp);
+              },
+            }),
+          ]
+        : []),
       integrationsPlugin(),
       serviceAuthPlugin(),
       // We don't use any of the better auth stripe plugin's database schema or
@@ -76,6 +101,18 @@ export const getAuth = (db: DB) =>
         clientId: env.GOOGLE_CLIENT_ID,
         clientSecret: env.GOOGLE_CLIENT_SECRET,
       },
+      slack: {
+        clientId: env.SLACK_CLIENT_ID,
+        clientSecret: env.SLACK_CLIENT_SECRET,
+        scope: SLACK_USER_AUTH_SCOPES,
+        redirectURI: `${env.VITE_PUBLIC_URL}/api/auth/callback/slack`,
+      },
+    },
+    session: {
+      cookieCache: {
+        enabled: true,
+        maxAge: 10 * 60, // seconds - see https://www.better-auth.com/docs/reference/options#session
+      },
     },
     advanced: {
       database: {
@@ -92,6 +129,8 @@ export const getAuth = (db: DB) =>
       },
     },
   });
+};
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;
+export type AuthUser = NonNullable<AuthSession>["user"];

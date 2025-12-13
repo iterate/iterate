@@ -1,6 +1,7 @@
 import { ArrowRight, Github, ChevronDown, X, Puzzle } from "lucide-react";
 import { useState, useEffect } from "react";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { createFileRoute } from "@tanstack/react-router";
 import { Button } from "../../../../components/ui/button.tsx";
 import { Badge } from "../../../../components/ui/badge.tsx";
 import { Input } from "../../../../components/ui/input.tsx";
@@ -65,17 +66,6 @@ import { useTRPC } from "../../../../lib/trpc.ts";
 import { useEstateId } from "../../../../hooks/use-estate.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
 import { authClient } from "../../../../lib/auth-client.ts";
-import type { Route } from "./+types/index.ts";
-
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Iterate Connectors" },
-    {
-      name: "description",
-      content: "Connect your iterate bot to third parties",
-    },
-  ];
-}
 
 function ScopesList({ scope }: { scope: string }) {
   // Split scopes by comma or space and clean them up
@@ -125,16 +115,40 @@ type MCPConnection = {
   connectedAt: Date | string;
 };
 
-export default function Integrations() {
+export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/integrations/")({
+  component: Integrations,
+  head: () => ({
+    meta: [
+      {
+        title: "Iterate Connectors",
+      },
+      {
+        name: "description",
+        content: "Connect your iterate bot to third parties",
+      },
+    ],
+  }),
+});
+
+function Integrations() {
   const estateId = useEstateId();
   const trpc = useTRPC();
-  const { data, refetch } = useSuspenseQuery(
+  const { data, refetch } = useQuery(
     trpc.integrations.list.queryOptions({
       estateId: estateId,
     }),
   );
 
-  const integrations = data?.oauthIntegrations || [];
+  const { data: estateInfo } = useQuery(
+    trpc.estate.get.queryOptions({
+      estateId: estateId,
+    }),
+  );
+
+  // Filter out Slack connector for trial estates since they're using Slack Connect
+  const integrations = (data?.oauthIntegrations || []).filter(
+    (integration) => !(estateInfo?.isTrialEstate && integration.id === "slack-bot"),
+  );
   const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
 
   // Count connections by mode
@@ -178,7 +192,7 @@ export default function Integrations() {
   };
 
   const handleDisconnect = async (
-    integrationId: string,
+    integrationId: (typeof integrations)[number]["id"],
     disconnectType: "estate" | "personal" | "both" = "both",
   ) => {
     try {
@@ -221,9 +235,9 @@ export default function Integrations() {
         <CardContent>
           <h2 className="text-xl font-semibold mb-4">Built-in Connectors</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {integrations.map((integration: any) => (
+            {integrations.map((integration) => (
               <Card key={integration.id}>
-                <CardContent>
+                <CardContent className="flex flex-col justify-between h-full">
                   <Item className="p-0 mb-3">
                     <ItemMedia>
                       {integration.icon === "github" ? (
@@ -613,7 +627,7 @@ function MCPConnectionsTable({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="flex-shrink-0"
+                            className="shrink-0"
                             onClick={() => {
                               setParams(params.filter((_, i) => i !== index));
                             }}

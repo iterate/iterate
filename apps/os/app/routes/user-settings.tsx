@@ -1,8 +1,9 @@
 import { useState, Suspense } from "react";
 import { Save, ArrowLeft } from "lucide-react";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
-import { useNavigate } from "react-router";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { createFileRoute } from "@tanstack/react-router";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
 import { authClient } from "../lib/auth-client.ts";
@@ -37,32 +38,43 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "../components/ui/alert-dialog.tsx";
-import type { Route } from "./+types/user-settings";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "User Settings - Iterate" },
-    { name: "description", content: "Manage your user profile and preferences" },
-  ];
-}
+export const Route = createFileRoute("/_auth.layout/user-settings")({
+  component: UserSettings,
+  head: () => ({
+    meta: [
+      {
+        title: "User Settings - Iterate",
+      },
+      {
+        name: "description",
+        content: "Manage your profile information and account preferences",
+      },
+    ],
+  }),
+});
 
 function UserSettingsContent() {
   const trpc = useTRPC();
   const navigate = useNavigate();
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
+  const queryClient = useQueryClient();
+  const router = useRouter();
 
   const [userName, setUserName] = useState(user.name);
-  const [debugMode, setDebugMode] = useState(user.debugMode || false);
+  const [debugMode, setDebugMode] = useState(user.debugMode);
   const [error, setError] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
 
   const updateUser = useMutation(
     trpc.user.updateProfile.mutationOptions({
-      onSuccess: (data) => {
+      onSuccess: async (data) => {
         toast.success("User settings updated successfully");
+        queryClient.invalidateQueries({ queryKey: trpc.user.me.queryKey() });
         setUserName(data.name);
-        setDebugMode(data.debugMode || false);
+        setDebugMode(data.debugMode ?? false);
         setError(null);
       },
       onError: (error) => {
@@ -146,10 +158,10 @@ function UserSettingsContent() {
 
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
-    if (window.history.length > 1) {
-      navigate(-1);
+    if (router.history.canGoBack()) {
+      router.history.back();
     } else {
-      navigate("/");
+      navigate({ to: "/" });
     }
   };
 
@@ -181,7 +193,7 @@ function UserSettingsContent() {
                   {/* Avatar and User ID */}
                   <div className="flex items-center gap-4">
                     <Avatar className="h-16 w-16">
-                      <AvatarImage src={user.image || undefined} alt={user.name} />
+                      <AvatarImage src={user.image || undefined} alt={user.name || ""} />
                       <AvatarFallback className="text-lg">{userInitials}</AvatarFallback>
                     </Avatar>
                     <div className="flex-1 min-w-0">
@@ -211,7 +223,7 @@ function UserSettingsContent() {
                   {/* Email (Read-only) */}
                   <Field>
                     <FieldLabel htmlFor="email">Email Address</FieldLabel>
-                    <Input id="email" value={user.email} disabled className="bg-muted" />
+                    <Input id="email" value={user.email || ""} disabled className="bg-muted" />
                     <FieldDescription>
                       Email cannot be changed. Contact support if you need to update your email.
                     </FieldDescription>
@@ -327,15 +339,16 @@ function UserSettingsContent() {
   );
 }
 
-export default function UserSettings() {
+function UserSettings() {
   const navigate = useNavigate();
+  const router = useRouter();
 
   const handleGoBack = () => {
     // Try to go back in history, fallback to root if no history
-    if (window.history.length > 1) {
-      navigate(-1);
+    if (router.history.canGoBack()) {
+      router.history.back();
     } else {
-      navigate("/");
+      navigate({ to: "/" });
     }
   };
 

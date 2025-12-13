@@ -12,6 +12,9 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import eslintRisky from "eslint/use-at-your-own-risk";
 import globals from "globals";
 import eslintPluginUnicorn from "eslint-plugin-unicorn";
+import codegen from "eslint-plugin-codegen";
+import pluginRouter from "@tanstack/eslint-plugin-router";
+import esquery from "esquery";
 
 /** @param {string} name */
 const getBuiltinRule = (name) => {
@@ -20,7 +23,7 @@ const getBuiltinRule = (name) => {
   return rule;
 };
 
-/** @type {(typeof import("./vibe-rules/llms.ts"))} */
+/** @type {{default: Array<Exclude<typeof import("./vibe-rules/llms.ts")['default'][number], string> & {eslint?: import('eslint').Linter.Config}>}} */
 const { default: vibeRules } = await tsImport("./vibe-rules/llms.ts", import.meta.url);
 
 export default defineConfig([
@@ -73,11 +76,14 @@ export default defineConfig([
       "jsx-a11y": jsxA11y,
       import: importPlugin,
       "eslint-comments": eslintComments,
+      // @ts-expect-error codegen is a plugin i swear
+      codegen,
     },
     rules: {
       // Core JavaScript rules
       "no-unused-vars": "off",
       "no-console": "off",
+      "no-empty": "off", // `try {url = new URL(...)} catch {}` is fine
       "no-debugger": "error",
       "prefer-const": "off", // we're going to override this to be less annoying in IDEs
       "no-var": "error",
@@ -133,14 +139,15 @@ export default defineConfig([
       "prefer-numeric-literals": "error",
       "no-new-func": "error",
 
-      // React rules
-      ...reactHooks.configs.recommended.rules,
+      "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "warn",
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
 
       // A11y rules (mapping from biome a11y rules)
       "jsx-a11y/click-events-have-key-events": "off",
       "jsx-a11y/no-noninteractive-element-to-interactive-role": "off",
+
+      "codegen/codegen": "error",
     },
   },
   // Override for test files (mapping from biome overrides)
@@ -149,6 +156,7 @@ export default defineConfig([
       "startups/**",
       "**/test/**",
       "**/*.test.ts",
+      "**/*.e2e.ts",
       "**/*.test.tsx",
       "**/test-setup.ts",
       "**/test-utils.ts",
@@ -161,11 +169,17 @@ export default defineConfig([
   {
     rules: {
       "unicorn/template-indent": "warn",
+      "unicorn/isolated-functions": [
+        "error",
+        {
+          functions: ["githubScript"],
+          selectors: [`CallExpression[callee.property.name='githubScript'] FunctionExpression`],
+        },
+      ],
     },
   },
-  {
-    ignores: [".tmp-ci-build*"],
-  },
+  { ignores: ["**/evalite-export/**"] },
+  { ignores: [".tmp-ci-build*"] },
   // Override for React Router route files
   {
     files: ["**/routes/**", "**/app/root.tsx"],
@@ -173,6 +187,7 @@ export default defineConfig([
       "react-refresh/only-export-components": "off",
     },
   },
+  ...pluginRouter.configs["flat/recommended"],
   // custom iterate-internal rules
   {
     name: "iterate-plugin",
@@ -226,7 +241,10 @@ export default defineConfig([
                 );
               }
               return {
-                "VariableDeclarator[init.callee.object.name='z']": ({ id }) => {
+                "VariableDeclarator[init.callee.object.name='z']": ({ init, id }) => {
+                  if (init.callee.property.name === "toJSONSchema") return;
+                  if (init.callee.property.name === "prettifyError") return;
+
                   const actualName = id.name;
                   const expectedName = getExpectedName(actualName);
 
@@ -268,12 +286,37 @@ export default defineConfig([
             getBuiltinRule("prefer-const"),
             "Change to const, if you're finished tinkering",
           ),
-          "side-effect-imports-first": {
+          "import-rules": {
             meta: {
               fixable: "code",
             },
             create: (context) => {
               return {
+                ImportDeclaration: (node) => {
+                  const parentBodyIndex = node.parent.body.indexOf(node);
+                  const lastImportIndex = node.parent.body.findLastIndex(
+                    (n) => n.type === "ImportDeclaration",
+                  );
+                  if (parentBodyIndex === -1 || parentBodyIndex !== lastImportIndex) {
+                    return;
+                  }
+                  const exportsBefore = node.parent.body
+                    .slice(0, parentBodyIndex)
+                    .filter(
+                      (n) =>
+                        n.type === "ExportDeclaration" ||
+                        n.type === "ExportNamedDeclaration" ||
+                        n.type === "ExportAllDeclaration" ||
+                        n.type === "ExportDefaultDeclaration",
+                    );
+
+                  exportsBefore.forEach((e) => {
+                    context.report({
+                      node: e,
+                      message: `Exports should come after imports`,
+                    });
+                  });
+                },
                 "ImportDeclaration[specifiers.length=0]": (node) => {
                   const parentBodyIndex = node.parent.body.indexOf(node);
                   const nonSideEffectImportBefore = node.parent.body
@@ -329,6 +372,72 @@ export default defineConfig([
               };
             },
           },
+          "drizzle-conventions": {
+            meta: {
+              hasSuggestions: true,
+              fixable: "code",
+            },
+            /** @param {import('eslint').Rule.RuleContext} context */
+            create: (context) => {
+              const dbMutateMethods = ["insert", "update", "delete"];
+              /** @type {Record<string, Function>} */
+              const dbMutateEnforcementListeners = {};
+              for (const m of dbMutateMethods) {
+                const selector = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.type='Identifier']`;
+                const selector2 = `CallExpression[callee.object.type='Identifier'][callee.property.name='${m}'][arguments.0.object.name='schemas']`;
+                dbMutateEnforcementListeners[selector] = (node) => {
+                  const before = context.sourceCode.getText(node.arguments[0]);
+                  const after = before.startsWith("schemas.")
+                    ? before.replace("schemas.", "schema.")
+                    : `schema.${node.arguments[0].name}`;
+                  if (
+                    (m === "delete" || m === "update") &&
+                    node.callee.object.name !== "db" &&
+                    node.callee.object.name !== "tx"
+                  ) {
+                    return; // too many false positives for Maps, hmac.update, etc.
+                  }
+                  context.report({
+                    node: node.arguments[0],
+                    message: `use \`db.${m}(${after})\` instead of \`db.${m}(${before})\` - it makes it easier to find ${m} expressions in the codebase`,
+                    suggest: [
+                      {
+                        desc: `Change \`${before}\` to \`${after}\``,
+                        fix: (fixer) => fixer.replaceText(node.arguments[0], after),
+                      },
+                    ],
+                  });
+                };
+                dbMutateEnforcementListeners[selector2] = dbMutateEnforcementListeners[selector];
+              }
+
+              return {
+                ...dbMutateEnforcementListeners,
+
+                "CallExpression[callee.property.name='transaction']": (node) => {
+                  const parentReference = context.sourceCode.getText(node.callee.object);
+                  const shouldUse = node.arguments[0].params[0]?.name;
+                  esquery.match(node, esquery.parse(`${node.callee.object.type}`)).forEach((m) => {
+                    const used = context.sourceCode.getText(m);
+                    if (m !== node.callee.object && parentReference === used) {
+                      // @ts-expect-error -- lots of ?.
+                      if (m.parent?.key?.name === "parent") return; // special case: outboxClient.send({ tx, parent: db }, '...', {...})
+                      context.report({
+                        node: m,
+                        message: `Don't use the parent connection (${used}) in a transaction. Use the passed in transaction connection (${shouldUse}).`,
+                        suggest: [
+                          {
+                            desc: `Change \`${used}\` to \`${shouldUse}\``,
+                            fix: (fixer) => fixer.replaceText(m, shouldUse),
+                          },
+                        ],
+                      });
+                    }
+                  });
+                },
+              };
+            },
+          },
         },
       },
     },
@@ -338,8 +447,9 @@ export default defineConfig([
     name: "iterate-config",
     rules: {
       "iterate/prefer-const": "error",
-      "iterate/side-effect-imports-first": "warn",
+      "iterate/import-rules": "warn",
       "iterate/zod-schema-naming": "error",
+      "iterate/drizzle-conventions": "error",
     },
   },
   {
@@ -351,7 +461,8 @@ export default defineConfig([
   },
   ...vibeRules.flatMap((rule) => {
     if (!rule.eslint) return [];
-    const { eslint, globs: files, name } = rule;
+    const { eslint, globs, name } = rule;
+    const files = typeof globs === "string" ? [globs] : globs;
     return [{ name: `vibe-rules/${name}`, files, ...eslint }];
   }),
 ]);

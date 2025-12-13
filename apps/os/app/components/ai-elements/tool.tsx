@@ -11,7 +11,7 @@ import type { ComponentProps, ReactNode } from "react";
 import { Badge } from "../ui/badge.tsx";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible.tsx";
 import { cn } from "../../lib/utils.ts";
-import { CodeBlock } from "./code-block.tsx";
+import { SerializedObjectCodeBlock } from "../serialized-object-code-block.tsx";
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
 
@@ -84,7 +84,7 @@ export const ToolInput = ({ className, input, ...props }: ToolInputProps) => (
       Parameters
     </h4>
     <div className="rounded-md bg-muted/50">
-      <CodeBlock code={JSON.stringify(input, null, 2)} language="json" />
+      <SerializedObjectCodeBlock data={input} />
     </div>
   </div>
 );
@@ -102,9 +102,15 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
   let Output = <div>{output as ReactNode}</div>;
 
   if (typeof output === "object") {
-    Output = <CodeBlock code={JSON.stringify(output, null, 2)} language="json" />;
+    Output = <SerializedObjectCodeBlock data={output} />;
   } else if (typeof output === "string") {
-    Output = <CodeBlock code={output} language="json" />;
+    let data;
+    try {
+      data = JSON.parse(output);
+    } catch {
+      data = { output };
+    }
+    Output = <SerializedObjectCodeBlock data={data} />;
   }
 
   return (
@@ -118,7 +124,7 @@ export const ToolOutput = ({ className, output, errorText, ...props }: ToolOutpu
           errorText ? "bg-destructive/10 text-destructive" : "bg-muted/50 text-foreground",
         )}
       >
-        {errorText && <div>{errorText}</div>}
+        {errorText && <pre>{errorText}</pre>}
         {Output}
       </div>
     </div>

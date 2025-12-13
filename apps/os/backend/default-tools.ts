@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { or, eq, asc } from "drizzle-orm";
 import { env } from "../env.ts";
 import type { AgentCoreEvent } from "./agent/agent-core-schemas.ts";
@@ -271,6 +271,7 @@ const FindSimilarResponse = z.object({
 });
 
 const EXA_BASE_URL = "https://api.exa.ai";
+const PARALLEL_AI_BASE_URL = "https://api.parallel.ai/v1";
 const ITERATE_USER_AGENT = "iterate-bot";
 
 async function callExaEndpoint<Schema extends z.ZodTypeAny>(
@@ -292,7 +293,7 @@ async function callExaEndpoint<Schema extends z.ZodTypeAny>(
   }
 
   const data = await response.json();
-  return schema.parse(data);
+  return zodParse(`${path} response`, schema, data);
 }
 
 function isFulfilled<T>(result: PromiseSettledResult<T>): result is PromiseFulfilledResult<T> {
@@ -303,6 +304,14 @@ function getExaApiKey() {
   const apiKey = env.EXA_API_KEY;
   if (!apiKey) {
     throw new Error("EXA_API_KEY environment variable is not set");
+  }
+  return apiKey;
+}
+
+function getParallelAIApiKey() {
+  const apiKey = env.PARALLEL_AI_API_KEY;
+  if (!apiKey) {
+    throw new Error("PARALLEL_AI_API_KEY environment variable is not set");
   }
   return apiKey;
 }
@@ -346,8 +355,20 @@ export async function searchWeb(input: z.infer<typeof SearchRequest>) {
   return callExaEndpoint("/search", payload, SearchResponse);
 }
 
+const zodParse = <Z extends z.ZodType<any, any, any>>(
+  context: string,
+  schema: Z,
+  input: unknown,
+) => {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw new Error(`${context} parse failed: ${z.prettifyError(result.error)}`);
+  }
+  return result.data;
+};
+
 export async function getURLContentFromExa(input: z.infer<typeof ContentsRequestInput>) {
-  const payload = ContentsRequestInput.parse(input);
+  const payload = zodParse(JSON.stringify(input), ContentsRequestInput, input);
   return callExaEndpoint("/contents", payload, ContentsResponse);
 }
 
@@ -545,7 +566,7 @@ async function getURLContentFromWebpage(params: {
     if (!includeScreenshotOfPage || !isFulfilled(screenshotResult)) {
       return {
         success: false,
-        error: `Failed to extract webpage content: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
+        error: `Failed to extract webpage content of ${url}: ${textResult.reason instanceof Error ? textResult.reason.message : "Unknown error"}`,
         contentType: "webpage" as const,
       };
     }
@@ -700,6 +721,129 @@ export async function getURLContent(options: {
       estateId,
       db,
     });
+  }
+}
+
+// Parallel AI Deep Research schemas
+const DeepResearchInputType = z.object({
+  query: z.string().max(15000),
+  processor: z
+    .enum([
+      "lite",
+      "base",
+      "core",
+      "core2x",
+      "pro",
+      "pro-fast",
+      "ultra",
+      "ultra-fast",
+      "ultra2x",
+      "ultra4x",
+      "ultra8x",
+    ])
+    .default("pro"),
+  outputFormat: z.enum(["auto", "text"]).default("text"),
+});
+
+// The create response - just need the run_id
+const DeepResearchTaskRunResponse = z.object({
+  run_id: z.string(),
+  status: z.string().optional(),
+});
+
+export type DeepResearchInputType = z.infer<typeof DeepResearchInputType>;
+
+/**
+ * Create a deep research task using Parallel AI's Task API.
+ * Returns the run_id immediately - use checkDeepResearchStatus to poll for results.
+ */
+export async function createDeepResearchTask(input: DeepResearchInputType) {
+  const parsedInput = DeepResearchInputType.parse(input);
+  const apiKey = getParallelAIApiKey();
+
+  const taskSpec =
+    parsedInput.outputFormat === "text" ? { output_schema: { type: "text" as const } } : undefined;
+
+  const createResponse = await fetch(`${PARALLEL_AI_BASE_URL}/tasks/runs`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+    },
+    body: JSON.stringify({
+      input: parsedInput.query,
+      processor: parsedInput.processor,
+      ...(taskSpec ? { task_spec: taskSpec } : {}),
+    }),
+  });
+
+  if (!createResponse.ok) {
+    const errorText = await createResponse.text();
+    throw new Error(
+      `Parallel AI API error: ${createResponse.status} ${createResponse.statusText} - ${errorText}`,
+    );
+  }
+
+  const taskRun = zodParse(
+    "task_run create response",
+    DeepResearchTaskRunResponse,
+    await createResponse.json(),
+  );
+
+  return taskRun;
+}
+
+/**
+ * Check the status of a deep research task.
+ * Returns null if still processing (202 status), or the result if completed/failed.
+ */
+/**
+ * Check the status of a deep research task using long polling.
+ * The API holds the connection until the task completes or times out.
+ * We use 15s polls to avoid issues with Durable Object connection limits.
+ * @param runId - The task run ID
+ * @param timeoutMs - Timeout in milliseconds (default 15 seconds per poll)
+ */
+export async function checkDeepResearchStatus(runId: string, timeoutMs = 15 * 1000) {
+  const apiKey = getParallelAIApiKey();
+
+  // Long polling - the API holds the connection until complete
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const resultResponse = await fetch(`${PARALLEL_AI_BASE_URL}/tasks/runs/${runId}/result`, {
+      method: "GET",
+      headers: {
+        "x-api-key": apiKey,
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    // 202 means still processing (shouldn't happen often with long polling)
+    if (resultResponse.status === 202) {
+      return { status: "running" as const, runId };
+    }
+
+    if (!resultResponse.ok) {
+      const errorText = await resultResponse.text();
+      throw new Error(
+        `Parallel AI API error: ${resultResponse.status} ${resultResponse.statusText} - ${errorText}`,
+      );
+    }
+
+    // Don't strictly parse - just return the raw JSON for the model to interpret
+    const rawResult = await resultResponse.json();
+    return { status: "completed" as const, runId, data: rawResult };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error instanceof Error && error.name === "AbortError") {
+      // Timeout - return running status so polling continues
+      logger.info("deep research long poll timed out, will retry:", { runId });
+      return { status: "running" as const, runId };
+    }
+    throw error;
   }
 }
 

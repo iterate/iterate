@@ -1,9 +1,9 @@
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState, useEffect, useMemo, useRef } from "react";
-import { useParams, Link } from "react-router";
 import { ArrowLeft, Clock, Upload, X } from "lucide-react";
 import { useAgent } from "agents/react";
-import { useMutation, useQuery, useSuspenseQuery } from "@tanstack/react-query";
-import { trpcClient, useTRPC } from "../lib/trpc.ts";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
 import { useEstateId } from "../hooks/use-estate.ts";
 import { Card } from "../components/ui/card.tsx";
@@ -26,13 +26,9 @@ import {
   type AgentDetailDataGetters,
   type AgentDetailActions,
 } from "../components/agent-detail-renderer.tsx";
-import type {
-  AgentCoreEvent,
-  AugmentedCoreReducedState,
-} from "../../backend/agent/agent-core-schemas.ts";
-import type { SlackSliceEvent } from "../../backend/agent/slack-slice.ts";
-
-type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & { eventIndex: number; createdAt: string };
+import type { AugmentedCoreReducedState } from "../../backend/agent/agent-core-schemas.ts";
+import type { AgentEvent } from "../../backend/agent/agents-router.ts";
+import { GlobalLoading } from "../components/global-loading.tsx";
 
 interface ToolDefinition {
   name: string;
@@ -259,10 +255,10 @@ function ToolCallInjector({
       ) : (
         <div className="flex gap-4 h-[calc(80vh-12rem)]">
           {/* Tool selector */}
-          <Card className="w-80 flex-shrink-0 p-0 flex flex-col">
+          <Card className="w-80 shrink-0 p-0 flex flex-col">
             <div className="p-4 flex flex-col h-full">
-              <h3 className="font-medium mb-3 flex-shrink-0">Available Tools</h3>
-              <div className="space-y-1 flex-1 overflow-y-auto pr-2">
+              <h3 className="font-medium mb-3 shrink-0">Available Tools</h3>
+              <div className="space-y-1 grow overflow-y-auto pr-2">
                 {availableTools.map((tool, index) => (
                   <button
                     key={tool.name}
@@ -341,7 +337,7 @@ function ToolCallInjector({
                     })()}
                   </div>
 
-                  <div className="mt-4 pt-4 border-t flex-shrink-0">
+                  <div className="mt-4 pt-4 border-t shrink-0">
                     <div className="flex items-center space-x-2 mb-4">
                       <Checkbox
                         id="trigger-llm"
@@ -624,11 +620,18 @@ function FileUploadDialog({
   );
 }
 
-export default function AgentsPage() {
-  const params = useParams();
-  const { agentClassName, durableObjectName } = params;
+export const Route = createFileRoute(
+  "/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName",
+)({
+  component: AgentsPage,
+});
+
+function AgentsPage() {
+  const { agentClassName, durableObjectName } = Route.useParams();
   const estateId = useEstateId();
   const trpc = useTRPC();
+  const queryClient = useQueryClient();
+  const trpcClient = useTRPCClient();
 
   if (
     !(
@@ -647,15 +650,19 @@ export default function AgentsPage() {
   const [isWebsocketConnected, setIsWebsocketConnected] = useState(false);
 
   // Get initial events
-  const { data: initialEvents } = useSuspenseQuery(
-    trpc.agents.getEvents.queryOptions({
-      estateId,
-      agentInstanceName: durableObjectName,
-      agentClassName,
-    }),
+  const eventsQuery = useQuery(
+    trpc.agents.getEvents.queryOptions(
+      {
+        estateId,
+        agentInstanceName: durableObjectName,
+        agentClassName,
+      },
+      {
+        initialData: [],
+        placeholderData: (prev) => prev || [],
+      },
+    ),
   );
-
-  const [events, setEvents] = useState<AgentEvent[]>(initialEvents as unknown as AgentEvent[]);
 
   // Connect to agent via WebSocket
   const agentConnection = useAgent({
@@ -664,7 +671,12 @@ export default function AgentsPage() {
     onMessage: (message) => {
       const messageData = JSON.parse(message.data);
       if (messageData.type === "events_added") {
-        setEvents(messageData.events);
+        const queryKey = trpc.agents.getEvents.queryKey({
+          estateId,
+          agentInstanceName: durableObjectName,
+          agentClassName,
+        });
+        queryClient.setQueryData(queryKey, () => messageData.events);
       }
     },
   });
@@ -688,38 +700,32 @@ export default function AgentsPage() {
   const addEventsMutation = useMutation(trpc.agents.addEvents.mutationOptions({}));
 
   // Get initial reduced state (with suspense for initial load)
-  const { data: initialReducedState } = useSuspenseQuery(
-    trpc.agents.getReducedStateAtEventIndex.queryOptions({
-      estateId,
-      agentInstanceName: durableObjectName,
-      agentClassName,
-      eventIndex: initialEvents.length - 1,
-    }),
-  );
-
-  // Get current reduced state (without suspense, updates as events come in)
-  const { data: reducedState } = useQuery(
+  const reducedStateQuery = useQuery(
     trpc.agents.getReducedStateAtEventIndex.queryOptions(
       {
         estateId,
         agentInstanceName: durableObjectName,
         agentClassName,
-        eventIndex: events.length - 1,
+        eventIndex: eventsQuery.data.length - 1,
       },
       {
-        initialData: initialReducedState,
-        enabled: events.length > initialEvents.length,
+        enabled: eventsQuery.data && eventsQuery.data.length > 0,
+        placeholderData: (prev) => prev,
       },
     ),
   );
 
-  // Get Braintrust permalink
-  const { data: braintrustPermalinkResult } = useQuery(
-    trpc.agents.getBraintrustPermalink.queryOptions({
-      estateId,
-      agentInstanceName: durableObjectName,
-      agentClassName,
-    }),
+  const braintrustPermalinkQuery = useQuery(
+    trpc.agents.getBraintrustPermalink.queryOptions(
+      {
+        estateId,
+        agentInstanceName: durableObjectName,
+        agentClassName,
+      },
+      {
+        staleTime: Infinity,
+      },
+    ),
   );
 
   // Handle pause/resume agent
@@ -762,7 +768,7 @@ export default function AgentsPage() {
       return result as unknown as AugmentedCoreReducedState;
     },
     getBraintrustPermalink: async () => {
-      return braintrustPermalinkResult?.permalink;
+      return braintrustPermalinkQuery.data?.permalink;
     },
   };
 
@@ -794,7 +800,7 @@ export default function AgentsPage() {
       e?.preventDefault();
       e?.stopPropagation();
 
-      const isPaused = reducedState && reducedState.paused;
+      const isPaused = reducedStateQuery.data && reducedStateQuery.data.paused;
 
       try {
         const event = {
@@ -854,13 +860,25 @@ export default function AgentsPage() {
     </Link>
   );
 
+  if (eventsQuery.isPending) {
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <GlobalLoading />
+      </div>
+    );
+  }
+
   return (
     <>
       <AgentDetailRenderer
-        events={events}
+        events={eventsQuery.data as unknown as AgentEvent[]}
         estateId={estateId}
         agentClassName={agentClassName}
-        reducedState={reducedState as unknown as AugmentedCoreReducedState}
+        reducedState={
+          reducedStateQuery.data
+            ? (reducedStateQuery.data as unknown as AugmentedCoreReducedState)
+            : null
+        }
         isWebsocketConnected={isWebsocketConnected}
         getters={getters}
         actions={actions}
@@ -877,7 +895,7 @@ export default function AgentsPage() {
               estateId={estateId}
               agentInstanceName={durableObjectName}
               agentClassName={agentClassName}
-              reducedState={reducedState}
+              reducedState={reducedStateQuery.data}
               onClose={() => setShowToolInjector(false)}
             />
           </div>

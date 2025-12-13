@@ -5,7 +5,7 @@ import type { AgentDurableObjectToolSpec, ToolSpec } from "./tool-schemas.ts";
 export type RuntimeJsonSchema = {
   type: "query" | "mutation" | "subscription";
   inputJsonSchema: JSONSchema.JSONSchema;
-  outputJsonSchema: JSONSchema.JSONSchema;
+  outputJsonSchema: JSONSchema.JSONSchema | undefined;
   metadata: Record<string, any>;
 };
 
@@ -74,19 +74,23 @@ export function doToolToRuntimeJsonSchema(_value: unknown) {
   const runtimeJsonSchema: RuntimeJsonSchema = {
     type: "mutation", // ?
     metadata: {},
-    inputJsonSchema: {
-      properties: {},
-      ...z.toJSONSchema(value.input || LooseEmptyObject, {
-        unrepresentable: "any",
-        target: "draft-2020-12",
-        io: "input",
-      }),
-    },
-    outputJsonSchema: z.toJSONSchema(value.output || LooseEmptyObject, {
-      unrepresentable: "any",
-      target: "draft-2020-12",
-      io: "output",
-    }),
+    inputJsonSchema: value.input
+      ? {
+          properties: {},
+          ...z.toJSONSchema(value.input || LooseEmptyObject, {
+            unrepresentable: "any",
+            target: "draft-2020-12",
+            io: "input",
+          }),
+        }
+      : {},
+    outputJsonSchema: value.output
+      ? z.toJSONSchema(value.output, {
+          unrepresentable: "any",
+          target: "draft-2020-12",
+          io: "output",
+        })
+      : undefined,
   };
   return runtimeJsonSchema;
 }

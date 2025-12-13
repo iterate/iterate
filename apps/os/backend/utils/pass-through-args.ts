@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import { z } from "zod";
 import { JSONSerializable } from "./type-helpers.ts";
 
 export const passThroughArgsSchema = z

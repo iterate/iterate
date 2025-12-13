@@ -2,7 +2,7 @@
 // Prompt Fragment Zod Schemas (mirrors structures in prompt-fragments.ts)
 // ---------------------------------------------------------------------------
 
-import { z } from "zod/v4";
+import { z } from "zod";
 
 export type PromptFragment =
   | null

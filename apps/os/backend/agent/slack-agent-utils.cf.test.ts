@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getMentionedExternalUserIds, isBotMentionedInMessage } from "./slack-agent-utils.ts";
 
-describe.skip("slack-helpers mentions", () => {
+describe("slack-helpers mentions", () => {
   it("extracts user IDs from <@ID>", () => {
     const text = "Hello <@U12345> and <@U67890>";
     expect(getMentionedExternalUserIds(text)).toEqual(["U12345", "U67890"]);
@@ -55,6 +55,30 @@ describe.skip("slack-helpers mentions", () => {
     const event = {
       type: "message",
       text: `Hi <@${botId}>`,
+      user: botId,
+      channel: "C123",
+      ts: "1",
+    };
+    expect(isBotMentionedInMessage(event, botId)).toBe(false);
+  });
+
+  it("isBotMentionedInMessage returns true for app_mention events", () => {
+    const botId = "U096V5ACXD0";
+    const event = {
+      type: "app_mention",
+      text: `Hey <@${botId}> can you help?`,
+      user: "U12345",
+      channel: "C123",
+      ts: "1",
+    };
+    expect(isBotMentionedInMessage(event, botId)).toBe(true);
+  });
+
+  it("isBotMentionedInMessage returns false for app_mention from bot itself", () => {
+    const botId = "U096V5ACXD0";
+    const event = {
+      type: "app_mention",
+      text: `Hey <@${botId}>`,
       user: botId,
       channel: "C123",
       ts: "1",

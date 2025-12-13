@@ -1,27 +1,35 @@
-import { redirect } from "react-router";
 import { eq } from "drizzle-orm";
-import { getDb, schema } from "../../../../../backend/db/client.ts";
+import { z } from "zod";
+import { createFileRoute, redirect } from "@tanstack/react-router";
+import { schema } from "../../../../../backend/db/client.ts";
 import { BaseOAuthState } from "../../../../../backend/auth/oauth-state-schemas.ts";
-import type { Route } from "./+types/redirect.ts";
+import { authenticatedServerFn } from "../../../../lib/auth-middleware.ts";
 
-export async function loader({ request }: Route.LoaderArgs) {
-  const url = new URL(request.url);
-  const key = url.searchParams.get("key");
+const integrationRedirect = authenticatedServerFn
+  .inputValidator(z.object({ key: z.string() }))
+  .handler(async ({ context, data }) => {
+    const { key } = data;
+    const { db } = context.variables;
 
-  if (!key) {
-    return redirect("/");
-  }
-  const state = await getDb().query.verification.findFirst({
-    where: eq(schema.verification.identifier, key),
+    const state = await db.query.verification.findFirst({
+      where: eq(schema.verification.identifier, key),
+    });
+
+    if (!state || state.expiresAt < new Date()) {
+      throw redirect({ to: "/" });
+    }
+
+    const parsedState = BaseOAuthState.parse(JSON.parse(state.value));
+    if (!parsedState.fullUrl) throw redirect({ to: "/" });
+
+    // fullUrl is an external URL, so we need to use href
+    throw redirect({ href: parsedState.fullUrl });
   });
-  if (!state || state.expiresAt < new Date()) {
-    return redirect("/");
-  }
 
-  const parsedState = BaseOAuthState.parse(JSON.parse(state.value));
-  return redirect(parsedState.fullUrl ?? "/");
-}
-
-export default function IntegrationsRedirect() {
-  return null;
-}
+export const Route = createFileRoute(
+  "/_auth.layout/$organizationId/$estateId/integrations/redirect",
+)({
+  validateSearch: z.object({ key: z.string() }),
+  loaderDeps: ({ search }) => ({ key: search.key }),
+  loader: ({ deps }) => integrationRedirect({ data: { key: deps.key } }),
+});

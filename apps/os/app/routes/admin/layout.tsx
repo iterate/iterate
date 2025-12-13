@@ -1,18 +1,7 @@
-import { Link, Outlet, useLocation } from "react-router";
+import { createFileRoute, Link, notFound, Outlet, useLocation } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import {
-  Shield,
-  MessageSquare,
-  Info,
-  ArrowLeft,
-  AlertCircle,
-  Database,
-  Building2,
-  Server,
-} from "lucide-react";
+import { Shield, MessageSquare, Info, ArrowLeft, Database, Building2, Server } from "lucide-react";
 import { useTRPC } from "../../lib/trpc.ts";
-import { Button } from "../../components/ui/button.tsx";
-import { authClient } from "../../lib/auth-client.ts";
 import {
   Sidebar,
   SidebarContent,
@@ -28,6 +17,12 @@ import {
   SidebarGroupLabel,
   SidebarGroupContent,
 } from "../../components/ui/sidebar.tsx";
+import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
+
+const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
+  const session = context.variables.session;
+  if (session?.user.role !== "admin") throw notFound();
+});
 
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
@@ -37,55 +32,15 @@ const adminLinks = [
   { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
 ];
 
-export default function AdminLayout() {
+export const Route = createFileRoute("/_auth.layout/admin")({
+  component: AdminLayout,
+  loader: () => assertIsAdmin(),
+});
+
+function AdminLayout() {
   const location = useLocation();
   const trpc = useTRPC();
-  const { data: impersonationInfo } = useSuspenseQuery(trpc.admin.impersonationInfo.queryOptions());
   const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
-
-  // Show admin-specific access denied for non-admins
-  if (!impersonationInfo?.isAdmin) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
-        <div className="max-w-md w-full px-6 py-8">
-          <div className="text-center">
-            <div className="mx-auto flex items-center justify-center h-12 w-12 rounded-full bg-red-100 dark:bg-red-900/20 mb-4">
-              <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
-            </div>
-            <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-              Admin Access Required
-            </h1>
-            <p className="text-gray-600 dark:text-gray-400 mb-8">
-              You need administrator privileges to access this area.
-            </p>
-            <div className="space-y-3">
-              <Link to="/">
-                <Button variant="default" className="w-full">
-                  <ArrowLeft className="mr-2 h-4 w-4" />
-                  Back to Dashboard
-                </Button>
-              </Link>
-              <Button
-                variant="outline"
-                className="w-full"
-                onClick={() => {
-                  authClient.signOut({
-                    fetchOptions: {
-                      onSuccess: () => {
-                        window.location.href = "/login";
-                      },
-                    },
-                  });
-                }}
-              >
-                Sign Out
-              </Button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   // Get the first estate if available, otherwise show a message
   const hasEstates = estates && estates.length > 0;

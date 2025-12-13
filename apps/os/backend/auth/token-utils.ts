@@ -12,6 +12,7 @@ export const getSlackAccessTokenForEstate = async (db: DB, estateId: string) => 
   const result = await db
     .select({
       accessToken: schema.account.accessToken,
+      accountId: schema.account.id,
     })
     .from(schema.estateAccountsPermissions)
     .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
@@ -23,7 +24,14 @@ export const getSlackAccessTokenForEstate = async (db: DB, estateId: string) => 
     )
     .limit(1);
 
-  return result[0]?.accessToken || null;
+  if (!result[0]?.accessToken) {
+    return undefined;
+  }
+
+  return {
+    accessToken: result[0].accessToken,
+    accountId: result[0].accountId,
+  };
 };
 
 export const GithubUserAccessTokenResponse = z.object({

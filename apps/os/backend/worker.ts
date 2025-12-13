@@ -1,14 +1,15 @@
-import { Hono } from "hono";
-import { createRequestHandler } from "react-router";
+import { Hono, type Context } from "hono";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { contextStorage } from "hono/context-storage";
-import { zValidator } from "@hono/zod-validator";
-import { z } from "zod";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
+import { secureHeaders } from "hono/secure-headers";
 import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import { type CloudflareEnv } from "../env.ts";
+import { z } from "zod/v4";
+import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
+import { getContainer } from "@cloudflare/containers";
+import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import {
   uploadFileHandler,
@@ -24,68 +25,74 @@ import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { runConfigInSandbox } from "./sandbox/run-config.ts";
+import { EstateBuildManager } from "./durable-objects/estate-build-manager.ts";
+import { verifySignedUrl } from "./utils/url-signing.ts";
+import { getUserEstateAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
-import { buildCallbackApp } from "./integrations/github/build-callback.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
+import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
+
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
-import { createLoggerMiddleware } from "./tag-logger-middleware.ts";
+import { registerConsumers } from "./outbox/consumers.ts";
+import * as workerConfig from "./worker-config.ts";
+import { queuer } from "./outbox/outbox-queuer.ts";
 
-declare module "react-router" {
-  export interface AppLoadContext {
-    cloudflare: {
-      env: CloudflareEnv;
-      ctx: ExecutionContext;
-    };
-  }
-}
+registerConsumers();
 
+type TrpcCaller = ReturnType<typeof appRouter.createCaller>;
 export type Variables = {
   auth: Auth;
   session: AuthSession;
   db: DB;
-  workerEntrypoint?: WorkerEntrypoint;
+  trpcCaller: TrpcCaller;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 app.use(contextStorage());
+
+app.use(
+  cors({
+    origin: (origin, c: Context<{ Bindings: CloudflareEnv }>) => {
+      if (import.meta.env.DEV) return origin;
+      if (!origin || !URL.canParse(origin)) return null;
+      const domain = new URL(origin).hostname;
+      return c.env.ALLOWED_DOMAINS.split(",").includes(domain) ? origin : null;
+    },
+    credentials: true,
+    allowMethods: ["*"],
+    maxAge: 600,
+  }),
+  secureHeaders(),
+);
+
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const session = await auth.api.getSession({
-    headers: c.req.raw.headers,
-  });
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
+  const trpcCaller = appRouter.createCaller(createContext(c));
+  c.set("trpcCaller", trpcCaller);
   return next();
 });
 
-// Sets up the logger with request metadata
-app.use(
-  "*",
-  createLoggerMiddleware<CloudflareEnv, Variables>(logger, (c) => ({
+app.use("*", async (c, next) => {
+  const requestTags = {
     userId: c.var.session?.user?.id || undefined,
     path: c.req.path,
     httpMethod: c.req.method,
     url: c.req.url,
     traceId: typeid("req").toString(),
-  })),
-);
-
-app.use(
-  "*",
-  cors({
-    credentials: true,
-    origin: (c) => c,
-  }),
-);
+  };
+  return logger.run(requestTags, () => next());
+});
 
 // Error tracking with PostHog
 app.onError((err, c) => {
-  // Log the error
-  logger.error("Unhandled error:", err);
+  // Log the error with cause-chaining and contextual suffix
+  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
   // Return error response
   return c.json({ error: "Internal Server Error" }, 500);
 });
@@ -110,7 +117,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
       db: c.var.db,
       agentInstanceName,
     });
-    return agentStub.fetch(c.req.raw);
+    return agentStub.raw.fetch(c.req.raw);
   } catch (error) {
     const message = (error as Error).message || "Unknown error";
     if (message.includes("not found")) {
@@ -128,10 +135,18 @@ app.all("/api/trpc/*", (c) => {
     req: c.req.raw,
     router: appRouter,
     allowMethodOverride: true,
-    createContext: (opts) => createContext(c, opts),
-    onError: ({ error }) => {
-      if (getHTTPStatusCodeFromError(error) >= 500) {
-        logger.error("Error in tRPC endpoint:", error);
+    createContext: () => createContext(c),
+    onError: ({ error, path }) => {
+      const procedurePath = path ?? "unknown";
+      const status = getHTTPStatusCodeFromError(error);
+      if (status >= 500) {
+        // logger.error tracks the error in posthog - we only want this for 500 errors
+        logger.error(
+          new Error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, { cause: error }),
+        );
+      } else {
+        // however, we DO want to log other errors to stdout with path and stacktrace
+        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
       }
     },
   });
@@ -142,7 +157,11 @@ app.use("/api/estate/:estateId/*", async (c, next) => {
   if (!c.var.session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  //TODO: session.user.estates.includes(c.req.param("estateId")) -> PASS
+  const estateId = c.req.param("estateId");
+  const session = c.var.session;
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
   return next();
 });
 
@@ -155,7 +174,6 @@ app.get("/api/files/:id", getFileHandler);
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 app.route("/api/integrations/github", githubApp);
-app.route("/api/build", buildCallbackApp);
 
 // WebSocket endpoint for organization connections
 app.get("/api/ws/:organizationId", async (c) => {
@@ -178,71 +196,88 @@ app.get("/api/ws/:organizationId", async (c) => {
   );
 });
 
-// Test build endpoint for sandbox
-app.post(
-  "/api/test-build",
-  zValidator(
-    "json",
-    z.object({
-      githubRepoUrl: z
-        .string()
-        .url()
-        .regex(/^https:\/\/github\.com\/[\w-]+\/[\w.-]+$/, {
-          message: "Invalid GitHub repository URL format",
-        }),
-      githubToken: z.string().min(1, "GitHub token is required"),
-      branch: z.string().optional(),
-      commitHash: z
-        .string()
-        .regex(/^[a-f0-9]{7,40}$/i, "Invalid commit hash format")
-        .optional(),
-      connectedRepoPath: z
-        .string()
-        .refine(
-          (val) => !val || !val.startsWith("/"),
-          "Directory to use within the connected repository",
-        )
-        .optional(),
-    }),
-  ),
-  async (c) => {
-    try {
-      const body = c.req.valid("json");
+// Watch logs (admin UI) → DO (requires user session + estate access)
+app.get("/api/estate/:estateId/builds/:buildId/sse", async (c) => {
+  const estateId = c.req.param("estateId");
+  const buildId = c.req.param("buildId");
 
-      // Run the configuration in the sandbox
-      const result = await runConfigInSandbox(c.env, body);
+  const session = c.var.session;
+  if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
+  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
 
-      // Return appropriate status code based on the result
-      if ("error" in result) {
-        return c.json(result, 400);
-      }
+  const container = getContainer(c.env.ESTATE_BUILD_MANAGER, estateId);
 
-      return c.json(result);
-    } catch (error) {
-      logger.error(
-        "Test build error:",
-        error instanceof Error ? error : new Error(error as string),
-      );
-      return c.json(
-        {
-          error: "Internal server error during build test",
-          details: error instanceof Error ? error.message : "Unknown error",
-        },
-        500,
-      );
-    }
-  },
-);
+  const logs = await container.getSSELogStream(buildId);
+  return logs;
+});
 
-const requestHandler = createRequestHandler(
-  // @ts-ignore - this is a virtual module
-  () => import("virtual:react-router/server-build"),
-  import.meta.env.MODE,
-);
+// Ingest agent background task logs (from sandbox/codex), batched every ~10s
+app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async (c) => {
+  const estateId = c.req.param("estateId");
+  const durableObjectName = c.req.param("durableObjectName");
+
+  const url = new URL(c.req.url);
+  const hasSignature = !!url.searchParams.get("signature");
+  if (!hasSignature) return c.json({ error: "Signature required" }, 401);
+  const valid = await verifySignedUrl(c.req.url, c.env.EXPIRING_URLS_SIGNING_KEY);
+  if (!valid) return c.json({ error: "Invalid or expired signature" }, 401);
+
+  // Parse body
+  const body = (await c.req.json()) as unknown;
+  const LogItem = z.object({
+    seq: z.number(),
+    ts: z.number(),
+    stream: z.enum(["stdout", "stderr"]),
+    message: z.string(),
+    event: z.string().optional(),
+  });
+  const Body = z.object({
+    processId: z.string(),
+    logs: z.array(LogItem).default([]),
+  });
+  const parsed = Body.safeParse(body);
+  if (!parsed.success) return c.json({ error: "Invalid payload" }, 400);
+  const { processId, logs } = parsed.data;
+
+  const agent = await getAgentStubByName(toAgentClassName(c.req.param("className")!), {
+    db: c.var.db,
+    agentInstanceName: durableObjectName,
+    estateId,
+  });
+  const result = (await agent.ingestBackgroundLogs({
+    processId,
+    logs,
+  })) as { lastSeq?: number } | void;
+  const lastSeq = result && typeof result.lastSeq === "number" ? result.lastSeq : undefined;
+  return c.json({ ok: true, lastSeq });
+});
+
+export type RequestContext = {
+  cloudflare: {
+    env: CloudflareEnv;
+    ctx: ExecutionContext;
+  };
+  variables: Variables;
+};
+
+declare module "@tanstack/react-start" {
+  interface Register {
+    server: {
+      requestContext: RequestContext;
+    };
+  }
+}
 
 app.all("*", (c) => {
-  return requestHandler(c.req.raw, {
-    cloudflare: { env: c.env, ctx: c.executionCtx },
+  return tanstackStartServerEntry.fetch(c.req.raw, {
+    context: {
+      cloudflare: {
+        env: c.env,
+        ctx: c.executionCtx as ExecutionContext<unknown>,
+      },
+      variables: c.var,
+    },
   });
 });
 
@@ -252,15 +287,31 @@ app.all("*", (c) => {
 // This is only really needed when we have multiple workers, though. I just ported it over because I mistakenly
 // thought we need it sooner
 export default class extends WorkerEntrypoint {
+  declare env: CloudflareEnv;
+
+  /** rpc method for codemode to call back to the agent running the codemode tool */
+  callMyAgent(params: {
+    bindingName: string;
+    durableObjectName: string;
+    methodName: string;
+    args: unknown[];
+  }) {
+    // cast the bindingName, methodName and args to example values to make sure types are roughly correct
+    // this is called from dynamic workers, not typescript anyway
+    const binding = this.env[params.bindingName as "ITERATE_AGENT"];
+    const agent = binding.getByName(params.durableObjectName);
+    return agent[params.methodName as "doNothing"](...(params.args as []));
+  }
+
   fetch(request: Request) {
     return app.fetch(request, this.env, this.ctx);
   }
 
   async scheduled(controller: ScheduledController) {
-    switch (controller.cron) {
-      case "0 0 * * *": {
-        const db = getDb();
-
+    const db = getDb();
+    const cron = controller.cron as workerConfig.WorkerCronExpression;
+    switch (cron) {
+      case workerConfig.workerCrons.slackSync: {
         try {
           logger.info("Running scheduled Slack sync for all estates");
           const result = await syncSlackForAllEstatesHelper(db);
@@ -274,11 +325,30 @@ export default class extends WorkerEntrypoint {
         }
         break;
       }
-      default:
-        logger.error("Unknown cron pattern:", controller.cron);
+      case workerConfig.workerCrons.processOutboxQueue: {
+        try {
+          const result = await queuer.processQueue(db);
+          if (result !== "0 messages processed")
+            logger.info("Scheduled outbox queue processing completed", result);
+        } catch (error) {
+          logger.error("Scheduled outbox queue processing failed:", error);
+        }
+        break;
+      }
+      default: {
+        cron satisfies never;
+        logger.error("Unknown cron pattern:", controller);
+      }
     }
   }
 }
 
-export { IterateAgent, OnboardingAgent, SlackAgent, OrganizationWebSocket };
+export {
+  IterateAgent,
+  OnboardingAgent,
+  SlackAgent,
+  OrganizationWebSocket,
+  AdvisoryLocker,
+  EstateBuildManager,
+};
 export { Sandbox } from "@cloudflare/sandbox";

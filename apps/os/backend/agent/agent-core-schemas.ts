@@ -1,5 +1,5 @@
 import type { OpenAI } from "openai";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { backcompat, JSONSerializable } from "../utils/type-helpers.ts";
 import {
   FunctionCall,
@@ -141,6 +141,41 @@ export const LocalFunctionToolCallEvent = z.object({
   ...agentCoreBaseEventFields,
   ...localFunctionToolCallEventFields,
 });
+
+export const ParticipantRole = z.enum(["member", "admin", "owner", "guest", "external"]);
+
+export const ApprovalKey = z.string().brand("ApprovalKey");
+export type ApprovalKey = z.infer<typeof ApprovalKey>;
+const toolCallApprovalRequestedEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVAL_REQUESTED"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    toolName: z.string(),
+    toolCallId: z.string(),
+    args: z.unknown(),
+  }),
+};
+export const ToolCallApprovalRequestedEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalRequestedEventFields,
+});
+
+const toolCallApprovalEventFields = {
+  type: z.literal("CORE:TOOL_CALL_APPROVED"),
+  data: z.object({
+    approvalKey: ApprovalKey,
+    approved: z.boolean(),
+    approvedBy: z.object({
+      userId: z.string(),
+      orgRole: ParticipantRole.optional(),
+    }),
+  }),
+};
+export const ToolCallApprovalEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...toolCallApprovalEventFields,
+});
+export type ToolCallApprovalEvent = z.infer<typeof ToolCallApprovalEvent>;
 
 // CORE:LLM_REQUEST_START
 const llmRequestStartEventFields = {
@@ -319,6 +354,7 @@ export const InitializedWithEventsEvent = z.object({
 // CORE:PAUSE_LLM_REQUESTS
 const pauseLLMRequestsEventFields = {
   type: z.literal("CORE:PAUSE_LLM_REQUESTS"),
+  data: z.object({ reason: z.string().optional() }).optional(),
 };
 export const PauseLLMRequestsEvent = z.object({
   ...agentCoreBaseEventFields,
@@ -332,7 +368,7 @@ const participantJoinedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -371,7 +407,7 @@ const participantMentionedEventFields = {
     internalUserId: z.string(),
     email: z.string().optional(),
     displayName: z.string().optional(),
-    role: z.enum(["member", "admin", "owner", "guest", "external"]).optional(),
+    role: ParticipantRole.optional(),
     externalUserMapping: z
       .record(
         z.string(),
@@ -419,10 +455,40 @@ export const FileSharedEvent = z.object({
   ...fileSharedEventFields,
 });
 
+// CORE:BACKGROUND_TASK_PROGRESS
+const backgroundTaskProgressEventFields = {
+  type: z.literal("CORE:BACKGROUND_TASK_PROGRESS"),
+  data: z.object({
+    processId: z.string(),
+    stdout: z.string().default(""),
+    stderr: z.string().default(""),
+    lastSeq: z.number().optional(),
+    complete: z.boolean().optional(),
+  }),
+};
+export const BackgroundTaskProgressEvent = z.object({
+  ...agentCoreBaseEventFields,
+  ...backgroundTaskProgressEventFields,
+});
+
+export const CodemodeToolCallEvent = z.object({
+  ...agentCoreBaseEventFields,
+  type: z.literal("CORE:CODEMODE_TOOL_CALLS"),
+  data: z.array(
+    z.object({
+      tool: z.string(),
+      input: z.unknown(),
+      output: z.unknown(),
+    }),
+  ),
+});
+
 // ------------------------- Discriminated Unions -------------------------
 
 export const agentCoreEventSchemasUndiscriminated = [
   LocalFunctionToolCallEvent,
+  ToolCallApprovalRequestedEvent,
+  ToolCallApprovalEvent,
   LlmRequestStartEvent,
   LlmRequestEndEvent,
   LlmRequestCancelEvent,
@@ -443,6 +509,8 @@ export const agentCoreEventSchemasUndiscriminated = [
   ParticipantJoinedEvent,
   ParticipantLeftEvent,
   ParticipantMentionedEvent,
+  BackgroundTaskProgressEvent,
+  CodemodeToolCallEvent,
 ] as const;
 
 export const AgentCoreEvent = z.discriminatedUnion("type", agentCoreEventSchemasUndiscriminated);
@@ -532,6 +600,13 @@ export type ParticipantJoinedEvent = z.infer<typeof ParticipantJoinedEvent>;
 
 export type ParticipantMentionedEvent = z.infer<typeof ParticipantMentionedEvent>;
 
+export type ToolCallApprovalState = {
+  toolCallId: string;
+  status: "pending" | "approved" | "rejected";
+  toolName: string;
+  args: unknown;
+};
+
 // ---------------------------------------------------------------------------
 //  Reduced State
 // ---------------------------------------------------------------------------
@@ -559,6 +634,9 @@ export interface CoreReducedState<TEventInput = AgentCoreEvent> {
 
   /** slug->rule. this is the source of truth for prompts, tools, and mcp servers. */
   contextRules: Record<string, ContextRule>;
+
+  toolCallApprovals: Record<ApprovalKey, ToolCallApprovalState>;
+
   /**
    * These are fully valid OpenAI function tools that are ready to be used.
    * They are grouped by the source of the tool, e.g. "context-rule" or "mcp".
@@ -588,10 +666,14 @@ with the agent.
    * Tracks users who have been mentioned but haven't actively participated.
    */
   mentionedParticipants: Record<string, Participant>;
+
+  recordedToolCalls?: Array<{ tool: string; input: unknown; output: unknown }>;
 }
 
-export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
-  extends CoreReducedState<TEventInput> {
+export interface AugmentedCoreReducedState<
+  TEventInput = AgentCoreEvent,
+> extends CoreReducedState<TEventInput> {
+  enabledContextRules: ContextRule[];
   /**
    * Tool specs, these are essentially "pointers" to tools that will be resolved into valid OpenAI function tools when the LLM request is made. Derived from contextRules.
    */
@@ -610,6 +692,7 @@ export interface AugmentedCoreReducedState<TEventInput = AgentCoreEvent>
    * slices to continuously update their context item. Derived from contextRules.
    */
   ephemeralPromptFragments: Record<string, PromptFragment>;
+  codemodeEnabledTools: string[];
   /** The keys on the original, un-augmented state. Can be used to get the original state without the derived props. */
   rawKeys: string[];
 }
@@ -626,6 +709,7 @@ export const CORE_INITIAL_REDUCED_STATE: CoreReducedState = {
   inputItems: [],
   modelOpts: DEFAULT_MODEL_OPTS,
   contextRules: {},
+  toolCallApprovals: {},
   groupedRuntimeTools: { "context-rule": [], mcp: [] },
   llmRequestStartedAtIndex: null,
   paused: false,

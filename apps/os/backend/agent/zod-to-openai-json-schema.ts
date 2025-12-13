@@ -8,7 +8,7 @@ import {
   type ZodObject,
   type ZodType,
   type ZodUnion,
-} from "zod/v4";
+} from "zod";
 import { logger } from "../tag-logger.ts";
 import type { BaseJSONSchema, SchemaBranded } from "./schema-utils.ts";
 
@@ -124,6 +124,7 @@ export function makeJSONSchemaOpenAICompatible(obj: any) {
   }
 
   if (typeof obj === "object" && Object.keys(obj).length === 0) {
+    obj.$original = "empty_schema";
     obj.additionalProperties = false;
     obj.type = "string";
     obj.description = "The value can be a string containing a JSON object";

@@ -12,16 +12,16 @@ import { waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
-import { env, type CloudflareEnv } from "../../env.ts";
+import type { CloudflareEnv } from "../../env.ts";
 import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
 import { createUserOrganizationAndEstate } from "../org-utils.ts";
-import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
 import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
 export const SLACK_BOT_SCOPES = [
   "channels:history",
   "channels:join",
+  "channels:manage", // Required for conversations.create
   "channels:read",
   "chat:write",
   "chat:write.public",
@@ -40,7 +40,7 @@ export const SLACK_BOT_SCOPES = [
   "users:read",
   "users:read.email",
   "assistant:write",
-  "conversations.connect:write",
+  "conversations.connect:write", // Required for Slack Connect invitations
 ];
 
 export const SLACK_USER_AUTH_SCOPES = ["openid", "profile", "email"];
@@ -177,54 +177,6 @@ export const integrationsPlugin = () =>
         },
       ),
 
-      directLoginWithSlack: createAuthEndpoint(
-        "/integrations/direct-login-with-slack",
-        {
-          method: "GET",
-          query: z.object({
-            callbackURL: z.string().default("/"),
-            mode: z.enum(["redirect", "json"]).default("json"),
-          }),
-        },
-        async (ctx) => {
-          const state = generateRandomString(32);
-          const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-
-          const data = JSON.stringify({
-            callbackURL: ctx.query.callbackURL,
-          });
-
-          await ctx.context.internalAdapter.createVerificationValue({
-            expiresAt,
-            identifier: state,
-            value: data,
-          });
-
-          const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
-          const url = await createAuthorizationURL({
-            id: "slack-bot",
-            options: {
-              clientId: env.SLACK_CLIENT_ID,
-              clientSecret: env.SLACK_CLIENT_SECRET,
-              redirectURI,
-            },
-            redirectURI,
-            authorizationEndpoint: "https://slack.com/oauth/v2/authorize",
-            scopes: SLACK_BOT_SCOPES,
-            state,
-            additionalParams: {
-              user_scope: SLACK_USER_AUTH_SCOPES.join(","),
-            },
-          });
-
-          // If mode is redirect, redirect directly to OAuth URL
-          if (ctx.query.mode === "redirect") {
-            return ctx.redirect(url.toString());
-          }
-
-          return ctx.json({ url });
-        },
-      ),
       linkSlackBot: createAuthEndpoint(
         "/integrations/link/slack-bot",
         {
@@ -269,19 +221,19 @@ export const integrationsPlugin = () =>
           const state = generateRandomString(32);
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-          const data = JSON.stringify({
+          const oauthStateData = {
             estateId,
             link: {
               userId: session.user.id,
               email: session.user.email,
             },
-            callbackURL,
-          });
+            callbackUrl: callbackURL,
+          } satisfies SlackBotOAuthState;
 
           await ctx.context.internalAdapter.createVerificationValue({
             expiresAt,
             identifier: state,
-            value: data,
+            value: JSON.stringify(oauthStateData),
           });
 
           const redirectURI = `${env.VITE_PUBLIC_URL}/api/auth/integrations/callback/slack-bot`;
@@ -360,28 +312,37 @@ export const integrationsPlugin = () =>
         "/integrations/callback/slack-bot",
         {
           method: "GET",
-          query: z.object({
-            error: z
-              .string()
-              .meta({
+          query: z.union([
+            z.object({
+              error: z.string().meta({
                 description: "The error message, if any",
-              })
-              .optional(),
-            error_description: z
-              .string()
-              .meta({
-                description: "The error description, if any",
-              })
-              .optional(),
-            code: z.string().meta({
-              description: "The OAuth2 code",
+              }),
+              error_description: z
+                .string()
+                .meta({
+                  description: "The error description, if any",
+                })
+                .optional(),
             }),
-            state: z.string().meta({
-              description: "The state parameter from the OAuth2 request",
+            z.object({
+              code: z.string().meta({
+                description: "The OAuth2 code",
+              }),
+              state: z.string().meta({
+                description: "The state parameter from the OAuth2 request",
+              }),
             }),
-          }),
+          ]),
         },
         async (ctx) => {
+          if ("error" in ctx.query) {
+            const url = new URL(`${import.meta.env.VITE_PUBLIC_URL}/api/auth/error`);
+            url.searchParams.set("error", ctx.query.error);
+            if (ctx.query.error_description)
+              url.searchParams.set("error_description", ctx.query.error_description);
+            throw ctx.redirect(url.toString());
+          }
+
           const value = await ctx.context.internalAdapter.findVerificationValue(ctx.query.state);
           if (!value) {
             return ctx.json({ error: "Invalid state" });
@@ -449,6 +410,17 @@ export const integrationsPlugin = () =>
                 image: userInfo.picture,
               });
               user = existingUser.user;
+
+              // REMOVED AUTO-LINKING: Do not auto-link bot accounts to existing estates during signup.
+              // This was causing bot accounts to be linked to multiple estates when users were
+              // synced across organizations via Slack Connect.
+              //
+              // Bot accounts should only be linked when:
+              // 1. estateId is explicitly provided in OAuth state (link flow from integrations page)
+              // 2. A new estate is being created during signup (handled by redirect.tsx)
+              //
+              // If estateId is not provided, the signup flow in redirect.tsx will create a new estate
+              // and link the bot account to it properly.
             } else {
               user = await ctx.context.internalAdapter.createUser({
                 email: userInfo.email,
@@ -469,15 +441,6 @@ export const integrationsPlugin = () =>
               }
 
               const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
-              waitUntil(
-                createStripeCustomerAndSubscriptionForOrganization(
-                  db,
-                  newOrgAndEstate.organization,
-                  user,
-                ).catch(() => {
-                  // Error is already logged in the helper function
-                }),
-              );
 
               if (!newOrgAndEstate.estate) {
                 return ctx.json({ error: "Failed to create an estate for the user" });
@@ -505,7 +468,7 @@ export const integrationsPlugin = () =>
               });
             }
 
-            const session = await ctx.context.internalAdapter.createSession(user.id, ctx);
+            const session = await ctx.context.internalAdapter.createSession(user.id);
             await setSessionCookie(ctx, {
               session,
               user,
@@ -522,7 +485,18 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get user" });
           }
 
-          let botAccount = await ctx.context.internalAdapter.findAccount(botUserId);
+          // Store app_id for cross-workspace bot matching
+          const appId = tokens.app_id || (tokens as any).appId;
+
+          // Find existing bot account by userId + providerId (not by bot user ID which is not the account.id)
+          const existingBotAccount = await db.query.account.findFirst({
+            where: and(
+              eq(schema.account.userId, user.id),
+              eq(schema.account.providerId, "slack-bot"),
+            ),
+          });
+
+          let botAccount: typeof existingBotAccount = existingBotAccount;
           if (botAccount) {
             await ctx.context.internalAdapter.updateAccount(botAccount.id, {
               accessToken: tokens.access_token,
@@ -530,13 +504,24 @@ export const integrationsPlugin = () =>
               accountId: botUserId,
             });
           } else {
-            botAccount = await ctx.context.internalAdapter.createAccount({
+            const createdAccount = await ctx.context.internalAdapter.createAccount({
               providerId: "slack-bot",
               userId: user.id,
               accessToken: tokens.access_token,
               scope: SLACK_BOT_SCOPES.join(","),
               accountId: botUserId,
             });
+            if (!createdAccount) {
+              return ctx.json({ error: "Failed to create bot account" });
+            }
+            botAccount = {
+              ...createdAccount,
+              password: createdAccount.password ?? null,
+              refreshToken: createdAccount.refreshToken ?? null,
+              idToken: createdAccount.idToken ?? null,
+              accessTokenExpiresAt: createdAccount.accessTokenExpiresAt ?? null,
+              refreshTokenExpiresAt: createdAccount.refreshTokenExpiresAt ?? null,
+            };
           }
 
           if (!botAccount) {
@@ -550,7 +535,14 @@ export const integrationsPlugin = () =>
           if (estateId) {
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
-            waitUntil(syncSlackForEstateInBackground(db, tokens.access_token, estateId));
+            if (!tokens.team?.id) {
+              logger.error("[Slack OAuth] No team_id in link flow");
+              return ctx.json({ error: "Failed to get Slack team ID" }, { status: 500 });
+            }
+
+            waitUntil(
+              syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
+            );
 
             await db
               .insert(schema.estateAccountsPermissions)
@@ -564,11 +556,12 @@ export const integrationsPlugin = () =>
               .insert(schema.providerEstateMapping)
               .values({
                 internalEstateId: estateId,
-                externalId: tokens.team?.id,
+                externalId: tokens.team.id,
                 providerId: "slack-bot",
                 providerMetadata: {
                   botUserId,
                   team: tokens.team,
+                  appId, // Store app_id for cross-workspace bot matching
                 },
               })
               .onConflictDoUpdate({
@@ -581,9 +574,14 @@ export const integrationsPlugin = () =>
                   providerMetadata: {
                     botUserId,
                     team: tokens.team,
+                    appId, // Store app_id for cross-workspace bot matching
                   },
                 },
-              });
+              })
+              .returning();
+          } else {
+            // Don't auto-link in login flow - let redirect.tsx handle it
+            // This avoids linking to wrong estates when users share organizations via Slack sync
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);

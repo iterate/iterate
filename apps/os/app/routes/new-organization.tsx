@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useNavigate } from "react-router";
-import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Spinner } from "../components/ui/spinner.tsx";
 import { useTRPC } from "../lib/trpc.ts";
@@ -14,47 +14,29 @@ import {
   CardHeader,
   CardTitle,
 } from "../components/ui/card.tsx";
-import type { Route } from "./+types/new-organization";
+import { useSessionUser } from "../hooks/use-session-user.ts";
 
-export function meta(_args: Route.MetaArgs) {
-  return [
-    { title: "Create Organization - Iterate" },
-    { name: "description", content: "Create a new organization" },
-  ];
-}
+export const Route = createFileRoute("/_auth.layout/new-organization")({
+  component: NewOrganization,
+  head: () => ({
+    meta: [
+      { title: "Create Organization - Iterate" },
+      { name: "description", content: "Create a new organization" },
+    ],
+  }),
+});
 
-export default function NewOrganization() {
+function NewOrganization() {
   const navigate = useNavigate();
   const trpc = useTRPC();
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const user = useSessionUser();
   const [organizationName, setOrganizationName] = useState("");
-
-  // Only allow debugMode users to create organizations
-  if (!user.debugMode) {
-    return (
-      <div className="flex min-h-screen items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardHeader>
-            <CardTitle>Access Denied</CardTitle>
-            <CardDescription>
-              Organization creation is currently restricted to debug mode users only.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Button onClick={() => navigate("/")} className="w-full">
-              Go Back
-            </Button>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   const createOrganization = useMutation(
     trpc.organization.create.mutationOptions({
       onSuccess: (data) => {
         // Navigate to the new organization's first estate
-        navigate(`/${data.organization.id}/${data.estate.id}`);
+        navigate({ to: `/${data.organization.id}/${data.estate.id}` });
       },
       onError: (error) => {
         toast.error(error.message);
@@ -72,6 +54,27 @@ export default function NewOrganization() {
 
     createOrganization.mutate({ name: organizationName });
   };
+
+  // Only allow debugMode users to create organizations
+  if (!user.debugMode) {
+    return (
+      <div className="flex min-h-screen items-center justify-center p-4">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Access Denied</CardTitle>
+            <CardDescription>
+              Organization creation is currently restricted to debug mode users only.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button onClick={() => navigate({ to: "/" })} className="w-full">
+              Go Back
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center p-4">

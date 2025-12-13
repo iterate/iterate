@@ -31,6 +31,7 @@
   "typescript.tsdk": "node_modules/typescript/lib",
   "typescript.preferences.importModuleSpecifierEnding": "js",
   "typescript.preferences.preferTypeOnlyAutoImports": true,
+  // "typescript.experimental.useTsgo": true,
   "search.exclude": {
     "**/node_modules": true,
     "**/dist": true,
@@ -48,7 +49,14 @@
   },
   "files.watcherExclude": {
     "**/routeTree.gen.ts": true,
-    "**/worker-configuration.d.ts": true
+    "**/worker-configuration.d.ts": true,
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/build": true,
+    "**/.wrangler": true,
+    "**/.alchemy": true
   },
+  "git.autorefresh": true,
+  "git.autoRepositoryDetection": true,
   "vitest.disableWorkspaceWarning": true
 }

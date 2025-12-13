@@ -1,47 +1,34 @@
-import { setTimeout as setTimeoutPromise } from "node:timers/promises";
+import { createHash } from "node:crypto";
+import { basename } from "node:path";
+import { Agent as CloudflareAgent } from "agents";
 import pMemoize from "p-suite/p-memoize";
-import { enableDebug } from "better-wait-until";
-import { KeepAliveAgent as CloudflareAgent } from "better-wait-until/agents";
 import { formatDistanceToNow } from "date-fns";
-import { z } from "zod/v4";
+import { z } from "zod";
 import dedent from "dedent";
 import { typeid } from "typeid-js";
 import * as fflate from "fflate/browser";
 import { permalink as getPermalink } from "braintrust/browser";
-
-// Parent directory imports
 import { and, eq } from "drizzle-orm";
 import * as R from "remeda";
 import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
+import { match, P } from "ts-pattern";
 import { logger } from "../tag-logger.ts";
-import { env, type CloudflareEnv } from "../../env.ts";
+import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
 import { PosthogCloudflare } from "../utils/posthog-cloudflare.ts";
 import type { JSONSerializable, Result } from "../utils/type-helpers.ts";
-
-// Local imports
 import { agentInstance, files, UserRole } from "../db/schema.ts";
 import type { IterateConfig } from "../../sdk/iterate-config.ts";
-export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
-export type AgentInitParams = {
-  record: AgentInstanceDatabaseRecord;
-  estate: typeof schema.estate.$inferSelect;
-  organization: typeof schema.organization.$inferSelect;
-  iterateConfig: IterateConfig;
-  // Optional props forwarded to PartyKit when setting the room name
-  // Used to pass initial metadata for the room/server initialisation
-  props?: Record<string, unknown>;
-  // Optional tracing information for logger context
-  tracing?: {
-    userId?: string;
-    parentSpan?: string;
-    traceId?: string;
-  };
-};
 import { makeBraintrustSpan } from "../utils/braintrust-client.ts";
-import { searchWeb, getURLContent } from "../default-tools.ts";
+import { signUrl } from "../utils/url-signing.ts";
+import {
+  searchWeb,
+  getURLContent,
+  createDeepResearchTask,
+  checkDeepResearchStatus,
+} from "../default-tools.ts";
 import {
   getFileContent,
   getFilePublicURL,
@@ -52,12 +39,24 @@ import { trackTokenUsageInStripe } from "../integrations/stripe/stripe.ts";
 import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-utils.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
+import {
+  getGithubInstallationForEstate,
+  getOctokitForInstallation,
+} from "../integrations/github/github-utils.ts";
+import type { WithCallMethod } from "../stub-stub.ts";
+import { recentActiveSources } from "../db/helpers.ts";
+import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
+import {
+  betterWaitUntil,
+  monkeyPatchAgentWithBetterWaitUntilSupport,
+} from "./better-wait-until.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
   type AgentCoreDeps,
   type AgentCoreSlice,
+  type executeLocalFunctionTool,
   type MergedDepsForSlices,
   type MergedEventForSlices,
   type MergedStateForSlices,
@@ -82,8 +81,29 @@ import { toolSpecsToImplementations } from "./tool-spec-to-runtime-tool.ts";
 import { defaultContextRules } from "./default-context-rules.ts";
 import { ContextRule } from "./context-schemas.ts";
 import { processPosthogAgentCoreEvent } from "./posthog-event-processor.ts";
+import type { MagicAgentInstructions } from "./magic.ts";
 import { getAgentStubByName, toAgentClassName } from "./agents/stub-getters.ts";
-import { execStreamOnSandbox } from "./exec-stream-on-sandbox.ts";
+import { toolNameToJsIdentifier } from "./codemode.ts";
+
+// Deep research processors that have shorter timeout (20 min vs 60 min for pro+)
+const UNDER_PRO_PROCESSORS = ["lite", "base", "core", "core2x"] as const;
+
+export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
+export type AgentInitParams = {
+  record: AgentInstanceDatabaseRecord;
+  estate: typeof schema.estate.$inferSelect;
+  organization: typeof schema.organization.$inferSelect;
+  iterateConfig: IterateConfig;
+  // Optional props forwarded to PartyKit when setting the room name
+  // Used to pass initial metadata for the room/server initialisation
+  props?: Record<string, unknown>;
+  // Optional tracing information for logger context
+  tracing?: {
+    userId?: string;
+    parentSpan?: string;
+    traceId?: string;
+  };
+};
 
 // -----------------------------------------------------------------------------
 // Core slice definition – *always* included for any IterateAgent variant.
@@ -163,12 +183,13 @@ type Inputs = typeof iterateAgentTools.$infer.inputTypes;
  * core ones are always present.
  */
 export class IterateAgent<
-    Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
-    State extends IterateAgentState = IterateAgentState,
-  >
-  extends CloudflareAgent<CloudflareEnv, State>
-  implements ToolsInterface
+  Slices extends readonly AgentCoreSlice[] = CoreAgentSlices,
+  State extends IterateAgentState = IterateAgentState,
+>
+  extends CloudflareAgent<{}, State>
+  implements ToolsInterface, WithCallMethod
 {
+  declare env: CloudflareEnv;
   override observability = undefined;
 
   protected db: DB;
@@ -196,17 +217,13 @@ export class IterateAgent<
     // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
 
     // Perform the PartyKit set-name fetch internally so it triggers onStart inside this DO
-    try {
-      const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
-      req.headers.set("x-partykit-room", params.record.durableObjectName);
-      if (params.props) {
-        req.headers.set("x-partykit-props", JSON.stringify(params.props));
-      }
-      const res = await this.fetch(req);
-      await res.text();
-    } catch (e) {
-      logger.error("Could not set server name:", e);
+    const req = new Request("http://dummy-example.cloudflare.com/cdn-cgi/partyserver/set-name/");
+    req.headers.set("x-partykit-room", params.record.durableObjectName);
+    if (params.props) {
+      req.headers.set("x-partykit-props", JSON.stringify(params.props));
     }
+    const res = await this.fetch(req);
+    await res.text();
 
     this._isInitialized = true;
   }
@@ -260,19 +277,12 @@ export class IterateAgent<
   }
 
   get iterateConfig() {
-    if (!this._iterateConfig) return {} as IterateConfig;
     return this._iterateConfig;
   }
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
-
-    // disabling broadcast functionality because it breaks with better-wait-until keep alive websockets
-    const newBroadcast = (_msg: string, _without: string[] | undefined) => {
-      logger.info("web socket broadcast is a no op for now");
-    };
-    this.broadcast = newBroadcast;
-    this.constructor.prototype.broadcast = newBroadcast;
+    monkeyPatchAgentWithBetterWaitUntilSupport(this);
 
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
@@ -299,6 +309,25 @@ export class IterateAgent<
 
     this.agentCore = this.initAgentCore();
     this.sql`create table if not exists swr_cache (key text primary key, json text)`;
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bg_logs (process_id TEXT, seq INTEGER, ts INTEGER, stream TEXT, message TEXT, event TEXT)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_bg_logs_proc_seq ON bg_logs (process_id, seq)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE INDEX IF NOT EXISTS idx_bg_logs_proc_ts ON bg_logs (process_id, ts)",
+    );
+    this.ctx.storage.sql.exec(
+      "CREATE TABLE IF NOT EXISTS bg_processes (process_id TEXT PRIMARY KEY, formatter TEXT, last_heartbeat INTEGER, status TEXT NOT NULL DEFAULT 'in_progress')",
+    );
+  }
+
+  callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
+    return logger.run(context, async () => {
+      // @ts-expect-error trust me bro
+      return this[methodName](...args);
+    });
   }
 
   /**
@@ -335,6 +364,99 @@ export class IterateAgent<
     });
 
     const baseDeps: AgentCoreDeps = {
+      setupCodemode: (functions) => {
+        const codemodeCallerId = this.createCodemodeCaller(functions);
+        return {
+          eval: async (functionCode) => {
+            const toolCallFunctions = Object.keys(functions)
+              .map((name) => {
+                return `const ${toolNameToJsIdentifier(name)} = input => callCodemodeCallbackOnDO(${JSON.stringify(name)}, input);`;
+              })
+              .join("\n");
+            const dynamicWorkerCode = dedent`
+              export default {
+                async fetch(request, env, ctx) {
+                  const toolCalls = [];
+                  const callMethodOnDO = (methodName, args) => {
+                    return env.AGENT_CALLER.callMyAgent({
+                      bindingName: env.AGENT_BINDING_NAME,
+                      durableObjectName: env.AGENT_NAME,
+                      methodName,
+                      args,
+                    });
+                  };
+
+                  const callCodemodeCallbackOnDO = async (functionName, input) => {
+                    const output = await callMethodOnDO("callCodemodeCallback", [env.CODEMODE_CALLER_ID, functionName, input]);
+                    toolCalls.push({tool: functionName, input, output});
+                    return output.toolCallResult;
+                  };
+
+                  __tool_call_functions__
+
+                  __function_code__
+
+                  const result = await codemode();
+
+                  return new Response(JSON.stringify({ result, toolCalls }));
+                }
+              }
+            `
+              .replace("__tool_call_functions__", toolCallFunctions.replaceAll("\n", "\n    "))
+              .replace("__function_code__", functionCode.replaceAll("\n", "\n    "));
+
+            const hash = createHash("md5").update(dynamicWorkerCode).digest("hex");
+            const dynamicWorker = this.env.WORKER_LOADER.get(
+              `codemode-${codemodeCallerId}-${hash}`,
+              async () => {
+                return {
+                  compatibilityDate: "2025-06-01",
+                  mainModule: "index.js",
+                  modules: {
+                    "index.js": dynamicWorkerCode,
+                  },
+                  env: {
+                    AGENT_CALLER: this.ctx.exports.default({ props: {} }),
+                    // there's gotta be a better way to do this
+                    AGENT_BINDING_NAME: R.toSnakeCase(this.databaseRecord.className).toUpperCase(),
+                    AGENT_NAME: this.databaseRecord.durableObjectName,
+                    CODEMODE_CALLER_ID: codemodeCallerId,
+                  },
+                };
+              },
+            );
+
+            const entrypoint = dynamicWorker.getEntrypoint();
+
+            try {
+              const res = await entrypoint.fetch("http://iterate-dynamic-worker");
+
+              const { result, toolCalls } = await res.json<{
+                result: unknown;
+                toolCalls: {
+                  tool: string;
+                  input: unknown;
+                  output: Awaited<ReturnType<typeof executeLocalFunctionTool>>;
+                }[];
+              }>();
+              return { result, dynamicWorkerCode, toolCalls };
+            } catch (error) {
+              throw new Error(
+                `Failed to executed codemode.\n\nMessage: ${error}\n\nWorker code:\n\n${dynamicWorkerCode}`,
+                { cause: error },
+              );
+            }
+          },
+          [Symbol.dispose]: async () => {
+            // for some reason `using cm = ...` was disposing too early, so dispose after plenty of time has passed
+            waitUntil(
+              new Promise((r) => setTimeout(r, 5 * 60_000)).then(() =>
+                this.deleteCodemodeCaller(codemodeCallerId),
+              ),
+            );
+          },
+        };
+      },
       getRuleMatchData: (state) => ({
         agentCoreState: state,
         durableObjectClassName: this.constructor.name,
@@ -344,17 +466,25 @@ export class IterateAgent<
       ) => {
         // Insert SQL is sync so fine to just iterate
         for (const event of events) {
+          if (!event.data) {
+            logger.warn("Event has no data:", event);
+          }
           this.sql`
             INSERT OR REPLACE INTO agent_events (
-              event_index, event_type, created_at, 
-              trigger_llm_request, idempotency_key, data_json, metadata_json
+              event_index,
+              event_type,
+              created_at, 
+              trigger_llm_request,
+              idempotency_key,
+              data_json,
+              metadata_json
             ) VALUES (
               ${event.eventIndex},
               ${event.type},
               ${event.createdAt},
               ${typeof event.triggerLLMRequest === "boolean" ? Number(event.triggerLLMRequest) : 0},
               ${event.idempotencyKey || null},
-              ${JSON.stringify(event.data)},
+              ${JSON.stringify(event.data || {})},
               ${JSON.stringify(event.metadata || {})}
             )
           `;
@@ -386,9 +516,11 @@ export class IterateAgent<
       },
 
       background: (fn: () => Promise<void>) => {
-        // sometimes tool calls and other background tasks take longer than cloudflare allows so we use reallyWaitUntil to keep the DO alive
-        enableDebug();
-        this.ctx.waitUntil(fn());
+        betterWaitUntil(this, fn(), {
+          logErrorAfter: new Date(Date.now() + 1000 * 60 * 60 * 2), // 2 hours
+          logWarningAfter: new Date(Date.now() + 1000 * 60 * 30), // 30 minutes
+          timeout: new Date(Date.now() + 1000 * 60 * 60 * 6), // 6 hours
+        });
       },
 
       getOpenAIClient: async () => {
@@ -456,6 +588,8 @@ export class IterateAgent<
             const stripeCustomerId = this.organization.stripeCustomerId;
             const model = this.agentCore.state.modelOpts.model;
 
+            if (stripeCustomerId === "TEST_CUSTOMER_ID") return;
+
             if (stripeCustomerId) {
               void trackTokenUsageInStripe({
                 stripeCustomerId,
@@ -463,7 +597,7 @@ export class IterateAgent<
                 inputTokens: input_tokens,
                 outputTokens: output_tokens,
               });
-            } else {
+            } else if (import.meta.env.VITE_APP_STAGE === "prd") {
               logger.warn("No Stripe customer ID found for organization", {
                 organizationId: this.organization.id,
               });
@@ -472,14 +606,15 @@ export class IterateAgent<
         }
       },
 
-      // Wrap the default console so every call is also sent to connected websocket clients
-      console: (() => {
-        // we're going to jettison this soon
-        return console;
-      })(),
-
       onEventAdded: ({ event: _event, reducedState: _reducedState }) => {
         const event = _event as MergedEventForSlices<Slices>;
+        if (event.type === "CORE:INTERNAL_ERROR") {
+          const reconstructed = new Error(event.data.error);
+          if (event.data.stack) reconstructed.stack = event.data.stack;
+          logger.error(
+            new Error(`Internal error in agent: ${event.data.error}`, { cause: reconstructed }),
+          );
+        }
         const reducedState = _reducedState as MergedStateForSlices<CoreAgentSlices>;
         // Handle MCP side effects for relevant events
         const mcpRelevantEvents = ["MCP:CONNECT_REQUEST", "MCP:DISCONNECT_REQUEST"] as const;
@@ -495,6 +630,7 @@ export class IterateAgent<
               estateId: this.databaseRecord.estateId,
               mcpConnectionCache: this.mcpManagerCache,
               mcpConnectionQueues: this.mcpConnectionQueues,
+              storage: this.ctx.storage,
               getFinalRedirectUrl: deps.getFinalRedirectUrl!,
             }).then((eventsToAdd) => {
               for (const eventToAdd of eventsToAdd) {
@@ -511,12 +647,63 @@ export class IterateAgent<
           void this.refreshContextRules();
         }
 
+        if (event.type === "CORE:TOOL_CALL_APPROVED") {
+          void Promise.resolve().then(async () => {
+            const { data } = event;
+            const state = this.agentCore.state.toolCallApprovals[data.approvalKey];
+            if (!state) {
+              logger.error(`Tool call approval not found for key: ${data.approvalKey}`);
+              return;
+            }
+            const userMatches = match(state.args)
+              .with({ impersonateUserId: data.approvedBy.userId }, () => true)
+              .with({ impersonateUserId: P.string }, () => false) // any other user id is not allowed to approve
+              .otherwise(
+                () =>
+                  data.approvedBy.orgRole === "admin" ||
+                  data.approvedBy.orgRole === "owner" ||
+                  data.approvedBy.orgRole === "member",
+              ); // no impersonateUserId, allow any member to approve???
+
+            if (!userMatches) {
+              this.addEvent({
+                type: "CORE:LLM_INPUT_ITEM",
+                data: {
+                  type: "message",
+                  role: "developer",
+                  content: [
+                    {
+                      type: "input_text",
+                      text: dedent`
+                        User ${data.approvedBy.userId} is not allowed to approve tool call for ${state.toolName}.
+                      `,
+                    },
+                  ],
+                },
+                triggerLLMRequest: true,
+              });
+              return;
+            }
+
+            await this.agentCore.deps.onToolCallApproved?.({
+              data,
+              state,
+              replayToolCall: async () => {
+                await this.injectToolCall({
+                  args: state.args as {},
+                  toolName: state.toolName,
+                });
+              },
+            });
+          });
+        }
+
         void posthogClient().then((posthog) =>
           processPosthogAgentCoreEvent({
             posthog,
             data: {
               event,
-              reducedState,
+              reducedState: reducedState as {},
             },
           }),
         );
@@ -527,6 +714,7 @@ export class IterateAgent<
         getReducedState: () => this.agentCore.state,
         mcpConnectionCache: this.mcpManagerCache,
         mcpConnectionQueues: this.mcpConnectionQueues,
+        storage: this.ctx.storage,
         getFinalRedirectUrl: async (payload: { durableObjectInstanceName: string }) => {
           return `${this.env.VITE_PUBLIC_URL}/agents/IterateAgent/${payload.durableObjectInstanceName}`;
         },
@@ -540,6 +728,23 @@ export class IterateAgent<
       deps: deps,
       slices: slices,
     });
+  }
+
+  private _codemodeCallers: Record<`codemode_caller_${string}`, Record<string, Function>> = {};
+  private createCodemodeCaller(functions: Record<string, Function>) {
+    const id = typeid("codemode_caller").toString();
+    this._codemodeCallers[id] = functions;
+    return id;
+  }
+  private deleteCodemodeCaller(id: `codemode_caller_${string}`) {
+    delete this._codemodeCallers[id];
+  }
+  callCodemodeCallback(id: `codemode_caller_${string}`, functionName: string, input: unknown) {
+    const codemodeCaller = this._codemodeCallers[id];
+    if (!codemodeCaller) {
+      throw new Error(`codemode_caller ${id} not found`);
+    }
+    return codemodeCaller[functionName](input);
   }
 
   /**
@@ -559,6 +764,10 @@ export class IterateAgent<
       durableObjectName: this.databaseRecord.durableObjectName,
       className: this.constructor.name,
     };
+  }
+
+  async getHydrationInfo() {
+    return this.hydrationInfo; // callable via stub
   }
 
   /**
@@ -587,7 +796,7 @@ export class IterateAgent<
           record: updated,
           estate: this.estate,
           organization: this.organization,
-          iterateConfig: this.iterateConfig,
+          iterateConfig: this.iterateConfig || {},
         });
       }
     } catch (error) {
@@ -699,7 +908,7 @@ export class IterateAgent<
       ...defaultContextRules,
       // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
       // That means we want to pull in the tutorial rules
-      ...(this.iterateConfig.contextRules || []),
+      ...(this.iterateConfig?.contextRules || []),
     ];
     const seenIds = new Set<string>();
     const dedupedRules = rules.filter((rule: ContextRule) => {
@@ -717,24 +926,20 @@ export class IterateAgent<
    * Returns true if the user is a guest, false otherwise.
    */
   private async getUserRole(userId: string): Promise<UserRole | undefined> {
-    const result = await this.db
-      .select({
-        role: schema.organizationUserMembership.role,
-      })
-      .from(schema.estate)
-      .innerJoin(
-        schema.organizationUserMembership,
-        eq(schema.estate.organizationId, schema.organizationUserMembership.organizationId),
-      )
-      .where(
-        and(
-          eq(schema.estate.id, this.databaseRecord.estateId),
-          eq(schema.organizationUserMembership.userId, userId),
-        ),
-      )
-      .limit(1);
-
-    return result[0]?.role;
+    const estate = await this.db.query.estate.findFirst({
+      where: eq(schema.estate.id, this.databaseRecord.estateId),
+      with: {
+        organization: {
+          with: {
+            members: {
+              columns: { role: true },
+              where: eq(schema.organizationUserMembership.userId, userId),
+            },
+          },
+        },
+      },
+    });
+    return estate?.organization.members.at(0)?.role;
   }
 
   addEvent(event: MergedEventForSlices<Slices>): { eventIndex: number }[] {
@@ -757,7 +962,9 @@ export class IterateAgent<
     });
 
     if (!targetRecord) {
-      throw new Error(`Agent instance ${name} not found in estate ${this.databaseRecord.estateId}`);
+      throw new Error(
+        `Agent instance ${agentName} not found in estate ${this.databaseRecord.estateId}`,
+      );
     }
 
     const stub = await getAgentStubByName(toAgentClassName(targetRecord.className), {
@@ -803,13 +1010,31 @@ export class IterateAgent<
     triggerLLMRequest?: boolean;
   }) {
     // Create a mock function call object that matches OpenAI's format
-    const functionCall = {
+    let functionCall = {
       type: "function_call" as const,
       call_id: `injected-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: toolName,
       arguments: JSON.stringify(args),
       status: "completed" as const,
     };
+
+    const isCodemodeEnabled = this.agentCore.state.codemodeEnabledTools.includes(toolName);
+    if (isCodemodeEnabled) {
+      functionCall = {
+        type: "function_call",
+        call_id: `injected-codemode-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+        name: "codemode",
+        arguments: JSON.stringify({
+          functionCode: [
+            "async function codemode() {",
+            `  return await ${codemode.toolNameToJsIdentifier(toolName)}(${JSON.stringify(args, null, 2).replaceAll("\n", "\n  ")});`,
+            "}",
+          ].join("\n"),
+          statusIndicatorText: `running ${toolName}`,
+        }),
+        status: "completed",
+      };
+    }
 
     // Use the agentCore's existing tryInvokeLocalFunctionTool method
     const result = await this.agentCore.tryInvokeLocalFunctionTool(functionCall);
@@ -1139,9 +1364,7 @@ export class IterateAgent<
     return { reversed: input.message.split("").reverse().join("") };
   }
   doNothing() {
-    return {
-      __triggerLLMRequest: false,
-    };
+    return { __triggerLLMRequest: false } satisfies MagicAgentInstructions;
   }
   async getEstate() {
     return {
@@ -1150,6 +1373,7 @@ export class IterateAgent<
       name: this.estate.name,
     };
   }
+
   async getAgentDebugURL() {
     const estate = await this.getEstate();
     return {
@@ -1371,6 +1595,7 @@ export class IterateAgent<
       reducedState: this.getReducedState(),
       mcpConnectionCache: this.mcpManagerCache,
       mcpConnectionQueues: this.mcpConnectionQueues,
+      storage: this.ctx.storage,
       getFinalRedirectUrl: this.agentCore.getFinalRedirectUrl.bind(this.agentCore),
     });
 
@@ -1447,6 +1672,146 @@ export class IterateAgent<
       })),
       totalResults: result.results.length,
     };
+  }
+
+  async deepResearch(input: Inputs["deepResearch"]) {
+    const taskRun = await createDeepResearchTask({
+      query: input.query,
+      processor: input.processor,
+      outputFormat: "text",
+    });
+
+    // Calculate timeout based on processor tier (under pro: 20 min, pro+: 60 min)
+    const maxPollTime = UNDER_PRO_PROCESSORS.includes(
+      input.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+    )
+      ? 20 * 60 * 1000
+      : 60 * 60 * 1000;
+
+    await this.schedule(5, "pollForDeepResearch", {
+      runId: taskRun.run_id,
+      query: input.query,
+      processor: input.processor,
+      outputFormat: "text",
+      pollUntil: Date.now() + maxPollTime,
+      pollCount: 0,
+    });
+
+    return {
+      status: "queued",
+      runId: taskRun.run_id,
+      message:
+        "The deep research has been queued. I will poll the API every 15 seconds and share the results as soon as they're ready. This may take several minutes.",
+    };
+  }
+
+  async pollForDeepResearch(data: {
+    runId: string;
+    query: string;
+    processor: string;
+    outputFormat: string;
+    pollUntil: number;
+    pollCount: number;
+  }) {
+    // Helper function to add developer messages
+    const addDeveloperMessage = ({
+      text,
+      triggerLLMRequest,
+    }: {
+      text: string;
+      triggerLLMRequest: boolean;
+    }) => {
+      this.agentCore.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text,
+            },
+          ],
+        },
+        triggerLLMRequest,
+      });
+    };
+
+    // Check if we've exceeded the polling time limit
+    if (Date.now() > data.pollUntil) {
+      // Under pro: 20 min timeout, pro+: 60 min timeout
+      const expectedMinutes = UNDER_PRO_PROCESSORS.includes(
+        data.processor as (typeof UNDER_PRO_PROCESSORS)[number],
+      )
+        ? 20
+        : 60;
+
+      logger.info("deep research polling timeout reached:", {
+        runId: data.runId,
+        processor: data.processor,
+      });
+      addDeveloperMessage({
+        text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>${expectedMinutes} minutes for ${data.processor} processor). The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+
+    try {
+      const result = await checkDeepResearchStatus(data.runId);
+
+      // Helper to schedule next poll with incremented count
+      // Each poll can take up to 15 seconds (long polling timeout), then we schedule next poll after 5s
+      const POLL_TIMEOUT_SECONDS = 15;
+      const scheduleNextPoll = async (sendProgressMessage = false) => {
+        const nextPollCount = data.pollCount + 1;
+
+        // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
+        if (sendProgressMessage && nextPollCount % 8 === 0) {
+          const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
+          addDeveloperMessage({
+            text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
+            triggerLLMRequest: false, // Don't trigger a new turn, just inform
+          });
+        }
+
+        await this.schedule(5, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
+      };
+
+      // Check result status
+      if (result.status === "running") {
+        // Still running - schedule next poll
+        await scheduleNextPoll(true);
+        return;
+      }
+
+      if (result.status === "completed") {
+        // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
+        const rawOutput = result.data as unknown as { output?: { content?: string } } | null;
+        const content =
+          rawOutput?.output?.content ??
+          (result.data ? JSON.stringify(result.data) : "(no data returned)");
+
+        addDeveloperMessage({
+          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${content}`,
+          triggerLLMRequest: true,
+        });
+        return;
+      }
+
+      // Unknown status - log and continue polling
+      logger.info("deep research unknown response, continuing to poll:", {
+        runId: data.runId,
+        result,
+      });
+      await scheduleNextPoll(true);
+    } catch (err) {
+      logger.error("deep research polling error:", err);
+      addDeveloperMessage({
+        text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
+        triggerLLMRequest: true,
+      });
+    }
   }
 
   async generateImage(input: Inputs["generateImage"]) {
@@ -1677,32 +2042,84 @@ export class IterateAgent<
     });
   }
 
-  async execCodex(input: Inputs["execCodex"]) {
-    const instructions: string = input.command;
+  async uploadFile(input: Inputs["uploadFile"]) {
+    const estateId = this.databaseRecord.estateId;
+    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
 
-    const instructionsFilePath = `/tmp/instructions-${R.randomInteger(0, 99999)}.txt`;
-    const newInput: Inputs["exec"] = {
-      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
-      files: [
-        {
-          path: instructionsFilePath,
-          content: instructions,
-        },
-      ],
-      env: {
-        // this tells codex to use the openai api key
-        // setting OPENAI_API_KEY is not enough, because codex will not use it
-        CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY"),
+    logger.info("Uploading file from sandbox", { sandboxId, path: input.path });
+
+    // WARNING: This buffers the entire file in memory, so it may fail on large files.
+    const fileInfo = await sandbox.readFile(input.path);
+    const encoding = (fileInfo as any).encoding || "utf-8";
+    const detectedMime = (fileInfo as any).mimeType;
+    const filename = basename(input.path);
+    const contentType = detectedMime || "application/octet-stream";
+
+    let bytes: Uint8Array;
+    if (encoding === "base64") {
+      bytes = new Uint8Array(Buffer.from((fileInfo as any).content, "base64"));
+    } else {
+      bytes = new TextEncoder().encode((fileInfo as any).content as string);
+    }
+
+    const fileRecord = await uploadFile({
+      stream: bytes,
+      filename,
+      contentType,
+      estateId,
+      db: this.db,
+    });
+
+    // Emit a CORE:FILE_SHARED event so downstream agents (e.g., SlackAgent) can act on it
+    this.agentCore.addEvent({
+      type: "CORE:FILE_SHARED",
+      data: {
+        direction: "from-agent-to-user",
+        iterateFileId: fileRecord.id,
+        originalFilename: fileRecord.filename ?? undefined,
+        size: fileRecord.fileSize ?? undefined,
+        mimeType: fileRecord.mimeType ?? undefined,
+        openAIFileId: fileRecord.openAIFileId ?? undefined,
       },
-    };
-    const result = await this.exec(newInput);
-    // TODO: filter the json here and make it token efficient
-    return {
-      ...result,
-    };
+      triggerLLMRequest: false,
+    });
+
+    return { iterateFileId: fileRecord.id, openAIFileId: fileRecord.openAIFileId };
   }
 
-  async exec(input: Inputs["exec"]) {
+  async execCodex(input: Inputs["execCodex"]) {
+    const instructions: string = input.command;
+    const instructionsFilePath = `/tmp/instructions-${Math.floor(Math.random() * 1e6)}.txt`;
+    const execInput: Inputs["exec"] = {
+      command: `codex exec --json --dangerously-bypass-approvals-and-sandbox --skip-git-repo-check 'Perform the task described in ${instructionsFilePath}'`,
+      files: [{ path: instructionsFilePath, content: instructions }],
+      env: { CODEX_API_KEY: await getSecret(this.env, "OPENAI_API_KEY") },
+    };
+    return await this.runExecWithOptions(execInput, {
+      formatOutput: (stdout) => formatCodexOutput(stdout),
+      formatterKey: "codex",
+    });
+  }
+
+  // Default implementation – overridden by SlackAgent. This throws for non-Slack agents.
+  async shareFileWithSlack(_input: Inputs["shareFileWithSlack"]) {
+    throw new Error("shareFileWithSlack is only supported in SlackAgent");
+  }
+
+  /**
+   * Return sandbox and id for this agent instance/estate combination.
+   */
+  private async getAgentSandbox(estateId: string) {
+    const { getSandbox } = await import("@cloudflare/sandbox");
+    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
+    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+    return { sandbox, sandboxId };
+  }
+
+  private async runExecWithOptions(
+    input: Inputs["exec"],
+    opts?: { formatOutput?: (stdout: string) => string | null; formatterKey?: string },
+  ) {
     // ------------------------------------------------------------------------
     // Get config
     // ------------------------------------------------------------------------
@@ -1710,9 +2127,18 @@ export class IterateAgent<
     const estateId = this.databaseRecord.estateId;
 
     // Get estate and repo information
-    const estate = await this.db.query.estate.findFirst({
+    const _estate = await this.db.query.estate.findFirst({
       where: eq(schema.estate.id, estateId),
+      with: recentActiveSources,
     });
+
+    const estate = _estate && {
+      ..._estate,
+      sources: undefined,
+      connectedRepoId: _estate?.sources?.[0]?.repoId ?? null,
+      connectedRepoRef: _estate?.sources?.[0]?.branch ?? null,
+      connectedRepoPath: _estate?.sources?.[0]?.path ?? null,
+    };
 
     if (!estate) {
       throw new Error(`Estate ${estateId} not found`);
@@ -1722,34 +2148,11 @@ export class IterateAgent<
       throw new Error("No repository connected to this estate");
     }
 
-    // Get GitHub installation and token
-    const githubInstallation = await this.db
-      .select({
-        accountId: schema.account.accountId,
-        accessToken: schema.account.accessToken,
-      })
-      .from(schema.estateAccountsPermissions)
-      .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
-      .where(
-        and(
-          eq(schema.estateAccountsPermissions.estateId, estateId),
-          eq(schema.account.providerId, "github-app"),
-        ),
-      )
-      .limit(1)
-      .then((rows) => rows[0]);
+    const installation = await getGithubInstallationForEstate(this.db, estateId);
+    const octokit = await getOctokitForInstallation(
+      installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+    );
 
-    if (!githubInstallation) {
-      throw new Error("No GitHub installation found for this estate");
-    }
-
-    // Get installation token
-    const { getGithubInstallationToken } = await import("../integrations/github/github-utils.ts");
-    const githubToken = await getGithubInstallationToken(githubInstallation.accountId);
-
-    // Fetch repository details using Octokit
-    const { Octokit } = await import("octokit");
-    const octokit = new Octokit({ auth: githubToken });
     const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
       repository_id: estate.connectedRepoId,
     });
@@ -1757,195 +2160,134 @@ export class IterateAgent<
     const branch = estate.connectedRepoRef || repoData.default_branch || "main";
     const commitHash = undefined; // Use the latest commit on the branch
 
+    const scopedToken = await octokit.rest.apps
+      .createInstallationAccessToken({
+        installation_id: parseInt(
+          installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+        ),
+        repository_ids: [estate.connectedRepoId],
+      })
+      .catch(() => null);
+
+    if (!scopedToken || scopedToken.status !== 201) {
+      throw new Error("Failed to create scoped token");
+    }
+
     // ------------------------------------------------------------------------
     // Init sandbox
     // ------------------------------------------------------------------------
 
     // Retrieve the sandbox
-    const { getSandbox } = await import("@cloudflare/sandbox");
-
-    // TODO: instead of a sandbox per agent instance use a single sandbox with git worktrees and isolated worktree folders
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}-${this.name}`;
-    const sandbox = getSandbox(env.SANDBOX, sandboxId);
+    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
 
     const execInSandbox = async () => {
-      const sessionId = `${estateId}-${this.constructor.name}-${this.name}`.toLowerCase();
+      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
+      logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
       // Ensure that the session directory exists
-      const sessionDir = `/tmp/session-${sessionId}`;
-      await sandbox.mkdir(sessionDir, { recursive: true });
+      // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
+      // Use a unique working directory per exec to avoid contention
+      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}-${R.randomInteger(0, 99999)}`;
+      const nodePath = "/opt/node24/bin/node";
 
-      // Create an isolated session
-      const sandboxSession = await sandbox.createSession({
-        id: sessionId,
-        cwd: sessionDir,
-        isolation: true,
-        env: {
-          ...input.env,
-        },
-      });
-
-      // Determine the checkout target and whether it's a commit hash
-      const checkoutTarget = commitHash || branch || "main";
-      const isCommitHash = Boolean(commitHash);
-
-      // Prepare arguments as a JSON object
-      const initArgs = {
-        sessionDir,
-        githubRepoUrl,
-        githubToken,
-        checkoutTarget,
-        isCommitHash,
-      };
-      // Escape the JSON string for shell
-      const initJsonArgs = JSON.stringify(initArgs).replace(/'/g, "'\\''");
-      // Init the sandbox (ignore any errors)
-      const commandInit = `node /tmp/sandbox-entry.ts init '${initJsonArgs}' && node /tmp/sandbox-entry.ts install-dependencies '${initJsonArgs}'`;
-      using resultInit = await sandboxSession.exec(commandInit, {
-        timeout: 360 * 1000, // 360 seconds total timeout
-      });
-      if (!resultInit.success) {
-        logger.error(
-          "Error running `node /tmp/sandbox-entry.ts init <ARGS> && node /tmp/sandbox-entry.ts install-dependencies <ARGS>` in sandbox",
-          resultInit,
-        );
-      }
-
-      if (input.command.length > 256) {
-        if (!input.files) {
-          input.files = [];
-        }
-        const commandId = R.randomInteger(0, 99999);
-        input.files.push({
-          path: `/tmp/command-id-${commandId}.sh`,
-          content: "#!/bin/bash\nset -eo pipefail\n" + input.command,
-        });
-        input.command = `bash /tmp/command-id-${commandId}.sh`;
-      }
-      // ------------------------------------------------------------------------
-      // Write files
-      // ------------------------------------------------------------------------
-      await Promise.all(
-        (input.files ?? []).map(async (file) => {
-          await sandboxSession.writeFile(file.path, file.content);
-        }),
-      );
-
-      // ------------------------------------------------------------------------
-      // Run exec
-      // ------------------------------------------------------------------------
-
-      // Run the exec command in streaming mode
-      const commandExec = input.command;
-      const resultStream = await execStreamOnSandbox(sandbox, sandboxSession.id, commandExec, {
-        timeout: 30 * 60 * 1000, // 30 minutes total timeout - that should be enough for codex
-      });
-      let stdout = "";
-      let stderr = "";
-      const stream = resultStream[Symbol.asyncIterator]();
-
-      // we have to keep an eye on the sandbox, sometimes it crashes and we don't get an error from the stream
-      let sandboxHealthy = true;
-      const interval = setInterval(async () => {
-        try {
-          const state = await sandbox.getState();
-          if (state.status !== "healthy") {
-            sandboxHealthy = false;
-          }
-          await sandbox.renewActivityTimeout();
-        } catch (err) {
-          logger.error("Error renewing activity timeout", err);
-        }
-      }, 5000);
-
-      // try finallyblock to close the interval
       try {
-        while (true) {
-          if (!sandboxHealthy) {
-            logger.warn("Sandbox is not healthy, exiting");
-            return {
-              success: false,
-              message: "Sandbox crashed after completing this work",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
+        await sandbox.mkdir(sessionDir, { recursive: true });
+      } catch (err) {
+        logger.error("Error creating session directory", err);
+        const { success, exitCode } = await sandbox.listFiles(sessionDir);
+        logger.info("List files in session directory:", { success, exitCode });
 
-          // We allow 260 seconds for the next stream event, if we don't get one, we timeout
-          // this is because the Bun Server idle timeout is 255 seconds and if we don't get
-          // an event we probably will never get one but we don't get an error either from
-          // sandbox sdk
-          const abortController = new AbortController();
-          const getNextStreamEventTimeout = setTimeoutPromise(260_000, {
-            signal: abortController.signal,
-          }).then(() => "TIMEOUT" as const);
-
-          const result = await Promise.race([stream.next(), getNextStreamEventTimeout]);
-
-          // Clean up the timeout regardless of which promise won the race
-          abortController.abort();
-
-          if (result === "TIMEOUT") {
-            return {
-              message: "The connection to codex timed out",
-              success: false,
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
-          if (result.done) {
-            logger.info("Exec readable exhausted without complete event", {
-              input,
-              stdout,
-              stderr,
-            });
-            // should not get here
-            return {
-              success: false,
-              message: "Result stream terminated before process completion signal was received",
-              stdout,
-              stderr,
-              exitCode: 1,
-            };
-          }
-          const event = result.value;
-          switch (event.type) {
-            case "stdout":
-              stdout += event.data;
-              logger.info(`Exec stdout: ${event.data}`);
-              break;
-            case "stderr":
-              stderr += event.data;
-              logger.info(`Exec stderr: ${event.data}`);
-              break;
-            case "error":
-              stderr += event.data;
-              logger.info(`Exec error: ${event.data}`);
-              logger.error(`Error running \`${commandExec}\` in sandbox`, event);
-              return {
-                message: "Execution errors occurred",
-                success: false,
-                stdout,
-                stderr,
-                exitCode: 1,
-              };
-            case "complete":
-              logger.log(`Tests ${event.exitCode === 0 ? "passed" : "failed"}`);
-              return {
-                message:
-                  event.exitCode === 0
-                    ? "Execution completed successfully"
-                    : "Execution completed with errors",
-                success: event.exitCode === 0,
-                stdout,
-                stderr,
-                exitCode: event.exitCode,
-              };
-          }
+        if (success && exitCode === 0) {
+          // continue with the session
+        } else {
+          throw new Error("Error creating session directory", { cause: err });
         }
+      }
+
+      let sandboxSession: Awaited<ReturnType<typeof sandbox.createSession>>;
+      try {
+        // Create an isolated session
+        sandboxSession = await sandbox.createSession({
+          id: sessionId,
+          cwd: sessionDir,
+          isolation: true,
+          env: {
+            ...input.env,
+            // use the node24 binaries by preference
+            PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+          },
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message.includes("already exists")) {
+          logger.info("Session already exists, getting existing session");
+          sandboxSession = await sandbox.getSession(sessionId);
+        } else {
+          logger.error("Error creating session", err);
+          throw new Error("Error creating session");
+        }
+      }
+      try {
+        // Start background exec runner; it will perform repo setup (auth/clone/install)
+        const processId = typeid("exec").toString();
+        let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+        if (baseUrl.includes("localhost")) {
+          baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
+        }
+        const unsignedIngest = `${baseUrl}/api/agent-logs/${estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
+        const ingestUrl = await signUrl(
+          unsignedIngest,
+          this.env.EXPIRING_URLS_SIGNING_KEY,
+          60 * 60,
+        );
+        const startArgs = {
+          sessionDir,
+          githubRepoUrl,
+          githubToken: scopedToken.data.token,
+          checkoutTarget: commitHash || branch || "main",
+          isCommitHash: Boolean(commitHash),
+          connectedRepoPath: estate.connectedRepoPath,
+          ingestUrl,
+          estateId,
+          processId,
+          command: input.command,
+          env: input.env,
+          files: input.files,
+        };
+        const startJsonArgs = JSON.stringify(startArgs).replace(/'/g, "'\\''");
+        const commandStart = `${nodePath} /tmp/sandbox-exec-runner.js start '${startJsonArgs}'`;
+        const res = await sandboxSession.startProcess(commandStart);
+        if (res.status !== "running") {
+          logger.error("Failed to start exec process:", res);
+          return {
+            success: false,
+            error: "Failed to start background exec process",
+          };
+        }
+        // Ensure a metadata row exists for monitoring (formatter may be null)
+        try {
+          this.ctx.storage.sql.exec(
+            "INSERT OR REPLACE INTO bg_processes (process_id, formatter, last_heartbeat, status) VALUES (?, ?, ?, ?)",
+            processId,
+            opts?.formatterKey ?? null,
+            Date.now(),
+            "in_progress",
+          );
+        } catch {}
+        // Schedule monitor for timeouts
+        await this.schedule(120, "monitorBackgroundProcess", { processId });
+        return {
+          success: true,
+          output: {
+            message: `Started background exec task with process id ${processId}. You will get an event when it completes, you do not need to monitor it yourself.`,
+            processId,
+          },
+          __addAgentCoreEvents: [
+            { type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } },
+          ],
+        };
       } finally {
-        clearInterval(interval);
+        // TODO: uncomment when cloudflare sandbox is fixed
+        // await sandbox.deleteSession(sessionId);
+        logger.info(`TODO: delete session ${sessionId}`);
       }
     };
 
@@ -1958,40 +2300,30 @@ export class IterateAgent<
     // ... Error checking if container is ready: The operation was aborted
     // ... Port 3000 is ready
     const sandboxState = await sandbox.getState();
-    if (sandboxState.status !== "healthy") {
+    const runningStatuses = ["healthy", "running"];
+    if (!runningStatuses.includes(sandboxState.status)) {
       await sandbox.startAndWaitForPorts(3000); // default sandbox port
     }
+    logger.info("Sandbox state:", sandboxState);
 
     // If sandbox is already running, just run the command
     const resultExec = await execInSandbox();
 
     if (!resultExec.success) {
-      logger.error("Exec failed", resultExec);
+      logger.error("Exec failed to start", resultExec);
       return {
         success: false,
-        error: dedent`
-          Command failed with exit code ${resultExec.exitCode} and message "${resultExec.message}"
-
-          stdout:
-          ${resultExec.stdout || "(empty)"}
-
-          stderr:
-          ${resultExec.stderr || "(empty)"}
-        `,
+        error: resultExec.error || "Failed to start background exec process",
         __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
       };
     }
 
-    logger.info("Exec succeeded 1", resultExec);
-    return {
-      success: true,
-      output: {
-        message: resultExec.message,
-        stdout: resultExec.stdout,
-        stderr: resultExec.stderr,
-      },
-      __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
-    };
+    logger.info("Exec background task started");
+    return resultExec;
+  }
+
+  async exec(input: Inputs["exec"]) {
+    return await this.runExecWithOptions(input);
   }
 
   async callGoogleAPI(input: Inputs["callGoogleAPI"]): Promise<Result<unknown>> {
@@ -2206,6 +2538,214 @@ export class IterateAgent<
       data: { message: `Label "${label}" added successfully` },
     };
   }
+
+  /**
+   * Ingest background task logs (from sandbox runners) into DO storage and emit progress events.
+   * Stores logs idempotently in an internal SQL table keyed by process_id and seq.
+   */
+  async ingestBackgroundLogs(input: {
+    processId: string;
+    logs: Array<{
+      seq: number;
+      ts: number;
+      stream: "stdout" | "stderr";
+      message: string;
+      event?: string;
+    }>;
+  }): Promise<{ lastSeq: number }> {
+    const { processId, logs } = input;
+
+    // Record heartbeat for this process
+    try {
+      this.ctx.storage.sql.exec(
+        "UPDATE bg_processes SET last_heartbeat = ? WHERE process_id = ?",
+        Date.now(),
+        processId,
+      );
+    } catch {}
+
+    // Get current max seq
+    let lastSeq = 0;
+    try {
+      const rowsCursor = this.ctx.storage.sql.exec<{ max_seq: number | null }>(
+        "SELECT MAX(seq) AS max_seq FROM bg_logs WHERE process_id = ?",
+        processId,
+      );
+      const rows = Array.from(rowsCursor, (r) => ({ max_seq: r.max_seq }));
+      const maxSeqVal = rows.length > 0 ? rows[0].max_seq : null;
+      lastSeq = maxSeqVal !== null && maxSeqVal !== undefined ? Number(maxSeqVal) || 0 : 0;
+    } catch {
+      lastSeq = 0;
+    }
+
+    // Insert new logs idempotently
+    const sorted = logs
+      .filter((l) => typeof l.seq === "number" && l.seq > lastSeq)
+      .sort((a, b) => a.seq - b.seq);
+    for (const entry of sorted) {
+      try {
+        this.ctx.storage.sql.exec(
+          "INSERT INTO bg_logs (process_id, seq, ts, stream, message, event) VALUES (?, ?, ?, ?, ?, ?)",
+          processId,
+          entry.seq,
+          Number(entry.ts) || Date.now(),
+          entry.stream === "stderr" ? "stderr" : "stdout",
+          String(entry.message ?? ""),
+          entry.event ?? null,
+        );
+        lastSeq = entry.seq;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("UNIQUE") || msg.includes("constraint")) {
+          continue; // duplicate, ignore
+        }
+        throw err;
+      }
+    }
+
+    // Aggregate complete logs for this process
+    const rowsCursor = this.ctx.storage.sql.exec<{
+      seq: number;
+      stream: string;
+      message: string;
+      event: string | null;
+    }>(
+      "SELECT seq, stream, message, event FROM bg_logs WHERE process_id = ? ORDER BY seq ASC",
+      processId,
+    );
+    const rows = Array.from(rowsCursor, (r) => ({
+      seq: Number(r.seq),
+      stream: String(r.stream),
+      message: String(r.message ?? ""),
+      event: r.event ?? undefined,
+    }));
+    let stdout = "";
+    let stderr = "";
+    let fullOutput = "";
+    let complete = false;
+    let failed = false;
+    for (const r of rows) {
+      fullOutput += String(r.message ?? "");
+      if ((r.stream as string) === "stderr") stderr += String(r.message ?? "");
+      else stdout += String(r.message ?? "");
+      if (r.event && (r.event.includes("SUCCEEDED") || r.event.includes("FAILED"))) {
+        complete = true;
+        if (r.event.includes("FAILED")) failed = true;
+      }
+    }
+
+    // Emit progress event
+    this.addEvent({
+      type: "CORE:BACKGROUND_TASK_PROGRESS",
+      data: { processId, stdout, stderr, lastSeq, complete },
+    });
+
+    // If complete, add developer message and trigger the model
+    if (complete) {
+      try {
+        this.ctx.storage.sql.exec(
+          "UPDATE bg_processes SET status = ? WHERE process_id = ?",
+          failed ? "failed" : "succeeded",
+          processId,
+        );
+      } catch {}
+      // Optionally format output based on per-process formatter selection (from SQL)
+      let formatterFn: ((stdout: string) => string | null) | null = null;
+      try {
+        const cur = this.ctx.storage.sql.exec<{ formatter: string | null }>(
+          "SELECT formatter FROM bg_processes WHERE process_id = ?",
+          processId,
+        );
+        const arr = Array.from(cur, (r) => ({ formatter: r.formatter }));
+        const key = arr.length > 0 ? arr[0].formatter : null;
+        if (key === "codex") {
+          formatterFn = (s: string) => formatCodexOutput(s);
+        }
+      } catch {}
+      const stream = failed ? fullOutput : stdout;
+      const formatted = formatterFn ? formatterFn(stream) : truncateLongString(stream, 5_000);
+      try {
+        this.ctx.storage.sql.exec("DELETE FROM bg_processes WHERE process_id = ?", processId);
+      } catch {}
+      this.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Background task ${processId} has completed.${
+                formatted ? `\n\nOutput:\n${formatted}` : ""
+              }`,
+            },
+          ],
+        },
+        triggerLLMRequest: true,
+      });
+    }
+    return { lastSeq };
+  }
+
+  /**
+   * Monitor a background process for heartbeats; if stale > 2 minutes and not complete/failed,
+   * post a developer message about timeout.
+   */
+  async monitorBackgroundProcess(data: { processId: string }) {
+    const { processId } = data;
+    // Read process metadata from SQL (status + last_heartbeat)
+    let status: string | null = null;
+    let last = 0;
+    try {
+      const cur = this.ctx.storage.sql.exec<{
+        status: string | null;
+        last_heartbeat: number | null;
+      }>("SELECT status, last_heartbeat FROM bg_processes WHERE process_id = ?", processId);
+      const arr = Array.from(cur, (r) => ({
+        status: r.status ?? null,
+        last_heartbeat: r.last_heartbeat ?? 0,
+      }));
+      if (arr.length === 0) {
+        // No row means process metadata was cleaned up (completed) or never existed
+        return;
+      }
+      status = arr[0].status ?? "in_progress";
+      last = Number(arr[0].last_heartbeat) || 0;
+    } catch {
+      // If SQL read fails, bail out silently
+      return;
+    }
+    if (status === "succeeded" || status === "failed" || status === "timed_out") {
+      return;
+    }
+    const now = Date.now();
+    if (now - last > 120_000) {
+      try {
+        this.ctx.storage.sql.exec(
+          "UPDATE bg_processes SET status = ? WHERE process_id = ?",
+          "timed_out",
+          processId,
+        );
+      } catch {}
+      this.addEvent({
+        type: "CORE:LLM_INPUT_ITEM",
+        data: {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: `Background task ${processId} timed out (no heartbeat for over 2 minutes).`,
+            },
+          ],
+        },
+        triggerLLMRequest: true,
+      });
+      return;
+    }
+    // Still alive – reschedule another monitor
+    await this.schedule(120, "monitorBackgroundProcess", { processId });
+  }
 }
 
 // -----------------------------------------------------------------------------
@@ -2231,4 +2771,156 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
+}
+
+function hashSessionId(sessionId: string): string {
+  // Use sha256 for good entropy, then take first 5 bytes (40 bits = 8 base32 chars)
+  const hash = createHash("sha256").update(sessionId).digest();
+  const hashSlice = hash.subarray(0, 5); // first 5 bytes
+  // Use base32 for file path safe encoding
+  const base32 = "abcdefghijklmnopqrstuvwxyz234567";
+  let out = "";
+  let bits = 0,
+    value = 0,
+    i = 0;
+  while (i < hashSlice.length || bits > 0) {
+    if (bits < 5) {
+      if (i < hashSlice.length) {
+        value = (value << 8) | hashSlice[i++];
+        bits += 8;
+      } else {
+        // Padding zero bits if done with all bytes
+        value <<= 5 - bits;
+        bits = 5;
+      }
+    }
+    out += base32[(value >>> (bits - 5)) & 31];
+    bits -= 5;
+    if (out.length === 8) break; // Only 8 characters
+  }
+  return out;
+}
+
+/**
+ * Truncates a long string to show first N and last N characters with a truncation marker in between.
+ */
+function truncateLongString(str: string, maxLength = 500): string {
+  const showChars = Math.floor(maxLength / 2);
+
+  if (typeof str !== "string") {
+    str = JSON.stringify(str);
+  }
+  return str.length > maxLength
+    ? str.slice(0, showChars) + "...[truncated]..." + str.slice(-showChars)
+    : str;
+}
+
+/**
+ * Best-effort formatter for codex JSONL output streams.
+ * Returns a compact human-readable summary or null if the output doesn't look like codex JSONL.
+ */
+function formatCodexOutput(stdout: string): string {
+  if (!stdout) return "";
+  const lines = stdout.split("\n").filter((l) => l.trim().length > 0);
+  let sawCodexType = false;
+  const out: string[] = [];
+
+  for (const line of lines) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      // not JSON – keep plain line only if we have no JSON at all
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object" || !parsed.type) continue;
+    sawCodexType = true;
+
+    switch (parsed.type) {
+      case "thread.started":
+      case "turn.started":
+      case "turn.completed":
+        // ignore admin/meta events
+        break;
+      case "turn.failed":
+        out.push("Turn failed");
+        break;
+      case "item.updated":
+        out.push(`item.updated: ${truncateLongString(JSON.stringify(parsed), 250)}`);
+        break;
+      case "item.completed": {
+        const item = parsed.item;
+        if (!item || typeof item !== "object") break;
+        switch (item.type) {
+          case "file_change": {
+            if (item.status === "completed") {
+              if (item.changes) {
+                out.push(`<files changed>\n${JSON.stringify(item.changes)}\n</files changed>`);
+              } else {
+                out.push(String(item.text ?? "[file_change]"));
+              }
+            } else {
+              out.push(`file_change: ${String(item.status)}`);
+            }
+            break;
+          }
+          case "agent_message":
+            out.push(String(item.text ?? "[agent_message]"));
+            break;
+          case "reasoning":
+            out.push(
+              `<reasoning>\n${truncateLongString(String(item.text ?? "[reasoning]"), 250)}\n</reasoning>`,
+            );
+            break;
+          case "command_execution": {
+            if (item.status === "completed") {
+              if (item.command) {
+                const shortCommand = truncateLongString(String(item.command));
+                const shortOutput = truncateLongString(String(item.aggregated_output ?? ""), 500);
+                const exitCode = String(item.exit_code ?? "0");
+                out.push(
+                  `<command executed>\n<command>${shortCommand}</command>\n<aggregated_output>${shortOutput}</aggregated_output>\n<exit_code>${exitCode}</exit_code>\n</command executed>`,
+                );
+              } else {
+                out.push(String(item.text ?? "[command_execution]"));
+              }
+            } else {
+              out.push(`command_execution: ${String(item.status)}`);
+            }
+            break;
+          }
+          case "web_search":
+            out.push(
+              `<web search>\n${truncateLongString(JSON.stringify(item), 250)}\n</web search>`,
+            );
+            break;
+          case "todo_list":
+            out.push(`<todo list>\n${String(item)}\n</todo list>`);
+            break;
+          case "mcp_tool_call":
+            out.push(
+              `<mcp tool call>\n${truncateLongString(JSON.stringify(item), 250)}\n</mcp tool call>`,
+            );
+            break;
+          default:
+            out.push(truncateLongString(JSON.stringify(item), 250));
+            break;
+        }
+        break;
+      }
+      case "error":
+        out.push(truncateLongString(JSON.stringify(parsed)));
+        break;
+      default:
+        // Unknown codex event type -> keep compact JSON
+        out.push(truncateLongString(JSON.stringify(parsed)));
+        break;
+    }
+  }
+
+  if (!sawCodexType) {
+    // Not codex JSONL – return truncated raw stdout directly
+    return truncateLongString(stdout);
+  }
+  return out.filter(Boolean).join("\n");
 }

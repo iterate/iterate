@@ -5,7 +5,7 @@ import OpenAI from "openai";
 import { z } from "zod";
 import dedent from "dedent";
 import { startSpan } from "braintrust";
-import type { MultiTrialScorerOutput } from "./helpers.ts";
+import type { MultiTrialScorerOutput } from "../e2e/helpers.ts";
 import { zodTextFormat } from "./zod-openai.ts";
 
 export const ScoreResult = z.object({
