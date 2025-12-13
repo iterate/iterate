@@ -544,3 +544,56 @@ export const createDisposer = () => {
     },
   };
 };
+
+/**
+ * Consolidated E2E test helper that sets up everything needed for most e2e tests:
+ * - Admin trpc client (authenticated via service auth)
+ * - Test user with organization and estate
+ * - User trpc client (impersonated as the test user)
+ * - Mocked Slack API
+ * - Auto-cleanup via Symbol.asyncDispose
+ *
+ * Usage:
+ * ```ts
+ * await using h = await createE2EHelper('my-test-slug')
+ * // h.adminTrpc, h.userTrpc, h.user, h.estate, h.organization, etc.
+ * ```
+ */
+export async function createE2EHelper(inputSlug: string) {
+  const disposer = createDisposer();
+
+  const { client: adminTrpc, impersonate, sessionCookies } = await getAuthedTrpcClient();
+
+  const { user } = await adminTrpc.testing.createTestUser.mutate({});
+  disposer.fns.push(async () => {
+    await adminTrpc.admin.deleteUserByEmail.mutate({ email: user.email });
+  });
+
+  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+    userId: user.id,
+  });
+  disposer.fns.push(async () => {
+    await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
+  });
+
+  const { trpcClient: userTrpc, impersonationCookies } = await impersonate(user.id);
+
+  const testHelper = await createTestHelper({
+    inputSlug,
+    trpcClient: userTrpc,
+    userId: user.id,
+  });
+
+  return {
+    ...testHelper,
+    adminTrpc,
+    userTrpc,
+    user,
+    estate,
+    organization,
+    impersonationCookies,
+    sessionCookies,
+    onDispose: (fn: () => Promise<void>) => disposer.fns.push(fn),
+    [Symbol.asyncDispose]: disposer[Symbol.asyncDispose],
+  };
+}
