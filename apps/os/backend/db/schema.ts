@@ -604,22 +604,6 @@ export const estateOnboardingEvent = pgTable(
   ],
 );
 
-export const systemTasks = pgTable(
-  "system_tasks",
-  (t) => ({
-    id: bigserial("id", { mode: "number" }).primaryKey(),
-    aggregateType: t.text().notNull(),
-    aggregateId: t.text().notNull(),
-    taskType: t.text().notNull(),
-    payload: jsonb().$type<Record<string, unknown>>().default({}),
-    processedAt: t.timestamp(),
-    attempts: t.integer().default(0).notNull(),
-    error: t.text(),
-    ...withTimestamps,
-  }),
-  (t) => [index().on(t.processedAt), index().on(t.aggregateType), index().on(t.aggregateId)],
-);
-
 export const outboxEvent = pgTable("outbox_event", (t) => ({
   id: bigserial("id", { mode: "number" }).primaryKey(),
   name: t.text().notNull(),

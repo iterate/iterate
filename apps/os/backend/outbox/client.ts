@@ -19,6 +19,7 @@ export type EstateBuilderWorkflowInput = {
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
   "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
+  "estate:created": { estateId: string };
 };
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;

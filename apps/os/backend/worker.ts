@@ -32,7 +32,7 @@ import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
 import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
-import { processSystemTasks } from "./onboarding-tasks.ts";
+
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
 import { registerConsumers } from "./outbox/consumers.ts";
 import * as workerConfig from "./worker-config.ts";
@@ -311,16 +311,6 @@ export default class extends WorkerEntrypoint {
     const db = getDb();
     const cron = controller.cron as workerConfig.WorkerCronExpression;
     switch (cron) {
-      case workerConfig.workerCrons.processSystemTasks: {
-        try {
-          logger.info("Running scheduled system tasks");
-          const result = await processSystemTasks(db);
-          logger.info("System tasks completed", result);
-        } catch (error) {
-          logger.error("System tasks failed:", error);
-        }
-        break;
-      }
       case workerConfig.workerCrons.slackSync: {
         try {
           logger.info("Running scheduled Slack sync for all estates");

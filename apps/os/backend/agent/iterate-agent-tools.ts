@@ -210,6 +210,36 @@ export const iterateAgentTools = defineDOTools({
       command: z.string(),
     }),
   },
+  deepResearch: {
+    description:
+      "Conduct comprehensive deep research on a topic using Parallel AI. This tool performs multi-step web exploration across authoritative sources and synthesizes findings into a structured report with citations. Best for open-ended research questions that require analyst-grade intelligence. Note: Deep research can take several minutes to complete, so clarify user needs first.",
+    statusIndicatorText: "🔬 conducting deep research",
+    input: z.object({
+      query: z
+        .string()
+        .describe(
+          "A detailed research question or topic to investigate. Be specific and include relevant context for better results - ask the user for clarification or elaboration first. Keep under 15,000 characters.",
+        ),
+      processor: z
+        .enum([
+          "lite",
+          "base",
+          "core",
+          "core2x",
+          "pro",
+          "pro-fast",
+          "ultra",
+          "ultra-fast",
+          "ultra2x",
+          "ultra4x",
+          "ultra8x",
+        ])
+        .default("pro")
+        .describe(
+          "Research processor. lite/base/core for quick lookups (10s-5min). pro for exploratory research (2-10min). ultra for advanced multi-source research (5-25min). ultra2x/4x/8x for very difficult research (up to 2hr). Add '-fast' suffix (pro-fast, ultra-fast) for 2-5x faster but slightly less accurate results.",
+        ),
+    }),
+  },
   uploadFile: {
     description:
       "Upload a file from the sandbox to iterate. Returns the file id, which you can then use to share via slack or other means.",

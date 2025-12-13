@@ -106,7 +106,7 @@ export const getOctokitForInstallation = async (installationId: string): Promise
 export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
   const db = getDb();
 
-  const res = await outboxClient.createEvent(db, "estate:build:created", async (tx) => {
+  const res = await outboxClient.sendTx(db, "estate:build:created", async (tx) => {
     const [build] = await tx
       .insert(schema.builds)
       .values({
@@ -123,10 +123,10 @@ export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
       })
       .returning();
 
-    return { buildId: build.id, ...payload };
+    return { payload: { buildId: build.id, ...payload } };
   });
 
   // stupid circular type problem
-  const id: string = res.buildId;
+  const id: string = res.payload.buildId;
   return { id };
 }

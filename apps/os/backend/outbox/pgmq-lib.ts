@@ -76,7 +76,7 @@ export interface Queuer<DBConnection> {
   $types: {
     db: DBConnection;
   };
-  addToQueue: (
+  enqueue: (
     db: DBConnection,
     params: { name: string; payload: { input: unknown; output: unknown } },
   ) => Promise<{ eventId: string; matchedConsumers: number }>;
@@ -199,7 +199,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const consumers: Queuer<DBLike>["consumers"] = {};
 
-  const addToQueue: Queuer<DBLike>["addToQueue"] = async (db, params) => {
+  const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`adding to pgmq:${params.name}`);
     const [_eventInsertion] = await db.execute(sql`
       insert into outbox_event (name, payload)
@@ -239,7 +239,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
   return {
     $types: { db: {} as DBLike },
     consumers,
-    addToQueue,
+    enqueue,
     processQueue: (db) => logger.run("processQueue", () => processQueue(db)),
     peekQueue: async (db, options = {}) => {
       // just a basic query, go to drizzle studio to filter based on read count, visibility time, event name, consumer name, etc.
@@ -280,7 +280,7 @@ const t = initTRPC.context<MyContext>().create();
 
 const queuer = createPgmqQueuer({ queueName: "consumer_job_queue" });
 
-// `concat`-ing the plugin just injects a `sendToOutbox` helper function into the context, which is used to send events to the outbox
+// `concat`-ing the plugin just injects a `sendTrpc` helper function into the context, which is used to send events to the outbox
 // note that you should always use this helper function on the return value of the procedure, otherwise you won't be able to subscribe to the event
 const publicProcedure = t.procedure.concat(
   createPostProcedureConsumerPlugin(queuer, {
@@ -299,7 +299,7 @@ const appRouter = t.router({
           .values({ name: input.name })
           .returning();
 
-        return ctx.sendToOutbox(tx, { user });
+        return ctx.sendTrpc(tx, { user });
       });
     }),
   }
@@ -335,11 +335,11 @@ export const createPostProcedureConsumerPlugin = <
     pluginTrpc.procedure.use(async ({ getRawInput, next, ctx: _ctx, path }) => {
       return next({
         ctx: {
-          sendToOutbox: async <T extends {}>(db: DBConnection, output: T) => {
+          sendTrpc: async <T extends {}>(db: DBConnection, output: T) => {
             const input = await getRawInput();
             const payload = { input, output };
             return logger.run({ consumerPlugin: "true", path }, async () => {
-              await consumerClient.sendEvent(
+              await consumerClient.send(
                 { transaction: db as DBLike, parent: _ctx.db as DBLike },
                 `trpc:${path}`,
                 payload,
@@ -413,7 +413,7 @@ type ProcUnion<P, Prefix extends string = ""> = {
  * const addUser = async (db: DB, email: string) => {
  *   return myDb.transaction(async tx => {
  *     const [user] = await tx.insert(schema.user).values({ email }).returning();
- *     await consumerClient.sendEvent({ transaction: tx, parent: db }, "application:userCreated", { userId: user.id });
+ *     await consumerClient.send({ transaction: tx, parent: db }, "application:userCreated", { userId: user.id });
  *   })
  * }
  * ```
@@ -456,7 +456,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     };
   };
 
-  const sendEvent = async <Name extends EventName>(
+  const send = async <Name extends EventName>(
     connections: {
       /** the transaction reference that will be used to insert the event record into the databse */
       transaction: DBLike;
@@ -466,7 +466,7 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     eventName: Name,
     payload: EventTypes[Name],
   ) => {
-    const addResult = await queuer.addToQueue(connections.transaction as DBConnection, {
+    const addResult = await queuer.enqueue(connections.transaction as DBConnection, {
       name: eventName,
       payload: payload as never,
     });
@@ -484,26 +484,44 @@ export const createConsumerClient = <EventTypes extends Record<string, {}>, DBCo
     return addResult;
   };
 
-  /** Create an event in a db transaction and send to the outbox. Takes a callback which will receive a transaction reference, which can be used to insert/update database rows. The outbox even will then be inserted in the same transaction */
-  const createEvent = <D extends DBLike, Name extends EventName>(
-    parent: Transactable<D>,
-    eventName: Name,
-    callback: (db: D) => Promise<EventTypes[Name]>,
-  ) => {
-    return parent.transaction(async (tx) => {
+  /** Send an event in a db transaction. Takes a callback which will receive a transaction reference, which can be used to insert/update database rows. The outbox event will then be inserted in the same transaction */
+  async function sendTx<
+    D extends DBLike,
+    Name extends EventName,
+    T extends { payload: EventTypes[Name] },
+  >(parent: Transactable<D>, eventName: Name, callback: (db: D) => Promise<T>): Promise<T> {
+    const { addResult, result } = await parent.transaction(async (tx) => {
       return logger.run({ transactionForEvent: eventName }, async () => {
-        const payload = await callback(tx);
-        // eslint-disable-next-line iterate/drizzle-conventions -- we need to pass the parent here
-        await sendEvent({ transaction: tx, parent }, eventName, payload);
-        return payload;
+        const result = await callback(tx);
+
+        const addResult = await queuer.enqueue(tx as {} as DBConnection, {
+          name: eventName,
+          payload: result.payload as never,
+        });
+
+        return { addResult, result };
       });
     });
-  };
+
+    if (addResult.matchedConsumers > 0) {
+      waitUntil(
+        logger.run({ queuedEventId: addResult.eventId }, async () => {
+          // technically we're still inside the transaction here, but it _should_ be the last thing that's done in it
+          // so wait a few milliseconds to decrease the likelihood of the event not being visible to the parent connection yet
+          // if it is missed, we need to rely on the queue processor cron job so not that big of a deal
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          return queuer.processQueue(parent as DBConnection);
+        }),
+      );
+    }
+
+    return result;
+  }
 
   return {
     registerConsumer,
-    sendEvent,
-    createEvent,
+    send,
+    sendTx,
   };
 };
 
