@@ -98,7 +98,12 @@ export class OrganizationWebSocket extends DurableObject {
     }
 
     // Verify user has access to this estate using the helper function
-    const { hasAccess } = await getUserInstallationAccess(db, session.user.id, installationId, organizationId);
+    const { hasAccess } = await getUserInstallationAccess(
+      db,
+      session.user.id,
+      installationId,
+      organizationId,
+    );
 
     if (!hasAccess) {
       return new Response("Forbidden", { status: 403 });

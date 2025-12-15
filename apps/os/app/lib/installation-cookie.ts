@@ -11,7 +11,9 @@ export function getSelectedEstate(): SelectedEstate | null {
   }
 
   const cookies = document.cookie.split(";");
-  const estateCookie = cookies.find((cookie) => cookie.trim().startsWith(`${INSTALLATION_COOKIE_NAME}=`));
+  const estateCookie = cookies.find((cookie) =>
+    cookie.trim().startsWith(`${INSTALLATION_COOKIE_NAME}=`),
+  );
 
   if (!estateCookie) {
     return null;

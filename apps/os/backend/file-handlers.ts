@@ -206,7 +206,11 @@ export function getFilePublicURL(iterateFileId: string) {
   return `${getBaseURL({ replaceLocalhostWithNgrok: true })}/api/files/${iterateFileId}`;
 }
 
-export async function getFileContent(params: { iterateFileId: string; db: DB; installationId: string }) {
+export async function getFileContent(params: {
+  iterateFileId: string;
+  db: DB;
+  installationId: string;
+}) {
   const { iterateFileId, db, installationId } = params;
 
   // Get file record from database

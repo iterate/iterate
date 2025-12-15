@@ -39,7 +39,10 @@ export async function startSlackAgentInChannel(params: {
   // Look up the Slack channel ID in the database first by name, then fall back to treating as ID
   let channelId = slackChannelIdOrName;
   const channelRecord = await db.query.slackChannel.findFirst({
-    where: and(eq(slackChannel.installationId, installationId), eq(slackChannel.name, slackChannelIdOrName)),
+    where: and(
+      eq(slackChannel.installationId, installationId),
+      eq(slackChannel.name, slackChannelIdOrName),
+    ),
   });
 
   if (channelRecord) {

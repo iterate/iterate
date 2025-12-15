@@ -454,7 +454,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const createPullRequestMutation = useMutation(
     trpc.installation.createPullRequest.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+        queryClient.invalidateQueries(
+          trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+        );
         queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
       },
     }),
@@ -464,7 +466,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
     trpc.installation.mergePull.mutationOptions({
       onSuccess: () => {
         queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
-        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+        queryClient.invalidateQueries(
+          trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+        );
         removeCurrentPrBranch();
       },
     }),
@@ -937,7 +941,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
             await queryClient.refetchQueries(
               trpc.installation.listPulls.queryFilter({ installationId, state: "open" }),
             );
-            queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+            queryClient.invalidateQueries(
+              trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+            );
 
             setSelectedFile(null);
           },
@@ -1187,7 +1193,10 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
                       if (currentPrBranch === defaultBranch) {
                         handleCreateNewBranch("createPr");
                       } else {
-                        createPullRequestMutation.mutate({ installationId, fromBranch: currentPrBranch });
+                        createPullRequestMutation.mutate({
+                          installationId,
+                          fromBranch: currentPrBranch,
+                        });
                       }
                     }}
                     disabled={createPullRequestMutation.isPending}

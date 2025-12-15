@@ -690,7 +690,13 @@ export async function getURLContent(options: {
   db: DB;
   installationId: string;
 }) {
-  const { url, includeScreenshotOfPage = false, includeTextContent = true, db, installationId } = options;
+  const {
+    url,
+    includeScreenshotOfPage = false,
+    includeTextContent = true,
+    db,
+    installationId,
+  } = options;
 
   // 1) Try registry handlers first
   for (const { pattern, handler } of urlHandlers) {

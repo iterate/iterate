@@ -561,7 +561,13 @@ slackApp.post("/interactive", async (c) => {
   return c.text("ok");
 });
 
-export function getRoutingKey({ installationId, threadTs }: { installationId: string; threadTs: string }) {
+export function getRoutingKey({
+  installationId,
+  threadTs,
+}: {
+  installationId: string;
+  threadTs: string;
+}) {
   const suffix = `slack-${installationId}`;
   return `ts-${threadTs}-${suffix}`;
 }

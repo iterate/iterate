@@ -115,20 +115,22 @@ type MCPConnection = {
   connectedAt: Date | string;
 };
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/integrations/")({
-  component: Integrations,
-  head: () => ({
-    meta: [
-      {
-        title: "Iterate Connectors",
-      },
-      {
-        name: "description",
-        content: "Connect your iterate bot to third parties",
-      },
-    ],
-  }),
-});
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/integrations/")(
+  {
+    component: Integrations,
+    head: () => ({
+      meta: [
+        {
+          title: "Iterate Connectors",
+        },
+        {
+          name: "description",
+          content: "Connect your iterate bot to third parties",
+        },
+      ],
+    }),
+  },
+);
 
 function Integrations() {
   const installationId = useInstallationId();
