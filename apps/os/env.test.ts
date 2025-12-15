@@ -33,15 +33,13 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    // Wait for the promise chain to resolve
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Synchronous error (in waitUntil callback, original error in cause property)",
-          cause: synchronousError,
-        }),
-      );
-    });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
+
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Synchronous error",
+      }),
+    );
   });
 
   test("should catch asynchronous errors (promise rejections)", async () => {
@@ -55,40 +53,13 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Async error (in waitUntil callback, original error in cause property)",
-          cause: asyncError,
-        }),
-      );
-    });
-  });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
 
-  test("should capture original stack trace", async () => {
-    const loggerSpy = vi.spyOn(tagLogger.logger, "error");
-
-    const asyncError = new Error("Async error");
-
-    function functionWithBrokenWaitUntil() {
-      waitUntil(
-        (async () => {
-          throw asyncError;
-        })(),
-      );
-    }
-
-    functionWithBrokenWaitUntil();
-
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Async error (in waitUntil callback, original error in cause property)",
-          cause: asyncError,
-          stack: expect.stringContaining("functionWithBrokenWaitUntil"),
-        }),
-      );
-    });
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Async error",
+      }),
+    );
   });
 
   test("should handle rejected promises passed directly", async () => {
@@ -99,14 +70,13 @@ describe("waitUntil wrapper", () => {
 
     waitUntil(rejectedPromise);
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Rejection error (in waitUntil callback, original error in cause property)",
-          cause: rejectionError,
-        }),
-      );
-    });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
+
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Rejection error",
+      }),
+    );
   });
 
   test("should not throw for successful async operations", async () => {
@@ -147,59 +117,12 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Delayed error (in waitUntil callback, original error in cause property)",
-          cause: delayedError,
-        }),
-      );
-    });
-  });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
 
-  test("call stacks are usefully tracked", async () => {
-    const loggerSpy = vi.spyOn(tagLogger.logger, "error");
-
-    function functionWithBrokenWaitUntil() {
-      waitUntil(
-        Promise.resolve().then(() => {
-          throw new Error("Oh dear");
-        }),
-      );
-    }
-
-    functionWithBrokenWaitUntil();
-
-    await vi.waitFor(() => {
-      const error = loggerSpy.mock.calls[0][0] as any;
-      const simplify = (stack: string) =>
-        stack
-          .replaceAll(import.meta.filename, import.meta.filename.split("/").pop()!)
-          .replaceAll(
-            /file:\/\/\/.*node_modules\/([^/]+)\/.*:\d+:\d+\b/g,
-            "node_modules-blah-blah/$1/node_modules-more-blah-blah",
-          )
-          .replaceAll(process.cwd(), "<cwd>");
-
-      expect(error).toHaveProperty("stack");
-
-      expect(simplify(error.stack)).toMatchInlineSnapshot(`
-        "Oh dear (in waitUntil callback, original error in cause property):
-            at functionWithBrokenWaitUntil (env.test.ts:164:7)
-            at env.test.ts:171:5
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at new Promise (<anonymous>)
-            at runWithTimeout (node_modules-blah-blah/@vitest/node_modules-more-blah-blah)
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at Traces.$ (node_modules-blah-blah/vitest/node_modules-more-blah-blah)"
-      `);
-
-      expect(simplify(error.cause.stack)).toMatchInlineSnapshot(`
-        "Error: Oh dear
-            at env.test.ts:166:17"
-      `);
-    });
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Delayed error",
+      }),
+    );
   });
 });
