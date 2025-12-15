@@ -149,7 +149,7 @@ const _richUserMessage: ResponseInputItem = {
 
     {
       type: "input_file",
-      file_url: "https://platform.estate.iterate.com/api/files/download/123",
+      file_url: "https://platform.installation.iterate.com/api/files/download/123",
       file_id: "our_iterate_file_id",
     },
 

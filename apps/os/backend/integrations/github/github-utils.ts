@@ -5,7 +5,7 @@ import { env } from "../../../env.ts";
 import { getDb, type DB } from "../../db/client.ts";
 import * as schema from "../../db/schema.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
-import type { EstateBuilderWorkflowInput } from "../../outbox/client.ts";
+import type { InstallationBuilderWorkflowInput } from "../../outbox/client.ts";
 import { outboxClient } from "../../outbox/client.ts";
 
 const privateKey = createPrivateKey({
@@ -32,7 +32,7 @@ export const githubAppInstance = (): GithubAppInstance =>
     Octokit: Octokit.defaults({ userAgent: "Iterate OS" }),
   });
 
-export const getGithubInstallationForEstate = async (db: DB, estateId: string) => {
+export const getGithubInstallationForEstate = async (db: DB, installationId: string) => {
   const installations = await db
     .select({
       accountId: schema.account.accountId,
@@ -40,11 +40,14 @@ export const getGithubInstallationForEstate = async (db: DB, estateId: string) =
       refreshToken: schema.account.refreshToken,
       accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
     })
-    .from(schema.estateAccountsPermissions)
-    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+    .from(schema.installationAccountsPermissions)
+    .innerJoin(
+      schema.account,
+      eq(schema.installationAccountsPermissions.accountId, schema.account.id),
+    )
     .where(
       and(
-        eq(schema.estateAccountsPermissions.estateId, estateId),
+        eq(schema.installationAccountsPermissions.installationId, installationId),
         eq(schema.account.providerId, "github-app"),
       ),
     )
@@ -53,9 +56,9 @@ export const getGithubInstallationForEstate = async (db: DB, estateId: string) =
   return installations.at(0);
 };
 
-export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
-  const e = await db.query.estate.findFirst({
-    where: eq(schema.estate.id, estateId),
+export const getGithubRepoForEstate = async (db: DB, installationId: string) => {
+  const e = await db.query.installation.findFirst({
+    where: eq(schema.installation.id, installationId),
     with: recentActiveSources,
   });
   const s = e?.sources?.[0];
@@ -73,20 +76,20 @@ export const getGithubRepoForEstate = async (db: DB, estateId: string) => {
   return estate;
 };
 
-export const getEstateByRepoId = async (db: DB, repoId: number) => {
+export const getInstallationByRepoId = async (db: DB, repoId: number) => {
   const configSource = await db.query.iterateConfigSource.findFirst({
     where: and(
       eq(schema.iterateConfigSource.repoId, repoId),
       isNull(schema.iterateConfigSource.deactivatedAt),
     ),
     with: {
-      estate: true,
+      installation: true,
     },
   });
   return (
-    configSource?.estate && {
-      id: configSource.estate.id,
-      name: configSource.estate.name,
+    configSource?.installation && {
+      id: configSource.installation.id,
+      name: configSource.installation.name,
       connectedRepoRef: configSource.branch,
       connectedRepoPath: configSource.path,
       connectedRepoAccountId: configSource.accountId,
@@ -102,11 +105,11 @@ export const validateGithubWebhookSignature = async (payload: string, signature:
 export const getOctokitForInstallation = async (installationId: string): Promise<Octokit> =>
   await githubAppInstance().getInstallationOctokit(parseInt(installationId));
 
-// Helper function to trigger a GitHub estate build
-export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
+// Helper function to trigger a GitHub installation build
+export async function triggerGithubBuild(payload: InstallationBuilderWorkflowInput) {
   const db = getDb();
 
-  const res = await outboxClient.sendTx(db, "estate:build:created", async (tx) => {
+  const res = await outboxClient.sendTx(db, "installation:build:created", async (tx) => {
     const [build] = await tx
       .insert(schema.builds)
       .values({
@@ -118,7 +121,7 @@ export async function triggerGithubBuild(payload: EstateBuilderWorkflowInput) {
         webhookIterateId:
           payload.webhookId || `${payload.isManual ? "manual" : "auto"}-${Date.now()}`,
         files: [],
-        estateId: payload.estateId,
+        installationId: payload.installationId,
         iterateWorkflowRunId: payload.workflowRunId,
       })
       .returning();

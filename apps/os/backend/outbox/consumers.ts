@@ -6,12 +6,12 @@ import { getDb, schema } from "../db/client.ts";
 import { logger } from "../tag-logger.ts";
 import {
   createTrialSlackConnectChannel,
-  getIterateSlackEstateId,
+  getIterateSlackInstallationId,
 } from "../utils/trial-channel-setup.ts";
 import { env } from "../../env.ts";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
-import { createGithubRepoInEstatePool } from "../org-utils.ts";
+import { createGithubRepoInInstallationPool } from "../org-utils.ts";
 import { getOrCreateAgentStubByRoute } from "../agent/agents/stub-getters.ts";
 import { outboxClient as cc } from "./client.ts";
 
@@ -24,19 +24,19 @@ export const registerConsumers = () => {
     handler: async (params) => {
       const { input, output } = params.payload;
       const db = getDb();
-      const iterateBotAccount = await getSlackAccessTokenForEstate(db, input.estateId);
+      const iterateBotAccount = await getSlackAccessTokenForEstate(db, input.installationId);
       if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
 
       const result = await createTrialSlackConnectChannel({
         db,
-        userEstateId: input.estateId,
+        userInstallationId: input.installationId,
         userEmail: output.userEmail,
         userName: output.userName,
         iterateTeamId: output.iterateTeamId,
         iterateBotToken: iterateBotAccount.accessToken,
       });
 
-      return `Set up trial for ${output.userName}: channel ${result.channelName} → estate ${input.estateId}`;
+      return `Set up trial for ${output.userName}: channel ${result.channelName} → estate ${input.installationId}`;
     },
   });
 
@@ -45,10 +45,10 @@ export const registerConsumers = () => {
     on: "trpc:integrations.upgradeTrialToFullInstallation",
     handler: async (params) => {
       const ctx = { db: getDb() };
-      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
-      if (!iterateEstateId) throw new Error("Iterate Slack workspace estate not found");
+      const iterateInstallationId = await getIterateSlackInstallationId(ctx.db);
+      if (!iterateInstallationId) throw new Error("Iterate Slack workspace estate not found");
 
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateInstallationId);
       if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
 
       const slackAPI = new WebClient(iterateBotAccount.accessToken);
@@ -62,11 +62,11 @@ export const registerConsumers = () => {
 
   cc.registerConsumer({
     name: "triggerBuild",
-    on: "estate:build:created",
+    on: "installation:build:created",
     async handler(params) {
       const { buildId, ...payload } = params.payload;
 
-      const container = getContainer(env.ESTATE_BUILD_MANAGER, payload.estateId);
+      const container = getContainer(env.INSTALLATION_BUILD_MANAGER, payload.installationId);
       using _build = await container.build({
         buildId,
         repo: payload.repoUrl,
@@ -82,20 +82,20 @@ export const registerConsumers = () => {
         .set({ status: "in_progress" })
         .where(eq(schema.builds.id, buildId));
 
-      const estateWithOrg = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, payload.estateId),
+      const installationWithOrg = await db.query.installation.findFirst({
+        where: eq(schema.installation.id, payload.installationId),
         with: {
           organization: true,
         },
       });
 
       // Invalidate organization queries to show the new in-progress build
-      if (estateWithOrg?.organization) {
-        await invalidateOrganizationQueries(env, estateWithOrg.organization.id, {
+      if (installationWithOrg?.organization) {
+        await invalidateOrganizationQueries(env, installationWithOrg.organization.id, {
           type: "INVALIDATE",
           invalidateInfo: {
             type: "TRPC_QUERY",
-            paths: ["estate.getBuilds"],
+            paths: ["installation.getBuilds"],
           },
         });
       }
@@ -104,32 +104,32 @@ export const registerConsumers = () => {
 
   cc.registerConsumer({
     name: "createStripeCustomer",
-    on: "estate:created",
+    on: "installation:created",
     async handler(params) {
-      const { estateId } = params.payload;
+      const { installationId } = params.payload;
       const db = getDb();
 
-      const estate = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
+      const installation = await db.query.installation.findFirst({
+        where: eq(schema.installation.id, installationId),
         with: { organization: true },
       });
-      if (!estate) throw new Error(`Estate ${estateId} not found`);
+      if (!installation) throw new Error(`Installation ${installationId} not found`);
 
       const ownerMembership = await db.query.organizationUserMembership.findFirst({
         where: (m, { eq, and }) =>
-          and(eq(m.organizationId, estate.organizationId), eq(m.role, "owner")),
+          and(eq(m.organizationId, installation.organizationId), eq(m.role, "owner")),
         with: { user: true },
       });
       const user = ownerMembership?.user;
       if (!user) throw new Error("Missing user to create Stripe customer");
 
-      await createStripeCustomerAndSubscriptionForOrganization(db, estate.organization, user);
+      await createStripeCustomerAndSubscriptionForOrganization(db, installation.organization, user);
 
       await db
-        .insert(schema.estateOnboardingEvent)
+        .insert(schema.installationOnboardingEvent)
         .values({
-          estateId,
-          organizationId: estate.organizationId,
+          installationId,
+          organizationId: installation.organizationId,
           eventType: "StripeCustomerCreated",
           category: "system",
         })
@@ -139,37 +139,37 @@ export const registerConsumers = () => {
 
   cc.registerConsumer({
     name: "createGithubRepo",
-    on: "estate:created",
+    on: "installation:created",
     async handler(params) {
-      const { estateId } = params.payload;
+      const { installationId } = params.payload;
       const db = getDb();
 
-      const estate = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
+      const installation = await db.query.installation.findFirst({
+        where: eq(schema.installation.id, installationId),
         with: { organization: true },
       });
-      if (!estate) throw new Error(`Estate ${estateId} not found`);
+      if (!installation) throw new Error(`Installation ${installationId} not found`);
 
       const activeSource = await db.query.iterateConfigSource.findFirst({
         where: and(
-          eq(schema.iterateConfigSource.estateId, estate.id),
+          eq(schema.iterateConfigSource.installationId, installation.id),
           isNull(schema.iterateConfigSource.deactivatedAt),
         ),
       });
       if (activeSource) {
-        logger.warn(`Estate ${estate.id} already has an active source, skipping`);
+        logger.warn(`Installation ${installation.id} already has an active source, skipping`);
         return;
       }
 
-      const repo = await createGithubRepoInEstatePool({
-        organizationName: estate.organization.name,
-        organizationId: estate.organizationId,
+      const repo = await createGithubRepoInInstallationPool({
+        organizationName: installation.organization.name,
+        organizationId: installation.organizationId,
       });
 
       await db
         .insert(schema.iterateConfigSource)
         .values({
-          estateId: estate.id,
+          installationId: installation.id,
           provider: "github",
           repoId: repo.id,
           branch: repo.default_branch,
@@ -181,31 +181,31 @@ export const registerConsumers = () => {
 
   cc.registerConsumer({
     name: "warmOnboardingAgent",
-    on: "estate:created",
+    on: "installation:created",
     async handler(params) {
-      const { estateId } = params.payload;
+      const { installationId } = params.payload;
       const db = getDb();
 
-      const estate = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
+      const installation = await db.query.installation.findFirst({
+        where: eq(schema.installation.id, installationId),
       });
-      if (!estate) throw new Error(`Estate ${estateId} not found`);
-      if (!estate.onboardingAgentName)
-        throw new Error(`Estate ${estateId} has no onboardingAgentName`);
+      if (!installation) throw new Error(`Installation ${installationId} not found`);
+      if (!installation.onboardingAgentName)
+        throw new Error(`Installation ${installationId} has no onboardingAgentName`);
 
       const agent = await getOrCreateAgentStubByRoute("OnboardingAgent", {
         db,
-        estateId,
-        route: estate.onboardingAgentName,
-        reason: `Provisioned via estate onboarding outbox for estate named ${estate.name}`,
+        installationId,
+        route: installation.onboardingAgentName,
+        reason: `Provisioned via installation onboarding outbox for installation named ${installation.name}`,
       });
       await agent.doNothing();
 
       await db
-        .insert(schema.estateOnboardingEvent)
+        .insert(schema.installationOnboardingEvent)
         .values({
-          estateId,
-          organizationId: estate.organizationId,
+          installationId,
+          organizationId: installation.organizationId,
           eventType: "OnboardingAgentWarmed",
           category: "system",
         })

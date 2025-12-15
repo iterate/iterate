@@ -4,7 +4,7 @@ import { z } from "zod";
 import { and, eq, like } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import {
-  estateProtectedProcedure,
+  installationProtectedProcedure,
   protectedProcedure,
   publicProcedure,
   router,
@@ -32,7 +32,7 @@ export type AgentEvent = (AgentCoreEvent | SlackSliceEvent) & {
 };
 
 /** operate on an existing agent - throws  */
-const agentStubProcedure = estateProtectedProcedure
+const agentStubProcedure = installationProtectedProcedure
   .input(
     z.object({
       agentInstanceName: z.string().describe("The durable object name for the agent instance"),
@@ -44,12 +44,12 @@ const agentStubProcedure = estateProtectedProcedure
     }),
   )
   .use(async ({ input, ctx, next }) => {
-    const estateId = input.estateId;
+    const installationId = input.installationId;
 
     const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
       agentInstanceName: input.agentInstanceName,
-      estateId,
+      installationId,
     }).catch((err) => {
       // todo: effect!
       if (String(err).includes("not found")) {
@@ -102,7 +102,7 @@ export const agentsRouter = router({
     })
     .input(
       z.object({
-        estateId: z.string(),
+        installationId: z.string(),
         agentInstanceName: z.string().describe("The durable object name for the agent instance"),
         agentClassName: z
           .enum(AGENT_CLASS_NAMES)
@@ -120,7 +120,7 @@ export const agentsRouter = router({
       const agent = await getAgentStubByName(input.agentClassName, {
         db: ctx.db,
         agentInstanceName: input.agentInstanceName,
-        estateId: input.estateId,
+        installationId: input.installationId,
       });
       return agent
         .callCodemodeCallback(
@@ -137,14 +137,14 @@ export const agentsRouter = router({
         });
     }),
 
-  list: estateProtectedProcedure
+  list: installationProtectedProcedure
     .input(
       z.object({
         agentNameLike: z.string().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const conditions = [eq(agentInstance.estateId, input.estateId)];
+      const conditions = [eq(agentInstance.installationId, input.installationId)];
       if (input.agentNameLike) {
         conditions.push(like(agentInstance.durableObjectName, input.agentNameLike));
       }
@@ -153,7 +153,7 @@ export const agentsRouter = router({
       });
     }),
 
-  getOrCreateAgent: estateProtectedProcedure
+  getOrCreateAgent: installationProtectedProcedure
     .input(
       z.object({
         route: z.string(),

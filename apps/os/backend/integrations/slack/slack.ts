@@ -37,35 +37,35 @@ export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables
  * @param botUserId - Slack bot user ID (e.g., "U08UQSK9D2M")
  * @returns Estate ID or null if not found
  */
-async function botUserIdToEstateId(db: DB, botUserId: string): Promise<string | null> {
+async function botUserIdToInstallationId(db: DB, botUserId: string): Promise<string | null> {
   const result = await db
-    .select({ estateId: schema.estateAccountsPermissions.estateId })
+    .select({ installationId: schema.installationAccountsPermissions.installationId })
     .from(schema.account)
     .innerJoin(
-      schema.estateAccountsPermissions,
-      eq(schema.account.id, schema.estateAccountsPermissions.accountId),
+      schema.installationAccountsPermissions,
+      eq(schema.account.id, schema.installationAccountsPermissions.accountId),
     )
     .where(and(eq(schema.account.providerId, "slack-bot"), eq(schema.account.accountId, botUserId)))
     .limit(1);
 
-  const estateId = result[0]?.estateId ?? null;
-  logger.info(`[botUserIdToEstateId] ${botUserId} → ${estateId}`);
-  return estateId;
+  const installationId = result[0]?.installationId ?? null;
+  logger.info(`[botUserIdToInstallationId] ${botUserId} → ${installationId}`);
+  return installationId;
 }
 
 /**
  * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
  *
  * Resolution order:
- * 1. If channelId is provided, check slackChannelEstateOverride table first
- * 2. Fall back to providerEstateMapping (team_id → estate_id)
+ * 1. If channelId is provided, check slackChannelOverride table first
+ * 2. Fall back to providerInstallationMapping (team_id → estate_id)
  *
  * @param db - Database connection
  * @param teamId - Slack team/workspace ID
  * @param channelId - Optional Slack channel ID for channel-specific routing
  * @returns Estate ID or null if not found
  */
-async function slackTeamIdToEstateId({
+async function slackTeamIdToInstallationId({
   db,
   teamId,
   channelId,
@@ -76,39 +76,39 @@ async function slackTeamIdToEstateId({
 }): Promise<string | null> {
   // First, check for channel-specific override if channelId is provided
   if (channelId) {
-    const overrideResult = await db.query.slackChannelEstateOverride.findFirst({
+    const overrideResult = await db.query.slackChannelOverride.findFirst({
       where: and(
-        eq(schema.slackChannelEstateOverride.slackChannelId, channelId),
-        eq(schema.slackChannelEstateOverride.slackTeamId, teamId),
+        eq(schema.slackChannelOverride.slackChannelId, channelId),
+        eq(schema.slackChannelOverride.slackTeamId, teamId),
       ),
       columns: {
-        estateId: true,
+        installationId: true,
       },
     });
 
     if (overrideResult) {
       logger.info(
-        `Using channel override routing: channel=${channelId}, team=${teamId} → estate=${overrideResult.estateId}`,
+        `Using channel override routing: channel=${channelId}, team=${teamId} → estate=${overrideResult.installationId}`,
       );
-      return overrideResult.estateId;
+      return overrideResult.installationId;
     }
   }
 
   // Fall back to default team_id → estate_id mapping
   const result = await db
     .select({
-      estateId: schema.providerEstateMapping.internalEstateId,
+      installationId: schema.providerInstallationMapping.internalInstallationId,
     })
-    .from(schema.providerEstateMapping)
+    .from(schema.providerInstallationMapping)
     .where(
       and(
-        eq(schema.providerEstateMapping.externalId, teamId),
-        eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        eq(schema.providerInstallationMapping.externalId, teamId),
+        eq(schema.providerInstallationMapping.providerId, "slack-bot"),
       ),
     )
     .limit(1);
 
-  return result[0]?.estateId ?? null;
+  return result[0]?.installationId ?? null;
 }
 
 /**
@@ -119,15 +119,15 @@ async function slackTeamIdToEstateId({
  */
 export async function ensureUserSynced(params: {
   db: DB;
-  estateId: string;
+  installationId: string;
   slackUserId: string;
   botToken: string;
   syncingTeamId: string;
 }): Promise<boolean> {
-  const { db, estateId, slackUserId, botToken, syncingTeamId } = params;
+  const { db, installationId, slackUserId, botToken, syncingTeamId } = params;
 
   logger.info(
-    `[JIT Sync] Starting sync for user ${slackUserId}, estate ${estateId}, syncingTeam ${syncingTeamId}`,
+    `[JIT Sync] Starting sync for user ${slackUserId}, estate ${installationId}, syncingTeam ${syncingTeamId}`,
   );
 
   try {
@@ -135,14 +135,14 @@ export async function ensureUserSynced(params: {
     const existing = await db.query.providerUserMapping.findFirst({
       where: and(
         eq(schema.providerUserMapping.providerId, "slack-bot"),
-        eq(schema.providerUserMapping.estateId, estateId),
+        eq(schema.providerUserMapping.installationId, installationId),
         eq(schema.providerUserMapping.externalId, slackUserId),
       ),
     });
 
     if (existing) {
       logger.info(
-        `[JIT Sync] User ${slackUserId} already synced for estate ${estateId} (internalUserId=${existing.internalUserId})`,
+        `[JIT Sync] User ${slackUserId} already synced for estate ${installationId} (internalUserId=${existing.internalUserId})`,
       );
       return true; // Already synced
     }
@@ -150,12 +150,12 @@ export async function ensureUserSynced(params: {
     logger.info(`[JIT Sync] User ${slackUserId} not in database, proceeding with sync`);
 
     // Check if this is a trial estate
-    const estate = await db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    const estate = await db.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
       columns: { organizationId: true },
     });
 
-    const isTrial = await slackChannelOverrideExists(db, estateId);
+    const isTrial = await slackChannelOverrideExists(db, installationId);
 
     // Fetch user info from Slack
     const slackAPI = new WebClient(botToken);
@@ -170,12 +170,12 @@ export async function ensureUserSynced(params: {
 
       if (!hasFullUserInfo) {
         logger.warn(
-          `[JIT Sync] Limited user info for ${slackUserId} on estate ${estateId} (${userInfoResponse.error})`,
+          `[JIT Sync] Limited user info for ${slackUserId} on estate ${installationId} (${userInfoResponse.error})`,
         );
       }
     } catch (error: any) {
       logger.warn(
-        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on estate ${estateId} (likely external Slack Connect user):`,
+        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on estate ${installationId} (likely external Slack Connect user):`,
         error,
       );
       // For trial estates, this is expected - all users are external
@@ -207,7 +207,7 @@ export async function ensureUserSynced(params: {
     const email = userInfo?.profile?.email || `${slackUserId}@${syncingTeamId}.slack.iterate.com`;
 
     if (!estate) {
-      logger.error(`[JIT Sync] Estate ${estateId} not found during JIT sync`);
+      logger.error(`[JIT Sync] Estate ${installationId} not found during JIT sync`);
       return false;
     }
 
@@ -245,7 +245,7 @@ export async function ensureUserSynced(params: {
           providerId: "slack-bot",
           internalUserId: user.id,
           externalId: slackUserId,
-          estateId: estateId,
+          installationId: installationId,
           externalUserTeamId: isExternalUser && userHomeTeamId ? userHomeTeamId : null,
           providerMetadata: {
             ...(userInfo || {}),
@@ -258,7 +258,7 @@ export async function ensureUserSynced(params: {
         .onConflictDoUpdate({
           target: [
             schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
+            schema.providerUserMapping.installationId,
             schema.providerUserMapping.externalId,
           ],
           set: {
@@ -306,12 +306,12 @@ export async function ensureUserSynced(params: {
     });
 
     logger.info(
-      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for estate ${estateId}`,
+      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for estate ${installationId}`,
     );
     return true;
   } catch (error) {
     logger.error(
-      `[JIT Sync] Error syncing user ${slackUserId} for estate ${estateId}:`,
+      `[JIT Sync] Error syncing user ${slackUserId} for estate ${installationId}:`,
       error instanceof Error ? error.message : error,
     );
     return false;
@@ -362,7 +362,7 @@ slackApp.post("/webhook", async (c) => {
 
   const messageMetadata = await getMessageMetadata(body.event, db);
 
-  const processInstruction = await determineEstateIdsToProcess({
+  const processInstruction = await determineInstallationIdsToProcess({
     db,
     body,
     messageMetadata,
@@ -370,12 +370,12 @@ slackApp.post("/webhook", async (c) => {
 
   // Process the webhook for each estate independently
   await Promise.all(
-    processInstruction.estateIds.map((estateId) =>
+    processInstruction.installationIds.map((installationId) =>
       processWebhookForEstate({
         db,
         body,
         messageMetadata,
-        estateId,
+        installationId,
         instruction: processInstruction.instruction,
       }),
     ),
@@ -384,7 +384,7 @@ slackApp.post("/webhook", async (c) => {
   return c.text("ok");
 });
 
-async function determineEstateIdsToProcess({
+async function determineInstallationIdsToProcess({
   db,
   body,
   messageMetadata,
@@ -392,10 +392,10 @@ async function determineEstateIdsToProcess({
   db: DB;
   body: SlackWebhookPayload;
   messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-  // todo: remove the `estateId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the estate?
-}): Promise<{ estateIds: string[]; instruction: "process" | "store-webhooks" }> {
+  // todo: remove the `installationId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the estate?
+}): Promise<{ installationIds: string[]; instruction: "process" | "store-webhooks" }> {
   if (!body.event) {
-    return { estateIds: [], instruction: "process" };
+    return { installationIds: [], instruction: "process" };
   }
 
   if (messageMetadata.threadTs) {
@@ -403,29 +403,29 @@ async function determineEstateIdsToProcess({
       where: sql`${schema.agentInstance.routingKey} LIKE ${`%${messageMetadata.threadTs}%`} AND ${schema.agentInstance.routingKey} LIKE ${"%-slack-%"}`,
     });
     if (existingRoutes.length > 0) {
-      const estateIds = [...new Set(existingRoutes.map((r) => r.estateId))];
-      return { estateIds, instruction: "process" };
+      const installationIds = [...new Set(existingRoutes.map((r) => r.installationId))];
+      return { installationIds, instruction: "process" };
     }
   }
 
   // Channel overrides (for trial estates) take priority over bot mention routing
   if (messageMetadata.channel && body.team_id) {
-    const channelOverrideEstateId = await slackTeamIdToEstateId({
+    const channelOverrideInstallationId = await slackTeamIdToInstallationId({
       db,
       teamId: body.team_id,
       channelId: messageMetadata.channel,
     });
 
-    if (channelOverrideEstateId) {
-      const channelOverride = await db.query.slackChannelEstateOverride.findFirst({
+    if (channelOverrideInstallationId) {
+      const channelOverride = await db.query.slackChannelOverride.findFirst({
         where: and(
-          eq(schema.slackChannelEstateOverride.slackChannelId, messageMetadata.channel),
-          eq(schema.slackChannelEstateOverride.slackTeamId, body.team_id),
+          eq(schema.slackChannelOverride.slackChannelId, messageMetadata.channel),
+          eq(schema.slackChannelOverride.slackTeamId, body.team_id),
         ),
       });
 
       if (channelOverride) {
-        return { estateIds: [channelOverrideEstateId], instruction: "process" };
+        return { installationIds: [channelOverrideInstallationId], instruction: "process" };
       }
     }
   }
@@ -439,47 +439,47 @@ async function determineEstateIdsToProcess({
 
   if (mentionedBotIds.length > 0) {
     const mentionedBotEstates = await Promise.all(
-      mentionedBotIds.map((botId: string) => botUserIdToEstateId(db, botId)),
+      mentionedBotIds.map((botId: string) => botUserIdToInstallationId(db, botId)),
     );
 
-    const validEstateIds = [
+    const validInstallationIds = [
       ...new Set(mentionedBotEstates.filter((id): id is string => id !== null)),
     ];
 
-    if (validEstateIds.length > 0) {
-      return { estateIds: validEstateIds, instruction: "process" };
+    if (validInstallationIds.length > 0) {
+      return { installationIds: validInstallationIds, instruction: "process" };
     }
   }
 
   if (!body.team_id) {
-    return { estateIds: [], instruction: "process" };
+    return { installationIds: [], instruction: "process" };
   }
 
-  const estateId = await slackTeamIdToEstateId({
+  const installationId = await slackTeamIdToInstallationId({
     db,
     teamId: body.team_id,
     channelId: messageMetadata.channel,
   });
 
-  if (estateId) {
+  if (installationId) {
     const isDM = "channel_type" in body.event && body.event.channel_type === "im";
-    return { estateIds: [estateId], instruction: isDM ? "process" : "store-webhooks" };
+    return { installationIds: [installationId], instruction: isDM ? "process" : "store-webhooks" };
   }
 
-  return { estateIds: [], instruction: "process" };
+  return { installationIds: [], instruction: "process" };
 }
 
 async function processWebhookForEstate({
   db,
   body,
   messageMetadata,
-  estateId,
+  installationId,
   instruction,
 }: {
   db: DB;
   body: SlackWebhookPayload;
   messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-  estateId: string;
+  installationId: string;
   instruction: "process" | "store-webhooks";
 }) {
   if (!body.event) {
@@ -497,7 +497,7 @@ async function processWebhookForEstate({
         subtype: "subtype" in body.event ? body.event.subtype : null,
         user: extractUserId(body.event),
         channel: messageMetadata.channel,
-        estateId: estateId,
+        installationId: installationId,
       })
       .returning(),
   );
@@ -520,7 +520,7 @@ async function processWebhookForEstate({
       waitUntil(
         handleBotChannelJoin({
           db,
-          estateId,
+          installationId,
           channelId: body.event.channel,
           botUserId,
           teamId: body.team_id,
@@ -530,7 +530,7 @@ async function processWebhookForEstate({
   }
 
   waitUntil(
-    getSlackAccessTokenForEstate(db, estateId).then(async (slackAccount) => {
+    getSlackAccessTokenForEstate(db, installationId).then(async (slackAccount) => {
       if (slackAccount) {
         await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
@@ -542,14 +542,14 @@ async function processWebhookForEstate({
   }
 
   const routingKey = getRoutingKey({
-    estateId: estateId,
+    installationId: installationId,
     threadTs: messageMetadata.threadTs,
   });
 
   const details = { type: body.event.type, ...messageMetadata };
   const agentStub = await getOrCreateAgentStubByRoute("SlackAgent", {
     db,
-    estateId,
+    installationId,
     route: routingKey,
     reason: `Slack webhook received: ${new URLSearchParams(details)}`,
   });
@@ -561,8 +561,8 @@ slackApp.post("/interactive", async (c) => {
   return c.text("ok");
 });
 
-export function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
-  const suffix = `slack-${estateId}`;
+export function getRoutingKey({ installationId, threadTs }: { installationId: string; threadTs: string }) {
+  const suffix = `slack-${installationId}`;
   return `ts-${threadTs}-${suffix}`;
 }
 
@@ -614,7 +614,7 @@ export async function reactToSlackWebhook(
 export async function syncSlackChannels(
   db: DB,
   botToken: string,
-  estateId: string,
+  installationId: string,
 ): Promise<{
   allChannels: Array<{ id: string; name: string; isShared: boolean; isExtShared: boolean }>;
   sharedChannelIds: Set<string>;
@@ -654,7 +654,7 @@ export async function syncSlackChannels(
 
     await db.transaction(async (tx) => {
       const channelMappings = channels.map((channel) => ({
-        estateId: estateId,
+        installationId: installationId,
         externalId: channel.id!,
         name: channel.name!,
         isShared: channel.is_shared ?? false,
@@ -669,7 +669,7 @@ export async function syncSlackChannels(
           .insert(schema.slackChannel)
           .values(channelMappings)
           .onConflictDoUpdate({
-            target: [schema.slackChannel.estateId, schema.slackChannel.externalId],
+            target: [schema.slackChannel.installationId, schema.slackChannel.externalId],
             set: {
               name: sql`excluded.name`,
               isShared: sql`excluded.is_shared`,
@@ -681,7 +681,7 @@ export async function syncSlackChannels(
           });
       }
 
-      logger.info(`Synced ${channelMappings.length} Slack channels for estate ${estateId}`);
+      logger.info(`Synced ${channelMappings.length} Slack channels for estate ${installationId}`);
     });
 
     const allChannels = channels.map((c) => ({
@@ -745,7 +745,7 @@ export type SaveSlackUsersOptions = {
 export async function saveSlackUsersToDatabase(
   db: DB,
   members: SlackMemberData[],
-  estateId: string,
+  installationId: string,
   teamId: string,
   options: SaveSlackUsersOptions = {},
 ): Promise<Set<string>> {
@@ -764,15 +764,15 @@ export async function saveSlackUsersToDatabase(
 
   await db.transaction(async (tx) => {
     // Get the organization ID from the estate
-    const estate = await tx.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    const estate = await tx.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
       columns: {
         organizationId: true,
       },
     });
 
     if (!estate) {
-      logger.error(`Estate ${estateId} not found`);
+      logger.error(`Estate ${installationId} not found`);
       return;
     }
 
@@ -838,7 +838,7 @@ export async function saveSlackUsersToDatabase(
         providerId: "slack-bot" as const,
         internalUserId: user.id,
         externalId: member.id!,
-        estateId: estateId,
+        installationId: installationId,
         externalUserTeamId: null, // Internal users have no external team
         providerMetadata: {
           ...member,
@@ -865,7 +865,7 @@ export async function saveSlackUsersToDatabase(
         .onConflictDoUpdate({
           target: [
             schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
+            schema.providerUserMapping.installationId,
             schema.providerUserMapping.externalId,
           ],
           set: {
@@ -941,7 +941,7 @@ export async function saveSlackUsersToDatabase(
               providerId: "slack-bot",
               internalUserId: slackbotUser.id,
               externalId: "USLACKBOT",
-              estateId: estateId,
+              installationId: installationId,
               externalUserTeamId: null, // Slackbot is internal to the workspace
               providerMetadata: {
                 isSlackbot: true,
@@ -952,7 +952,7 @@ export async function saveSlackUsersToDatabase(
             .onConflictDoUpdate({
               target: [
                 schema.providerUserMapping.providerId,
-                schema.providerUserMapping.estateId,
+                schema.providerUserMapping.installationId,
                 schema.providerUserMapping.externalId,
               ],
               set: {
@@ -1005,7 +1005,7 @@ export async function saveSlackUsersToDatabase(
 export async function syncSlackUsersInBackground(
   db: DB,
   botToken: string,
-  estateId: string,
+  installationId: string,
   teamId: string,
 ): Promise<Set<string>> {
   try {
@@ -1034,7 +1034,7 @@ export async function syncSlackUsersInBackground(
       cursor = userListResponse.response_metadata?.next_cursor;
     } while (cursor);
 
-    return await saveSlackUsersToDatabase(db, allMembers, estateId, teamId);
+    return await saveSlackUsersToDatabase(db, allMembers, installationId, teamId);
   } catch (error) {
     logger.error("Error syncing Slack users:", error instanceof Error ? error.message : error);
     throw error;
@@ -1047,10 +1047,10 @@ export async function syncSlackUsersInBackground(
  * 2. Syncs internal workspace users (parallel with channels)
  * 3. Syncs external Slack Connect users from shared channels (sequential)
  */
-export async function syncSlackForEstateInBackground(
+export async function syncSlackForInstallationInBackground(
   db: DB,
   botToken: string,
-  estateId: string,
+  installationId: string,
   teamId: string,
 ): Promise<{
   channels: { count: number; sharedCount: number };
@@ -1058,12 +1058,12 @@ export async function syncSlackForEstateInBackground(
   errors: string[];
 }> {
   try {
-    logger.info(`Starting complete Slack sync for estate ${estateId}`);
+    logger.info(`Starting complete Slack sync for estate ${installationId}`);
 
     // Phase 1: Sync channels and internal users in parallel
     const [channelsResult, internalUserIds] = await Promise.all([
-      syncSlackChannels(db, botToken, estateId),
-      syncSlackUsersInBackground(db, botToken, estateId, teamId),
+      syncSlackChannels(db, botToken, installationId),
+      syncSlackUsersInBackground(db, botToken, installationId, teamId),
     ]);
 
     const { sharedChannelIds } = channelsResult;
@@ -1072,14 +1072,14 @@ export async function syncSlackForEstateInBackground(
     const externalUsersResult = await syncSlackConnectUsers(
       db,
       botToken,
-      estateId,
+      installationId,
       teamId,
       sharedChannelIds,
       internalUserIds,
     );
 
     logger.info(
-      `Complete Slack sync finished for estate ${estateId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
+      `Complete Slack sync finished for estate ${installationId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
     );
 
     return {
@@ -1094,7 +1094,7 @@ export async function syncSlackForEstateInBackground(
       errors: externalUsersResult.errors,
     };
   } catch (error) {
-    logger.error("Error in syncSlackForEstateInBackground:", error);
+    logger.error("Error in syncSlackForInstallationInBackground:", error);
     throw error;
   }
 }
@@ -1113,7 +1113,7 @@ export async function syncSlackForEstateInBackground(
 export async function syncSlackConnectUsers(
   db: DB,
   botToken: string,
-  estateId: string,
+  installationId: string,
   iterateTeamId: string,
   sharedChannelIds: Set<string>,
   internalUserIds: Set<string>,
@@ -1227,13 +1227,13 @@ export async function syncSlackConnectUsers(
 
   // Insert/update external users in database
   await db.transaction(async (tx) => {
-    const estate = await tx.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    const estate = await tx.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
       columns: { organizationId: true },
     });
 
     if (!estate) {
-      throw new Error(`Estate ${estateId} not found`);
+      throw new Error(`Estate ${installationId} not found`);
     }
 
     for (const [
@@ -1290,7 +1290,7 @@ export async function syncSlackConnectUsers(
           providerId: "slack-bot",
           internalUserId: user.id,
           externalId: externalUserId,
-          estateId: estateId, // The estate that discovered this external user
+          installationId: installationId, // The estate that discovered this external user
           externalUserTeamId, // Their actual home team
           providerMetadata: {
             ...userInfo,
@@ -1305,7 +1305,7 @@ export async function syncSlackConnectUsers(
         .onConflictDoUpdate({
           target: [
             schema.providerUserMapping.providerId,
-            schema.providerUserMapping.estateId,
+            schema.providerUserMapping.installationId,
             schema.providerUserMapping.externalId,
           ],
           set: {
@@ -1325,7 +1325,7 @@ export async function syncSlackConnectUsers(
     }
 
     logger.info(
-      `Synced ${externalUsersByIdMap.size} external Slack Connect users for estate ${estateId}`,
+      `Synced ${externalUsersByIdMap.size} external Slack Connect users for estate ${installationId}`,
     );
   });
 
@@ -1334,14 +1334,14 @@ export async function syncSlackConnectUsers(
 
 async function handleBotChannelJoin(params: {
   db: DB;
-  estateId: string;
+  installationId: string;
   channelId: string;
   botUserId: string;
   teamId: string;
 }) {
-  const { db, estateId, channelId, botUserId } = params;
+  const { db, installationId, channelId, botUserId } = params;
 
-  const slackAccount = await getSlackAccessTokenForEstate(db, estateId);
+  const slackAccount = await getSlackAccessTokenForEstate(db, installationId);
   if (!slackAccount) {
     logger.error("No Slack token available for channel join handling");
     return;
@@ -1400,7 +1400,7 @@ async function handleBotChannelJoin(params: {
 
   await Promise.allSettled(
     threadsWithMentions.map(async ({ threadTs, threadHistory }) => {
-      const routingKey = getRoutingKey({ estateId, threadTs });
+      const routingKey = getRoutingKey({ installationId, threadTs });
 
       const threadContext = R.pipe(
         threadHistory.messages ?? [],
@@ -1441,7 +1441,7 @@ async function handleBotChannelJoin(params: {
       const [agentStub] = await Promise.allSettled([
         getOrCreateAgentStubByRoute("SlackAgent", {
           db,
-          estateId,
+          installationId,
           route: routingKey,
           reason: "Bot joined channel with existing mention",
         }) as unknown as Promise<SlackAgent>,

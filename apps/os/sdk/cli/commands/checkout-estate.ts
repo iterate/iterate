@@ -4,12 +4,12 @@ import * as fs from "fs/promises";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
-import { addUserToEstate } from "./add-to-estate.ts";
+import { addUserToInstallation } from "./add-to-estate.ts";
 
-export const checkoutEstateCommand = t.procedure
+export const checkoutInstallationCommand = t.procedure
   .input(
     z.object({
-      estateId: z.string(),
+      installationId: z.string(),
       path: z.string().optional().default(tmpdir()),
       rmrf: z.boolean().default(false),
     }),
@@ -27,11 +27,11 @@ export const checkoutEstateCommand = t.procedure
       token,
       repoId,
       repoRef,
-      repoPath: estateRepoPath,
-    } = await getRepoAccessToken(input.estateId);
+      repoPath: installationRepoPath,
+    } = await getRepoAccessToken(input.installationId);
 
     if (!repoId) {
-      throw new Error(`No repo is linked to estate ${input.estateId}`);
+      throw new Error(`No repo is linked to installation ${input.installationId}`);
     }
 
     const repoNameRes = await fetch(`https://api.github.com/repositories/${repoId}`, {
@@ -65,10 +65,10 @@ export const checkoutEstateCommand = t.procedure
       });
     }
 
-    return path.join(repoPath, estateRepoPath || ".");
+    return path.join(repoPath, installationRepoPath || ".");
   });
 
-export const estate = t.router({
-  checkout: checkoutEstateCommand,
-  addUser: addUserToEstate,
+export const installation = t.router({
+  checkout: checkoutInstallationCommand,
+  addUser: addUserToInstallation,
 });

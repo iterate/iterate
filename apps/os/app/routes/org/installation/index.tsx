@@ -46,7 +46,7 @@ import {
   TableHeader,
   TableRow,
 } from "../../../components/ui/table.tsx";
-import { useEstateId, useEstateUrl } from "../../../hooks/use-estate.ts";
+import { useInstallationId, useInstallationUrl } from "../../../hooks/use-installation.ts";
 import { useTRPC } from "../../../lib/trpc.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
@@ -74,10 +74,12 @@ function truncateEnd(str: string, maxLength = 20) {
 }
 
 function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }) {
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const [copied, setCopied] = useState(false);
 
-  const displayName = name.startsWith(`${estateId}-`) ? name.slice(`${estateId}-`.length) : name;
+  const displayName = name.startsWith(`${installationId}-`)
+    ? name.slice(`${installationId}-`.length)
+    : name;
 
   const handleCopy = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -103,7 +105,7 @@ function AgentNameCell({ name, onClick }: { name: string; onClick?: () => void }
   );
 }
 
-function UpgradeTrialButton({ estateId }: { estateId: string }) {
+function UpgradeTrialButton({ installationId }: { installationId: string }) {
   const trpc = useTRPC();
   const { connectSlackBot } = useSlackConnection();
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -114,7 +116,7 @@ function UpgradeTrialButton({ estateId }: { estateId: string }) {
 
   const handleUpgrade = async () => {
     try {
-      await upgradeTrial({ estateId });
+      await upgradeTrial({ installationId });
       toast.success("Installing to Slack workspace... Redirecting to Slack...");
       setDialogOpen(false);
       // Trigger Slack bot installation flow
@@ -189,7 +191,7 @@ function slackUrlTheadTs(filter: string): string | undefined {
   return undefined;
 }
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/")({
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/")({
   component: Home,
   head: () => ({
     meta: [
@@ -201,8 +203,8 @@ export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/")
 
 function Home() {
   const navigate = useNavigate();
-  const estateId = useEstateId();
-  const getEstateUrl = useEstateUrl();
+  const installationId = useInstallationId();
+  const getInstallationUrl = useInstallationUrl();
   const trpc = useTRPC();
   const { openSlackApp } = useSlackConnection();
 
@@ -221,11 +223,13 @@ function Home() {
   const nameSubstring = slackUrlTheadTs(agentNameFilter || "") || agentNameFilter;
   const { data: agents } = useQuery(
     trpc.agents.list.queryOptions({
-      estateId,
+      installationId,
       agentNameLike: nameSubstring ? `%${nameSubstring}%` : undefined,
     }),
   );
-  const { data: estateInfo } = useQuery(trpc.estate.get.queryOptions({ estateId }));
+  const { data: installationInfo } = useQuery(
+    trpc.installation.get.queryOptions({ installationId }),
+  );
   const user = useSessionUser();
 
   // Fetch Slack channels for the dialog
@@ -235,7 +239,7 @@ function Home() {
     error: channelsError,
   } = useQuery({
     ...trpc.integrations.listSlackChannels.queryOptions({
-      estateId: estateId,
+      installationId: installationId,
       types: "public_channel,private_channel",
       excludeArchived: true,
     }),
@@ -267,7 +271,9 @@ function Home() {
 
   const handleCreateAgent = () => {
     if (agentName.trim()) {
-      navigate({ to: getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`) });
+      navigate({
+        to: getInstallationUrl(`/agents/${agentType}/${installationId}-${agentName.trim()}`),
+      });
     }
   };
 
@@ -285,7 +291,7 @@ function Home() {
     }
 
     startThreadMutation.mutate({
-      estateId: estateId,
+      installationId: installationId,
       channel: channel.trim(),
       firstMessage: firstMessage.trim(),
     });
@@ -352,13 +358,15 @@ function Home() {
                 <img src="/slack.svg" alt="Slack" className="h-5 w-5 mr-2" />
                 Message @iterate on Slack
               </Button>
-              {estateInfo?.isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
+              {installationInfo?.isTrialInstallation && (
+                <UpgradeTrialButton installationId={installationId} />
+              )}
             </div>
 
-            {estateInfo?.onboardingAgentName && user?.debugMode ? (
+            {installationInfo?.onboardingAgentName && user?.debugMode ? (
               <div className="pt-4">
                 <Suspense fallback={<Skeleton className="h-[120px] w-full" />}>
-                  <OnboardingHero estateId={estateId} />
+                  <OnboardingHero installationId={installationId} />
                 </Suspense>
               </div>
             ) : null}
@@ -427,7 +435,7 @@ function Home() {
               </div>
               <Button
                 variant="outline"
-                onClick={() => navigate({ to: getEstateUrl("/agents/offline") })}
+                onClick={() => navigate({ to: getInstallationUrl("/agents/offline") })}
                 className="w-full"
               >
                 <Archive className="h-4 w-4 mr-2" />
@@ -654,7 +662,7 @@ function Home() {
                           name={agent.durableObjectName}
                           onClick={() => {
                             navigate({
-                              to: getEstateUrl(
+                              to: getInstallationUrl(
                                 `/agents/${agent.className}/${agent.durableObjectName}`,
                               ),
                             });
@@ -677,7 +685,7 @@ function Home() {
                           size="sm"
                           onClick={() => {
                             navigate({
-                              to: getEstateUrl(
+                              to: getInstallationUrl(
                                 `/agents/${agent.className}/${agent.durableObjectName}`,
                               ),
                             });
@@ -699,9 +707,11 @@ function Home() {
   );
 }
 
-function OnboardingHero({ estateId }: { estateId: string }) {
+function OnboardingHero({ installationId }: { installationId: string }) {
   const trpc = useTRPC();
-  const { data } = useQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
+  const { data } = useQuery(
+    trpc.installation.getOnboardingResults.queryOptions({ installationId }),
+  );
 
   const results = data?.results ?? {};
 

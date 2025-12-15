@@ -8,7 +8,7 @@ import * as schema from "../../db/schema.ts";
 import { logger } from "../../tag-logger.ts";
 import {
   validateGithubWebhookSignature,
-  getEstateByRepoId,
+  getInstallationByRepoId,
   getGithubInstallationForEstate,
   triggerGithubBuild,
   githubAppInstance,
@@ -44,14 +44,14 @@ githubApp.get(
     }
     const parsedState = z
       .object({
-        estateId: z.string(),
+        installationId: z.string(),
         redirectUri: z.string(),
         userId: z.string(),
         callbackURL: z.string().optional(),
       })
       .parse(JSON.parse(verification.value));
 
-    const { estateId, redirectUri, userId, callbackURL } = parsedState;
+    const { installationId, redirectUri, userId, callbackURL } = parsedState;
 
     const oauthResult = await githubAppInstance()
       .oauth.createToken({
@@ -114,21 +114,21 @@ githubApp.get(
         })
         .returning();
 
-      await tx.insert(schema.estateAccountsPermissions).values({
+      await tx.insert(schema.installationAccountsPermissions).values({
         accountId: account.id,
-        estateId,
+        installationId,
       });
 
       // user has just connected github, let's deactivate the old source to avoid confusion and to make sure we prompt them to select a new source
       await tx
         .update(schema.iterateConfigSource)
         .set({ deactivatedAt: new Date() })
-        .where(eq(schema.iterateConfigSource.estateId, estateId));
+        .where(eq(schema.iterateConfigSource.installationId, installationId));
 
       if (repos.length === 1) {
         // exactly one repo authorised, we can assume they want to use this one by default
         await tx.insert(schema.iterateConfigSource).values({
-          estateId,
+          installationId,
           provider: "github",
           repoId: repos[0].repository.id,
           branch: repos[0].repository.default_branch,
@@ -136,7 +136,7 @@ githubApp.get(
         });
       }
 
-      return tx.query.estate.findFirst({ where: eq(schema.estate.id, estateId) });
+      return tx.query.installation.findFirst({ where: eq(schema.installation.id, installationId) });
     });
 
     return c.redirect(
@@ -194,7 +194,7 @@ githubApp.post("/webhook", async (c) => {
     logger.log(`Processing push: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
 
     // Find the estate connected to this repository
-    const estate = await getEstateByRepoId(c.var.db, repoId);
+    const estate = await getInstallationByRepoId(c.var.db, repoId);
     if (!estate) {
       logger.log(`No estate found for repository ${repoId}`);
       return c.json({ message: "Repository not connected to any estate" }, 200);
@@ -238,7 +238,7 @@ githubApp.post("/webhook", async (c) => {
 
     // Use the common build trigger function
     const build = await triggerGithubBuild({
-      estateId: estate.id,
+      installationId: estate.id,
       commitHash: commitHash!,
       commitMessage: commitMessage || "No commit message",
       repoUrl,

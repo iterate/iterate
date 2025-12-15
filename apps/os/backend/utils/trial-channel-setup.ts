@@ -5,9 +5,9 @@ import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 import { env } from "../../env.ts";
 
-export async function slackChannelOverrideExists(db: DB, estateId: string): Promise<boolean> {
-  const override = await db.query.slackChannelEstateOverride.findFirst({
-    where: eq(schema.slackChannelEstateOverride.estateId, estateId),
+export async function slackChannelOverrideExists(db: DB, installationId: string): Promise<boolean> {
+  const override = await db.query.slackChannelOverride.findFirst({
+    where: eq(schema.slackChannelOverride.installationId, installationId),
     columns: { id: true },
   });
 
@@ -16,10 +16,10 @@ export async function slackChannelOverrideExists(db: DB, estateId: string): Prom
 
 export async function getSlackChannelOverrideId(
   db: DB,
-  estateId: string,
+  installationId: string,
 ): Promise<string | undefined> {
-  const override = await db.query.slackChannelEstateOverride.findFirst({
-    where: eq(schema.slackChannelEstateOverride.estateId, estateId),
+  const override = await db.query.slackChannelOverride.findFirst({
+    where: eq(schema.slackChannelOverride.installationId, installationId),
     columns: { slackChannelId: true },
   });
 
@@ -27,37 +27,37 @@ export async function getSlackChannelOverrideId(
 }
 
 /**
- * Generates a deterministic trial channel name from an estate ID
- * Uses the last 6 characters of the estate ID for a readable, unique code
- * Example: est_abc123xyz → iterate-23xyz (taking last 6 chars after the prefix)
+ * Generates a deterministic trial channel name from an installation ID
+ * Uses the last 6 characters of the installation ID for a readable, unique code
+ * Example: inst_abc123xyz → iterate-23xyz (taking last 6 chars after the prefix)
  */
-export function estateIdToChannelName(estateId: string): string {
-  // Estate IDs are in format "est_XXXXXXXXXX" - take last 6 chars
-  const code = estateId.slice(-6).toLowerCase();
+export function installationIdToChannelName(installationId: string): string {
+  // Installation IDs are in format "inst_XXXXXXXXXX" - take last 6 chars
+  const code = installationId.slice(-6).toLowerCase();
   return `iterate-${code}`;
 }
 
 /**
- * Gets the estate ID for iterate's own Slack workspace
+ * Gets the installation ID for iterate's own Slack workspace
  */
-export async function getIterateSlackEstateId(db: DB): Promise<string | undefined> {
+export async function getIterateSlackInstallationId(db: DB): Promise<string | undefined> {
   if (!env.SLACK_ITERATE_TEAM_ID) {
     return undefined;
   }
   const result = await db
     .select({
-      estateId: schema.providerEstateMapping.internalEstateId,
+      installationId: schema.providerInstallationMapping.internalInstallationId,
     })
-    .from(schema.providerEstateMapping)
+    .from(schema.providerInstallationMapping)
     .where(
       and(
-        eq(schema.providerEstateMapping.externalId, env.SLACK_ITERATE_TEAM_ID),
-        eq(schema.providerEstateMapping.providerId, "slack-bot"),
+        eq(schema.providerInstallationMapping.externalId, env.SLACK_ITERATE_TEAM_ID),
+        eq(schema.providerInstallationMapping.providerId, "slack-bot"),
       ),
     )
     .limit(1);
 
-  return result[0]?.estateId || undefined;
+  return result[0]?.installationId || undefined;
 }
 
 function slackChannelNameFromEmail(email: string): string {
@@ -83,25 +83,25 @@ function assertOk<T extends { ok: boolean; error?: string; message?: string }>(
  * 2. Unarchives the channel if it was previously archived
  * 3. Ensures the bot is a member of the channel
  * 4. Sends a Slack Connect invite to the user's email
- * 5. Creates or updates routing override to route webhooks from that channel to the user's estate
- * 6. Links the channel to the user's estate
+ * 5. Creates or updates routing override to route webhooks from that channel to the user's installation
+ * 6. Links the channel to the user's installation
  *
  * Note: If the channel already exists and has a routing override (from a previous trial),
- * it will update the override to point to the new estate, making this operation idempotent.
+ * it will update the override to point to the new installation, making this operation idempotent.
  * If a channel with the same name exists but is archived, it will be unarchived and reused.
  *
  * @returns Success result with channel info, or error info if email is invalid
  */
 export async function createTrialSlackConnectChannel(params: {
   db: Pick<DB, "insert" | "query">;
-  userEstateId: string;
+  userInstallationId: string;
   userEmail: string;
   userName: string;
   iterateTeamId: string;
   iterateBotToken: string;
 }): Promise<{ channelId: string; channelName: string }> {
   // todo: convert this to a workflow
-  const { db, userEstateId, userEmail, userName, iterateTeamId, iterateBotToken } = params;
+  const { db, userInstallationId, userEmail, userName, iterateTeamId, iterateBotToken } = params;
 
   let channelName = slackChannelNameFromEmail(userEmail);
   const slackAPI = new WebClient(iterateBotToken);
@@ -158,12 +158,14 @@ export async function createTrialSlackConnectChannel(params: {
     }),
   );
 
-  // Create new override - note that if this user has already created a channel, there will be two records. We look for the most recent one when mapping to an estate.
-  logger.info(`Creating routing override: channel ${channelId} → estate ${userEstateId}`);
-  await db.insert(schema.slackChannelEstateOverride).values({
+  // Create new override - note that if this user has already created a channel, there will be two records. We look for the most recent one when mapping to an installation.
+  logger.info(
+    `Creating routing override: channel ${channelId} → installation ${userInstallationId}`,
+  );
+  await db.insert(schema.slackChannelOverride).values({
     slackChannelId: channelId,
     slackTeamId: iterateTeamId,
-    estateId: userEstateId,
+    installationId: userInstallationId,
     reason: `Trial via Slack Connect for ${userName} (${userEmail})`,
     metadata: {
       createdVia: "trial_signup",
@@ -174,7 +176,9 @@ export async function createTrialSlackConnectChannel(params: {
     },
   });
 
-  logger.info(`Created channel for ${userEmail}: ${channelName}. Estate: ${userEstateId}`);
+  logger.info(
+    `Created channel for ${userEmail}: ${channelName}. Installation: ${userInstallationId}`,
+  );
 
   await slackAPI.chat.postMessage({
     channel: channelId,

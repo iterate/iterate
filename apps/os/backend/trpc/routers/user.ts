@@ -18,7 +18,7 @@ export interface DeleteUserAccountResult {
   success: true;
   deletedUser: string;
   deletedOrganizations: string[];
-  deletedEstates: string[];
+  deletedInstallations: string[];
 }
 
 export async function deleteUserAccount({
@@ -31,7 +31,7 @@ export async function deleteUserAccount({
       with: {
         organization: {
           with: {
-            estates: true,
+            installations: true,
           },
         },
       },
@@ -40,7 +40,7 @@ export async function deleteUserAccount({
     const ownerOrganizations = ownedMemberships.filter((membership) => membership.role === "owner");
 
     const deletedOrganizations: string[] = [];
-    const deletedEstates: string[] = [];
+    const deletedInstallations: string[] = [];
     const stripeCustomerIds: string[] = [];
 
     for (const membership of ownerOrganizations) {
@@ -61,9 +61,9 @@ export async function deleteUserAccount({
         continue;
       }
 
-      // No other owners remain; delete the organization (cascades to estates and their children)
-      for (const estate of org.estates) {
-        deletedEstates.push(estate.id);
+      // No other owners remain; delete the organization (cascades to installations and their children)
+      for (const inst of org.installations) {
+        deletedInstallations.push(inst.id);
       }
 
       if (org.stripeCustomerId) {
@@ -80,7 +80,7 @@ export async function deleteUserAccount({
       success: true as const,
       deletedUser: user.id,
       deletedOrganizations,
-      deletedEstates,
+      deletedInstallations,
       stripeCustomerIds,
     };
   });

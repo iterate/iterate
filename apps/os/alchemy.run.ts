@@ -321,20 +321,19 @@ async function setupDurableObjects() {
     },
   );
 
-  const ESTATE_BUILD_MANAGER = await Container<import("./backend/worker.ts").EstateBuildManager>(
-    "estate-build-manager",
-    {
-      className: "EstateBuildManager",
-      instanceType: "standard-2",
-      build: {
-        context: "./build-manager",
-        dockerfile: "Dockerfile",
-        platform: "linux/amd64",
-      },
-      maxInstances: 10,
-      adopt: true,
+  const INSTALLATION_BUILD_MANAGER = await Container<
+    import("./backend/worker.ts").InstallationBuildManager
+  >("installation-build-manager", {
+    className: "InstallationBuildManager",
+    instanceType: "standard-2",
+    build: {
+      context: "./build-manager",
+      dockerfile: "Dockerfile",
+      platform: "linux/amd64",
     },
-  );
+    maxInstances: 10,
+    adopt: true,
+  });
 
   return {
     ITERATE_AGENT,
@@ -343,7 +342,7 @@ async function setupDurableObjects() {
     ORGANIZATION_WEBSOCKET,
     SANDBOX,
     ADVISORY_LOCKER,
-    ESTATE_BUILD_MANAGER,
+    INSTALLATION_BUILD_MANAGER,
   };
 }
 

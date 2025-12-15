@@ -58,7 +58,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       auth: Auth;
       db: DB;
       userId: string;
-      estateId: string;
+      installationId: string;
       integrationSlug: string;
       serverUrl: string;
       callbackUrl: string | undefined;
@@ -178,9 +178,9 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
           })
           .returning();
 
-        await tx.insert(schema.estateAccountsPermissions).values({
+        await tx.insert(schema.installationAccountsPermissions).values({
           accountId: newAccount.id,
-          estateId: this.params.estateId,
+          installationId: this.params.installationId,
         });
         return newAccount;
       });
@@ -191,7 +191,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       {
         db: this.params.db,
         agentInstanceName: this.params.agentDurableObject.durableObjectName,
-        estateId: this.params.estateId,
+        installationId: this.params.installationId,
       },
     );
 
@@ -199,7 +199,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       {
         type: "MCP:TOKENS_UPDATED",
         data: {
-          estateId: this.params.estateId,
+          installationId: this.params.installationId,
           serverUrl: this.params.serverUrl,
           userId: this.params.userId,
           clientId: this.clientId,
@@ -272,7 +272,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
     const stateData: MCPOAuthState = {
       integrationSlug: this.params.integrationSlug,
       serverUrl: this.params.serverUrl,
-      estateId: this.params.estateId,
+      installationId: this.params.installationId,
       userId: this.params.userId,
       callbackUrl: this.params.callbackUrl,
       clientId: clientInformation.client_id,
@@ -296,8 +296,8 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       expiresAt,
     });
 
-    const organization = await this.params.db.query.estate.findFirst({
-      where: eq(schema.estate.id, this.params.estateId),
+    const organization = await this.params.db.query.installation.findFirst({
+      where: eq(schema.installation.id, this.params.installationId),
       columns: {
         organizationId: true,
       },
@@ -307,7 +307,7 @@ export class MCPOAuthProvider implements AgentsOAuthProvider {
       throw new Error("Organization not found");
     }
 
-    this.authUrl = `${env.VITE_PUBLIC_URL}/${organization.organizationId}/${this.params.estateId}/integrations/redirect?key=${state}`;
+    this.authUrl = `${env.VITE_PUBLIC_URL}/${organization.organizationId}/${this.params.installationId}/integrations/redirect?key=${state}`;
   }
 
   async codeVerifier(): Promise<string> {

@@ -24,31 +24,36 @@ async function generateGithubJWT() {
     .sign(key);
 }
 
-export async function getRepoAccessToken(estateId: string) {
+export async function getRepoAccessToken(installationId: string) {
   const [result] = await db
     .select({
-      estateId: schema.estate.id,
+      instId: schema.installation.id,
       accountId: schema.account.accountId,
     })
-    .from(schema.estate)
+    .from(schema.installation)
     .innerJoin(
-      schema.estateAccountsPermissions,
-      eq(schema.estate.id, schema.estateAccountsPermissions.estateId),
+      schema.installationAccountsPermissions,
+      eq(schema.installation.id, schema.installationAccountsPermissions.installationId),
     )
-    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
-    .where(and(eq(schema.estate.id, estateId), eq(schema.account.providerId, "github-app")))
+    .innerJoin(
+      schema.account,
+      eq(schema.installationAccountsPermissions.accountId, schema.account.id),
+    )
+    .where(
+      and(eq(schema.installation.id, installationId), eq(schema.account.providerId, "github-app")),
+    )
     .orderBy(desc(schema.account.createdAt))
     .limit(1);
 
   if (!result) {
-    throw new Error(`GitHub account not found for estate ${estateId}`);
+    throw new Error(`GitHub account not found for installation ${installationId}`);
   }
 
-  const installationId = result.accountId;
+  const githubInstallationId = result.accountId;
   const githubJWT = await generateGithubJWT();
 
   const tokenRes = await fetch(
-    `https://api.github.com/app/installations/${installationId}/access_tokens`,
+    `https://api.github.com/app/installations/${githubInstallationId}/access_tokens`,
     {
       method: "POST",
       headers: {
@@ -63,7 +68,7 @@ export async function getRepoAccessToken(estateId: string) {
   }
   const { token } = (await tokenRes.json()) as { token: string };
   const source = await db.query.iterateConfigSource.findFirst({
-    where: eq(schema.iterateConfigSource.estateId, estateId),
+    where: eq(schema.iterateConfigSource.installationId, installationId),
     orderBy: desc(schema.iterateConfigSource.createdAt),
   });
   return { token, repoId: source?.repoId, repoRef: source?.branch, repoPath: source?.path };

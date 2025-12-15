@@ -18,11 +18,13 @@ import { createE2EHelper } from "./helpers.ts";
 
 test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   await using h = await createE2EHelper("onboarding-e2e");
-  const { adminTrpc, userTrpc, estate, estateId } = h;
+  const { adminTrpc, userTrpc, installation, installationId } = h;
   await adminTrpc.testing.cleanupOutbox.mutate();
   const foundRepo = await vi.waitUntil(
     async () => {
-      const [first] = await userTrpc.integrations.listAvailableGithubRepos.query({ estateId });
+      const [first] = await userTrpc.integrations.listAvailableGithubRepos.query({
+        installationId,
+      });
       return first;
     },
     { interval: 1000, timeout: 10_000 },
@@ -34,7 +36,11 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   });
 
   // ideally we'd rely on the github webhook, but then this won't work outside of prod/staging
-  await userTrpc.estate.triggerRebuild.mutate({ estateId, target: "main", useExisting: true });
+  await userTrpc.installation.triggerRebuild.mutate({
+    installationId,
+    target: "main",
+    useExisting: true,
+  });
 
   console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
 
@@ -44,8 +50,8 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
   const pollInterval = 5000; // 5 seconds
 
   const getLatestBuild = async () => {
-    const builds = await userTrpc.estate.getBuilds.query({
-      estateId: estate.id,
+    const builds = await userTrpc.installation.getBuilds.query({
+      installationId: installation.id,
       limit: 1,
     });
     console.log(

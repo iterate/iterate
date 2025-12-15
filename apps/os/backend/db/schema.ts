@@ -34,7 +34,6 @@ export const withTimestamps = {
 
 export const iterateId = <P extends string>(prefix: P) =>
   text()
-    // .$type<`${P}_${string}`>() // TODO: Uncomment this when we have a zod validator
     .primaryKey()
     .$defaultFn(() => typeid(prefix).toString() as `${P}_${string}`);
 
@@ -110,7 +109,7 @@ export const accountRelations = relations(account, ({ one, many }) => ({
     fields: [account.userId],
     references: [user.id],
   }),
-  estateAccountsPermissions: many(estateAccountsPermissions),
+  installationAccountsPermissions: many(installationAccountsPermissions),
 }));
 
 export const verification = pgTable("verification", (t) => ({
@@ -146,21 +145,22 @@ export const files = pgTable("files", (t) => ({
     .notNull()
     .default("started"),
   filename: t.text(),
-  fileSize: t.integer(), // Size in bytes
+  fileSize: t.integer(),
   mimeType: t.text(),
   openAIFileId: t.text(),
-  estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
+  installationId: t.text().references(() => installation.id, { onDelete: "cascade" }),
   ...withTimestamps,
 }));
 export const filesRelations = relations(files, ({ one }) => ({
-  estate: one(estate, {
-    fields: [files.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [files.installationId],
+    references: [installation.id],
   }),
 }));
 
-export const estate = pgTable("estate", (t) => ({
-  id: iterateId("est"),
+export const installation = pgTable("installation", (t) => ({
+  id: iterateId("ins"),
+  slug: t.text().notNull().unique(),
   name: t.text().notNull(),
   organizationId: t
     .text()
@@ -172,21 +172,23 @@ export const estate = pgTable("estate", (t) => ({
   ...withTimestamps,
 }));
 
-export const estateRelations = relations(estate, ({ one, many }) => ({
+export const installationRelations = relations(installation, ({ one, many }) => ({
   organization: one(organization, {
-    fields: [estate.organizationId],
+    fields: [installation.organizationId],
     references: [organization.id],
   }),
   sources: many(iterateConfigSource),
-  estateAccountsPermissions: many(estateAccountsPermissions),
+  installationAccountsPermissions: many(installationAccountsPermissions),
   files: many(files),
-  providerSpecificEstateMapping: many(providerEstateMapping),
+  providerInstallationMappings: many(providerInstallationMapping),
   slackWebhookEvents: many(slackWebhookEvent),
   iterateConfigs: many(iterateConfig),
   agentInstances: many(agentInstance),
-  mcpConnectionParam: many(mcpConnectionParam),
+  mcpConnectionParams: many(mcpConnectionParam),
   slackChannels: many(slackChannel),
-  slackChannelEstateOverrides: many(slackChannelEstateOverride),
+  slackChannelOverrides: many(slackChannelOverride),
+  onboardingEvents: many(installationOnboardingEvent),
+  builds: many(builds),
 }));
 
 export const organization = pgTable("organization", (t) => ({
@@ -196,35 +198,35 @@ export const organization = pgTable("organization", (t) => ({
   ...withTimestamps,
 }));
 export const organizationRelations = relations(organization, ({ many }) => ({
-  estates: many(estate),
+  installations: many(installation),
   members: many(organizationUserMembership),
 }));
 
-export const estateAccountsPermissions = pgTable(
-  "estate_accounts_permissions",
+export const installationAccountsPermissions = pgTable(
+  "installation_accounts_permissions",
   (t) => ({
-    id: iterateId("eap"),
-    estateId: t
+    id: iterateId("iap"),
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     accountId: t
       .text()
       .notNull()
       .references(() => account.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.estateId, t.accountId)],
+  (t) => [uniqueIndex().on(t.installationId, t.accountId)],
 );
-export const estateAccountsPermissionsRelations = relations(
-  estateAccountsPermissions,
+export const installationAccountsPermissionsRelations = relations(
+  installationAccountsPermissions,
   ({ one }) => ({
-    estate: one(estate, {
-      fields: [estateAccountsPermissions.estateId],
-      references: [estate.id],
+    installation: one(installation, {
+      fields: [installationAccountsPermissions.installationId],
+      references: [installation.id],
     }),
     account: one(account, {
-      fields: [estateAccountsPermissions.accountId],
+      fields: [installationAccountsPermissions.accountId],
       references: [account.id],
     }),
   }),
@@ -239,25 +241,15 @@ export const providerUserMapping = pgTable(
       .text()
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
-    externalId: t.text().notNull(), // Slack user ID (e.g., U_NICK_123, USLACKBOT)
-    // OPTIONAL: Which estate's sync discovered/created this mapping
-    // This represents the "observing estate's perspective" on this user.
-    // Nullable to allow existing rows from before this field was added.
-    estateId: t.text().references(() => estate.id, { onDelete: "cascade" }),
-    // OPTIONAL: The user's actual home team ID, only set if external to the estate's workspace
-    // - null = user is from the estate's own OAuth'd workspace (internal user)
-    // - set = user is from a different workspace discovered via Slack Connect (external user)
-    // Example: Estate A (owns T_ITERATE) syncs Slack Connect user from T_STRIPE
-    //   → estateId = estate_A, externalUserTeamId = T_STRIPE
+    externalId: t.text().notNull(),
+    // OPTIONAL: Which installation's sync discovered/created this mapping
+    installationId: t.text().references(() => installation.id, { onDelete: "cascade" }),
+    // OPTIONAL: The user's actual home team ID, only set if external to the installation's workspace
     externalUserTeamId: t.text(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
-  (t) => [
-    // Global uniqueness: (provider, estate, externalId)
-    // Each external user can have only one mapping per estate
-    uniqueIndex().on(t.providerId, t.estateId, t.externalId),
-  ],
+  (t) => [uniqueIndex().on(t.providerId, t.installationId, t.externalId)],
 );
 export const providerUserMappingRelations = relations(providerUserMapping, ({ one }) => ({
   internalUser: one(user, {
@@ -266,36 +258,39 @@ export const providerUserMappingRelations = relations(providerUserMapping, ({ on
   }),
 }));
 
-export const providerEstateMapping = pgTable(
-  "provider_estate_mapping",
+export const providerInstallationMapping = pgTable(
+  "provider_installation_mapping",
   (t) => ({
-    id: iterateId("pem"),
+    id: iterateId("pim"),
     providerId: t.text().notNull(),
-    internalEstateId: t
+    internalInstallationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     externalId: t.text().notNull(),
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
   (t) => [uniqueIndex().on(t.providerId, t.externalId)],
 );
-export const providerEstateMappingRelations = relations(providerEstateMapping, ({ one }) => ({
-  internalEstate: one(estate, {
-    fields: [providerEstateMapping.internalEstateId],
-    references: [estate.id],
+export const providerInstallationMappingRelations = relations(
+  providerInstallationMapping,
+  ({ one }) => ({
+    internalInstallation: one(installation, {
+      fields: [providerInstallationMapping.internalInstallationId],
+      references: [installation.id],
+    }),
   }),
-}));
+);
 
 export const slackChannel = pgTable(
   "slack_channel",
   (t) => ({
     id: iterateId("slc"),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     externalId: t.text().notNull(),
     name: t.text().notNull(),
     isShared: t.boolean().default(false).notNull(),
@@ -305,64 +300,47 @@ export const slackChannel = pgTable(
     providerMetadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.estateId, t.externalId), index().on(t.estateId), index().on(t.name)],
+  (t) => [
+    uniqueIndex().on(t.installationId, t.externalId),
+    index().on(t.installationId),
+    index().on(t.name),
+  ],
 );
 
 export const slackChannelRelations = relations(slackChannel, ({ one }) => ({
-  estate: one(estate, {
-    fields: [slackChannel.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [slackChannel.installationId],
+    references: [installation.id],
   }),
 }));
 
-/**
- * Override table for routing Slack channels to specific estates.
- * When a webhook is received for a channel with an entry in this table,
- * the specified estate will be used instead of the default team_id → estate mapping.
- *
- * Use cases:
- * - Route specific channels from a workspace to different estates
- * - Handle shared Slack Connect channels with custom routing
- * - Testing and development with specific channel routing
- */
-export const slackChannelEstateOverride = pgTable(
-  "slack_channel_estate_override",
+export const slackChannelOverride = pgTable(
+  "slack_channel_override",
   (t) => ({
-    id: iterateId("sceo"),
-    // The Slack channel ID to override routing for
+    id: iterateId("sco"),
     slackChannelId: t.text().notNull(),
-    // The Slack team/workspace ID (for context/validation)
     slackTeamId: t.text().notNull(),
-    // The estate ID to route this channel to
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
-    // Optional: reason for the override (for documentation)
+      .references(() => installation.id, { onDelete: "cascade" }),
     reason: t.text(),
-    // Optional: metadata (e.g., who created it, when, why)
     metadata: t.jsonb().default({}),
     ...withTimestamps,
   }),
   (t) => [
-    // Ensure each channel can only have one override
     uniqueIndex().on(t.slackChannelId, t.slackTeamId),
-    // Index for fast lookups by channel
     index().on(t.slackChannelId),
-    // Index for finding all overrides for an estate
-    index().on(t.estateId),
+    index().on(t.installationId),
   ],
 );
 
-export const slackChannelEstateOverrideRelations = relations(
-  slackChannelEstateOverride,
-  ({ one }) => ({
-    estate: one(estate, {
-      fields: [slackChannelEstateOverride.estateId],
-      references: [estate.id],
-    }),
+export const slackChannelOverrideRelations = relations(slackChannelOverride, ({ one }) => ({
+  installation: one(installation, {
+    fields: [slackChannelOverride.installationId],
+    references: [installation.id],
   }),
-);
+}));
 
 export const organizationUserMembership = pgTable(
   "organization_user_membership",
@@ -402,31 +380,29 @@ export const agentInstance = pgTable(
   "agent_instance",
   (t) => ({
     id: iterateId("agnt"),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
-    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
+      .references(() => installation.id, { onDelete: "cascade" }),
+    className: t.text().notNull(),
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
-    routingKey: t.text().unique(), // todo: make not null?
+    routingKey: t.text().unique(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
   (t) => [
-    // Ensure names are unique per estate while allowing duplicates across estates
-    uniqueIndex().on(t.estateId, t.durableObjectName),
+    uniqueIndex().on(t.installationId, t.durableObjectName),
     uniqueIndex().on(t.durableObjectId),
-    // Listing helpers
-    index().on(t.estateId),
+    index().on(t.installationId),
     index().on(t.className),
   ],
 );
 
 export const agentInstanceRelations = relations(agentInstance, ({ one }) => ({
-  estate: one(estate, {
-    fields: [agentInstance.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [agentInstance.installationId],
+    references: [installation.id],
   }),
 }));
 
@@ -441,24 +417,22 @@ export const slackWebhookEvent = pgTable(
     type: t.text("type"),
     subtype: t.text("subtype"),
     user: t.text("user"),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
   (table) => [
-    // channel queries use all 4 of these columns, thread queries use the same except for channel
     index("channel_or_thread_messages").on(table.channel, table.ts, table.thread_ts, table.type),
-    // Estate queries
-    index().on(table.estateId),
+    index().on(table.installationId),
   ],
 );
 
 export const slackWebhookEventRelations = relations(slackWebhookEvent, ({ one }) => ({
-  estate: one(estate, {
-    fields: [slackWebhookEvent.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [slackWebhookEvent.installationId],
+    references: [installation.id],
   }),
 }));
 
@@ -466,26 +440,25 @@ export const iterateConfigSource = pgTable(
   "iterate_config_source",
   (t) => ({
     id: iterateId("ics"),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     provider: t.text({ enum: ["github"] }).notNull(),
-    /** keep track of which account is responsible for this source. sometimes it's iterate-managed, sometimes it's a user-managed account. also, conceivably, there could be multiple accounts for the same estate */
-    accountId: t.text().notNull(), // todo: make this stricter somehow. maybe using estateAccountsPermissions table?
+    accountId: t.text().notNull(),
     repoId: t.integer().notNull(),
     branch: t.text().notNull(),
     path: t.text(),
     deactivatedAt: t.timestamp(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.estateId, t.provider).where(isNull(t.deactivatedAt))],
+  (t) => [uniqueIndex().on(t.installationId, t.provider).where(isNull(t.deactivatedAt))],
 );
 
 export const iterateConfigSourceRelations = relations(iterateConfigSource, ({ one }) => ({
-  estate: one(estate, {
-    fields: [iterateConfigSource.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [iterateConfigSource.installationId],
+    references: [installation.id],
   }),
 }));
 
@@ -493,30 +466,24 @@ export const iterateConfig = pgTable(
   "iterate_config",
   (t) => ({
     id: iterateId("icfg"),
-    // sourceId: t.text().references(() => iterateConfigSource.id, { onDelete: "set null" }),
-    /** the build which contains the config json */
     buildId: t
       .text()
       .notNull()
       .references(() => builds.id, { onDelete: "cascade" }),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.estateId)],
+  (t) => [uniqueIndex().on(t.installationId)],
 );
 
 export const iterateConfigRelations = relations(iterateConfig, ({ one }) => ({
-  estate: one(estate, {
-    fields: [iterateConfig.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [iterateConfig.installationId],
+    references: [installation.id],
   }),
-  // source: one(iterateConfigSource, {
-  //   fields: [iterateConfig.sourceId],
-  //   references: [iterateConfigSource.id],
-  // }),
   build: one(builds, {
     fields: [iterateConfig.buildId],
     references: [builds.id],
@@ -529,23 +496,22 @@ export const builds = pgTable("builds", (t) => ({
   commitHash: t.text().notNull(),
   commitMessage: t.text().notNull(),
   files: t.jsonb().$type<{ path: string; content: string }[]>().notNull(),
-  /** note: config *is* nullable because we don't have it until the end of the build */
   config: t.jsonb().$type<{ contextRules?: any[] } | null>(),
   iterateWorkflowRunId: t.text(),
   webhookIterateId: t.text().notNull(),
-  estateId: t
+  installationId: t
     .text()
     .notNull()
-    .references(() => estate.id, { onDelete: "cascade" }),
+    .references(() => installation.id, { onDelete: "cascade" }),
   completedAt: t.timestamp(),
   failureReason: t.text(),
   ...withTimestamps,
 }));
 
 export const buildsRelations = relations(builds, ({ one }) => ({
-  estate: one(estate, {
-    fields: [builds.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [builds.installationId],
+    references: [installation.id],
   }),
 }));
 
@@ -554,38 +520,37 @@ export const mcpConnectionParam = pgTable(
   (t) => ({
     id: iterateId("mcp"),
     connectionKey: t.text().notNull(),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     paramKey: t.text().notNull(),
     paramValue: t.text().notNull(),
     paramType: t.text({ enum: ["header", "query_param"] }).notNull(),
     ...withTimestamps,
   }),
   (t) => [
-    uniqueIndex().on(t.estateId, t.connectionKey, t.paramKey, t.paramType),
-    index().on(t.estateId),
+    uniqueIndex().on(t.installationId, t.connectionKey, t.paramKey, t.paramType),
+    index().on(t.installationId),
     index().on(t.connectionKey),
   ],
 );
 
 export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one }) => ({
-  estate: one(estate, {
-    fields: [mcpConnectionParam.estateId],
-    references: [estate.id],
+  installation: one(installation, {
+    fields: [mcpConnectionParam.installationId],
+    references: [installation.id],
   }),
 }));
 
-// Estate events (append-only, immutable)
-export const estateOnboardingEvent = pgTable(
-  "estate_onboarding_event",
+export const installationOnboardingEvent = pgTable(
+  "installation_onboarding_event",
   (t) => ({
     id: iterateId("onbe"),
-    estateId: t
+    installationId: t
       .text()
       .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
+      .references(() => installation.id, { onDelete: "cascade" }),
     organizationId: t
       .text()
       .notNull()
@@ -597,9 +562,9 @@ export const estateOnboardingEvent = pgTable(
     ...withTimestamps,
   }),
   (t) => [
-    uniqueIndex().on(t.estateId, t.eventType),
-    index().on(t.estateId),
-    index().on(t.estateId, t.category),
+    uniqueIndex().on(t.installationId, t.eventType),
+    index().on(t.installationId),
+    index().on(t.installationId, t.category),
     index().on(t.category),
   ],
 );

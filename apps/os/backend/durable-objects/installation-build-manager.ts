@@ -24,7 +24,7 @@ export type Log = {
   data: string;
 };
 
-export class EstateBuildManager extends Container {
+export class InstallationBuildManager extends Container {
   declare env: CloudflareEnv;
 
   defaultPort = 3000;
@@ -192,27 +192,30 @@ export class EstateBuildManager extends Container {
   }
 
   private async getBuilderMetadata() {
-    const metadata = this.ctx.storage.kv.get<{ orgId: string; estateId: string }>(
+    const metadata = this.ctx.storage.kv.get<{ orgId: string; installationId: string }>(
       "builder-metadata",
     );
     if (metadata) return metadata;
     const sampleBuild = this._sql.exec<{ id: string }>("SELECT id FROM builds").one();
     if (!sampleBuild) throw new Error(`Attempted get metadata for builder, but no builds found`);
-    const { estateId, orgId } = await this.db.query.builds
+    const { installationId, orgId } = await this.db.query.builds
       .findFirst({
         where: eq(schemas.builds.id, sampleBuild.id),
-        columns: { estateId: true },
+        columns: { installationId: true },
         with: {
-          estate: {
+          installation: {
             columns: { organizationId: true },
           },
         },
       })
-      .then((res) => ({ orgId: res?.estate.organizationId, estateId: res?.estateId }));
-    if (!orgId || !estateId)
-      throw new Error(`Failed to find organization or estate for build ${sampleBuild.id}`);
-    this.ctx.storage.kv.put("builder-metadata", { orgId, estateId });
-    return { orgId, estateId };
+      .then((res) => ({
+        orgId: res?.installation.organizationId,
+        installationId: res?.installationId,
+      }));
+    if (!orgId || !installationId)
+      throw new Error(`Failed to find organization or installation for build ${sampleBuild.id}`);
+    this.ctx.storage.kv.put("builder-metadata", { orgId, installationId });
+    return { orgId, installationId };
   }
 
   private async syncLogsForAllOngoingBuilds() {
@@ -262,7 +265,7 @@ export class EstateBuildManager extends Container {
 
     if (ongoingBuilds.length === 0) return;
 
-    const { estateId, orgId } = await this.getBuilderMetadata();
+    const { installationId, orgId } = await this.getBuilderMetadata();
 
     const allLogs = ongoingBuilds.map((build) => ({
       buildId: build.id,
@@ -308,9 +311,9 @@ export class EstateBuildManager extends Container {
           if (buildId === newestTriggeredBuild.buildId && status === "complete") {
             await this.db
               .insert(schemas.iterateConfig)
-              .values({ estateId, buildId })
+              .values({ installationId, buildId })
               .onConflictDoUpdate({
-                target: [schemas.iterateConfig.estateId],
+                target: [schemas.iterateConfig.installationId],
                 set: { buildId },
               });
           }
@@ -329,7 +332,7 @@ export class EstateBuildManager extends Container {
       type: "INVALIDATE",
       invalidateInfo: {
         type: "TRPC_QUERY",
-        paths: ["estate.getBuilds"],
+        paths: ["installation.getBuilds"],
       },
     });
   }
@@ -397,15 +400,17 @@ export class EstateBuildManager extends Container {
       timeoutThreshold,
     );
 
-    const { estateId } = await this.getBuilderMetadata().catch(() => ({ estateId: null }));
+    const { installationId } = await this.getBuilderMetadata().catch(() => ({
+      installationId: null,
+    }));
 
-    if (estateId) {
+    if (installationId) {
       await this.db
         .update(schemas.builds)
         .set({ status: "failed", failureReason: "Build timed out" })
         .where(
           and(
-            eq(schemas.builds.estateId, estateId),
+            eq(schemas.builds.installationId, installationId),
             or(eq(schemas.builds.status, "in_progress"), eq(schemas.builds.status, "queued")),
             lt(schemas.builds.updatedAt, new Date(Date.now() - TIMEOUT_TIME)),
           ),

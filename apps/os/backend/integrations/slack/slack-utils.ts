@@ -15,9 +15,9 @@ export async function sendNotificationToIterateSlack(
   message: string,
   channel = "#building",
 ): Promise<void> {
-  const notificationEstateId = env.ITERATE_NOTIFICATION_ESTATE_ID;
+  const notificationInstallationId = env.ITERATE_NOTIFICATION_ESTATE_ID;
 
-  if (!notificationEstateId) {
+  if (!notificationInstallationId) {
     logger.warn("ITERATE_NOTIFICATION_ESTATE_ID not configured, skipping notification");
     return;
   }
@@ -25,11 +25,11 @@ export async function sendNotificationToIterateSlack(
   const db = getDb();
 
   // Get Slack access token for the notification estate
-  const slackAccount = await getSlackAccessTokenForEstate(db, notificationEstateId);
+  const slackAccount = await getSlackAccessTokenForEstate(db, notificationInstallationId);
 
   if (!slackAccount) {
     logger.error("Slack access token not found for notification estate", {
-      estateId: notificationEstateId,
+      installationId: notificationInstallationId,
     });
     return;
   }

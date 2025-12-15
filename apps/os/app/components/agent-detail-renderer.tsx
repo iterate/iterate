@@ -84,7 +84,7 @@ export interface AgentDetailActions {
 
 export interface AgentDetailProps {
   events: AgentEvent[];
-  estateId: string;
+  installationId: string;
   agentClassName: string;
   reducedState: AugmentedCoreReducedState | null;
   isWebsocketConnected?: boolean;
@@ -362,7 +362,7 @@ function MetaEventWrapper({
   array,
   renderer: Renderer,
   onEventClick,
-  estateId,
+  installationId,
   botUserId,
   getFileUrl,
 }: {
@@ -371,12 +371,12 @@ function MetaEventWrapper({
   array: AgentEvent[];
   renderer?: React.ComponentType<{
     event: AgentEvent;
-    estateId: string;
+    installationId: string;
     botUserId?: string;
     getFileUrl: (fileId: string, disposition?: "inline" | "attachment") => string;
   }>;
   onEventClick?: (eventIndex: number) => void;
-  estateId: string;
+  installationId: string;
   botUserId?: string;
   getFileUrl: (fileId: string, disposition?: "inline" | "attachment") => string;
 }): React.ReactElement {
@@ -430,7 +430,7 @@ function MetaEventWrapper({
         <div>
           <Renderer
             event={event}
-            estateId={estateId}
+            installationId={installationId}
             botUserId={botUserId}
             getFileUrl={getFileUrl}
           />
@@ -578,7 +578,7 @@ function CoreEventRenderer({
   getFileUrl,
 }: {
   event: AgentEvent;
-  estateId: string;
+  installationId: string;
   botUserId?: string;
   getFileUrl: (fileId: string, disposition?: "inline" | "attachment") => string;
 }): React.ReactElement | null {
@@ -1080,7 +1080,7 @@ function PauseResumeButton({
 
 export function AgentDetailRenderer({
   events,
-  estateId,
+  installationId,
   agentClassName,
   reducedState,
   isWebsocketConnected = false,
@@ -1294,7 +1294,7 @@ export function AgentDetailRenderer({
                             array={filteredEvents}
                             renderer={CoreEventRenderer}
                             onEventClick={handleEventClick}
-                            estateId={estateId}
+                            installationId={installationId}
                             botUserId={botUserId}
                             getFileUrl={getters.getFileUrl}
                           />
@@ -1318,7 +1318,7 @@ export function AgentDetailRenderer({
                                   array={filteredEvents}
                                   renderer={CoreEventRenderer}
                                   onEventClick={handleEventClick}
-                                  estateId={estateId}
+                                  installationId={installationId}
                                   botUserId={botUserId}
                                   getFileUrl={getters.getFileUrl}
                                 />

@@ -5,7 +5,7 @@ import { typeid } from "typeid-js";
 import { protectedProcedureWithNoEstateRestrictions, publicProcedure, router } from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { schema } from "../../db/client.ts";
-import { createUserOrganizationAndEstate } from "../../org-utils.ts";
+import { createUserOrganizationAndInstallation } from "../../org-utils.ts";
 import { getOctokitForInstallation } from "../../integrations/github/github-utils.ts";
 import { env } from "../../../env.ts";
 import { saveSlackUsersToDatabase } from "../../integrations/slack/slack.ts";
@@ -32,18 +32,18 @@ const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, 
 const testingAgentProcedure = testingProcedure
   .input(
     z.object({
-      estateId: z.string(),
+      installationId: z.string(),
       agentClassName: z.enum(AGENT_CLASS_NAMES),
       agentInstanceName: z.string(),
     }),
   )
   .use(async ({ input, ctx, next }) => {
-    const estateId = input.estateId;
+    const installationId = input.installationId;
 
     const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
       agentInstanceName: input.agentInstanceName,
-      estateId,
+      installationId,
     }).catch((err) => {
       // todo: effect!
       if (String(err).includes("not found")) {
@@ -103,7 +103,7 @@ export const createTestUser = testingProcedure
     return { user };
   });
 
-export const createOrganizationAndEstate = testingProcedure
+export const createOrganizationAndInstallation = testingProcedure
   .input(
     z.object({
       userId: z.string(),
@@ -117,14 +117,17 @@ export const createOrganizationAndEstate = testingProcedure
     });
     if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found" });
 
-    const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
+    const { organization, installation } = await createUserOrganizationAndInstallation(
+      ctx.db,
+      user,
+    );
 
-    if (!estate) throw new Error("Failed to create estate");
+    if (!installation) throw new Error("Failed to create installation");
 
     // Mark onboarding as completed to avoid redirecting to onboarding flow
     if (input.skipOnboarding) {
-      await ctx.db.insert(schema.estateOnboardingEvent).values({
-        estateId: estate.id,
+      await ctx.db.insert(schema.installationOnboardingEvent).values({
+        installationId: installation.id,
         organizationId: organization.id,
         eventType: "OnboardingCompleted",
         category: "system",
@@ -132,7 +135,7 @@ export const createOrganizationAndEstate = testingProcedure
       });
     }
 
-    return { organization, estate };
+    return { organization, installation };
   });
 
 export const deleteOrganization = testingProcedure
@@ -140,18 +143,18 @@ export const deleteOrganization = testingProcedure
   .mutation(async ({ ctx, input }) => {
     await queuer.processQueue(ctx.db);
     await ctx.db.transaction(async (tx) => {
-      const estates = await tx.query.estate.findMany({
-        where: eq(schema.estate.organizationId, input.organizationId),
+      const installations = await tx.query.installation.findMany({
+        where: eq(schema.installation.organizationId, input.organizationId),
       });
-      const estatesDeleted = await tx
-        .delete(schema.estate)
-        .where(eq(schema.estate.organizationId, input.organizationId))
+      const installationsDeleted = await tx
+        .delete(schema.installation)
+        .where(eq(schema.installation.organizationId, input.organizationId))
         .returning();
       const consumerJobs = await tx.execute(sql`
         delete from pgmq.q_consumer_job_queue
         where
           -- https://www.postgresql.org/docs/9.4/functions-json.html#FUNCTIONS-JSONB-OP-TABLE
-          ${JSON.stringify(estates.map((e) => e.id))}::jsonb ? (message->'event_payload'->>'estateId')
+          ${JSON.stringify(installations.map((e) => e.id))}::jsonb ? (message->'event_payload'->>'installationId')
         returning *
       `);
       const organizationDeleted = await tx
@@ -159,7 +162,7 @@ export const deleteOrganization = testingProcedure
         .where(eq(schema.organization.id, input.organizationId))
         .returning();
       return {
-        estatesDeleted: estatesDeleted.length,
+        installationsDeleted: installationsDeleted.length,
         consumerJobs: consumerJobs.length,
         organizationDeleted: organizationDeleted.length,
       };
@@ -189,10 +192,10 @@ const SlackMemberInfo = z.object({
     .optional(),
 });
 
-export const addSlackUsersToEstate = testingProcedure
+export const addSlackUsersToInstallation = testingProcedure
   .input(
     z.object({
-      estateId: z.string(),
+      installationId: z.string(),
       teamId: z.string().default("TEST_TEAM"),
       members: z.array(SlackMemberInfo),
       /** If provided, all Slack users will be linked to this iterate user ID
@@ -203,7 +206,7 @@ export const addSlackUsersToEstate = testingProcedure
   )
   .mutation(async ({ ctx, input }) => {
     // First save the users normally (this creates user records and mappings)
-    await saveSlackUsersToDatabase(ctx.db, input.members, input.estateId, input.teamId);
+    await saveSlackUsersToDatabase(ctx.db, input.members, input.installationId, input.teamId);
 
     // If linkToUserId is provided, update the mappings to point to that user
     if (input.linkToUserId) {
@@ -214,13 +217,13 @@ export const addSlackUsersToEstate = testingProcedure
             providerId: "slack-bot",
             externalId: member.id,
             internalUserId: input.linkToUserId,
-            estateId: input.estateId,
+            installationId: input.installationId,
             externalUserTeamId: input.teamId,
           })
           .onConflictDoUpdate({
             target: [
               schema.providerUserMapping.providerId,
-              schema.providerUserMapping.estateId,
+              schema.providerUserMapping.installationId,
               schema.providerUserMapping.externalId,
             ],
             set: {
@@ -235,21 +238,24 @@ export const addSlackUsersToEstate = testingProcedure
   });
 
 export const setupTeamId = testingProcedure
-  .input(z.object({ estateId: z.string(), teamId: z.string() }))
+  .input(z.object({ installationId: z.string(), teamId: z.string() }))
   .mutation(async ({ ctx, input }) => {
     await ctx.db
-      .insert(schema.providerEstateMapping)
+      .insert(schema.providerInstallationMapping)
       .values([
         {
           providerId: "slack-bot",
-          internalEstateId: input.estateId,
+          internalInstallationId: input.installationId,
           externalId: input.teamId,
         },
       ])
       .onConflictDoUpdate({
-        target: [schema.providerEstateMapping.providerId, schema.providerEstateMapping.externalId],
+        target: [
+          schema.providerInstallationMapping.providerId,
+          schema.providerInstallationMapping.externalId,
+        ],
         set: {
-          internalEstateId: input.estateId,
+          internalInstallationId: input.installationId,
           externalId: input.teamId,
         },
       });
@@ -259,7 +265,7 @@ export const setupTeamId = testingProcedure
 export const testingRouter = router({
   nuke: testingProcedure.mutation(async ({ ctx }) => {
     await ctx.db.transaction(async (tx) => {
-      await tx.delete(schema.estateOnboardingEvent);
+      await tx.delete(schema.installationOnboardingEvent);
       await tx.delete(schema.organization);
       await tx.delete(schema.user).where(ne(schema.user.id, ctx.user.id));
     });
@@ -297,7 +303,7 @@ export const testingRouter = router({
     const agent = await getAgentStubByName(input.agentClassName, {
       db: ctx.db,
       agentInstanceName: input.agentInstanceName,
-      estateId: input.estateId,
+      installationId: input.installationId,
     });
     await (agent as {} as SlackAgent).mockSlackAPI();
     return { success: true };
@@ -306,15 +312,15 @@ export const testingRouter = router({
     await ctx.db.execute(sql`
       delete from pgmq.q_consumer_job_queue
       where
-        message->'event_payload'->>'estateId' is not null
-        and message->'event_payload'->>'estateId' not in (select id from estate)
+        message->'event_payload'->>'installationId' is not null
+        and message->'event_payload'->>'installationId' not in (select id from installation)
     `);
   }),
   setUserRole,
   createTestUser,
-  createOrganizationAndEstate,
+  createOrganizationAndInstallation,
   deleteOrganization,
   deleteIterateManagedRepo,
-  addSlackUsersToEstate,
+  addSlackUsersToInstallation,
   setupTeamId,
 });

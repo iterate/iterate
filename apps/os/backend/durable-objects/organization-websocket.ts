@@ -4,7 +4,7 @@ import { APIError } from "better-auth/api";
 import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
 import { getAuth, type AuthSession } from "../auth/auth.ts";
-import { getUserEstateAccess } from "../trpc/trpc.ts";
+import { getUserInstallationAccess } from "../trpc/trpc.ts";
 import { logger } from "../tag-logger.ts";
 
 // Event schemas for WebSocket communication
@@ -90,15 +90,15 @@ export class OrganizationWebSocket extends DurableObject {
 
     // Extract estate and organization from URL params
     const url = new URL(request.url);
-    const estateId = url.searchParams.get("estateId");
+    const installationId = url.searchParams.get("installationId");
     const organizationId = url.searchParams.get("organizationId");
 
-    if (!estateId || !organizationId) {
+    if (!installationId || !organizationId) {
       return new Response("Missing required parameters", { status: 400 });
     }
 
     // Verify user has access to this estate using the helper function
-    const { hasAccess } = await getUserEstateAccess(db, session.user.id, estateId, organizationId);
+    const { hasAccess } = await getUserInstallationAccess(db, session.user.id, installationId, organizationId);
 
     if (!hasAccess) {
       return new Response("Forbidden", { status: 403 });

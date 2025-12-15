@@ -1,7 +1,7 @@
 import { createFileRoute, notFound, redirect } from "@tanstack/react-router";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
-import { estate } from "../../../backend/db/schema.ts";
+import { installation } from "../../../backend/db/schema.ts";
 import { isValidTypeID } from "../../../backend/utils/utils.ts";
 import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
 
@@ -15,18 +15,18 @@ const orgIndexRedirect = authenticatedServerFn
       throw notFound();
     }
 
-    const firstEstate = await db.query.estate.findFirst({
-      where: eq(estate.organizationId, organizationId),
-      orderBy: asc(estate.createdAt),
+    const firstInstallation = await db.query.installation.findFirst({
+      where: eq(installation.organizationId, organizationId),
+      orderBy: asc(installation.createdAt),
     });
-    if (!firstEstate) {
+    if (!firstInstallation) {
       throw new Error(
-        `The organization ${organizationId} has no estates, this should never happen.`,
+        `The organization ${organizationId} has no installations, this should never happen.`,
       );
     }
     throw redirect({
-      to: `/$organizationId/$estateId`,
-      params: { organizationId, estateId: firstEstate.id },
+      to: `/$organizationId/$installationId`,
+      params: { organizationId, installationId: firstInstallation.id },
     });
   });
 

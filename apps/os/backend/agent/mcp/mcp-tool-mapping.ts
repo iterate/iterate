@@ -347,7 +347,7 @@ export function generateRuntimeToolsFromConnections(
 // Lazy connection dependencies interface
 export interface LazyConnectionDeps {
   getDurableObjectInfo: () => AgentDurableObjectInfo;
-  getEstateId: () => string;
+  getInstallationId: () => string;
   getReducedState: () => MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
@@ -479,7 +479,7 @@ export function createRuntimeToolFromMCPTool(params: {
           connectionKey: selectedConnectionKey,
           connection,
           agentDurableObject: params.lazyConnectionDeps.getDurableObjectInfo(),
-          estateId: params.lazyConnectionDeps.getEstateId(),
+          installationId: params.lazyConnectionDeps.getInstallationId(),
           reducedState: reducedState,
           mcpConnectionCache: params.lazyConnectionDeps.mcpConnectionCache,
           mcpConnectionQueues: params.lazyConnectionDeps.mcpConnectionQueues,

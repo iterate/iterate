@@ -63,7 +63,7 @@ import { Card, CardContent, CardFooter } from "../../../../components/ui/card.ts
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../../../../components/ui/tabs.tsx";
 import { Item, ItemContent, ItemMedia, ItemTitle } from "../../../../components/ui/item.tsx";
 import { useTRPC } from "../../../../lib/trpc.ts";
-import { useEstateId } from "../../../../hooks/use-estate.ts";
+import { useInstallationId } from "../../../../hooks/use-installation.ts";
 import { useSlackConnection } from "../../../../hooks/use-slack-connection.ts";
 import { authClient } from "../../../../lib/auth-client.ts";
 
@@ -115,7 +115,7 @@ type MCPConnection = {
   connectedAt: Date | string;
 };
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/integrations/")({
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/integrations/")({
   component: Integrations,
   head: () => ({
     meta: [
@@ -131,23 +131,23 @@ export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/in
 });
 
 function Integrations() {
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const trpc = useTRPC();
   const { data, refetch } = useQuery(
     trpc.integrations.list.queryOptions({
-      estateId: estateId,
+      installationId: installationId,
     }),
   );
 
   const { data: estateInfo } = useQuery(
-    trpc.estate.get.queryOptions({
-      estateId: estateId,
+    trpc.installation.get.queryOptions({
+      installationId: installationId,
     }),
   );
 
   // Filter out Slack connector for trial estates since they're using Slack Connect
   const integrations = (data?.oauthIntegrations || []).filter(
-    (integration) => !(estateInfo?.isTrialEstate && integration.id === "slack-bot"),
+    (integration) => !(estateInfo?.isTrialInstallation && integration.id === "slack-bot"),
   );
   const mcpConnections = (data?.mcpConnections || []) as MCPConnection[];
 
@@ -174,7 +174,7 @@ function Integrations() {
   const handleConnect = async (integrationId: string) => {
     if (integrationId === "github-app") {
       const { installationUrl } = await startGithubAppInstallFlow({
-        estateId: estateId,
+        installationId: installationId,
       });
       window.location.href = installationUrl.toString();
     } else if (integrationId === "slack-bot") {
@@ -201,7 +201,7 @@ function Integrations() {
         await disconnectSlackBot(disconnectType);
       } else {
         await disconnectIntegration({
-          estateId: estateId,
+          installationId: installationId,
           providerId: integrationId,
           disconnectType,
         });
@@ -217,7 +217,7 @@ function Integrations() {
   const handleDisconnectMCP = async (connection: MCPConnection) => {
     try {
       await disconnectMCP({
-        estateId: estateId,
+        installationId: installationId,
         connectionId: connection.id,
         connectionType: connection.type,
         mode: connection.mode,
@@ -373,7 +373,7 @@ function Integrations() {
               <MCPConnectionsTable
                 connections={mcpConnections.filter((c) => c.mode === "personal")}
                 onDisconnect={handleDisconnectMCP}
-                estateId={estateId}
+                installationId={installationId}
                 onUpdate={refetch}
               />
             </TabsContent>
@@ -382,7 +382,7 @@ function Integrations() {
               <MCPConnectionsTable
                 connections={mcpConnections.filter((c) => c.mode === "company")}
                 onDisconnect={handleDisconnectMCP}
-                estateId={estateId}
+                installationId={installationId}
                 onUpdate={refetch}
               />
             </TabsContent>
@@ -396,12 +396,12 @@ function Integrations() {
 function MCPConnectionsTable({
   connections,
   onDisconnect,
-  estateId,
+  installationId,
   onUpdate,
 }: {
   connections: MCPConnection[];
   onDisconnect: (connection: MCPConnection) => void;
-  estateId: string;
+  installationId: string;
   onUpdate: () => void;
 }) {
   const trpc = useTRPC();
@@ -411,7 +411,7 @@ function MCPConnectionsTable({
 
   const { data: connectionDetails, isLoading: isLoadingDetails } = useQuery({
     ...trpc.integrations.getMCPConnectionDetails.queryOptions({
-      estateId,
+      installationId,
       connectionId: selectedConnection?.id || "",
       connectionType: selectedConnection?.type || "mcp-params",
     }),
@@ -434,7 +434,7 @@ function MCPConnectionsTable({
   const handleSaveParams = async () => {
     if (selectedConnection?.type === "mcp-params") {
       await updateParams({
-        estateId,
+        installationId,
         connectionKey: selectedConnection.id,
         params: params.map((p) => ({
           key: p.key,

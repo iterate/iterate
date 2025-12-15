@@ -2,7 +2,7 @@ import { desc, isNull } from "drizzle-orm";
 import { schema } from "./client.ts";
 
 /**
- * usage: `db.query.estate.findMany({ with: recentActiveSources })`
+ * usage: `db.query.installation.findMany({ with: recentActiveSources })`
  */
 export const recentActiveSources = {
   sources: {

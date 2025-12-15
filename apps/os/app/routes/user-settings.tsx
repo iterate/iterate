@@ -304,7 +304,7 @@ function UserSettingsContent() {
                   <AlertDialogTitle>Delete user account?</AlertDialogTitle>
                   <AlertDialogDescription>
                     This action cannot be undone. Deleting your user will also remove every
-                    organization and estate you own and delete the Stripe customer and billing
+                    organization and installation you own and delete the Stripe customer and billing
                     relationship associated with your account.
                   </AlertDialogDescription>
                 </AlertDialogHeader>

@@ -5,7 +5,7 @@ import { useAgent } from "agents/react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTRPC, useTRPCClient } from "../lib/trpc.ts";
 import { Button } from "../components/ui/button.tsx";
-import { useEstateId } from "../hooks/use-estate.ts";
+import { useInstallationId } from "../hooks/use-installation.ts";
 import { Card } from "../components/ui/card.tsx";
 import { Label } from "../components/ui/label.tsx";
 import { Textarea } from "../components/ui/textarea.tsx";
@@ -154,13 +154,13 @@ function JsonSchemaFormField({
 }
 
 function ToolCallInjector({
-  estateId,
+  installationId,
   agentInstanceName,
   agentClassName,
   reducedState,
   onClose,
 }: {
-  estateId: string;
+  installationId: string;
   agentInstanceName: string;
   agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
   reducedState: any;
@@ -213,7 +213,7 @@ function ToolCallInjector({
     );
 
     injectToolCallMutation.mutate({
-      estateId,
+      installationId,
       agentInstanceName,
       agentClassName,
       toolName: selectedTool.name,
@@ -388,12 +388,12 @@ function ToolCallInjector({
 
 // Simple File Upload Component
 function FileUploadDialog({
-  estateId,
+  installationId,
   agentInstanceName,
   agentClassName,
   onClose,
 }: {
-  estateId: string;
+  installationId: string;
   agentInstanceName: string;
   agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
   onClose: () => void;
@@ -485,7 +485,7 @@ function FileUploadDialog({
           // Use the existing upload endpoint with estate ID
           xhr.open(
             "POST",
-            `/api/estate/${estateId}/files?filename=${encodeURIComponent(file.name)}`,
+            `/api/estate/${installationId}/files?filename=${encodeURIComponent(file.name)}`,
           );
           xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
           xhr.send(file);
@@ -509,7 +509,7 @@ function FileUploadDialog({
 
       // Submit the file sharing events
       await addEventsMutation.mutateAsync({
-        estateId,
+        installationId,
         agentInstanceName,
         agentClassName,
         events: fileEvents,
@@ -621,14 +621,14 @@ function FileUploadDialog({
 }
 
 export const Route = createFileRoute(
-  "/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName",
+  "/_auth.layout/$organizationId/$installationId/agents/$agentClassName/$durableObjectName",
 )({
   component: AgentsPage,
 });
 
 function AgentsPage() {
   const { agentClassName, durableObjectName } = Route.useParams();
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
   const trpcClient = useTRPCClient();
@@ -653,7 +653,7 @@ function AgentsPage() {
   const eventsQuery = useQuery(
     trpc.agents.getEvents.queryOptions(
       {
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
       },
@@ -667,12 +667,12 @@ function AgentsPage() {
   // Connect to agent via WebSocket
   const agentConnection = useAgent({
     agent: "why-is-this-required-I-don't-need-to-use-it",
-    basePath: `api/agents/${estateId}/${agentClassName}/${durableObjectName}`,
+    basePath: `api/agents/${installationId}/${agentClassName}/${durableObjectName}`,
     onMessage: (message) => {
       const messageData = JSON.parse(message.data);
       if (messageData.type === "events_added") {
         const queryKey = trpc.agents.getEvents.queryKey({
-          estateId,
+          installationId,
           agentInstanceName: durableObjectName,
           agentClassName,
         });
@@ -703,7 +703,7 @@ function AgentsPage() {
   const reducedStateQuery = useQuery(
     trpc.agents.getReducedStateAtEventIndex.queryOptions(
       {
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
         eventIndex: eventsQuery.data.length - 1,
@@ -718,7 +718,7 @@ function AgentsPage() {
   const braintrustPermalinkQuery = useQuery(
     trpc.agents.getBraintrustPermalink.queryOptions(
       {
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
       },
@@ -760,7 +760,7 @@ function AgentsPage() {
     },
     getReducedStateAtEventIndex: async (eventIndex: number) => {
       const result = await trpcClient.agents.getReducedStateAtEventIndex.query({
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
         eventIndex,
@@ -790,7 +790,7 @@ function AgentsPage() {
       };
 
       await addEventsMutation.mutateAsync({
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
         events: [promptMessage],
@@ -808,7 +808,7 @@ function AgentsPage() {
         } as const;
 
         addEventsMutation.mutate({
-          estateId,
+          installationId,
           agentInstanceName: durableObjectName,
           agentClassName,
           events: [event],
@@ -827,7 +827,7 @@ function AgentsPage() {
         } as const;
 
         addEventsMutation.mutate({
-          estateId,
+          installationId,
           agentInstanceName: durableObjectName,
           agentClassName,
           events: [cancelEvent],
@@ -838,7 +838,7 @@ function AgentsPage() {
     },
     onExport: async () => {
       await exportTraceMutation.mutateAsync({
-        estateId,
+        installationId,
         agentInstanceName: durableObjectName,
         agentClassName,
       });
@@ -872,7 +872,7 @@ function AgentsPage() {
     <>
       <AgentDetailRenderer
         events={eventsQuery.data as unknown as AgentEvent[]}
-        estateId={estateId}
+        installationId={installationId}
         agentClassName={agentClassName}
         reducedState={
           reducedStateQuery.data
@@ -892,7 +892,7 @@ function AgentsPage() {
         <DrawerContent className="h-[80vh] p-0">
           <div className="px-4 pb-4 h-full overflow-auto pr-6">
             <ToolCallInjector
-              estateId={estateId}
+              installationId={installationId}
               agentInstanceName={durableObjectName}
               agentClassName={agentClassName}
               reducedState={reducedStateQuery.data}
@@ -907,7 +907,7 @@ function AgentsPage() {
         <DrawerContent className="h-[80vh] p-0">
           <div className="px-4 pb-4 h-full overflow-auto pr-6">
             <FileUploadDialog
-              estateId={estateId}
+              installationId={installationId}
               agentInstanceName={durableObjectName}
               agentClassName={agentClassName}
               onClose={() => setShowFileUpload(false)}

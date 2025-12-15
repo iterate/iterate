@@ -13,8 +13,8 @@ import { logger } from "../tag-logger.ts";
 import type { Variables } from "../worker";
 import * as schema from "../db/schema.ts";
 import type { CloudflareEnv } from "../../env.ts";
-import { syncSlackForEstateInBackground } from "../integrations/slack/slack.ts";
-import { createUserOrganizationAndEstate } from "../org-utils.ts";
+import { syncSlackForInstallationInBackground } from "../integrations/slack/slack.ts";
+import { createUserOrganizationAndInstallation } from "../org-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../agent/agents/stub-getters.ts";
 import { MCPOAuthState, SlackBotOAuthState, GoogleOAuthState } from "./oauth-state-schemas.ts";
 
@@ -115,27 +115,30 @@ export const integrationsPlugin = () =>
 
           const result = await db
             .select({
-              estate: schema.estate,
+              installation: schema.installation,
             })
-            .from(schema.estate)
+            .from(schema.installation)
             .innerJoin(
               schema.organizationUserMembership,
               and(
-                eq(schema.organizationUserMembership.organizationId, schema.estate.organizationId),
+                eq(
+                  schema.organizationUserMembership.organizationId,
+                  schema.installation.organizationId,
+                ),
                 eq(schema.organizationUserMembership.userId, state.userId),
               ),
             )
-            .where(eq(schema.estate.id, state.estateId))
+            .where(eq(schema.installation.id, state.installationId))
             .limit(1);
 
-          const estateWithMembership = result[0]?.estate;
+          const installationWithMembership = result[0]?.installation;
 
-          if (!estateWithMembership) {
-            logger.error("Estate not found or user not authorized", {
-              estateId: state.estateId,
+          if (!installationWithMembership) {
+            logger.error("Installation not found or user not authorized", {
+              installationId: state.installationId,
               userId: state.userId,
             });
-            return ctx.json({ error: "Estate not found" }, { status: 404 });
+            return ctx.json({ error: "Installation not found" }, { status: 404 });
           }
 
           await ctx.context.internalAdapter.deleteVerificationValue(stateId);
@@ -182,13 +185,13 @@ export const integrationsPlugin = () =>
         {
           method: "POST",
           body: z.object({
-            estateId: z.string(),
+            installationId: z.string(),
             callbackURL: z.string(),
           }),
           use: [sessionMiddleware],
         },
         async (ctx) => {
-          const { estateId, callbackURL } = ctx.body;
+          const { installationId, callbackURL } = ctx.body;
           const session = ctx.context.session;
 
           const {
@@ -196,8 +199,8 @@ export const integrationsPlugin = () =>
             var: { db },
           } = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
 
-          const member = await db.query.estate.findFirst({
-            where: eq(schema.estate.id, estateId),
+          const member = await db.query.installation.findFirst({
+            where: eq(schema.installation.id, installationId),
             columns: {},
             with: {
               organization: {
@@ -215,14 +218,14 @@ export const integrationsPlugin = () =>
           });
 
           if (!member) {
-            throw new Error("You are not a member of this estate");
+            throw new Error("You are not a member of this installation");
           }
 
           const state = generateRandomString(32);
           const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
           const oauthStateData = {
-            estateId,
+            installationId,
             link: {
               userId: session.user.id,
               email: session.user.email,
@@ -351,7 +354,7 @@ export const integrationsPlugin = () =>
           const parsedState = SlackBotOAuthState.parse(JSON.parse(value.value));
 
           const { link, callbackUrl: callbackURL } = parsedState;
-          let estateId = parsedState.estateId;
+          let installationId = parsedState.installationId;
 
           const code = ctx.query.code;
 
@@ -416,10 +419,10 @@ export const integrationsPlugin = () =>
               // synced across organizations via Slack Connect.
               //
               // Bot accounts should only be linked when:
-              // 1. estateId is explicitly provided in OAuth state (link flow from integrations page)
+              // 1. installationId is explicitly provided in OAuth state (link flow from integrations page)
               // 2. A new estate is being created during signup (handled by redirect.tsx)
               //
-              // If estateId is not provided, the signup flow in redirect.tsx will create a new estate
+              // If installationId is not provided, the signup flow in redirect.tsx will create a new estate
               // and link the bot account to it properly.
             } else {
               user = await ctx.context.internalAdapter.createUser({
@@ -440,13 +443,13 @@ export const integrationsPlugin = () =>
                 }
               }
 
-              const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
+              const newOrgAndInstallation = await createUserOrganizationAndInstallation(db, user);
 
-              if (!newOrgAndEstate.estate) {
-                return ctx.json({ error: "Failed to create an estate for the user" });
+              if (!newOrgAndInstallation.installation) {
+                return ctx.json({ error: "Failed to create an installation for the user" });
               }
 
-              estateId = newOrgAndEstate.estate.id;
+              installationId = newOrgAndInstallation.installation.id;
             }
 
             const existingUserAccount = existingUser?.accounts.find(
@@ -530,9 +533,9 @@ export const integrationsPlugin = () =>
 
           // Link estate if we have an ID
           // TODO(rahul): figure out if there are any edge cases
-          // Only reason we don't have a estateId by this point is that the flow started with login, and the user already has an estate
+          // Only reason we don't have a installationId by this point is that the flow started with login, and the user already has an estate
           // So we can skip this step for them
-          if (estateId) {
+          if (installationId) {
             // For linking flow, connect everything now
             // Sync Slack channels, users (internal and external) in the background
             if (!tokens.team?.id) {
@@ -541,21 +544,26 @@ export const integrationsPlugin = () =>
             }
 
             waitUntil(
-              syncSlackForEstateInBackground(db, tokens.access_token, estateId, tokens.team.id),
+              syncSlackForInstallationInBackground(
+                db,
+                tokens.access_token,
+                installationId,
+                tokens.team.id,
+              ),
             );
 
             await db
-              .insert(schema.estateAccountsPermissions)
+              .insert(schema.installationAccountsPermissions)
               .values({
                 accountId: botAccount.id,
-                estateId,
+                installationId,
               })
               .onConflictDoNothing();
 
             await db
-              .insert(schema.providerEstateMapping)
+              .insert(schema.providerInstallationMapping)
               .values({
-                internalEstateId: estateId,
+                internalInstallationId: installationId,
                 externalId: tokens.team.id,
                 providerId: "slack-bot",
                 providerMetadata: {
@@ -566,11 +574,11 @@ export const integrationsPlugin = () =>
               })
               .onConflictDoUpdate({
                 target: [
-                  schema.providerEstateMapping.providerId,
-                  schema.providerEstateMapping.externalId,
+                  schema.providerInstallationMapping.providerId,
+                  schema.providerInstallationMapping.externalId,
                 ],
                 set: {
-                  internalEstateId: estateId, // We may want to require a confirmation to change the estate
+                  internalInstallationId: installationId, // We may want to require a confirmation to change the installation
                   providerMetadata: {
                     botUserId,
                     team: tokens.team,

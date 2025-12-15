@@ -15,7 +15,7 @@ type SlackStepView = "choose-method" | "confirm-email" | "processing-trial" | "t
 
 type SlackStepProps = {
   organizationId: string;
-  estateId: string;
+  installationId: string;
   /**
    * Called when the Slack step has successfully completed (e.g. trial channel created).
    * Parent can use this to mark onboarding as completed on the backend.
@@ -23,20 +23,20 @@ type SlackStepProps = {
   onComplete: () => void;
 };
 
-export function OnboardingSlackStep({ organizationId, estateId, onComplete }: SlackStepProps) {
+export function OnboardingSlackStep({ organizationId, installationId, onComplete }: SlackStepProps) {
   const navigate = useNavigate();
   const trpc = useTRPC();
   const [view, setView] = useState<SlackStepView>("choose-method");
   const [trialData, setTrialData] = useState<{
-    estateId: string;
+    installationId: string;
     organizationId: string;
   } | null>(null);
   const user = useSessionUser();
 
   const directSlackLogin = async () => {
     const result = await authClient.integrations.link.slackBot({
-      callbackURL: `/${organizationId}/${estateId}/onboarding?step=slack_complete`,
-      estateId: estateId,
+      callbackURL: `/${organizationId}/${installationId}/onboarding?step=slack_complete`,
+      installationId: installationId,
     });
 
     if (!result || !("url" in result)) {
@@ -51,7 +51,7 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
     ...trpc.integrations.setupSlackConnectTrial.mutationOptions({}),
     onSuccess: (data) => {
       setTrialData({
-        estateId: data.estateId,
+        installationId: data.installationId,
         organizationId: data.organizationId,
       });
       setView("trial-success");
@@ -74,13 +74,13 @@ export function OnboardingSlackStep({ organizationId, estateId, onComplete }: Sl
 
   const handleContinueWithEmail = () => {
     setView("processing-trial");
-    setupTrialMutation.mutate({ estateId });
+    setupTrialMutation.mutate({ installationId });
   };
 
   const handleGoToDashboard = () => {
     navigate({
-      to: `/$organizationId/$estateId`,
-      params: trialData ?? { organizationId, estateId },
+      to: `/$organizationId/$installationId`,
+      params: trialData ?? { organizationId, installationId },
     });
   };
 

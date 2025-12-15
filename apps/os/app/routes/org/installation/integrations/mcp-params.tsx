@@ -15,12 +15,12 @@ import {
   FieldSet,
 } from "../../../../components/ui/field.tsx";
 import { useTRPC } from "../../../../lib/trpc.ts";
-import { useEstateId } from "../../../../hooks/use-estate.ts";
+import { useInstallationId } from "../../../../hooks/use-installation.ts";
 import { AgentDurableObjectInfo } from "../../../../../backend/auth/oauth-state-schemas.ts";
 import { MCPParam } from "../../../../../backend/agent/tool-schemas.ts";
 
 export const Route = createFileRoute(
-  "/_auth.layout/$organizationId/$estateId/integrations/mcp-params",
+  "/_auth.layout/$organizationId/$installationId/integrations/mcp-params",
 )({
   component: MCPParams,
   validateSearch: z.object({
@@ -58,7 +58,7 @@ function MCPParams() {
     finalRedirectUrl,
   } = searchParams;
 
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const trpc = useTRPC();
   const router = useRouter();
 
@@ -115,7 +115,7 @@ function MCPParams() {
 
     try {
       await saveParams({
-        estateId,
+        installationId,
         connectionKey,
         params: requiredParams.map((param) => ({
           key: param.key,
@@ -126,7 +126,7 @@ function MCPParams() {
 
       if (durableObject) {
         await reconnect({
-          estateId,
+          installationId,
           agentDurableObject: durableObject,
           serverUrl,
           mode: mode as "personal" | "company",

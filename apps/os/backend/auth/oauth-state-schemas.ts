@@ -24,7 +24,7 @@ export const BaseOAuthState = z.object({
 export const MCPOAuthState = BaseOAuthState.extend({
   integrationSlug: z.string(),
   serverUrl: z.url(),
-  estateId: z.string(),
+  installationId: z.string(),
   userId: z.string(),
   clientId: z.string(),
   serverId: z.string(),
@@ -33,7 +33,7 @@ export const MCPOAuthState = BaseOAuthState.extend({
 export const SlackDirectLoginState = BaseOAuthState.extend({});
 
 export const SlackBotLinkState = BaseOAuthState.extend({
-  estateId: z.string(),
+  installationId: z.string(),
   link: z.object({
     userId: z.string(),
     email: z.string().email(),
@@ -41,7 +41,7 @@ export const SlackBotLinkState = BaseOAuthState.extend({
 });
 
 export const SlackBotOAuthState = BaseOAuthState.extend({
-  estateId: z.string().optional(),
+  installationId: z.string().optional(),
   link: z
     .object({
       userId: z.string(),

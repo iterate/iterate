@@ -31,7 +31,7 @@ import { formatDate } from "date-fns";
 import { useQueryState } from "nuqs";
 import { cn } from "../lib/utils.ts";
 import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "../hooks/use-estate.ts";
+import { useInstallationId } from "../hooks/use-installation.ts";
 import { IterateLetterI } from "./ui/iterate-logos.tsx";
 import { Button } from "./ui/button.tsx";
 import { Spinner } from "./ui/spinner.tsx";
@@ -321,7 +321,7 @@ export type IDEHandle = {
 
 export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const trpc = useTRPC();
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
 
   const [selectedFile, setSelectedFile] = useQueryState("file", { defaultValue: "" });
 
@@ -351,11 +351,11 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
 
   const getRepoFilesystemQueryOptions = useMemo(
     () =>
-      trpc.estate.getRepoFilesystem.queryOptions({
-        estateId,
+      trpc.installation.getRepoFilesystem.queryOptions({
+        installationId,
         branch: yoloMode ? undefined : currentPrBranch,
       }),
-    [trpc, estateId, currentPrBranch, yoloMode],
+    [trpc, installationId, currentPrBranch, yoloMode],
   );
 
   const getRepoFileSystemQuery = useQuery({
@@ -392,7 +392,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
 
   // Use localStorage for per-branch local edits based on pushToBranch
   const [localEdits, setLocalEdits] = useLocalStorage<Record<string, string | null>>(
-    `iterate-ide-local-edits-${estateId}`,
+    `iterate-ide-local-edits-${installationId}`,
     {},
   );
 
@@ -413,20 +413,20 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   );
 
   const updateRepoMutation = useMutation(
-    trpc.estate.updateRepo.mutationOptions({
+    trpc.installation.updateRepo.mutationOptions({
       onSuccess: () => {
         // Invalidate and refetch the repo filesystem query
         queryClient.invalidateQueries(
-          trpc.estate.getRepoFilesystem.queryFilter({
-            estateId,
+          trpc.installation.getRepoFilesystem.queryFilter({
+            installationId,
             branch: yoloMode ? undefined : currentPrBranch,
           }),
         );
         // Also invalidate for pushToBranch if different
         if (pushToBranch && pushToBranch !== currentPrBranch) {
           queryClient.invalidateQueries(
-            trpc.estate.getRepoFilesystem.queryFilter({
-              estateId,
+            trpc.installation.getRepoFilesystem.queryFilter({
+              installationId,
               branch: pushToBranch,
             }),
           );
@@ -436,7 +436,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   );
 
   const pullsQuery = useQuery({
-    ...trpc.estate.listPulls.queryOptions({ estateId, state: "open" }),
+    ...trpc.installation.listPulls.queryOptions({ installationId, state: "open" }),
     enabled: !yoloMode,
   });
   const currentPr = useMemo(() => {
@@ -452,34 +452,34 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   }, [pullsQuery.data, currentPrBranch, yoloMode]);
 
   const createPullRequestMutation = useMutation(
-    trpc.estate.createPullRequest.mutationOptions({
+    trpc.installation.createPullRequest.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
-        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
+        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+        queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
       },
     }),
   );
 
   const mergePullMutation = useMutation(
-    trpc.estate.mergePull.mutationOptions({
+    trpc.installation.mergePull.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
-        queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+        queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
+        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
         removeCurrentPrBranch();
       },
     }),
   );
 
   const closePullMutation = useMutation(
-    trpc.estate.closePull.mutationOptions({
+    trpc.installation.closePull.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries(trpc.estate.listPulls.queryFilter({ estateId }));
+        queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
       },
     }),
   );
 
   const getDTSQuery = useQuery(
-    trpc.estate.getDTS.queryOptions(
+    trpc.installation.getDTS.queryOptions(
       {
         packageJson: JSON.parse(getRepoFileSystemQuery.data?.filesystem["package.json"] || "{}"),
         overrides: {
@@ -702,16 +702,16 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
     setLocalEdits({});
     // Invalidate and refetch the repo filesystem query
     queryClient.invalidateQueries(
-      trpc.estate.getRepoFilesystem.queryFilter({
-        estateId,
+      trpc.installation.getRepoFilesystem.queryFilter({
+        installationId,
         branch: yoloMode ? undefined : currentPrBranch,
       }),
     );
     // Also invalidate for pushToBranch if different
     if (pushToBranch && pushToBranch !== currentPrBranch) {
       queryClient.invalidateQueries(
-        trpc.estate.getRepoFilesystem.queryFilter({
-          estateId,
+        trpc.installation.getRepoFilesystem.queryFilter({
+          installationId,
           branch: pushToBranch,
         }),
       );
@@ -747,7 +747,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
     }
 
     updateRepoMutation.mutate({
-      estateId,
+      installationId,
       commit: {
         branch: {
           branchName: pushToBranch || defaultBranch || "main",
@@ -908,7 +908,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
       } else if (pendingActionAfterBranch === "createPr") {
         // Wait for state to update, then create PR
         setTimeout(() => {
-          createPullRequestMutation.mutate({ estateId, fromBranch: newBranch });
+          createPullRequestMutation.mutate({ installationId, fromBranch: newBranch });
         }, 100);
       }
     }
@@ -928,16 +928,16 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const confirmMerge = () => {
     if (prToMerge && currentPr) {
       mergePullMutation.mutate(
-        { estateId, pullNumber: prToMerge, mergeMethod: "squash" },
+        { installationId, pullNumber: prToMerge, mergeMethod: "squash" },
         {
           onSuccess: async () => {
-            localStorage.removeItem(`iterate-ide-local-edits-${estateId}`);
+            localStorage.removeItem(`iterate-ide-local-edits-${installationId}`);
 
             // Invalidate and refetch queries
             await queryClient.refetchQueries(
-              trpc.estate.listPulls.queryFilter({ estateId, state: "open" }),
+              trpc.installation.listPulls.queryFilter({ installationId, state: "open" }),
             );
-            queryClient.invalidateQueries(trpc.estate.getRepoFilesystem.queryFilter({ estateId }));
+            queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
 
             setSelectedFile(null);
           },
@@ -959,19 +959,19 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const confirmClose = () => {
     if (prToClose && currentPr) {
       closePullMutation.mutate(
-        { estateId, pullNumber: prToClose },
+        { installationId, pullNumber: prToClose },
         {
           onSuccess: async () => {
             // Clear local edits
-            localStorage.removeItem(`iterate-ide-local-edits-${estateId}`);
+            localStorage.removeItem(`iterate-ide-local-edits-${installationId}`);
             // Invalidate and refetch queries
             await queryClient.refetchQueries(
-              trpc.estate.listPulls.queryFilter({ estateId, state: "open" }),
+              trpc.installation.listPulls.queryFilter({ installationId, state: "open" }),
             );
 
             // Get updated pulls data
             const pullsData = queryClient.getQueryData(
-              trpc.estate.listPulls.queryKey({ estateId, state: "open" }),
+              trpc.installation.listPulls.queryKey({ installationId, state: "open" }),
             ) as typeof pullsQuery.data | undefined;
 
             // Find latest PR (highest number) or fall back to default branch
@@ -1187,7 +1187,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
                       if (currentPrBranch === defaultBranch) {
                         handleCreateNewBranch("createPr");
                       } else {
-                        createPullRequestMutation.mutate({ estateId, fromBranch: currentPrBranch });
+                        createPullRequestMutation.mutate({ installationId, fromBranch: currentPrBranch });
                       }
                     }}
                     disabled={createPullRequestMutation.isPending}

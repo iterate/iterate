@@ -26,7 +26,7 @@ const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
 
 const adminLinks = [
   { title: "Session Info", icon: Info, path: "/admin/session-info" },
-  { title: "Estates", icon: Building2, path: "/admin/estates" },
+  { title: "Installations", icon: Building2, path: "/admin/installations" },
   { title: "Test Slack Notification", icon: MessageSquare, path: "/admin/slack-notification" },
   { title: "Database Tools", icon: Database, path: "/admin/db-tools" },
   { title: "tRPC Tools", icon: Server, path: "/admin/trpc-tools" },
@@ -40,11 +40,13 @@ export const Route = createFileRoute("/_auth.layout/admin")({
 function AdminLayout() {
   const location = useLocation();
   const trpc = useTRPC();
-  const { data: estates } = useSuspenseQuery(trpc.estates.list.queryOptions());
+  const { data: installations } = useSuspenseQuery(trpc.installation.list.queryOptions());
 
-  // Get the first estate if available, otherwise show a message
-  const hasEstates = estates && estates.length > 0;
-  const dashboardLink = hasEstates ? `/${estates[0].organizationId}/${estates[0].id}` : "/";
+  // Get the first installation if available, otherwise show a message
+  const hasInstallations = installations && installations.length > 0;
+  const dashboardLink = hasInstallations
+    ? `/${installations[0].organizationId}/${installations[0].id}`
+    : "/";
 
   return (
     <SidebarProvider defaultOpen={true}>

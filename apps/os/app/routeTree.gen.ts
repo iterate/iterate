@@ -21,17 +21,17 @@ import { Route as orgIndexRouteImport } from './routes/org/index.tsx'
 import { Route as adminTrpcToolsRouteImport } from './routes/admin/trpc-tools.tsx'
 import { Route as adminSlackNotificationRouteImport } from './routes/admin/slack-notification.tsx'
 import { Route as adminSessionInfoRouteImport } from './routes/admin/session-info.tsx'
-import { Route as adminEstatesRouteImport } from './routes/admin/estates.tsx'
+import { Route as adminInstallationsRouteImport } from './routes/admin/installations.tsx'
 import { Route as adminDbToolsRouteImport } from './routes/admin/db-tools.tsx'
 import { Route as orgTeamRouteImport } from './routes/org/team.tsx'
 import { Route as orgSettingsRouteImport } from './routes/org/settings.tsx'
-import { Route as orgEstateLayoutRouteImport } from './routes/org/estate/layout.tsx'
-import { Route as orgEstateIndexRouteImport } from './routes/org/estate/index.tsx'
-import { Route as orgEstateRepoRouteImport } from './routes/org/estate/repo.tsx'
-import { Route as orgEstateOnboardingRouteImport } from './routes/org/estate/onboarding.tsx'
-import { Route as orgEstateIntegrationsIndexRouteImport } from './routes/org/estate/integrations/index.tsx'
-import { Route as orgEstateIntegrationsRedirectRouteImport } from './routes/org/estate/integrations/redirect.tsx'
-import { Route as orgEstateIntegrationsMcpParamsRouteImport } from './routes/org/estate/integrations/mcp-params.tsx'
+import { Route as orgInstallationLayoutRouteImport } from './routes/org/installation/layout.tsx'
+import { Route as orgInstallationIndexRouteImport } from './routes/org/installation/index.tsx'
+import { Route as orgInstallationRepoRouteImport } from './routes/org/installation/repo.tsx'
+import { Route as orgInstallationOnboardingRouteImport } from './routes/org/installation/onboarding.tsx'
+import { Route as orgInstallationIntegrationsIndexRouteImport } from './routes/org/installation/integrations/index.tsx'
+import { Route as orgInstallationIntegrationsRedirectRouteImport } from './routes/org/installation/integrations/redirect.tsx'
+import { Route as orgInstallationIntegrationsMcpParamsRouteImport } from './routes/org/installation/integrations/mcp-params.tsx'
 import { Route as offlineAgentDetailRouteImport } from './routes/offline-agent-detail.tsx'
 import { Route as onlineAgentDetailRouteImport } from './routes/online-agent-detail.tsx'
 
@@ -94,9 +94,9 @@ const adminSessionInfoRoute = adminSessionInfoRouteImport.update({
   path: '/session-info',
   getParentRoute: () => adminLayoutRoute,
 } as any)
-const adminEstatesRoute = adminEstatesRouteImport.update({
-  id: '/estates',
-  path: '/estates',
+const adminInstallationsRoute = adminInstallationsRouteImport.update({
+  id: '/installations',
+  path: '/installations',
   getParentRoute: () => adminLayoutRoute,
 } as any)
 const adminDbToolsRoute = adminDbToolsRouteImport.update({
@@ -114,53 +114,54 @@ const orgSettingsRoute = orgSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => orgLayoutRoute,
 } as any)
-const orgEstateLayoutRoute = orgEstateLayoutRouteImport.update({
-  id: '/$estateId',
-  path: '/$estateId',
+const orgInstallationLayoutRoute = orgInstallationLayoutRouteImport.update({
+  id: '/$installationId',
+  path: '/$installationId',
   getParentRoute: () => orgLayoutRoute,
 } as any)
-const orgEstateIndexRoute = orgEstateIndexRouteImport.update({
+const orgInstallationIndexRoute = orgInstallationIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => orgEstateLayoutRoute,
+  getParentRoute: () => orgInstallationLayoutRoute,
 } as any)
-const orgEstateRepoRoute = orgEstateRepoRouteImport.update({
+const orgInstallationRepoRoute = orgInstallationRepoRouteImport.update({
   id: '/repo',
   path: '/repo',
-  getParentRoute: () => orgEstateLayoutRoute,
+  getParentRoute: () => orgInstallationLayoutRoute,
 } as any)
-const orgEstateOnboardingRoute = orgEstateOnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => orgEstateLayoutRoute,
-} as any)
-const orgEstateIntegrationsIndexRoute =
-  orgEstateIntegrationsIndexRouteImport.update({
+const orgInstallationOnboardingRoute =
+  orgInstallationOnboardingRouteImport.update({
+    id: '/onboarding',
+    path: '/onboarding',
+    getParentRoute: () => orgInstallationLayoutRoute,
+  } as any)
+const orgInstallationIntegrationsIndexRoute =
+  orgInstallationIntegrationsIndexRouteImport.update({
     id: '/integrations/',
     path: '/integrations/',
-    getParentRoute: () => orgEstateLayoutRoute,
+    getParentRoute: () => orgInstallationLayoutRoute,
   } as any)
-const orgEstateIntegrationsRedirectRoute =
-  orgEstateIntegrationsRedirectRouteImport.update({
+const orgInstallationIntegrationsRedirectRoute =
+  orgInstallationIntegrationsRedirectRouteImport.update({
     id: '/integrations/redirect',
     path: '/integrations/redirect',
-    getParentRoute: () => orgEstateLayoutRoute,
+    getParentRoute: () => orgInstallationLayoutRoute,
   } as any)
-const orgEstateIntegrationsMcpParamsRoute =
-  orgEstateIntegrationsMcpParamsRouteImport.update({
+const orgInstallationIntegrationsMcpParamsRoute =
+  orgInstallationIntegrationsMcpParamsRouteImport.update({
     id: '/integrations/mcp-params',
     path: '/integrations/mcp-params',
-    getParentRoute: () => orgEstateLayoutRoute,
+    getParentRoute: () => orgInstallationLayoutRoute,
   } as any)
 const offlineAgentDetailRoute = offlineAgentDetailRouteImport.update({
   id: '/agents/offline',
   path: '/agents/offline',
-  getParentRoute: () => orgEstateLayoutRoute,
+  getParentRoute: () => orgInstallationLayoutRoute,
 } as any)
 const onlineAgentDetailRoute = onlineAgentDetailRouteImport.update({
   id: '/agents/$agentClassName/$durableObjectName',
   path: '/agents/$agentClassName/$durableObjectName',
-  getParentRoute: () => orgEstateLayoutRoute,
+  getParentRoute: () => orgInstallationLayoutRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -170,24 +171,24 @@ export interface FileRoutesByFullPath {
   '/admin': typeof adminLayoutRouteWithChildren
   '/new-organization': typeof newOrganizationRoute
   '/user-settings': typeof userSettingsRoute
-  '/$organizationId/$estateId': typeof orgEstateLayoutRouteWithChildren
+  '/$organizationId/$installationId': typeof orgInstallationLayoutRouteWithChildren
   '/$organizationId/settings': typeof orgSettingsRoute
   '/$organizationId/team': typeof orgTeamRoute
   '/admin/db-tools': typeof adminDbToolsRoute
-  '/admin/estates': typeof adminEstatesRoute
+  '/admin/installations': typeof adminInstallationsRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/slack-notification': typeof adminSlackNotificationRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationId/': typeof orgIndexRoute
   '/admin/': typeof adminIndexRoute
-  '/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
-  '/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
-  '/$organizationId/$estateId/': typeof orgEstateIndexRoute
-  '/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
-  '/$organizationId/$estateId/integrations/mcp-params': typeof orgEstateIntegrationsMcpParamsRoute
-  '/$organizationId/$estateId/integrations/redirect': typeof orgEstateIntegrationsRedirectRoute
-  '/$organizationId/$estateId/integrations': typeof orgEstateIntegrationsIndexRoute
-  '/$organizationId/$estateId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
+  '/$organizationId/$installationId/onboarding': typeof orgInstallationOnboardingRoute
+  '/$organizationId/$installationId/repo': typeof orgInstallationRepoRoute
+  '/$organizationId/$installationId/': typeof orgInstallationIndexRoute
+  '/$organizationId/$installationId/agents/offline': typeof offlineAgentDetailRoute
+  '/$organizationId/$installationId/integrations/mcp-params': typeof orgInstallationIntegrationsMcpParamsRoute
+  '/$organizationId/$installationId/integrations/redirect': typeof orgInstallationIntegrationsRedirectRoute
+  '/$organizationId/$installationId/integrations': typeof orgInstallationIntegrationsIndexRoute
+  '/$organizationId/$installationId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof loginRoute
@@ -197,20 +198,20 @@ export interface FileRoutesByTo {
   '/$organizationId/settings': typeof orgSettingsRoute
   '/$organizationId/team': typeof orgTeamRoute
   '/admin/db-tools': typeof adminDbToolsRoute
-  '/admin/estates': typeof adminEstatesRoute
+  '/admin/installations': typeof adminInstallationsRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/slack-notification': typeof adminSlackNotificationRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationId': typeof orgIndexRoute
   '/admin': typeof adminIndexRoute
-  '/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
-  '/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
-  '/$organizationId/$estateId': typeof orgEstateIndexRoute
-  '/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
-  '/$organizationId/$estateId/integrations/mcp-params': typeof orgEstateIntegrationsMcpParamsRoute
-  '/$organizationId/$estateId/integrations/redirect': typeof orgEstateIntegrationsRedirectRoute
-  '/$organizationId/$estateId/integrations': typeof orgEstateIntegrationsIndexRoute
-  '/$organizationId/$estateId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
+  '/$organizationId/$installationId/onboarding': typeof orgInstallationOnboardingRoute
+  '/$organizationId/$installationId/repo': typeof orgInstallationRepoRoute
+  '/$organizationId/$installationId': typeof orgInstallationIndexRoute
+  '/$organizationId/$installationId/agents/offline': typeof offlineAgentDetailRoute
+  '/$organizationId/$installationId/integrations/mcp-params': typeof orgInstallationIntegrationsMcpParamsRoute
+  '/$organizationId/$installationId/integrations/redirect': typeof orgInstallationIntegrationsRedirectRoute
+  '/$organizationId/$installationId/integrations': typeof orgInstallationIntegrationsIndexRoute
+  '/$organizationId/$installationId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -221,24 +222,24 @@ export interface FileRoutesById {
   '/_auth.layout/admin': typeof adminLayoutRouteWithChildren
   '/_auth.layout/new-organization': typeof newOrganizationRoute
   '/_auth.layout/user-settings': typeof userSettingsRoute
-  '/_auth.layout/$organizationId/$estateId': typeof orgEstateLayoutRouteWithChildren
+  '/_auth.layout/$organizationId/$installationId': typeof orgInstallationLayoutRouteWithChildren
   '/_auth.layout/$organizationId/settings': typeof orgSettingsRoute
   '/_auth.layout/$organizationId/team': typeof orgTeamRoute
   '/_auth.layout/admin/db-tools': typeof adminDbToolsRoute
-  '/_auth.layout/admin/estates': typeof adminEstatesRoute
+  '/_auth.layout/admin/installations': typeof adminInstallationsRoute
   '/_auth.layout/admin/session-info': typeof adminSessionInfoRoute
   '/_auth.layout/admin/slack-notification': typeof adminSlackNotificationRoute
   '/_auth.layout/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/_auth.layout/$organizationId/': typeof orgIndexRoute
   '/_auth.layout/admin/': typeof adminIndexRoute
-  '/_auth.layout/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
-  '/_auth.layout/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
-  '/_auth.layout/$organizationId/$estateId/': typeof orgEstateIndexRoute
-  '/_auth.layout/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
-  '/_auth.layout/$organizationId/$estateId/integrations/mcp-params': typeof orgEstateIntegrationsMcpParamsRoute
-  '/_auth.layout/$organizationId/$estateId/integrations/redirect': typeof orgEstateIntegrationsRedirectRoute
-  '/_auth.layout/$organizationId/$estateId/integrations/': typeof orgEstateIntegrationsIndexRoute
-  '/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
+  '/_auth.layout/$organizationId/$installationId/onboarding': typeof orgInstallationOnboardingRoute
+  '/_auth.layout/$organizationId/$installationId/repo': typeof orgInstallationRepoRoute
+  '/_auth.layout/$organizationId/$installationId/': typeof orgInstallationIndexRoute
+  '/_auth.layout/$organizationId/$installationId/agents/offline': typeof offlineAgentDetailRoute
+  '/_auth.layout/$organizationId/$installationId/integrations/mcp-params': typeof orgInstallationIntegrationsMcpParamsRoute
+  '/_auth.layout/$organizationId/$installationId/integrations/redirect': typeof orgInstallationIntegrationsRedirectRoute
+  '/_auth.layout/$organizationId/$installationId/integrations/': typeof orgInstallationIntegrationsIndexRoute
+  '/_auth.layout/$organizationId/$installationId/agents/$agentClassName/$durableObjectName': typeof onlineAgentDetailRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -249,24 +250,24 @@ export interface FileRouteTypes {
     | '/admin'
     | '/new-organization'
     | '/user-settings'
-    | '/$organizationId/$estateId'
+    | '/$organizationId/$installationId'
     | '/$organizationId/settings'
     | '/$organizationId/team'
     | '/admin/db-tools'
-    | '/admin/estates'
+    | '/admin/installations'
     | '/admin/session-info'
     | '/admin/slack-notification'
     | '/admin/trpc-tools'
     | '/$organizationId/'
     | '/admin/'
-    | '/$organizationId/$estateId/onboarding'
-    | '/$organizationId/$estateId/repo'
-    | '/$organizationId/$estateId/'
-    | '/$organizationId/$estateId/agents/offline'
-    | '/$organizationId/$estateId/integrations/mcp-params'
-    | '/$organizationId/$estateId/integrations/redirect'
-    | '/$organizationId/$estateId/integrations'
-    | '/$organizationId/$estateId/agents/$agentClassName/$durableObjectName'
+    | '/$organizationId/$installationId/onboarding'
+    | '/$organizationId/$installationId/repo'
+    | '/$organizationId/$installationId/'
+    | '/$organizationId/$installationId/agents/offline'
+    | '/$organizationId/$installationId/integrations/mcp-params'
+    | '/$organizationId/$installationId/integrations/redirect'
+    | '/$organizationId/$installationId/integrations'
+    | '/$organizationId/$installationId/agents/$agentClassName/$durableObjectName'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -276,20 +277,20 @@ export interface FileRouteTypes {
     | '/$organizationId/settings'
     | '/$organizationId/team'
     | '/admin/db-tools'
-    | '/admin/estates'
+    | '/admin/installations'
     | '/admin/session-info'
     | '/admin/slack-notification'
     | '/admin/trpc-tools'
     | '/$organizationId'
     | '/admin'
-    | '/$organizationId/$estateId/onboarding'
-    | '/$organizationId/$estateId/repo'
-    | '/$organizationId/$estateId'
-    | '/$organizationId/$estateId/agents/offline'
-    | '/$organizationId/$estateId/integrations/mcp-params'
-    | '/$organizationId/$estateId/integrations/redirect'
-    | '/$organizationId/$estateId/integrations'
-    | '/$organizationId/$estateId/agents/$agentClassName/$durableObjectName'
+    | '/$organizationId/$installationId/onboarding'
+    | '/$organizationId/$installationId/repo'
+    | '/$organizationId/$installationId'
+    | '/$organizationId/$installationId/agents/offline'
+    | '/$organizationId/$installationId/integrations/mcp-params'
+    | '/$organizationId/$installationId/integrations/redirect'
+    | '/$organizationId/$installationId/integrations'
+    | '/$organizationId/$installationId/agents/$agentClassName/$durableObjectName'
   id:
     | '__root__'
     | '/_auth.layout'
@@ -299,24 +300,24 @@ export interface FileRouteTypes {
     | '/_auth.layout/admin'
     | '/_auth.layout/new-organization'
     | '/_auth.layout/user-settings'
-    | '/_auth.layout/$organizationId/$estateId'
+    | '/_auth.layout/$organizationId/$installationId'
     | '/_auth.layout/$organizationId/settings'
     | '/_auth.layout/$organizationId/team'
     | '/_auth.layout/admin/db-tools'
-    | '/_auth.layout/admin/estates'
+    | '/_auth.layout/admin/installations'
     | '/_auth.layout/admin/session-info'
     | '/_auth.layout/admin/slack-notification'
     | '/_auth.layout/admin/trpc-tools'
     | '/_auth.layout/$organizationId/'
     | '/_auth.layout/admin/'
-    | '/_auth.layout/$organizationId/$estateId/onboarding'
-    | '/_auth.layout/$organizationId/$estateId/repo'
-    | '/_auth.layout/$organizationId/$estateId/'
-    | '/_auth.layout/$organizationId/$estateId/agents/offline'
-    | '/_auth.layout/$organizationId/$estateId/integrations/mcp-params'
-    | '/_auth.layout/$organizationId/$estateId/integrations/redirect'
-    | '/_auth.layout/$organizationId/$estateId/integrations/'
-    | '/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName'
+    | '/_auth.layout/$organizationId/$installationId/onboarding'
+    | '/_auth.layout/$organizationId/$installationId/repo'
+    | '/_auth.layout/$organizationId/$installationId/'
+    | '/_auth.layout/$organizationId/$installationId/agents/offline'
+    | '/_auth.layout/$organizationId/$installationId/integrations/mcp-params'
+    | '/_auth.layout/$organizationId/$installationId/integrations/redirect'
+    | '/_auth.layout/$organizationId/$installationId/integrations/'
+    | '/_auth.layout/$organizationId/$installationId/agents/$agentClassName/$durableObjectName'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -410,11 +411,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof adminSessionInfoRouteImport
       parentRoute: typeof adminLayoutRoute
     }
-    '/_auth.layout/admin/estates': {
-      id: '/_auth.layout/admin/estates'
-      path: '/estates'
-      fullPath: '/admin/estates'
-      preLoaderRoute: typeof adminEstatesRouteImport
+    '/_auth.layout/admin/installations': {
+      id: '/_auth.layout/admin/installations'
+      path: '/installations'
+      fullPath: '/admin/installations'
+      preLoaderRoute: typeof adminInstallationsRouteImport
       parentRoute: typeof adminLayoutRoute
     }
     '/_auth.layout/admin/db-tools': {
@@ -438,107 +439,110 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgSettingsRouteImport
       parentRoute: typeof orgLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId': {
-      id: '/_auth.layout/$organizationId/$estateId'
-      path: '/$estateId'
-      fullPath: '/$organizationId/$estateId'
-      preLoaderRoute: typeof orgEstateLayoutRouteImport
+    '/_auth.layout/$organizationId/$installationId': {
+      id: '/_auth.layout/$organizationId/$installationId'
+      path: '/$installationId'
+      fullPath: '/$organizationId/$installationId'
+      preLoaderRoute: typeof orgInstallationLayoutRouteImport
       parentRoute: typeof orgLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/': {
-      id: '/_auth.layout/$organizationId/$estateId/'
+    '/_auth.layout/$organizationId/$installationId/': {
+      id: '/_auth.layout/$organizationId/$installationId/'
       path: '/'
-      fullPath: '/$organizationId/$estateId/'
-      preLoaderRoute: typeof orgEstateIndexRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/'
+      preLoaderRoute: typeof orgInstallationIndexRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/repo': {
-      id: '/_auth.layout/$organizationId/$estateId/repo'
+    '/_auth.layout/$organizationId/$installationId/repo': {
+      id: '/_auth.layout/$organizationId/$installationId/repo'
       path: '/repo'
-      fullPath: '/$organizationId/$estateId/repo'
-      preLoaderRoute: typeof orgEstateRepoRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/repo'
+      preLoaderRoute: typeof orgInstallationRepoRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/onboarding': {
-      id: '/_auth.layout/$organizationId/$estateId/onboarding'
+    '/_auth.layout/$organizationId/$installationId/onboarding': {
+      id: '/_auth.layout/$organizationId/$installationId/onboarding'
       path: '/onboarding'
-      fullPath: '/$organizationId/$estateId/onboarding'
-      preLoaderRoute: typeof orgEstateOnboardingRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/onboarding'
+      preLoaderRoute: typeof orgInstallationOnboardingRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/integrations/': {
-      id: '/_auth.layout/$organizationId/$estateId/integrations/'
+    '/_auth.layout/$organizationId/$installationId/integrations/': {
+      id: '/_auth.layout/$organizationId/$installationId/integrations/'
       path: '/integrations'
-      fullPath: '/$organizationId/$estateId/integrations'
-      preLoaderRoute: typeof orgEstateIntegrationsIndexRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/integrations'
+      preLoaderRoute: typeof orgInstallationIntegrationsIndexRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/integrations/redirect': {
-      id: '/_auth.layout/$organizationId/$estateId/integrations/redirect'
+    '/_auth.layout/$organizationId/$installationId/integrations/redirect': {
+      id: '/_auth.layout/$organizationId/$installationId/integrations/redirect'
       path: '/integrations/redirect'
-      fullPath: '/$organizationId/$estateId/integrations/redirect'
-      preLoaderRoute: typeof orgEstateIntegrationsRedirectRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/integrations/redirect'
+      preLoaderRoute: typeof orgInstallationIntegrationsRedirectRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/integrations/mcp-params': {
-      id: '/_auth.layout/$organizationId/$estateId/integrations/mcp-params'
+    '/_auth.layout/$organizationId/$installationId/integrations/mcp-params': {
+      id: '/_auth.layout/$organizationId/$installationId/integrations/mcp-params'
       path: '/integrations/mcp-params'
-      fullPath: '/$organizationId/$estateId/integrations/mcp-params'
-      preLoaderRoute: typeof orgEstateIntegrationsMcpParamsRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      fullPath: '/$organizationId/$installationId/integrations/mcp-params'
+      preLoaderRoute: typeof orgInstallationIntegrationsMcpParamsRouteImport
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/agents/offline': {
-      id: '/_auth.layout/$organizationId/$estateId/agents/offline'
+    '/_auth.layout/$organizationId/$installationId/agents/offline': {
+      id: '/_auth.layout/$organizationId/$installationId/agents/offline'
       path: '/agents/offline'
-      fullPath: '/$organizationId/$estateId/agents/offline'
+      fullPath: '/$organizationId/$installationId/agents/offline'
       preLoaderRoute: typeof offlineAgentDetailRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      parentRoute: typeof orgInstallationLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName': {
-      id: '/_auth.layout/$organizationId/$estateId/agents/$agentClassName/$durableObjectName'
+    '/_auth.layout/$organizationId/$installationId/agents/$agentClassName/$durableObjectName': {
+      id: '/_auth.layout/$organizationId/$installationId/agents/$agentClassName/$durableObjectName'
       path: '/agents/$agentClassName/$durableObjectName'
-      fullPath: '/$organizationId/$estateId/agents/$agentClassName/$durableObjectName'
+      fullPath: '/$organizationId/$installationId/agents/$agentClassName/$durableObjectName'
       preLoaderRoute: typeof onlineAgentDetailRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
+      parentRoute: typeof orgInstallationLayoutRoute
     }
   }
 }
 
-interface orgEstateLayoutRouteChildren {
-  orgEstateOnboardingRoute: typeof orgEstateOnboardingRoute
-  orgEstateRepoRoute: typeof orgEstateRepoRoute
-  orgEstateIndexRoute: typeof orgEstateIndexRoute
+interface orgInstallationLayoutRouteChildren {
+  orgInstallationOnboardingRoute: typeof orgInstallationOnboardingRoute
+  orgInstallationRepoRoute: typeof orgInstallationRepoRoute
+  orgInstallationIndexRoute: typeof orgInstallationIndexRoute
   offlineAgentDetailRoute: typeof offlineAgentDetailRoute
-  orgEstateIntegrationsMcpParamsRoute: typeof orgEstateIntegrationsMcpParamsRoute
-  orgEstateIntegrationsRedirectRoute: typeof orgEstateIntegrationsRedirectRoute
-  orgEstateIntegrationsIndexRoute: typeof orgEstateIntegrationsIndexRoute
+  orgInstallationIntegrationsMcpParamsRoute: typeof orgInstallationIntegrationsMcpParamsRoute
+  orgInstallationIntegrationsRedirectRoute: typeof orgInstallationIntegrationsRedirectRoute
+  orgInstallationIntegrationsIndexRoute: typeof orgInstallationIntegrationsIndexRoute
   onlineAgentDetailRoute: typeof onlineAgentDetailRoute
 }
 
-const orgEstateLayoutRouteChildren: orgEstateLayoutRouteChildren = {
-  orgEstateOnboardingRoute: orgEstateOnboardingRoute,
-  orgEstateRepoRoute: orgEstateRepoRoute,
-  orgEstateIndexRoute: orgEstateIndexRoute,
+const orgInstallationLayoutRouteChildren: orgInstallationLayoutRouteChildren = {
+  orgInstallationOnboardingRoute: orgInstallationOnboardingRoute,
+  orgInstallationRepoRoute: orgInstallationRepoRoute,
+  orgInstallationIndexRoute: orgInstallationIndexRoute,
   offlineAgentDetailRoute: offlineAgentDetailRoute,
-  orgEstateIntegrationsMcpParamsRoute: orgEstateIntegrationsMcpParamsRoute,
-  orgEstateIntegrationsRedirectRoute: orgEstateIntegrationsRedirectRoute,
-  orgEstateIntegrationsIndexRoute: orgEstateIntegrationsIndexRoute,
+  orgInstallationIntegrationsMcpParamsRoute:
+    orgInstallationIntegrationsMcpParamsRoute,
+  orgInstallationIntegrationsRedirectRoute:
+    orgInstallationIntegrationsRedirectRoute,
+  orgInstallationIntegrationsIndexRoute: orgInstallationIntegrationsIndexRoute,
   onlineAgentDetailRoute: onlineAgentDetailRoute,
 }
 
-const orgEstateLayoutRouteWithChildren = orgEstateLayoutRoute._addFileChildren(
-  orgEstateLayoutRouteChildren,
-)
+const orgInstallationLayoutRouteWithChildren =
+  orgInstallationLayoutRoute._addFileChildren(
+    orgInstallationLayoutRouteChildren,
+  )
 
 interface orgLayoutRouteChildren {
-  orgEstateLayoutRoute: typeof orgEstateLayoutRouteWithChildren
+  orgInstallationLayoutRoute: typeof orgInstallationLayoutRouteWithChildren
   orgSettingsRoute: typeof orgSettingsRoute
   orgTeamRoute: typeof orgTeamRoute
   orgIndexRoute: typeof orgIndexRoute
 }
 
 const orgLayoutRouteChildren: orgLayoutRouteChildren = {
-  orgEstateLayoutRoute: orgEstateLayoutRouteWithChildren,
+  orgInstallationLayoutRoute: orgInstallationLayoutRouteWithChildren,
   orgSettingsRoute: orgSettingsRoute,
   orgTeamRoute: orgTeamRoute,
   orgIndexRoute: orgIndexRoute,
@@ -550,7 +554,7 @@ const orgLayoutRouteWithChildren = orgLayoutRoute._addFileChildren(
 
 interface adminLayoutRouteChildren {
   adminDbToolsRoute: typeof adminDbToolsRoute
-  adminEstatesRoute: typeof adminEstatesRoute
+  adminInstallationsRoute: typeof adminInstallationsRoute
   adminSessionInfoRoute: typeof adminSessionInfoRoute
   adminSlackNotificationRoute: typeof adminSlackNotificationRoute
   adminTrpcToolsRoute: typeof adminTrpcToolsRoute
@@ -559,7 +563,7 @@ interface adminLayoutRouteChildren {
 
 const adminLayoutRouteChildren: adminLayoutRouteChildren = {
   adminDbToolsRoute: adminDbToolsRoute,
-  adminEstatesRoute: adminEstatesRoute,
+  adminInstallationsRoute: adminInstallationsRoute,
   adminSessionInfoRoute: adminSessionInfoRoute,
   adminSlackNotificationRoute: adminSlackNotificationRoute,
   adminTrpcToolsRoute: adminTrpcToolsRoute,

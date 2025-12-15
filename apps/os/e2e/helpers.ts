@@ -19,8 +19,8 @@ import type { ToolSpec } from "../backend/agent/tool-schemas.ts";
 import type { ExplainedScoreResult } from "../evals/scorer.ts";
 
 // TODO: duplicated here because there's some weird circular dependency issue with the slack utils in tests
-function getRoutingKey({ estateId, threadTs }: { estateId: string; threadTs: string }) {
-  const suffix = `slack-${estateId}`;
+function getRoutingKey({ installationId, threadTs }: { installationId: string; threadTs: string }) {
+  const suffix = `slack-${installationId}`;
   return `ts-${threadTs}-${suffix}`;
 }
 
@@ -136,10 +136,10 @@ export async function createTestHelper({
 }) {
   const { client: adminTrpcClient } = await getAuthedTrpcClient();
 
-  // Get estateId first since we need it for the routing key
-  const estates = await trpcClient.estates.list.query();
-  const estateId = estates[0].id;
-  expect(estateId).toBeTruthy();
+  // Get installationId first since we need it for the routing key
+  const installations = await trpcClient.installation.list.query();
+  const installationId = installations[0].id;
+  expect(installationId).toBeTruthy();
 
   // Create threadTs and channel before the routing key since the webhook handler
   // uses a LIKE query to find agents by threadTs and "-slack-" pattern
@@ -152,11 +152,11 @@ export async function createTestHelper({
   // - Must contain "-slack-" (for LIKE %-slack-% query)
   // - Add "test-" prefix so we can identify it came from a test
 
-  const agentRoutingKey = getRoutingKey({ estateId, threadTs });
+  const agentRoutingKey = getRoutingKey({ installationId, threadTs });
   expect(agentRoutingKey).toBeTruthy();
 
   const { info } = await trpcClient.agents.getOrCreateAgent.mutate({
-    estateId,
+    installationId,
     agentClassName: "SlackAgent",
     route: agentRoutingKey,
     reason: `Agent created for test ${expect.getState().currentTestName}`,
@@ -166,7 +166,7 @@ export async function createTestHelper({
   const agentProcedureProps = {
     agentInstanceName: agentName,
     agentClassName: "SlackAgent",
-    estateId,
+    installationId,
   } as const;
 
   await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
@@ -193,20 +193,20 @@ export async function createTestHelper({
   }));
 
   const teamId = "TEST_TEAM";
-  await adminTrpcClient.testing.addSlackUsersToEstate.mutate({
-    estateId,
+  await adminTrpcClient.testing.addSlackUsersToInstallation.mutate({
+    installationId,
     members: fakeMembers,
-    // Link the fake Slack users to the test user if userId is provided
-    ...(userId && { linkToUserId: userId }),
+    linkToUserId: userId,
   });
   await adminTrpcClient.testing.setupTeamId.mutate({
-    estateId,
+    installationId,
     teamId,
   });
 
   if (braintrustSpanExportedId)
     await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
-      ...agentProcedureProps,
+      installationId,
+      agentInstanceName: agentProcedureProps.agentInstanceName,
       braintrustParentSpanExportedId: braintrustSpanExportedId,
     });
 
@@ -249,7 +249,7 @@ export async function createTestHelper({
   };
   const _getState = async () => {
     return trpcClient.agents.getState.query({
-      estateId,
+      installationId,
       agentInstanceName: agentName,
       agentClassName: "SlackAgent",
     });
@@ -379,7 +379,7 @@ export async function createTestHelper({
   };
 
   return {
-    estateId,
+    installationId,
     addEvents,
     getEvents,
     // getState,
@@ -569,9 +569,10 @@ export async function createE2EHelper(inputSlug: string) {
     await adminTrpc.admin.deleteUserByEmail.mutate({ email: user.email });
   });
 
-  const { estate, organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
-    userId: user.id,
-  });
+  const { installation, organization } =
+    await adminTrpc.testing.createOrganizationAndInstallation.mutate({
+      userId: user.id,
+    });
   disposer.fns.push(async () => {
     await adminTrpc.testing.deleteOrganization.mutate({ organizationId: organization.id });
   });
@@ -589,7 +590,7 @@ export async function createE2EHelper(inputSlug: string) {
     adminTrpc,
     userTrpc,
     user,
-    estate,
+    installation,
     organization,
     impersonationCookies,
     sessionCookies,

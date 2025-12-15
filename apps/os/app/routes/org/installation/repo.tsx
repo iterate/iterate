@@ -25,7 +25,7 @@ import { Spinner } from "../../../components/ui/spinner.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import { useTRPC } from "../../../lib/trpc.ts";
-import { useEstateId, useOrganizationId } from "../../../hooks/use-estate.ts";
+import { useInstallationId, useOrganizationId } from "../../../hooks/use-installation.ts";
 import {
   Select,
   SelectContent,
@@ -93,24 +93,24 @@ import { Badge } from "../../../components/ui/badge.tsx";
 
 // Use tRPC's built-in type inference for the build type
 type RouterOutputs = inferRouterOutputs<AppRouter>;
-type _Build = RouterOutputs["estate"]["getBuilds"][0];
+type _Build = RouterOutputs["installation"]["getBuilds"][0];
 type BuildStatus = _Build["status"] | "timed_out";
 type Build = Omit<_Build, "status"> & { status: BuildStatus };
 
-const estateRepoLoader = authenticatedServerFn
-  .inputValidator(z.object({ estateId: z.string() }))
+const installationRepoLoader = authenticatedServerFn
+  .inputValidator(z.object({ installationId: z.string() }))
   .handler(async ({ context, data }) => {
-    const { estateId } = data;
+    const { installationId } = data;
     const { db } = context.variables;
 
     const trpc = context.variables.trpcCaller;
     const [githubIntegration, githubRepoResult, githubInstallation] = await Promise.all([
-      trpc.integrations.get({ estateId: estateId, providerId: "github-app" }),
+      trpc.integrations.get({ installationId: installationId, providerId: "github-app" }),
       trpc.integrations
-        .getGithubRepoForEstate({ estateId: estateId })
+        .getGithubRepoForEstate({ installationId: installationId })
         .then((r) => ({ success: true, data: r, error: null }) as const)
         .catch((e) => ({ success: false, data: null, error: String(e.message || e) }) as const),
-      getGithubInstallationForEstate(db, estateId),
+      getGithubInstallationForEstate(db, installationId),
     ]);
 
     const authInfo =
@@ -133,9 +133,10 @@ const estateRepoLoader = authenticatedServerFn
     };
   });
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/repo")({
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/repo")({
   component: ManageEstate,
-  loader: ({ params }) => estateRepoLoader({ data: { estateId: params.estateId } }),
+  loader: ({ params }) =>
+    installationRepoLoader({ data: { installationId: params.installationId } }),
   head: () => ({
     meta: [
       {
@@ -143,7 +144,7 @@ export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/re
       },
       {
         name: "description",
-        content: "Manage your estate and connect to GitHub",
+        content: "Manage your installation and connect to GitHub",
       },
     ],
   }),
@@ -153,7 +154,7 @@ function EstateContent({
   installationStatus,
   ideRef,
 }: {
-  installationStatus: Awaited<ReturnType<typeof estateRepoLoader>>;
+  installationStatus: Awaited<ReturnType<typeof installationRepoLoader>>;
   ideRef: React.RefObject<IDEHandle | null>;
 }) {
   const [isConfigDialogOpen, setIsConfigDialogOpen] = useState(false);
@@ -172,16 +173,17 @@ function EstateContent({
   const [rollbackBuild, setRollbackBuild] = useState<Build | null>(null);
 
   // Get estate ID from URL
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const trpc = useTRPC();
   const queryClient = useQueryClient();
 
   const reposQuery = useQuery({
     ...trpc.integrations.listAvailableGithubRepos.queryOptions({
-      estateId: estateId,
+      installationId: installationId,
     }),
     // Only enumerate repos when the config dialog is open and GitHub is connected
-    enabled: isConfigDialogOpen && installationStatus.hasGithubIntegration && Boolean(estateId),
+    enabled:
+      isConfigDialogOpen && installationStatus.hasGithubIntegration && Boolean(installationId),
     staleTime: 5 * 60 * 1000,
   });
   const repos = reposQuery.data;
@@ -193,17 +195,17 @@ function EstateContent({
   }, [selectedRepo, repoBranch, repos]);
 
   const { data: builds, isLoading: buildsLoading } = useQuery(
-    trpc.estate.getBuilds.queryOptions({
-      estateId: estateId,
+    trpc.installation.getBuilds.queryOptions({
+      installationId: installationId,
       limit: 10,
     }),
   );
 
   const compiledConfigQuery = useQuery({
-    ...trpc.estate.getCompiledIterateConfig.queryOptions({
-      estateId: estateId!,
+    ...trpc.installation.getCompiledIterateConfig.queryOptions({
+      installationId: installationId!,
     }),
-    enabled: isIterateConfigSheetOpen && Boolean(estateId),
+    enabled: isIterateConfigSheetOpen && Boolean(installationId),
   });
   const iterateConfigData = compiledConfigQuery.data?.config ?? null;
   const iterateConfigUpdatedAt = compiledConfigQuery.data?.updatedAt
@@ -234,9 +236,11 @@ function EstateContent({
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
   );
 
-  const triggerRebuildMutation = useMutation(trpc.estate.triggerRebuild.mutationOptions({}));
+  const triggerRebuildMutation = useMutation(trpc.installation.triggerRebuild.mutationOptions({}));
 
-  const rollbackToBuildMutation = useMutation(trpc.estate.rollbackToBuild.mutationOptions({}));
+  const rollbackToBuildMutation = useMutation(
+    trpc.installation.rollbackToBuild.mutationOptions({}),
+  );
 
   const organizationId = useOrganizationId();
 
@@ -254,7 +258,7 @@ function EstateContent({
 
     setGithubRepoForEstateMutation.mutate(
       {
-        estateId: estateId!,
+        installationId: installationId!,
         repoId: parseInt(selectedRepo),
         path: repoPath,
         branch: repoBranch,
@@ -269,7 +273,7 @@ function EstateContent({
           setRepoPath(undefined);
           setRepoBranch(undefined);
           queryClient.invalidateQueries({
-            queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ estateId }),
+            queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ installationId }),
           });
         },
         onError: () => {
@@ -352,7 +356,7 @@ function EstateContent({
 
     triggerRebuildMutation.mutate(
       {
-        estateId: estateId!,
+        installationId: installationId!,
         target: rebuildTarget.trim(),
         targetType: rebuildTargetType,
       },
@@ -364,7 +368,7 @@ function EstateContent({
           setRebuildTargetType("branch"); // Reset to default
           // Refresh the builds list
           queryClient.invalidateQueries({
-            queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+            queryKey: trpc.installation.getBuilds.queryKey({ installationId }),
           });
         },
         onError: (error) => {
@@ -377,7 +381,7 @@ function EstateContent({
   const handleRebuildCommit = (build: Build) => {
     triggerRebuildMutation.mutate(
       {
-        estateId: estateId!,
+        installationId: installationId!,
         target: build.commitHash,
         targetType: "commit" as const,
       },
@@ -386,7 +390,7 @@ function EstateContent({
           toast.success(`Rebuilding commit ${build.commitHash.substring(0, 7)}`);
           // Refresh the builds list
           queryClient.invalidateQueries({
-            queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+            queryKey: trpc.installation.getBuilds.queryKey({ installationId }),
           });
         },
         onError: (error) => {
@@ -416,7 +420,7 @@ function EstateContent({
         <DialogHeader>
           <DialogTitle>Update Repository Configuration</DialogTitle>
           <DialogDescription>
-            Select a repository and configure the branch and path for your iterate estate.
+            Select a repository and configure the branch and path for your iterate installation.
           </DialogDescription>
         </DialogHeader>
 
@@ -500,8 +504,8 @@ function EstateContent({
               variant="destructive"
               onClick={() => {
                 // TODO: temporary disabled
-                // Upon redirect the estate will be disconnected from GitHub
-                // Which will automatically create a new repo in the estate pool
+                // Upon redirect the installation will be disconnected from GitHub
+                // Which will automatically create a new repo in the installation pool
                 // That is not ideal, so we're temporarily disabling this feature
                 toast.error("This feature is temporarily disabled");
               }}
@@ -568,7 +572,10 @@ function EstateContent({
       <div className="h-[calc(100vh-8rem)] flex items-center justify-center">
         <span>
           {problemMessage}{" "}
-          <Link to="/$organizationId/$estateId/integrations" params={{ organizationId, estateId }}>
+          <Link
+            to="/$organizationId/$installationId/integrations"
+            params={{ organizationId, installationId }}
+          >
             {connectMessage}
           </Link>
           <div className="flex items-center gap-2 mt-4">
@@ -576,7 +583,7 @@ function EstateContent({
             <Button
               variant="outline"
               size="sm"
-              onClick={() => createIterateManagedGithubRepoMutation.mutate({ estateId })}
+              onClick={() => createIterateManagedGithubRepoMutation.mutate({ installationId })}
               disabled={createIterateManagedGithubRepoMutation.isPending}
             >
               <PlusIcon className="h-4 w-4 mr-2" />
@@ -679,8 +686,8 @@ function EstateContent({
                     </CardDescription>
                     <div className="flex gap-2 mt-4">
                       <Link
-                        to="/$organizationId/$estateId/integrations"
-                        params={{ organizationId, estateId }}
+                        to="/$organizationId/$installationId/integrations"
+                        params={{ organizationId, installationId }}
                       >
                         Manage Integrations
                       </Link>
@@ -698,8 +705,8 @@ function EstateContent({
                   <>
                     This repository is managed by Iterate,{" "}
                     <Link
-                      to="/$organizationId/$estateId/integrations"
-                      params={{ organizationId, estateId }}
+                      to="/$organizationId/$installationId/integrations"
+                      params={{ organizationId, installationId }}
                     >
                       connect GitHub
                     </Link>{" "}
@@ -899,7 +906,7 @@ function EstateContent({
           <SheetHeader>
             <SheetTitle>Compiled iterate.config.ts</SheetTitle>
             <SheetDescription>
-              View the compiled iterate configuration for this estate.
+              View the compiled iterate configuration for this installation.
               {iterateConfigUpdatedAt && (
                 <span className="mt-1 block text-xs text-muted-foreground">
                   Last updated {iterateConfigUpdatedAt}
@@ -968,7 +975,7 @@ function EstateContent({
           </SheetHeader>
           <div className="flex flex-1 min-h-0 p-4">
             {logsBuild ? (
-              <BuildLogsViewer estateId={estateId!} build={logsBuild} />
+              <BuildLogsViewer installationId={installationId!} build={logsBuild} />
             ) : (
               <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
                 Select a build to view logs
@@ -999,7 +1006,7 @@ function EstateContent({
             <DialogTitle>Rollback to Build</DialogTitle>
             <DialogDescription>
               This will roll your bot back to its state as of this build. The configuration shown
-              below will be restored to your estate.
+              below will be restored to your installation.
             </DialogDescription>
           </DialogHeader>
           <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
@@ -1054,7 +1061,7 @@ function EstateContent({
               onClick={() => {
                 if (rollbackBuild) {
                   rollbackToBuildMutation.mutate(
-                    { estateId, buildId: rollbackBuild.id },
+                    { installationId, buildId: rollbackBuild.id },
                     {
                       onSuccess: ({ updated }) => {
                         if (updated === 0) {
@@ -1065,7 +1072,7 @@ function EstateContent({
                         setIsRollbackDialogOpen(false);
                         setRollbackBuild(null);
                         queryClient.invalidateQueries({
-                          queryKey: trpc.estate.getBuilds.queryKey({ estateId }),
+                          queryKey: trpc.installation.getBuilds.queryKey({ installationId }),
                         });
                       },
                       onError: (error) => {
@@ -1200,7 +1207,7 @@ export default function ManageEstate() {
   return <EstateContent installationStatus={installationStatus} ideRef={ideRef} />;
 }
 
-function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }) {
+function BuildLogsViewer({ installationId, build }: { installationId: string; build: Build }) {
   const [lines, setLines] = useState<
     Array<{
       ts: number;
@@ -1243,7 +1250,7 @@ function BuildLogsViewer({ estateId, build }: { estateId: string; build: Build }
     [],
   );
 
-  useSSE(`/api/estate/${estateId}/builds/${build.id}/sse`, options);
+  useSSE(`/api/installation/${installationId}/builds/${build.id}/sse`, options);
 
   React.useEffect(() => {
     if (!follow) return;

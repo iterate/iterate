@@ -37,7 +37,7 @@ evaliterate("agent knows when to end their turn", {
       await adminTrpc.admin.deleteUserByEmail.mutate({ email: testUser.email });
     });
 
-    const { organization } = await adminTrpc.testing.createOrganizationAndEstate.mutate({
+    const { organization } = await adminTrpc.testing.createOrganizationAndInstallation.mutate({
       userId: testUser.id,
     });
     disposer.fns.push(async () => {

@@ -17,7 +17,7 @@ import { SlackAgent } from "./slack-agent.ts";
  * in order to even create our agent.
  *
  * @param db - Database connection
- * @param estateId - Estate ID
+ * @param installationId - Estate ID
  * @param slackChannelIdOrName - Slack channel ID or name (will be looked up in database first)
  * @param firstMessage - Initial message to post in the thread
  * @param additionalEvents - Optional additional events to send to the agent after initialization
@@ -25,7 +25,7 @@ import { SlackAgent } from "./slack-agent.ts";
  */
 export async function startSlackAgentInChannel(params: {
   db: DB;
-  estateId: string;
+  installationId: string;
   slackChannelIdOrName: string;
   firstMessage?: string;
   additionalEvents?: Array<any>;
@@ -34,12 +34,12 @@ export async function startSlackAgentInChannel(params: {
   threadTs: string;
   channel: string;
 }> {
-  const { db, estateId, slackChannelIdOrName, firstMessage, additionalEvents } = params;
+  const { db, installationId, slackChannelIdOrName, firstMessage, additionalEvents } = params;
 
   // Look up the Slack channel ID in the database first by name, then fall back to treating as ID
   let channelId = slackChannelIdOrName;
   const channelRecord = await db.query.slackChannel.findFirst({
-    where: and(eq(slackChannel.estateId, estateId), eq(slackChannel.name, slackChannelIdOrName)),
+    where: and(eq(slackChannel.installationId, installationId), eq(slackChannel.name, slackChannelIdOrName)),
   });
 
   if (channelRecord) {
@@ -47,7 +47,7 @@ export async function startSlackAgentInChannel(params: {
   }
   // If not found by name, assume slackChannelIdOrName is already the channel ID
 
-  const slackAccount = await getSlackAccessTokenForEstate(db, estateId);
+  const slackAccount = await getSlackAccessTokenForEstate(db, installationId);
   if (!slackAccount) {
     throw new Error("No Slack integration found for this estate");
   }
@@ -64,13 +64,13 @@ export async function startSlackAgentInChannel(params: {
   }
 
   const routingKey = getRoutingKey({
-    estateId: estateId,
+    installationId: installationId,
     threadTs: chatResult.ts,
   });
 
   const slackAgent = (await getOrCreateAgentStubByRoute("SlackAgent", {
     db: db,
-    estateId: estateId,
+    installationId: installationId,
     route: routingKey,
     reason: "Start thread with agent",
   })) as unknown as SlackAgent;

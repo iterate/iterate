@@ -12,7 +12,7 @@ import {
 import { schema } from "../../db/client.ts";
 import { stripeClient } from "../../integrations/stripe/stripe.ts";
 import { logger } from "../../tag-logger.ts";
-import { createOrganizationAndEstate } from "../../org-utils.ts";
+import { createOrganizationAndInstallation } from "../../org-utils.ts";
 
 type SlackUserProperties = {
   discoveredInChannels: string[] | undefined;
@@ -54,18 +54,19 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const created = await createOrganizationAndEstate(ctx.db, {
+      const created = await createOrganizationAndInstallation(ctx.db, {
         organizationName: input.name,
         ownerUserId: ctx.user.id,
-        estateName: `${input.name} Estate`,
+        installationName: `${input.name} Installation`,
+        userEmail: ctx.user.email,
       });
       const organization = created.organization;
-      const estate = created.estate;
+      const installation = created.installation;
 
       // Return created resources
       return {
         organization: organization,
-        estate: estate,
+        installation: installation,
       };
     }),
 
@@ -127,8 +128,8 @@ export const organizationRouter = router({
     });
 
     // Get estate for this organization to fetch slack channels
-    const estate = await ctx.db.query.estate.findFirst({
-      where: eq(schema.estate.organizationId, ctx.organization.id),
+    const estate = await ctx.db.query.installation.findFirst({
+      where: eq(schema.installation.organizationId, ctx.organization.id),
     });
 
     // Fetch slack channels and metadata for all users
@@ -145,7 +146,7 @@ export const organizationRouter = router({
 
       // Fetch all slack channels for this estate
       const slackChannels = await ctx.db.query.slackChannel.findMany({
-        where: eq(schema.slackChannel.estateId, estate.id),
+        where: eq(schema.slackChannel.installationId, estate.id),
       });
 
       const channelMap = new Map(slackChannels.map((c) => [c.externalId, c.name]));

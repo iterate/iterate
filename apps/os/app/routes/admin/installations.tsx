@@ -27,14 +27,14 @@ import {
   DialogDescription,
 } from "../../components/ui/dialog.tsx";
 
-export const Route = createFileRoute("/_auth.layout/admin/estates")({
-  component: AdminEstatesPage,
+export const Route = createFileRoute("/_auth.layout/admin/installations")({
+  component: AdminInstallationsPage,
 });
 
-function AdminEstatesPage() {
+function AdminInstallationsPage() {
   const trpc = useTRPC();
   const trpcClient = useTRPCClient();
-  const { data: estates } = useSuspenseQuery(trpc.admin.listAllEstates.queryOptions());
+  const { data: installations } = useSuspenseQuery(trpc.admin.listAllInstallations.queryOptions());
   const [showSyncResultsDialog, setShowSyncResultsDialog] = useState(false);
 
   const impersonateMutation = useMutation({
@@ -47,26 +47,26 @@ function AdminEstatesPage() {
   });
 
   const rebuildMutation = useMutation({
-    mutationFn: async (estateId: string) => {
-      return trpcClient.admin.rebuildEstate.mutate({ estateId });
+    mutationFn: async (installationId: string) => {
+      return trpcClient.admin.rebuildInstallation.mutate({ installationId });
     },
   });
 
   const rebuildAllMutation = useMutation({
     mutationFn: async () => {
-      return trpcClient.admin.rebuildAllEstates.mutate();
+      return trpcClient.admin.rebuildAllInstallations.mutate();
     },
   });
 
   const syncSlackMutation = useMutation({
-    mutationFn: async (estateId: string) => {
-      return trpcClient.admin.syncSlackForEstate.mutate({ estateId });
+    mutationFn: async (installationId: string) => {
+      return trpcClient.admin.syncSlackForInstallation.mutate({ installationId });
     },
   });
 
   const syncAllSlackMutation = useMutation({
     mutationFn: async () => {
-      return trpcClient.admin.syncSlackForAllEstates.mutate();
+      return trpcClient.admin.syncSlackForAllInstallations.mutate();
     },
     onSuccess: () => {
       setShowSyncResultsDialog(true);
@@ -75,38 +75,40 @@ function AdminEstatesPage() {
 
   const handleImpersonate = (ownerId: string | undefined) => {
     if (!ownerId) {
-      alert("No owner found for this estate");
+      alert("No owner found for this installation");
       return;
     }
-    if (confirm("Impersonate this estate's owner?")) {
+    if (confirm("Impersonate this installation's owner?")) {
       impersonateMutation.mutate(ownerId);
     }
   };
 
-  const handleRebuild = (estateId: string, estateName: string) => {
-    if (confirm(`Rebuild estate "${estateName}"?`)) {
-      rebuildMutation.mutate(estateId);
+  const handleRebuild = (installationId: string, installationName: string) => {
+    if (confirm(`Rebuild installation "${installationName}"?`)) {
+      rebuildMutation.mutate(installationId);
     }
   };
 
   const handleRebuildAll = () => {
     if (
       confirm(
-        `Rebuild ALL ${estates.length} estates? This may take a while and trigger many builds.`,
+        `Rebuild ALL ${installations.length} installations? This may take a while and trigger many builds.`,
       )
     ) {
       rebuildAllMutation.mutate();
     }
   };
 
-  const handleSyncSlack = (estateId: string, estateName: string) => {
-    if (confirm(`Sync Slack for estate "${estateName}"?`)) {
-      syncSlackMutation.mutate(estateId);
+  const handleSyncSlack = (installationId: string, installationName: string) => {
+    if (confirm(`Sync Slack for installation "${installationName}"?`)) {
+      syncSlackMutation.mutate(installationId);
     }
   };
 
   const handleSyncAllSlack = () => {
-    if (confirm(`Sync Slack for ALL ${estates.length} estates? This may take a while.`)) {
+    if (
+      confirm(`Sync Slack for ALL ${installations.length} installations? This may take a while.`)
+    ) {
       syncAllSlackMutation.mutate();
     }
   };
@@ -115,9 +117,9 @@ function AdminEstatesPage() {
     <>
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-2xl font-bold">Estates</h2>
+          <h2 className="text-2xl font-bold">Installations</h2>
           <p className="text-muted-foreground">
-            Manage all estates in the system ({estates.length} total)
+            Manage all installations in the system ({installations.length} total)
           </p>
         </div>
         <div className="flex gap-2">
@@ -144,19 +146,19 @@ function AdminEstatesPage() {
             Rebuild All Complete
           </div>
           <div className="text-sm text-green-800 dark:text-green-200 mt-1">
-            {rebuildAllMutation.data.total} estates processed
+            {rebuildAllMutation.data.total} installations processed
           </div>
           <div className="space-y-1 text-sm mt-3">
             {rebuildAllMutation.data.results.map((result) => (
               <div
-                key={result.estateId}
+                key={result.installationId}
                 className={
                   result.success
                     ? "text-green-700 dark:text-green-300"
                     : "text-red-700 dark:text-red-300"
                 }
               >
-                {result.estateName}:{" "}
+                {result.installationName}:{" "}
                 {result.success
                   ? "✓ Success"
                   : `✗ ${"error" in result ? result.error : "Unknown error"}`}
@@ -170,8 +172,8 @@ function AdminEstatesPage() {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Estate Name</TableHead>
-              <TableHead>Estate ID</TableHead>
+              <TableHead>Installation Name</TableHead>
+              <TableHead>Installation ID</TableHead>
               <TableHead>Organization</TableHead>
               <TableHead>Organization ID</TableHead>
               <TableHead>Owner</TableHead>
@@ -182,31 +184,32 @@ function AdminEstatesPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {estates.map((estate) => (
-              <TableRow key={estate.id}>
-                <TableCell className="font-medium">{estate.name}</TableCell>
+            {installations.map((installation) => (
+              <TableRow key={installation.id}>
+                <TableCell className="font-medium">{installation.name}</TableCell>
                 <TableCell className="text-xs text-muted-foreground font-mono">
-                  {estate.id}
+                  {installation.id}
                 </TableCell>
-                <TableCell>{estate.organizationName}</TableCell>
+                <TableCell>{installation.organizationName}</TableCell>
                 <TableCell className="text-xs text-muted-foreground font-mono">
-                  {estate.organizationId}
+                  {installation.organizationId}
                 </TableCell>
-                <TableCell>{estate.ownerName || "No name"}</TableCell>
+                <TableCell>{installation.ownerName || "No name"}</TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {estate.ownerEmail || "No email"}
+                  {installation.ownerEmail || "No email"}
                 </TableCell>
                 <TableCell>
-                  {estate.connectedRepoId ? (
+                  {installation.connectedRepoId ? (
                     <span className="text-xs text-muted-foreground">
-                      {estate.connectedRepoPath || "/"} @ {estate.connectedRepoRef || "main"}
+                      {installation.connectedRepoPath || "/"} @{" "}
+                      {installation.connectedRepoRef || "main"}
                     </span>
                   ) : (
                     <span className="text-xs text-muted-foreground">No repo</span>
                   )}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {new Date(estate.updatedAt).toLocaleDateString()}
+                  {new Date(installation.updatedAt).toLocaleDateString()}
                 </TableCell>
                 <TableCell className="text-right">
                   <DropdownMenu>
@@ -217,15 +220,15 @@ function AdminEstatesPage() {
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem
-                        onClick={() => handleImpersonate(estate.ownerId)}
-                        disabled={!estate.ownerId || impersonateMutation.isPending}
+                        onClick={() => handleImpersonate(installation.ownerId)}
+                        disabled={!installation.ownerId || impersonateMutation.isPending}
                       >
                         Impersonate Owner
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        onClick={() => handleRebuild(estate.id, estate.name)}
+                        onClick={() => handleRebuild(installation.id, installation.name)}
                         disabled={
-                          !estate.connectedRepoId ||
+                          !installation.connectedRepoId ||
                           rebuildMutation.isPending ||
                           rebuildAllMutation.isPending
                         }
@@ -233,7 +236,7 @@ function AdminEstatesPage() {
                         Rebuild
                       </DropdownMenuItem>
                       <DropdownMenuItem
-                        onClick={() => handleSyncSlack(estate.id, estate.name)}
+                        onClick={() => handleSyncSlack(installation.id, installation.name)}
                         disabled={syncSlackMutation.isPending}
                       >
                         Sync Slack
@@ -253,7 +256,7 @@ function AdminEstatesPage() {
             <DialogTitle>Slack Sync Results</DialogTitle>
             <DialogDescription>
               {syncAllSlackMutation.data
-                ? `Synced ${syncAllSlackMutation.data.total} estates`
+                ? `Synced ${syncAllSlackMutation.data.total} installations`
                 : "Loading..."}
             </DialogDescription>
           </DialogHeader>
@@ -262,21 +265,21 @@ function AdminEstatesPage() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-[200px]">Estate Name</TableHead>
-                    <TableHead className="w-[120px]">Estate ID</TableHead>
+                    <TableHead className="w-[200px]">Installation Name</TableHead>
+                    <TableHead className="w-[120px]">Installation ID</TableHead>
                     <TableHead className="w-[100px]">Status</TableHead>
                     <TableHead>Details</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {syncAllSlackMutation.data.results.map((result) => (
-                    <TableRow key={result.estateId}>
-                      <TableCell className="font-medium">{result.estateName}</TableCell>
+                    <TableRow key={result.installationId}>
+                      <TableCell className="font-medium">{result.installationName}</TableCell>
                       <TableCell
                         className="text-xs text-muted-foreground font-mono truncate max-w-[120px]"
-                        title={result.estateId}
+                        title={result.installationId}
                       >
-                        {result.estateId}
+                        {result.installationId}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {result.success ? (

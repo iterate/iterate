@@ -25,12 +25,12 @@ import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
-import { EstateBuildManager } from "./durable-objects/estate-build-manager.ts";
+import { InstallationBuildManager } from "./durable-objects/installation-build-manager.ts";
 import { verifySignedUrl } from "./utils/url-signing.ts";
-import { getUserEstateAccess } from "./trpc/trpc.ts";
+import { getUserInstallationAccess } from "./trpc/trpc.ts";
 import { githubApp } from "./integrations/github/router.ts";
 import { logger } from "./tag-logger.ts";
-import { syncSlackForAllEstatesHelper } from "./trpc/routers/admin.ts";
+import { syncSlackForAllInstallationsHelper } from "./trpc/routers/admin.ts";
 import { AdvisoryLocker } from "./durable-objects/advisory-locker.ts";
 
 import { getAgentStubByName, toAgentClassName } from "./agent/agents/stub-getters.ts";
@@ -100,7 +100,7 @@ app.onError((err, c) => {
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 // agent websocket endpoint
-app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
+app.all("/api/agents/:installationId/:className/:agentInstanceName", async (c) => {
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
@@ -153,21 +153,26 @@ app.all("/api/trpc/*", (c) => {
 });
 
 // File upload routes
-app.use("/api/estate/:estateId/*", async (c, next) => {
+app.use("/api/installation/:installationId/*", async (c, next) => {
   if (!c.var.session) {
     return c.json({ error: "Unauthorized" }, 401);
   }
-  const estateId = c.req.param("estateId");
+  const installationId = c.req.param("installationId");
   const session = c.var.session;
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
-  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  const { hasAccess } = await getUserInstallationAccess(
+    c.var.db,
+    session.user.id,
+    installationId,
+    undefined,
+  );
   if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
   return next();
 });
 
-app.post("/api/estate/:estateId/files", uploadFileHandler);
-app.post("/api/estate/:estateId/files/from-url", uploadFileFromURLHandler);
-app.get("/api/estate/:estateId/exports/:exportId", getExportHandler);
+app.post("/api/installation/:installationId/files", uploadFileHandler);
+app.post("/api/installation/:installationId/files/from-url", uploadFileFromURLHandler);
+app.get("/api/installation/:installationId/exports/:exportId", getExportHandler);
 
 app.get("/api/files/:id", getFileHandler);
 
@@ -196,25 +201,30 @@ app.get("/api/ws/:organizationId", async (c) => {
   );
 });
 
-// Watch logs (admin UI) → DO (requires user session + estate access)
-app.get("/api/estate/:estateId/builds/:buildId/sse", async (c) => {
-  const estateId = c.req.param("estateId");
+// Watch logs (admin UI) → DO (requires user session + installation access)
+app.get("/api/installation/:installationId/builds/:buildId/sse", async (c) => {
+  const installationId = c.req.param("installationId");
   const buildId = c.req.param("buildId");
 
   const session = c.var.session;
   if (!session?.user) return c.json({ error: "Unauthorized" }, 401);
-  const { hasAccess } = await getUserEstateAccess(c.var.db, session.user.id, estateId, undefined);
+  const { hasAccess } = await getUserInstallationAccess(
+    c.var.db,
+    session.user.id,
+    installationId,
+    undefined,
+  );
   if (!hasAccess) return c.json({ error: "Forbidden" }, 403);
 
-  const container = getContainer(c.env.ESTATE_BUILD_MANAGER, estateId);
+  const container = getContainer(c.env.INSTALLATION_BUILD_MANAGER, installationId);
 
   const logs = await container.getSSELogStream(buildId);
   return logs;
 });
 
 // Ingest agent background task logs (from sandbox/codex), batched every ~10s
-app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async (c) => {
-  const estateId = c.req.param("estateId");
+app.post("/api/agent-logs/:installationId/:className/:durableObjectName/ingest", async (c) => {
+  const installationId = c.req.param("installationId");
   const durableObjectName = c.req.param("durableObjectName");
 
   const url = new URL(c.req.url);
@@ -243,7 +253,7 @@ app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async
   const agent = await getAgentStubByName(toAgentClassName(c.req.param("className")!), {
     db: c.var.db,
     agentInstanceName: durableObjectName,
-    estateId,
+    installationId,
   });
   const result = (await agent.ingestBackgroundLogs({
     processId,
@@ -313,8 +323,8 @@ export default class extends WorkerEntrypoint {
     switch (cron) {
       case workerConfig.workerCrons.slackSync: {
         try {
-          logger.info("Running scheduled Slack sync for all estates");
-          const result = await syncSlackForAllEstatesHelper(db);
+          logger.info("Running scheduled Slack sync for all installations");
+          const result = await syncSlackForAllInstallationsHelper(db);
           logger.info("Scheduled Slack sync completed", {
             total: result.total,
             successful: result.results.filter((r) => r.success).length,
@@ -349,6 +359,6 @@ export {
   SlackAgent,
   OrganizationWebSocket,
   AdvisoryLocker,
-  EstateBuildManager,
+  InstallationBuildManager,
 };
 export { Sandbox } from "@cloudflare/sandbox";

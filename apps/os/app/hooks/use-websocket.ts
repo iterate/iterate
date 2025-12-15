@@ -56,7 +56,7 @@ function matchPath(path: string, patterns: string[]): boolean {
   });
 }
 
-export function useOrganizationWebSocket(organizationId: string, estateId: string) {
+export function useOrganizationWebSocket(organizationId: string, installationId: string) {
   const queryClient = useQueryClient();
   const [isConnected, setIsConnected] = useState(false);
 
@@ -66,9 +66,9 @@ export function useOrganizationWebSocket(organizationId: string, estateId: strin
     );
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.pathname = `/api/ws/${organizationId}`;
-    url.searchParams.set("estateId", estateId);
+    url.searchParams.set("installationId", installationId);
     return url.toString();
-  }, [organizationId, estateId]);
+  }, [organizationId, installationId]);
 
   const handleWebSocketMessage = useCallback(
     (event: MessageEvent) => {

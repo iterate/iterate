@@ -92,7 +92,7 @@ export async function verifySignedUrl(url: string, signingKey: string): Promise<
 // Schema for build callback payload
 export const BuildCallbackPayload = z.object({
   buildId: z.string(),
-  estateId: z.string(),
+  installationId: z.string(),
   success: z.boolean(),
   stdout: z.string().optional(),
   stderr: z.string().optional(),

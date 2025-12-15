@@ -14,7 +14,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../components/ui/dialog.tsx";
-import { useEstateUrl } from "../hooks/use-estate.ts";
+import { useInstallationUrl } from "../hooks/use-installation.ts";
 import {
   AgentDetailRenderer,
   type AgentDetailDataGetters,
@@ -194,13 +194,15 @@ function ArchiveUploader({
   );
 }
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/agents/offline")({
+export const Route = createFileRoute(
+  "/_auth.layout/$organizationId/$installationId/agents/offline",
+)({
   component: OfflineAgentDetailPage,
 });
 
 function OfflineAgentDetailPage() {
   const [archiveData, setArchiveData] = useState<ParsedArchiveData | null>(null);
-  const getEstateUrl = useEstateUrl();
+  const getInstallationUrl = useInstallationUrl();
 
   if (!archiveData) {
     return <ArchiveUploader onArchiveLoaded={setArchiveData} />;
@@ -239,7 +241,7 @@ function OfflineAgentDetailPage() {
 
   const headerLeft = (
     <div className="flex items-center gap-2">
-      <Link to={getEstateUrl("agents/offline")}>
+      <Link to={getInstallationUrl("agents/offline")}>
         <Button
           variant="ghost"
           size="sm"
@@ -305,9 +307,9 @@ function OfflineAgentDetailPage() {
             )}
 
             <div>
-              <h3 className="font-semibold mb-2">Estate</h3>
+              <h3 className="font-semibold mb-2">Installation</h3>
               <div className="max-w-full overflow-hidden">
-                <SerializedObjectCodeBlock data={metadata.estate} />
+                <SerializedObjectCodeBlock data={metadata.installation} />
               </div>
             </div>
 
@@ -362,7 +364,7 @@ function OfflineAgentDetailPage() {
   return (
     <AgentDetailRenderer
       events={events}
-      estateId={metadata.estate.id}
+      installationId={metadata.installation.id}
       agentClassName={metadata.agentInstance.className}
       reducedState={lastReducedState}
       isWebsocketConnected={false}

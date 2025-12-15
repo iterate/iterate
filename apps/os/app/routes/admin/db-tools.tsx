@@ -20,7 +20,7 @@ function AdminDBToolsPage() {
   const [result, setResult] = useState<{
     deletedUser: string;
     deletedOrganizations: string[];
-    deletedEstates: string[];
+    deletedInstallations: string[];
   } | null>(null);
 
   const deleteUserMutation = useMutation(trpc.admin.deleteUserByEmail.mutationOptions({}));
@@ -36,7 +36,7 @@ function AdminDBToolsPage() {
       }
 
       const confirmed = window.confirm(
-        `Delete user ${user.name} (${user.email})?\n\nThis will delete all organizations owned by this user, including all estates and associated data.\n\nThis action cannot be undone.`,
+        `Delete user ${user.name} (${user.email})?\n\nThis will delete all organizations owned by this user, including all installations and associated data.\n\nThis action cannot be undone.`,
       );
 
       if (!confirmed) return;
@@ -60,7 +60,7 @@ function AdminDBToolsPage() {
         <div>
           <div className="font-semibold mb-1">Delete User</div>
           <div className="text-sm text-muted-foreground">
-            Permanently delete a user and all associated organizations and estates.
+            Permanently delete a user and all associated organizations and installations.
           </div>
         </div>
         <div className="space-y-2">
@@ -91,7 +91,7 @@ function AdminDBToolsPage() {
           <Alert>
             <AlertDescription>
               Deleted user {result.deletedUser} with {result.deletedOrganizations.length}{" "}
-              organizations and {result.deletedEstates.length} estates
+              organizations and {result.deletedInstallations.length} installations
             </AlertDescription>
           </Alert>
         )}

@@ -8,17 +8,20 @@ import type { DB } from "../db/client.ts";
 import type { AgentDurableObjectInfo, GoogleOAuthState } from "./oauth-state-schemas.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "./integrations.ts";
 
-export const getSlackAccessTokenForEstate = async (db: DB, estateId: string) => {
+export const getSlackAccessTokenForEstate = async (db: DB, installationId: string) => {
   const result = await db
     .select({
       accessToken: schema.account.accessToken,
       accountId: schema.account.id,
     })
-    .from(schema.estateAccountsPermissions)
-    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
+    .from(schema.installationAccountsPermissions)
+    .innerJoin(
+      schema.account,
+      eq(schema.installationAccountsPermissions.accountId, schema.account.id),
+    )
     .where(
       and(
-        eq(schema.estateAccountsPermissions.estateId, estateId),
+        eq(schema.installationAccountsPermissions.installationId, installationId),
         eq(schema.account.providerId, "slack-bot"),
       ),
     )
@@ -41,7 +44,7 @@ export const GithubUserAccessTokenResponse = z.object({
   refresh_token_expires_in: z.number(),
 });
 
-export const getGithubUserAccessTokenForEstate = async (db: DB, estateId: string) => {
+export const getGithubUserAccessTokenForEstate = async (db: DB, installationId: string) => {
   const [result] = await db
     .select({
       id: schema.account.id,
@@ -51,18 +54,21 @@ export const getGithubUserAccessTokenForEstate = async (db: DB, estateId: string
       accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
       refreshTokenExpiresAt: schema.account.refreshTokenExpiresAt,
     })
-    .from(schema.estateAccountsPermissions)
-    .innerJoin(schema.account, eq(schema.estateAccountsPermissions.accountId, schema.account.id))
-    .where(eq(schema.estateAccountsPermissions.estateId, estateId))
+    .from(schema.installationAccountsPermissions)
+    .innerJoin(
+      schema.account,
+      eq(schema.installationAccountsPermissions.accountId, schema.account.id),
+    )
+    .where(eq(schema.installationAccountsPermissions.installationId, installationId))
     .limit(1);
 
   if (!result) {
-    throw new Error(`GitHub user access token not found for estate ${estateId}`);
+    throw new Error(`GitHub user access token not found for installation ${installationId}`);
   }
 
   if (result.accessTokenExpiresAt && result.accessTokenExpiresAt < new Date()) {
     if (!result.refreshToken) {
-      throw new Error(`GitHub user refresh token not found for estate ${estateId}`);
+      throw new Error(`GitHub user refresh token not found for installation ${installationId}`);
     }
 
     const newAccessToken = await fetch(`https://github.com/login/oauth/access_token`, {
@@ -105,7 +111,7 @@ export const getGithubUserAccessTokenForEstate = async (db: DB, estateId: string
   }
 
   if (!result.accessToken) {
-    throw new Error(`GitHub user access token not found for estate ${estateId}`);
+    throw new Error(`GitHub user access token not found for estate ${installationId}`);
   }
 
   return {
@@ -182,13 +188,13 @@ export const getGoogleAccessTokenForUser = async (db: DB, userId: string) => {
 
 export const getGoogleOAuthURL = async ({
   db,
-  estateId,
+  installationId,
   userId,
   agentDurableObject,
   callbackUrl,
 }: {
   db: DB;
-  estateId: string;
+  installationId: string;
   userId: string;
   agentDurableObject: AgentDurableObjectInfo;
   callbackUrl?: string;
@@ -226,8 +232,8 @@ export const getGoogleOAuthURL = async ({
     expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes for OAuth flow
   });
 
-  const organization = await db.query.estate.findFirst({
-    where: eq(schema.estate.id, estateId),
+  const organization = await db.query.installation.findFirst({
+    where: eq(schema.installation.id, installationId),
     columns: {
       organizationId: true,
     },
@@ -237,5 +243,5 @@ export const getGoogleOAuthURL = async ({
     throw new Error("Organization not found");
   }
 
-  return `${env.VITE_PUBLIC_URL}/${organization.organizationId}/${estateId}/integrations/redirect?key=${state}`;
+  return `${env.VITE_PUBLIC_URL}/${organization.organizationId}/${installationId}/integrations/redirect?key=${state}`;
 };

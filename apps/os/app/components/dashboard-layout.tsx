@@ -19,7 +19,7 @@ import { fromString } from "typeid-js";
 import { toast } from "sonner";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC, useTRPCClient, type TRPCClient } from "../lib/trpc.ts";
-import { useOrganizationId } from "../hooks/use-estate.ts";
+import { useOrganizationId } from "../hooks/use-installation.ts";
 import { useOrganizationWebSocket } from "../hooks/use-websocket.ts";
 import {
   Sidebar,
@@ -63,7 +63,7 @@ import {
 import { AutoComplete } from "./autocomplete.tsx";
 import ThemeSwitcher from "./theme-switcher.tsx";
 
-const estateNavigation: NavigationItem[] = [
+const installationNavigation: NavigationItem[] = [
   { title: "Home", icon: HomeIcon, path: "" },
   { title: "Git repository", icon: Github, path: "repo" },
   { title: "Connectors", icon: Puzzle, path: "integrations" },
@@ -75,7 +75,7 @@ const organizationNavigation: NavigationItem[] = [
   { title: "Billing", icon: CreditCard, path: "billing-portal", external: true },
 ];
 
-interface Estate {
+interface Installation {
   id: string;
   name: string;
   organizationName: string;
@@ -116,7 +116,7 @@ function BillingPortalLink({ item }: { item: NavigationItem }) {
 interface ImpersonationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSubmit: (type: "email" | "user_id" | "estate_id", value: string) => void;
+  onSubmit: (type: "email" | "user_id" | "installation_id", value: string) => void;
   isPending?: boolean;
 }
 
@@ -127,7 +127,7 @@ function ImpersonationDialog({
   isPending,
 }: ImpersonationDialogProps) {
   const [value, setValue] = useState("");
-  const [type, setType] = useState<"email" | "user_id" | "estate_id">("email");
+  const [type, setType] = useState<"email" | "user_id" | "installation_id">("email");
 
   const trpc = useTRPC();
   const debouncedValue = useDebounce(value, 500);
@@ -161,9 +161,9 @@ function ImpersonationDialog({
         return false;
       }
     }
-    if (type === "estate_id") {
+    if (type === "installation_id") {
       try {
-        fromString(value, "est");
+        fromString(value, "inst");
         return true;
       } catch {
         return false;
@@ -193,14 +193,14 @@ function ImpersonationDialog({
             defaultValue="email"
             value={type}
             onValueChange={(value) => {
-              setType(value as "email" | "user_id" | "estate_id");
+              setType(value as "email" | "user_id" | "installation_id");
               setValue("");
             }}
           >
             <TabsList className="grid w-full grid-cols-3">
               <TabsTrigger value="email">By Email</TabsTrigger>
               <TabsTrigger value="user_id">By User ID</TabsTrigger>
-              <TabsTrigger value="estate_id">By Estate ID</TabsTrigger>
+              <TabsTrigger value="installation_id">By Installation ID</TabsTrigger>
             </TabsList>
             <TabsContent value="email" className="mt-4">
               <div className="w-full">
@@ -231,11 +231,11 @@ function ImpersonationDialog({
                 disabled={isPending}
               />
             </TabsContent>
-            <TabsContent value="estate_id" className="mt-4">
+            <TabsContent value="installation_id" className="mt-4">
               <Input
                 value={value}
                 onChange={(e) => setValue(e.target.value)}
-                placeholder="est_xxxxxxxxxxxxxxxxxxxxxxxx"
+                placeholder="inst_xxxxxxxxxxxxxxxxxxxxxxxx"
                 className={cn({
                   "border-destructive": value.length > 0 && !isValid,
                 })}
@@ -260,7 +260,7 @@ function ImpersonationDialog({
 
 async function resolveImpersonation(
   trpcClient: TRPCClient,
-  type: "email" | "user_id" | "estate_id",
+  type: "email" | "user_id" | "installation_id",
   value: string,
 ) {
   if (type === "email") {
@@ -273,12 +273,14 @@ async function resolveImpersonation(
   if (type === "user_id") {
     return value;
   }
-  if (type === "estate_id") {
-    const estate = await trpcClient.admin.getEstateOwner.query({ estateId: value });
-    if (!estate) {
-      throw new Error("Estate not found");
+  if (type === "installation_id") {
+    const installation = await trpcClient.admin.getInstallationOwner.query({
+      installationId: value,
+    });
+    if (!installation) {
+      throw new Error("Installation not found");
     }
-    return estate.userId;
+    return installation.userId;
   }
   throw new Error("Invalid type");
 }
@@ -296,7 +298,10 @@ function UserSwitcher() {
   const trpcClient = useTRPCClient();
   const queryClient = useQueryClient();
   const startImpersonation = useMutation({
-    mutationFn: async (params: { type: "email" | "user_id" | "estate_id"; value: string }) => {
+    mutationFn: async (params: {
+      type: "email" | "user_id" | "installation_id";
+      value: string;
+    }) => {
       const userId = await resolveImpersonation(trpcClient, params.type, params.value);
       await authClient.admin.impersonateUser({ userId });
     },
@@ -324,7 +329,10 @@ function UserSwitcher() {
     },
   });
 
-  const handleImpersonationSubmit = (type: "email" | "user_id" | "estate_id", value: string) => {
+  const handleImpersonationSubmit = (
+    type: "email" | "user_id" | "installation_id",
+    value: string,
+  ) => {
     startImpersonation.mutate({ type, value });
   };
 
@@ -441,15 +449,15 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const location = useLocation();
   const params = useParams({ strict: false });
   const organizationId = useOrganizationId();
-  const currentEstateId = params.estateId;
+  const currentInstallationId = params.installationId;
   const trpc = useTRPC();
   const loaderData = orgRoute.useLoaderData();
 
-  const estatesQuery = useQuery(
-    trpc.estates.list.queryOptions(
+  const installationsQuery = useQuery(
+    trpc.installation.list.queryOptions(
       { organizationId },
       {
-        initialData: () => loaderData?.estates ?? [],
+        initialData: () => loaderData?.installations ?? [],
         staleTime: 1000 * 60 * 5,
       },
     ),
@@ -457,14 +465,14 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const user = useSessionUser();
 
-  // Only connect websocket if we're in an estate context
+  // Only connect websocket if we're in an installation context
   const _ws = useOrganizationWebSocket(
     organizationId,
-    currentEstateId ?? loaderData?.estates[0]?.id ?? "",
+    currentInstallationId ?? loaderData?.installations[0]?.id ?? "",
   );
 
-  const getEstateUrl = (estateId: string, path: string) => {
-    return `/${organizationId}/${estateId}${path ? `/${path}` : ""}`;
+  const getInstallationUrl = (installationId: string, path: string) => {
+    return `/${organizationId}/${installationId}${path ? `/${path}` : ""}`;
   };
 
   const getOrgUrl = (path: string) => {
@@ -474,8 +482,8 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
   const isPathActive = (url: string) => {
     // Exact match for paths
     if (location.pathname === url) return true;
-    // For home paths (ending with estateId), check if pathname ends with the estateId followed by optional slash
-    if (url.endsWith(`/${currentEstateId}`) || url.endsWith(`/${currentEstateId}/`)) {
+    // For home paths (ending with installationId), check if pathname ends with the installationId followed by optional slash
+    if (url.endsWith(`/${currentInstallationId}`) || url.endsWith(`/${currentInstallationId}/`)) {
       return location.pathname === url || location.pathname === `${url}/`;
     }
     return false;
@@ -489,20 +497,20 @@ export function DashboardLayout({ children }: DashboardLayoutProps) {
             <OrganizationSwitcher />
           </SidebarHeader>
           <SidebarContent>
-            {/* Estate Navigation - One section per estate */}
-            {estatesQuery.data?.map((estate: Estate) => (
-              <SidebarGroup key={estate.id}>
-                {/* Only show estate label if there are multiple estates */}
-                {estatesQuery.data.length > 1 && (
+            {/* Installation Navigation - One section per installation */}
+            {installationsQuery.data?.map((installation: Installation) => (
+              <SidebarGroup key={installation.id}>
+                {/* Only show installation label if there are multiple installations */}
+                {installationsQuery.data.length > 1 && (
                   <SidebarGroupLabel className="flex items-center gap-2">
                     <Building2 className="size-3" />
-                    {estate.name}
+                    {installation.name}
                   </SidebarGroupLabel>
                 )}
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {estateNavigation.map((item) => {
-                      const url = getEstateUrl(estate.id, item.path);
+                    {installationNavigation.map((item) => {
+                      const url = getInstallationUrl(installation.id, item.path);
                       return (
                         <SidebarMenuItem key={item.title}>
                           <SidebarMenuButton asChild isActive={isPathActive(url)}>

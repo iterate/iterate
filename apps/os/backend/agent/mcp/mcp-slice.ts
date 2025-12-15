@@ -195,7 +195,7 @@ const mcpTokenUpdatedFields = {
   data: z.object({
     serverUrl: z.string(),
     userId: z.string(),
-    estateId: z.string(),
+    installationId: z.string(),
     clientId: z.string().optional(),
     integrationSlug: z.string(),
     hasRefreshToken: z.boolean(),

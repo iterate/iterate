@@ -6,17 +6,17 @@ import { typeid } from "typeid-js";
 import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
-import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.ts";
+import { syncSlackForInstallationInBackground } from "../../integrations/slack/slack.ts";
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 import type { DB } from "../../db/client.ts";
 import { getAuth } from "../../auth/auth.ts";
-import { createUserOrganizationAndEstate } from "../../org-utils.ts";
+import { createUserOrganizationAndInstallation } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
 import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
 import {
   createTrialSlackConnectChannel,
-  getIterateSlackEstateId,
+  getIterateSlackInstallationId,
 } from "../../utils/trial-channel-setup.ts";
 import { env } from "../../../env.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
@@ -24,7 +24,7 @@ import { queuer } from "../../outbox/outbox-queuer.ts";
 import { outboxClient } from "../../outbox/client.ts";
 import { deleteUserAccount } from "./user.ts";
 
-// don't use `protectedProcedure` because that prevents the use of `estateId`. safe to use without the restrictions because we're checking the user is an admin
+// don't use `protectedProcedure` because that prevents the use of `installationId`. safe to use without the restrictions because we're checking the user is an admin
 const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
@@ -64,23 +64,23 @@ const searchUsersByEmail = adminProcedure
     return users;
   });
 
-const getEstateOwner = adminProcedure
-  .input(z.object({ estateId: z.string() }))
+const getInstallationOwner = adminProcedure
+  .input(z.object({ installationId: z.string() }))
   .query(async ({ ctx, input }) => {
-    const estate = await ctx.db.query.estate.findFirst({
-      where: eq(schema.estate.id, input.estateId),
+    const installation = await ctx.db.query.installation.findFirst({
+      where: eq(schema.installation.id, input.installationId),
     });
 
-    if (!estate) {
+    if (!installation) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: "Estate not found",
+        message: "Installation not found",
       });
     }
 
     const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
       where: and(
-        eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+        eq(schema.organizationUserMembership.organizationId, installation.organizationId),
         eq(schema.organizationUserMembership.role, "owner"),
       ),
       with: {
@@ -91,7 +91,7 @@ const getEstateOwner = adminProcedure
     if (!ownerMembership?.user) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: "Estate owner not found",
+        message: "Installation owner not found",
       });
     }
 
@@ -132,12 +132,12 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
     },
   });
 
-  const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
+  const { organization, installation } = await createUserOrganizationAndInstallation(ctx.db, user);
 
-  if (!estate) {
+  if (!installation) {
     throw new TRPCError({
       code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to create estate",
+      message: "Failed to create installation",
     });
   }
 
@@ -166,11 +166,11 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
         .returning();
 
       await ctx.db
-        .insert(schema.providerEstateMapping)
+        .insert(schema.providerInstallationMapping)
         .values([
           {
             providerId: "slack-bot",
-            internalEstateId: estate.id,
+            internalInstallationId: installation.id,
             externalId: seedData.slack.teamId,
             providerMetadata: {
               botUserId: seedData.slack.bot.id,
@@ -180,11 +180,11 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
         .onConflictDoNothing();
 
       await ctx.db
-        .insert(schema.estateAccountsPermissions)
+        .insert(schema.installationAccountsPermissions)
         .values([
           {
             accountId: botAccount.id,
-            estateId: estate.id,
+            installationId: installation.id,
           },
         ])
         .onConflictDoNothing();
@@ -195,19 +195,19 @@ const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
     }
   }
 
-  return { user, organization, estate, hasSeedData };
+  return { user, organization, installation, hasSeedData };
 });
 
 const markTestUserAsOnboarded = adminProcedure
   .input(
     z.object({
       organizationId: z.string(),
-      estateId: z.string(),
+      installationId: z.string(),
     }),
   )
   .mutation(async ({ ctx, input }) => {
-    await ctx.db.insert(schema.estateOnboardingEvent).values({
-      estateId: input.estateId,
+    await ctx.db.insert(schema.installationOnboardingEvent).values({
+      installationId: input.installationId,
       organizationId: input.organizationId,
       eventType: "OnboardingCompleted",
       category: "user",
@@ -234,7 +234,7 @@ const allProcedureInputs = adminProcedure.query(async () => {
 export const adminRouter = router({
   findUserByEmail,
   searchUsersByEmail,
-  getEstateOwner,
+  getInstallationOwner,
   deleteUserByEmail,
   setupTestOnboardingUser,
   markTestUserAsOnboarded,
@@ -263,8 +263,8 @@ export const adminRouter = router({
       session: ctx.session,
     };
   }),
-  listAllEstates: adminProcedure.query(async ({ ctx }) => {
-    const estates = await ctx.db.query.estate.findMany({
+  listAllInstallations: adminProcedure.query(async ({ ctx }) => {
+    const installations = await ctx.db.query.installation.findMany({
       with: {
         organization: {
           with: {
@@ -278,80 +278,80 @@ export const adminRouter = router({
         },
         ...recentActiveSources,
       },
-      orderBy: desc(schema.estate.updatedAt),
+      orderBy: desc(schema.installation.updatedAt),
     });
 
-    return estates.map((estate) => ({
-      id: estate.id,
-      name: estate.name,
-      organizationId: estate.organizationId,
-      organizationName: estate.organization.name,
-      ownerEmail: estate.organization.members[0]?.user.email,
-      ownerName: estate.organization.members[0]?.user.name,
-      ownerId: estate.organization.members[0]?.user.id,
-      connectedRepoId: estate.sources?.[0]?.repoId ?? null,
-      connectedRepoPath: estate.sources?.[0]?.path ?? null,
-      connectedRepoRef: estate.sources?.[0]?.branch ?? null,
-      createdAt: estate.createdAt,
-      updatedAt: estate.updatedAt,
+    return installations.map((installation) => ({
+      id: installation.id,
+      name: installation.name,
+      organizationId: installation.organizationId,
+      organizationName: installation.organization.name,
+      ownerEmail: installation.organization.members[0]?.user.email,
+      ownerName: installation.organization.members[0]?.user.name,
+      ownerId: installation.organization.members[0]?.user.id,
+      connectedRepoId: installation.sources?.[0]?.repoId ?? null,
+      connectedRepoPath: installation.sources?.[0]?.path ?? null,
+      connectedRepoRef: installation.sources?.[0]?.branch ?? null,
+      createdAt: installation.createdAt,
+      updatedAt: installation.updatedAt,
     }));
   }),
-  rebuildEstate: adminProcedure
-    .input(z.object({ estateId: z.string() }))
+  rebuildInstallation: adminProcedure
+    .input(z.object({ installationId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const { triggerEstateRebuild } = await import("./estate.ts");
+      const { triggerInstallationRebuild } = await import("./installation.ts");
 
-      const _estateData = await ctx.db.query.estate.findFirst({
-        where: eq(schema.estate.id, input.estateId),
+      const _installationData = await ctx.db.query.installation.findFirst({
+        where: eq(schema.installation.id, input.installationId),
         with: recentActiveSources,
       });
 
-      const estateData = {
-        ..._estateData,
-        connectedRepoId: _estateData?.sources?.[0]?.repoId ?? null,
-        connectedRepoRef: _estateData?.sources?.[0]?.branch ?? null,
-        connectedRepoPath: _estateData?.sources?.[0]?.path ?? null,
+      const installationData = {
+        ..._installationData,
+        connectedRepoId: _installationData?.sources?.[0]?.repoId ?? null,
+        connectedRepoRef: _installationData?.sources?.[0]?.branch ?? null,
+        connectedRepoPath: _installationData?.sources?.[0]?.path ?? null,
       };
 
-      if (!estateData) {
+      if (!installationData) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Estate not found",
+          message: "Installation not found",
         });
       }
 
-      if (!estateData.connectedRepoId) {
+      if (!installationData.connectedRepoId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Estate has no connected repository",
+          message: "Installation has no connected repository",
         });
       }
 
-      const result = await triggerEstateRebuild({
+      const result = await triggerInstallationRebuild({
         db: ctx.db,
         env: ctx.env,
-        estateId: input.estateId,
-        commitHash: estateData.connectedRepoRef || "main",
+        installationId: input.installationId,
+        commitHash: installationData.connectedRepoRef || "main",
         commitMessage: "Manual rebuild triggered by admin",
         isManual: true,
       });
 
       return { success: true, buildId: result.id };
     }),
-  rebuildAllEstates: adminProcedure.mutation(async ({ ctx }) => {
-    const { triggerEstateRebuild } = await import("./estate.ts");
+  rebuildAllInstallations: adminProcedure.mutation(async ({ ctx }) => {
+    const { triggerInstallationRebuild } = await import("./installation.ts");
 
-    const estates = await ctx.db.query.estate.findMany({
+    const installations = await ctx.db.query.installation.findMany({
       with: recentActiveSources,
     });
 
     const results = [];
 
-    for (const estate of estates) {
-      if (!estate.sources.at(0)?.repoId) {
+    for (const installation of installations) {
+      if (!installation.sources.at(0)?.repoId) {
         results.push({
-          estateId: estate.id,
-          estateName: estate.name,
+          installationId: installation.id,
+          installationName: installation.name,
           success: false,
           error: "No connected repository",
         });
@@ -359,25 +359,25 @@ export const adminRouter = router({
       }
 
       try {
-        const result = await triggerEstateRebuild({
+        const result = await triggerInstallationRebuild({
           db: ctx.db,
           env: ctx.env,
-          estateId: estate.id,
-          commitHash: estate.sources.at(0)?.branch || "main",
+          installationId: installation.id,
+          commitHash: installation.sources.at(0)?.branch || "main",
           commitMessage: "Bulk rebuild triggered by admin",
           isManual: true,
         });
 
         results.push({
-          estateId: estate.id,
-          estateName: estate.name,
+          installationId: installation.id,
+          installationName: installation.name,
           success: true,
           buildId: result.id,
         });
       } catch (error) {
         results.push({
-          estateId: estate.id,
-          estateName: estate.name,
+          installationId: installation.id,
+          installationName: installation.name,
           success: false,
           error: error instanceof Error ? error.message : "Unknown error",
         });
@@ -385,46 +385,46 @@ export const adminRouter = router({
     }
 
     return {
-      total: estates.length,
+      total: installations.length,
       results,
     };
   }),
-  syncSlackForEstate: adminProcedure
-    .input(z.object({ estateId: z.string() }))
+  syncSlackForInstallation: adminProcedure
+    .input(z.object({ installationId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.estateId);
+      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.installationId);
 
       if (!slackAccount) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "No Slack token found for this estate",
+          message: "No Slack token found for this installation",
         });
       }
 
-      // Get team ID from provider estate mapping
-      const estateMapping = await ctx.db.query.providerEstateMapping.findFirst({
+      // Get team ID from provider installation mapping
+      const installationMapping = await ctx.db.query.providerInstallationMapping.findFirst({
         where: and(
-          eq(schema.providerEstateMapping.internalEstateId, input.estateId),
-          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+          eq(schema.providerInstallationMapping.internalInstallationId, input.installationId),
+          eq(schema.providerInstallationMapping.providerId, "slack-bot"),
         ),
       });
 
-      if (!estateMapping) {
+      if (!installationMapping) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "No Slack team mapping found for this estate",
+          message: "No Slack team mapping found for this installation",
         });
       }
 
-      return await syncSlackForEstateInBackground(
+      return await syncSlackForInstallationInBackground(
         ctx.db,
         slackAccount.accessToken,
-        input.estateId,
-        estateMapping.externalId,
+        input.installationId,
+        installationMapping.externalId,
       );
     }),
-  syncSlackForAllEstates: adminProcedure.mutation(async ({ ctx }) => {
-    return await syncSlackForAllEstatesHelper(ctx.db);
+  syncSlackForAllInstallations: adminProcedure.mutation(async ({ ctx }) => {
+    return await syncSlackForAllInstallationsHelper(ctx.db);
   }),
   // Create Stripe customer for an organization (admin only)
   createStripeCustomer: adminProcedure
@@ -499,7 +499,7 @@ export const adminRouter = router({
       z.object({
         userEmail: z.email(),
         userName: z.string().optional(),
-        existingEstateId: z.string().optional(),
+        existingInstallationId: z.string().optional(),
         createNewEstate: z.boolean().default(true),
         estateName: z.string().optional(),
         organizationName: z.string().optional(),
@@ -509,13 +509,13 @@ export const adminRouter = router({
       const {
         userEmail,
         userName,
-        existingEstateId,
+        existingInstallationId,
         createNewEstate,
         estateName,
         organizationName,
       } = input;
 
-      let estateId = existingEstateId;
+      let installationId = existingInstallationId;
       let organizationId: string | undefined;
 
       // Create estate/org if needed
@@ -527,27 +527,30 @@ export const adminRouter = router({
           })
           .returning();
 
-        const [estate] = await ctx.db
-          .insert(schema.estate)
+        const [installation] = await ctx.db
+          .insert(schema.installation)
           .values({
-            name: estateName || `${userName || userEmail}'s Estate`,
+            name: estateName || `${userName || userEmail}'s Installation`,
             organizationId: org.id,
+            slug: typeid("ins").toString(),
           })
           .returning();
 
-        estateId = estate.id;
+        installationId = installation.id;
         organizationId = org.id;
 
-        logger.info(`Admin created new org ${org.id} and estate ${estate.id} for trial channel`);
-      } else if (!existingEstateId) {
+        logger.info(
+          `Admin created new org ${org.id} and installation ${installation.id} for trial channel`,
+        );
+      } else if (!existingInstallationId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Either createNewEstate must be true or existingEstateId must be provided",
+          message: "Either createNewEstate must be true or existingInstallationId must be provided",
         });
       } else {
         // Get org ID from existing estate
-        const estate = await ctx.db.query.estate.findFirst({
-          where: eq(schema.estate.id, existingEstateId),
+        const estate = await ctx.db.query.installation.findFirst({
+          where: eq(schema.installation.id, existingInstallationId),
         });
         if (!estate) {
           throw new TRPCError({
@@ -564,32 +567,32 @@ export const adminRouter = router({
         throw new Error("Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)");
       }
 
-      const iterateEstateId = await getIterateSlackEstateId(ctx.db);
-      if (!iterateEstateId) {
+      const iterateInstallationId = await getIterateSlackInstallationId(ctx.db);
+      if (!iterateInstallationId) {
         throw new Error("Iterate Slack workspace estate not found");
       }
 
       // Get iterate's bot account and token
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateEstateId);
+      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateInstallationId);
       if (!iterateBotAccount) {
         throw new Error("Iterate Slack bot account not found");
       }
 
       // Link trial estate to iterate's bot account
       await ctx.db
-        .insert(schema.estateAccountsPermissions)
+        .insert(schema.installationAccountsPermissions)
         .values({
           accountId: iterateBotAccount.accountId,
-          estateId: estateId!,
+          installationId: installationId!,
         })
         .onConflictDoNothing();
 
-      logger.info(`Linked trial estate ${estateId} to iterate's bot account`);
+      logger.info(`Linked trial estate ${installationId} to iterate's bot account`);
 
       // Create trial channel and send invite
       const result = await createTrialSlackConnectChannel({
         db: ctx.db,
-        userEstateId: estateId!,
+        userInstallationId: installationId!,
         userEmail,
         userName: userName || userEmail.split("@")[0],
         iterateTeamId,
@@ -597,12 +600,12 @@ export const adminRouter = router({
       });
 
       logger.info(
-        `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${estateId}`,
+        `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${installationId}`,
       );
 
       return {
         success: true,
-        estateId: estateId!,
+        installationId: installationId!,
         organizationId,
         channelId: result.channelId,
         channelName: result.channelName,
@@ -680,59 +683,59 @@ export const adminRouter = router({
 });
 
 /**
- * Helper function to sync Slack data for all estates
+ * Helper function to sync Slack data for all installations
  * Used by both the tRPC procedure and the scheduled cron job
  */
-export async function syncSlackForAllEstatesHelper(db: DB) {
-  const estates = await db.query.estate.findMany();
+export async function syncSlackForAllInstallationsHelper(db: DB) {
+  const installations = await db.query.installation.findMany();
 
-  const syncPromises = estates.map(async (estate) => {
+  const syncPromises = installations.map(async (installation) => {
     try {
-      const slackAccount = await getSlackAccessTokenForEstate(db, estate.id);
+      const slackAccount = await getSlackAccessTokenForEstate(db, installation.id);
 
       if (!slackAccount) {
         return {
-          estateId: estate.id,
-          estateName: estate.name,
+          installationId: installation.id,
+          installationName: installation.name,
           success: false,
           error: "No Slack token found",
         };
       }
 
-      // Get team ID from provider estate mapping
-      const estateMapping = await db.query.providerEstateMapping.findFirst({
+      // Get team ID from provider installation mapping
+      const installationMapping = await db.query.providerInstallationMapping.findFirst({
         where: and(
-          eq(schema.providerEstateMapping.internalEstateId, estate.id),
-          eq(schema.providerEstateMapping.providerId, "slack-bot"),
+          eq(schema.providerInstallationMapping.internalInstallationId, installation.id),
+          eq(schema.providerInstallationMapping.providerId, "slack-bot"),
         ),
       });
 
-      if (!estateMapping) {
+      if (!installationMapping) {
         return {
-          estateId: estate.id,
-          estateName: estate.name,
+          installationId: installation.id,
+          installationName: installation.name,
           success: false,
           error: "No Slack team mapping found",
         };
       }
 
-      const result = await syncSlackForEstateInBackground(
+      const result = await syncSlackForInstallationInBackground(
         db,
         slackAccount.accessToken,
-        estate.id,
-        estateMapping.externalId,
+        installation.id,
+        installationMapping.externalId,
       );
 
       return {
-        estateId: estate.id,
-        estateName: estate.name,
+        installationId: installation.id,
+        installationName: installation.name,
         success: true,
         data: result,
       };
     } catch (error) {
       return {
-        estateId: estate.id,
-        estateName: estate.name,
+        installationId: installation.id,
+        installationName: installation.name,
         success: false,
         error: error instanceof Error ? error.message : "Unknown error",
       };
@@ -742,7 +745,7 @@ export async function syncSlackForAllEstatesHelper(db: DB) {
   const results = await Promise.all(syncPromises);
 
   return {
-    total: estates.length,
+    total: installations.length,
     results,
   };
 }

@@ -1,8 +1,8 @@
-const ESTATE_COOKIE_NAME = "iterate-selected-estate";
+const INSTALLATION_COOKIE_NAME = "iterate-selected-estate";
 
 export interface SelectedEstate {
   organizationId: string;
-  estateId: string;
+  installationId: string;
 }
 
 export function getSelectedEstate(): SelectedEstate | null {
@@ -11,7 +11,7 @@ export function getSelectedEstate(): SelectedEstate | null {
   }
 
   const cookies = document.cookie.split(";");
-  const estateCookie = cookies.find((cookie) => cookie.trim().startsWith(`${ESTATE_COOKIE_NAME}=`));
+  const estateCookie = cookies.find((cookie) => cookie.trim().startsWith(`${INSTALLATION_COOKIE_NAME}=`));
 
   if (!estateCookie) {
     return null;
@@ -33,13 +33,13 @@ export function getSelectedEstate(): SelectedEstate | null {
   }
 }
 
-export function setSelectedEstate(organizationId: string, estateId: string): void {
+export function setSelectedEstate(organizationId: string, installationId: string): void {
   if (typeof document === "undefined") {
     return;
   }
 
   // Create the estate object
-  const estate: SelectedEstate = { organizationId, estateId };
+  const estate: SelectedEstate = { organizationId, installationId };
 
   // Encode the JSON value
   const encoded = encodeURIComponent(JSON.stringify(estate));
@@ -48,7 +48,7 @@ export function setSelectedEstate(organizationId: string, estateId: string): voi
   const expires = new Date();
   expires.setDate(expires.getDate() + 30);
 
-  document.cookie = `${ESTATE_COOKIE_NAME}=${encoded}; expires=${expires.toUTCString()}; path=/; SameSite=Lax`;
+  document.cookie = `${INSTALLATION_COOKIE_NAME}=${encoded}; expires=${expires.toUTCString()}; path=/; SameSite=Lax`;
 }
 
 export function clearSelectedEstate(): void {
@@ -56,5 +56,5 @@ export function clearSelectedEstate(): void {
     return;
   }
 
-  document.cookie = `${ESTATE_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
+  document.cookie = `${INSTALLATION_COOKIE_NAME}=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/`;
 }

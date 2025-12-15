@@ -27,7 +27,7 @@ const integrationRedirect = authenticatedServerFn
   });
 
 export const Route = createFileRoute(
-  "/_auth.layout/$organizationId/$estateId/integrations/redirect",
+  "/_auth.layout/$organizationId/$installationId/integrations/redirect",
 )({
   validateSearch: z.object({ key: z.string() }),
   loaderDeps: ({ search }) => ({ key: search.key }),

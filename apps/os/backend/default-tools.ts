@@ -440,7 +440,7 @@ interface UrlTypeInfo {
 type UrlHandler = (args: {
   url: string;
   db: DB;
-  estateId: string;
+  installationId: string;
   includeScreenshotOfPage?: boolean;
   includeTextContent?: boolean;
 }) => Promise<unknown>;
@@ -537,10 +537,10 @@ async function getURLContentFromWebpage(params: {
   url: string;
   includeScreenshotOfPage: boolean;
   includeTextContent: boolean;
-  estateId: string;
+  installationId: string;
   db: DB;
 }) {
-  const { url, includeScreenshotOfPage, includeTextContent, estateId, db } = params;
+  const { url, includeScreenshotOfPage, includeTextContent, installationId, db } = params;
   const [textResult, screenshotResult] = await Promise.allSettled([
     includeTextContent
       ? getURLContentFromExa({
@@ -587,7 +587,7 @@ async function getURLContentFromWebpage(params: {
 
         const screenshotFileRecord = await uploadFile({
           stream: screenshotBytes,
-          estateId,
+          installationId,
           db,
           filename: screenshotFilename,
           contentType: "image/png",
@@ -630,10 +630,10 @@ async function getURLContentFromWebpage(params: {
 async function getURLContentFromFile(params: {
   url: string;
   contentType: string;
-  estateId: string;
+  installationId: string;
   db: DB;
 }) {
-  const { url, contentType, estateId, db } = params;
+  const { url, contentType, installationId, db } = params;
   const response = await fetch(url, {
     headers: {
       "User-Agent": ITERATE_USER_AGENT, // Otherwise we are recognized as a browser agent
@@ -653,7 +653,7 @@ async function getURLContentFromFile(params: {
 
   const fileRecord = await uploadFile({
     stream: bytes,
-    estateId: estateId,
+    installationId: installationId,
     db: db,
     filename: filename,
     contentType: contentType || "application/octet-stream",
@@ -688,14 +688,14 @@ export async function getURLContent(options: {
   includeScreenshotOfPage?: boolean;
   includeTextContent?: boolean;
   db: DB;
-  estateId: string;
+  installationId: string;
 }) {
-  const { url, includeScreenshotOfPage = false, includeTextContent = true, db, estateId } = options;
+  const { url, includeScreenshotOfPage = false, includeTextContent = true, db, installationId } = options;
 
   // 1) Try registry handlers first
   for (const { pattern, handler } of urlHandlers) {
     if (pattern.test(url)) {
-      return handler({ url, db, estateId, includeScreenshotOfPage, includeTextContent });
+      return handler({ url, db, installationId, includeScreenshotOfPage, includeTextContent });
     }
   }
 
@@ -711,14 +711,14 @@ export async function getURLContent(options: {
       url,
       includeScreenshotOfPage,
       includeTextContent,
-      estateId,
+      installationId,
       db,
     });
   } else {
     return await getURLContentFromFile({
       url,
       contentType: urlInfo.contentType || "",
-      estateId,
+      installationId,
       db,
     });
   }

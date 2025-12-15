@@ -2,26 +2,28 @@ import { toast } from "sonner";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { authClient } from "../lib/auth-client.ts";
 import { useTRPC } from "../lib/trpc.ts";
-import { useEstateId } from "./use-estate.ts";
+import { useInstallationId } from "./use-installation.ts";
 
 export function useSlackConnection() {
-  const estateId = useEstateId();
+  const installationId = useInstallationId();
   const trpc = useTRPC();
 
-  const integrationsQuery = useQuery(trpc.integrations.list.queryOptions({ estateId: estateId }));
+  const integrationsQuery = useQuery(
+    trpc.integrations.list.queryOptions({ installationId: installationId }),
+  );
 
-  // Check if Slack bot is connected at the estate level
+  // Check if Slack bot is connected at the installation level
   const slackBotIntegration = integrationsQuery.data?.oauthIntegrations.find(
     (i) => i.id === "slack-bot",
   );
   const isConnected = slackBotIntegration?.isConnected || false;
-  const isEstateWide = slackBotIntegration?.isEstateWide || false;
+  const isInstallationWide = slackBotIntegration?.isEstateWide || false;
   const isPersonal = slackBotIntegration?.isPersonal || false;
 
   const connectSlackBot = async (callbackPath?: string) => {
-    if (!estateId) {
-      toast.error("Unable to get estate information");
-      return { error: { message: "No estate ID" } };
+    if (!installationId) {
+      toast.error("Unable to get installation information");
+      return { error: { message: "No installation ID" } };
     }
 
     const callbackURL = callbackPath
@@ -29,7 +31,7 @@ export function useSlackConnection() {
       : window.location.pathname + "?success=true";
 
     const result = await authClient.integrations.link.slackBot({
-      estateId: estateId,
+      installationId: installationId,
       callbackURL: callbackURL,
     });
 
@@ -50,7 +52,7 @@ export function useSlackConnection() {
   const disconnectSlackBot = async (disconnectType: "estate" | "personal" | "both" = "both") => {
     try {
       await disconnectIntegration({
-        estateId: estateId,
+        installationId: installationId,
         providerId: "slack-bot",
         disconnectType,
       });
@@ -66,7 +68,7 @@ export function useSlackConnection() {
   return {
     integrationsQuery,
     isConnected,
-    isEstateWide,
+    isInstallationWide,
     isPersonal,
     connectSlackBot,
     disconnectSlackBot,

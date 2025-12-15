@@ -14,7 +14,7 @@ interface StartArgs {
   isCommitHash: boolean;
   connectedRepoPath?: string;
   ingestUrl: string;
-  estateId: string;
+  installationId: string;
   processId: string;
   command: string;
   env?: Record<string, string>;

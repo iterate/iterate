@@ -3,9 +3,9 @@ import { WebClient } from "@slack/web-api";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { getRequestHeader, getRequestUrl } from "@tanstack/react-start/server";
 import { waitUntil } from "../../env.ts";
-import { getUserOrganizationsWithEstates } from "../../backend/trpc/trpc.ts";
+import { getUserOrganizationsWithInstallations } from "../../backend/trpc/trpc.ts";
 import * as schema from "../../backend/db/schema.ts";
-import { createUserOrganizationAndEstate } from "../../backend/org-utils.ts";
+import { createUserOrganizationAndInstallation } from "../../backend/org-utils.ts";
 import { syncSlackUsersInBackground } from "../../backend/integrations/slack/slack.ts";
 import { logger } from "../../backend/tag-logger.ts";
 import type { DB } from "../../backend/db/client.ts";
@@ -22,8 +22,8 @@ async function determineRedirectPath({
   cookieHeader?: string;
   db: DB;
 }) {
-  // Get user's estates from the database (excluding external orgs)
-  const userOrganizations = await getUserOrganizationsWithEstates(db, userId);
+  // Get user's installations from the database (excluding external orgs)
+  const userOrganizations = await getUserOrganizationsWithInstallations(db, userId);
 
   if (userOrganizations.length === 0) {
     // No organizations, do first time setup
@@ -33,12 +33,12 @@ async function determineRedirectPath({
     if (!user) {
       throw new Error(`User ${userId} not found - this should never happen.`);
     }
-    const newOrgAndEstate = await createUserOrganizationAndEstate(db, user);
+    const newOrgAndInstallation = await createUserOrganizationAndInstallation(db, user);
 
-    // If the user has a Slack bot account, automatically connect it to the new estate
+    // If the user has a Slack bot account, automatically connect it to the new installation
     // and sync Slack users to the organization
-    if (newOrgAndEstate.estate) {
-      const estateId = newOrgAndEstate.estate.id;
+    if (newOrgAndInstallation.installation) {
+      const installationId = newOrgAndInstallation.installation.id;
       waitUntil(
         (async () => {
           const slackBotAccount = await db.query.account.findFirst({
@@ -49,16 +49,16 @@ async function determineRedirectPath({
           });
 
           if (slackBotAccount?.accessToken) {
-            // Connect the bot account to the estate
+            // Connect the bot account to the installation
             await db
-              .insert(schema.estateAccountsPermissions)
+              .insert(schema.installationAccountsPermissions)
               .values({
                 accountId: slackBotAccount.id,
-                estateId,
+                installationId,
               })
               .onConflictDoNothing();
 
-            // Get team info from Slack API to create provider-estate mapping
+            // Get team info from Slack API to create provider-installation mapping
             let teamId: string | undefined;
             let appId: string | undefined;
             try {
@@ -68,12 +68,12 @@ async function determineRedirectPath({
               if (authTest.ok && authTest.team_id) {
                 teamId = authTest.team_id;
 
-                // Get appId from any existing providerEstateMapping for this team
-                // (will exist if user has another estate with this Slack workspace already linked)
-                const existingMapping = await db.query.providerEstateMapping.findFirst({
+                // Get appId from any existing providerInstallationMapping for this team
+                // (will exist if user has another installation with this Slack workspace already linked)
+                const existingMapping = await db.query.providerInstallationMapping.findFirst({
                   where: and(
-                    eq(schema.providerEstateMapping.providerId, "slack-bot"),
-                    eq(schema.providerEstateMapping.externalId, authTest.team_id),
+                    eq(schema.providerInstallationMapping.providerId, "slack-bot"),
+                    eq(schema.providerInstallationMapping.externalId, authTest.team_id),
                   ),
                 });
 
@@ -90,13 +90,13 @@ async function determineRedirectPath({
                 }
 
                 logger.info(
-                  `[redirect.tsx] Creating providerEstateMapping for estate ${estateId}, team ${authTest.team_id}, appId=${appId}, botUserId=${slackBotAccount.accountId}`,
+                  `[redirect.tsx] Creating providerInstallationMapping for installation ${installationId}, team ${authTest.team_id}, appId=${appId}, botUserId=${slackBotAccount.accountId}`,
                 );
 
                 await db
-                  .insert(schema.providerEstateMapping)
+                  .insert(schema.providerInstallationMapping)
                   .values({
-                    internalEstateId: estateId,
+                    internalInstallationId: installationId,
                     externalId: authTest.team_id,
                     providerId: "slack-bot",
                     providerMetadata: {
@@ -110,11 +110,11 @@ async function determineRedirectPath({
                   })
                   .onConflictDoUpdate({
                     target: [
-                      schema.providerEstateMapping.providerId,
-                      schema.providerEstateMapping.externalId,
+                      schema.providerInstallationMapping.providerId,
+                      schema.providerInstallationMapping.externalId,
                     ],
                     set: {
-                      internalEstateId: estateId,
+                      internalInstallationId: installationId,
                       providerMetadata: {
                         botUserId: slackBotAccount.accountId,
                         team: {
@@ -127,50 +127,57 @@ async function determineRedirectPath({
                   });
 
                 logger.info(
-                  `[redirect.tsx] Successfully stored providerEstateMapping with appId=${appId}`,
+                  `[redirect.tsx] Successfully stored providerInstallationMapping with appId=${appId}`,
                 );
               }
             } catch (error) {
-              logger.error("Failed to create provider-estate mapping for Slack", error);
+              logger.error("Failed to create provider-installation mapping for Slack", error);
               // Continue even if this fails - the main thing is syncing users
             }
 
             // Sync Slack users to the organization
             if (teamId) {
-              await syncSlackUsersInBackground(db, slackBotAccount.accessToken, estateId, teamId);
-              logger.info(`Auto-connected Slack bot to estate ${estateId} and synced users`);
+              await syncSlackUsersInBackground(
+                db,
+                slackBotAccount.accessToken,
+                installationId,
+                teamId,
+              );
+              logger.info(
+                `Auto-connected Slack bot to installation ${installationId} and synced users`,
+              );
             } else {
               logger.warn("Skipped syncing Slack users - no team ID available");
             }
           }
         })().catch((error) => {
-          logger.error("Failed to auto-connect Slack bot to new estate", error);
+          logger.error("Failed to auto-connect Slack bot to new installation", error);
         }),
       );
     }
 
-    return `/${newOrgAndEstate.organization.id}/${newOrgAndEstate.estate?.id}`;
+    return `/${newOrgAndInstallation.organization.id}/${newOrgAndInstallation.installation?.id}`;
   }
 
-  // Flatten estates from all organizations
-  const userEstates = userOrganizations.flatMap(({ organization }) =>
-    organization.estates.map((estate) => ({
-      id: estate.id,
-      name: estate.name,
-      organizationId: estate.organizationId,
-      connectedRepoId: estate.sources.at(0)?.repoId ?? null,
+  // Flatten installations from all organizations
+  const userInstallations = userOrganizations.flatMap(({ organization }) =>
+    organization.installations.map((installation) => ({
+      id: installation.id,
+      name: installation.name,
+      organizationId: installation.organizationId,
+      connectedRepoId: installation.sources.at(0)?.repoId ?? null,
       parentOrgName: organization.name,
     })),
   );
 
-  if (userEstates.length === 0) {
-    throw new Response("You don't have access to any estates, this should never happen.", {
+  if (userInstallations.length === 0) {
+    throw new Response("You don't have access to any installations, this should never happen.", {
       status: 403,
     });
   }
 
-  // Try to parse saved estate from cookie header
-  let savedEstate = null;
+  // Try to parse saved installation from cookie header
+  let savedInstallation = null;
   if (cookieHeader) {
     const cookies = cookieHeader.split(";").reduce(
       (acc, cookie) => {
@@ -183,31 +190,33 @@ async function determineRedirectPath({
       {} as Record<string, string>,
     );
 
-    const estateCookie = cookies["iterate-selected-estate"];
-    if (estateCookie) {
+    const installationCookie = cookies["iterate-selected-installation"];
+    if (installationCookie) {
       try {
-        savedEstate = JSON.parse(decodeURIComponent(estateCookie));
+        savedInstallation = JSON.parse(decodeURIComponent(installationCookie));
       } catch {
         // Invalid cookie, ignore
       }
     }
   }
 
-  // If we have a saved estate, verify it's still valid
-  if (savedEstate) {
-    const validEstate = userEstates.find(
-      (e) => e.id === savedEstate.estateId && e.organizationId === savedEstate.organizationId,
+  // If we have a saved installation, verify it's still valid
+  if (savedInstallation) {
+    const validInstallation = userInstallations.find(
+      (e) =>
+        e.id === savedInstallation.installationId &&
+        e.organizationId === savedInstallation.organizationId,
     );
 
-    if (validEstate) {
-      return `/${savedEstate.organizationId}/${savedEstate.estateId}`;
+    if (validInstallation) {
+      return `/${savedInstallation.organizationId}/${savedInstallation.installationId}`;
     }
   }
 
-  // No valid saved estate, use the first available estate
-  const defaultEstate = userEstates[0];
-  if (defaultEstate) {
-    return `/${defaultEstate.organizationId}/${defaultEstate.id}`;
+  // No valid saved installation, use the first available installation
+  const defaultInstallation = userInstallations[0];
+  if (defaultInstallation) {
+    return `/${defaultInstallation.organizationId}/${defaultInstallation.id}`;
   }
 
   // Fallback (shouldn't happen)
@@ -227,10 +236,10 @@ const handleRedirect = authenticatedServerFn.handler(async ({ context }) => {
 
   const requestUrl = getRequestUrl();
 
-  if (redirectPath.match(/\/org_\w+\/est_\w+$/)) {
-    const estatePath = requestUrl.searchParams.get("estate_path");
-    if (estatePath) {
-      redirectPath = appendEstatePath(redirectPath, estatePath);
+  if (redirectPath.match(/\/org_\w+\/inst_\w+$/)) {
+    const installationPath = requestUrl.searchParams.get("installation_path");
+    if (installationPath) {
+      redirectPath = appendEstatePath(redirectPath, installationPath);
     }
   }
 

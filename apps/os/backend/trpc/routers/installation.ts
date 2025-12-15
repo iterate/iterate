@@ -11,13 +11,13 @@ import dedent from "dedent";
 import { TRPCError } from "@trpc/server";
 import {
   protectedProcedure,
-  estateProtectedProcedure,
-  getUserEstateAccess,
+  installationProtectedProcedure,
+  getUserInstallationAccess,
   router,
   protectedProcedureWithNoEstateRestrictions,
 } from "../trpc.ts";
 import {
-  estate,
+  installation,
   agentInstance,
   iterateConfig,
   organizationUserMembership,
@@ -46,7 +46,7 @@ export const RepoData = z.object({
 
 const getInstallationScopedContext = async (options: {
   db: DB;
-  estateId: string;
+  installationId: string;
   connectedRepoId: number;
   connectedRepoAccountId: string;
 }) => {
@@ -71,74 +71,74 @@ const getInstallationScopedContext = async (options: {
   };
 };
 
-const githubInstallationScopedProcedure = estateProtectedProcedure.use(async ({ ctx, next }) => {
-  if (!ctx.estate.connectedRepoId)
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "No GitHub repository connected to this estate",
+const githubInstallationScopedProcedure = installationProtectedProcedure.use(
+  async ({ ctx, next }) => {
+    if (!ctx.installation.connectedRepoId)
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No GitHub repository connected to this installation",
+      });
+
+    const { octokit, repoData } = await getInstallationScopedContext({
+      db: ctx.db,
+      installationId: ctx.installation.id,
+      connectedRepoId: ctx.installation.connectedRepoId,
+      connectedRepoAccountId: ctx.installation.connectedRepoAccountId,
     });
 
-  const { octokit, repoData } = await getInstallationScopedContext({
-    db: ctx.db,
-    estateId: ctx.estate.id,
-    connectedRepoId: ctx.estate.connectedRepoId,
-    connectedRepoAccountId: ctx.estate.connectedRepoAccountId,
-  });
+    return next({
+      ctx: {
+        ...ctx,
+        installation: { ...ctx.installation, connectedRepoId: ctx.installation.connectedRepoId },
+        github: octokit,
+        repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
+        repoData,
+        connectedRepoPathWithoutLeadingSlash:
+          ctx.installation.connectedRepoPath?.replace(/^\//, "") || "",
+        refName: ctx.installation.connectedRepoRef,
+      },
+    });
+  },
+);
 
-  return next({
-    ctx: {
-      ...ctx,
-      estate: { ...ctx.estate, connectedRepoId: ctx.estate.connectedRepoId },
-      github: octokit,
-      /** owner and repo in format needed for octokit.rest api */
-      repo: { owner: repoData.full_name.split("/")[0], repo: repoData.full_name.split("/")[1] },
-      repoData,
-      connectedRepoPathWithoutLeadingSlash: ctx.estate.connectedRepoPath?.replace(/^\//, "") || "",
-      refName: ctx.estate.connectedRepoRef,
-    },
-  });
-});
-
-// Helper function to trigger a rebuild for a given commit
-export async function triggerEstateRebuild(params: {
+export async function triggerInstallationRebuild(params: {
   db: DB;
   env: CloudflareEnv;
-  estateId: string;
+  installationId: string;
   commitHash: string;
   commitMessage: string;
   isManual?: boolean;
 }) {
-  const { db, estateId, commitHash, commitMessage, isManual = false } = params;
+  const { db, installationId, commitHash, commitMessage, isManual = false } = params;
 
-  // Get the estate details
-  const _estateWithRepo = await db.query.estate.findFirst({
-    where: eq(estate.id, estateId),
+  const _installationWithRepo = await db.query.installation.findFirst({
+    where: eq(installation.id, installationId),
     with: recentActiveSources,
   });
 
-  const estateWithRepo = _estateWithRepo && {
-    ..._estateWithRepo,
-    connectedRepoId: _estateWithRepo?.sources?.[0]?.repoId,
-    connectedRepoPath: _estateWithRepo?.sources?.[0]?.path,
-    connectedRepoRef: _estateWithRepo?.sources?.[0]?.branch,
-    connectedRepoAccountId: _estateWithRepo?.sources?.[0]?.accountId,
+  const installationWithRepo = _installationWithRepo && {
+    ..._installationWithRepo,
+    connectedRepoId: _installationWithRepo?.sources?.[0]?.repoId,
+    connectedRepoPath: _installationWithRepo?.sources?.[0]?.path,
+    connectedRepoRef: _installationWithRepo?.sources?.[0]?.branch,
+    connectedRepoAccountId: _installationWithRepo?.sources?.[0]?.accountId,
   };
 
-  if (!estateWithRepo?.connectedRepoId || !estateWithRepo?.connectedRepoAccountId) {
-    throw new Error("No GitHub repository connected to this estate");
+  if (!installationWithRepo?.connectedRepoId || !installationWithRepo?.connectedRepoAccountId) {
+    throw new Error("No GitHub repository connected to this installation");
   }
 
   const { repoData } = await getInstallationScopedContext({
     db,
-    estateId,
-    connectedRepoId: estateWithRepo.connectedRepoId,
-    connectedRepoAccountId: estateWithRepo.connectedRepoAccountId,
+    installationId,
+    connectedRepoId: installationWithRepo.connectedRepoId,
+    connectedRepoAccountId: installationWithRepo.connectedRepoAccountId,
   });
 
   const installationToken =
     await githubAppInstance().octokit.rest.apps.createInstallationAccessToken({
-      installation_id: parseInt(estateWithRepo.connectedRepoAccountId),
-      repository_ids: [estateWithRepo.connectedRepoId],
+      installation_id: parseInt(installationWithRepo.connectedRepoAccountId),
+      repository_ids: [installationWithRepo.connectedRepoId],
     });
 
   if (installationToken.status !== 201) {
@@ -147,89 +147,160 @@ export async function triggerEstateRebuild(params: {
     );
   }
 
-  // Use the common build trigger function
   return await triggerGithubBuild({
-    estateId,
+    installationId: installationId, // TODO: rename to installationId in triggerGithubBuild
     commitHash,
     commitMessage,
     repoUrl: repoData.clone_url,
     installationToken: installationToken.data.token,
-    connectedRepoPath: estateWithRepo.connectedRepoPath || "/",
-    branch: estateWithRepo.connectedRepoRef || "main",
+    connectedRepoPath: installationWithRepo.connectedRepoPath || "/",
+    branch: installationWithRepo.connectedRepoRef || "main",
     isManual,
   });
 }
 
-export const estateRouter = router({
-  // Check if user has access to a specific estate (non-throwing version)
-  checkAccess: protectedProcedureWithNoEstateRestrictions // we're going to carefully make sure we only give info to authorized users
+export const installationRouter = router({
+  list: protectedProcedure
+    .input(z.object({ organizationId: z.string().optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      const memberships = await ctx.db.query.organizationUserMembership.findMany({
+        where: and(
+          eq(organizationUserMembership.userId, ctx.user.id),
+          input?.organizationId
+            ? eq(organizationUserMembership.organizationId, input.organizationId)
+            : undefined,
+        ),
+        with: {
+          organization: {
+            with: {
+              installations: true,
+            },
+          },
+        },
+      });
+
+      const installations = memberships.flatMap(({ organization }) =>
+        organization.installations.map((inst) => ({
+          id: inst.id,
+          name: inst.name,
+          slug: inst.slug,
+          organizationId: inst.organizationId,
+          organizationName: organization.name,
+          createdAt: inst.createdAt,
+          updatedAt: inst.updatedAt,
+        })),
+      );
+
+      return installations;
+    }),
+
+  checkAccess: protectedProcedureWithNoEstateRestrictions
     .input(
       z.object({
-        estateId: z.string(),
+        installationId: z.string(),
         organizationId: z.string(),
       }),
     )
     .query(async ({ ctx, input }) => {
       try {
-        // Use the shared helper function
-        const result = await getUserEstateAccess(
+        const result = await getUserInstallationAccess(
           ctx.db,
           ctx.user.id,
-          input.estateId,
+          input.installationId,
           input.organizationId,
         );
 
-        if (result.hasAccess && result.estate) {
+        if (result.hasAccess && result.installation) {
           return {
             hasAccess: true,
-            estate: {
-              id: result.estate.id,
-              name: result.estate.name,
-              organizationId: result.estate.organizationId,
+            installation: {
+              id: result.installation.id,
+              name: result.installation.name,
+              slug: result.installation.slug,
+              organizationId: result.installation.organizationId,
             },
           };
         }
 
-        return { hasAccess: false, estate: null };
+        return { hasAccess: false, installation: null };
       } catch {
-        // Return false on any error instead of throwing
-        return { hasAccess: false, estate: null };
+        return { hasAccess: false, installation: null };
       }
     }),
 
-  // Get a specific estate (with permission check)
-  get: estateProtectedProcedure.query(async ({ ctx }) => {
-    // The estate is already validated and available in context
-    const userEstate = ctx.estate;
+  getBySlug: protectedProcedureWithNoEstateRestrictions
+    .input(z.object({ slug: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const inst = await ctx.db.query.installation.findFirst({
+        where: eq(installation.slug, input.slug),
+        with: {
+          organization: true,
+        },
+      });
 
-    // Fetch the organization
+      if (!inst) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: `Installation with slug "${input.slug}" not found`,
+        });
+      }
+
+      const membership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(organizationUserMembership.userId, ctx.user.id),
+          eq(organizationUserMembership.organizationId, inst.organizationId),
+        ),
+      });
+
+      if (!membership && ctx.user.role !== "admin") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "You do not have access to this installation",
+        });
+      }
+
+      return {
+        id: inst.id,
+        slug: inst.slug,
+        name: inst.name,
+        organizationId: inst.organizationId,
+        organization: {
+          id: inst.organization.id,
+          name: inst.organization.name,
+        },
+        createdAt: inst.createdAt,
+        updatedAt: inst.updatedAt,
+      };
+    }),
+
+  get: installationProtectedProcedure.query(async ({ ctx }) => {
+    const userInstallation = ctx.installation;
+
     const org = await ctx.db.query.organization.findFirst({
-      where: eq(organization.id, userEstate.organizationId),
+      where: eq(organization.id, userInstallation.organizationId),
     });
 
-    // Check if this is a trial estate
-    const isTrial = await slackChannelOverrideExists(ctx.db, userEstate.id);
+    const isTrial = await slackChannelOverrideExists(ctx.db, userInstallation.id);
 
     return {
-      id: userEstate.id,
-      name: userEstate.name,
-      organizationId: userEstate.organizationId,
-      onboardingAgentName: userEstate.onboardingAgentName ?? null,
-      isTrialEstate: isTrial,
+      id: userInstallation.id,
+      slug: userInstallation.slug,
+      name: userInstallation.name,
+      organizationId: userInstallation.organizationId,
+      onboardingAgentName: userInstallation.onboardingAgentName ?? null,
+      isTrialInstallation: isTrial,
       organization: org
         ? {
             id: org.id,
             name: org.name,
           }
         : undefined,
-      createdAt: userEstate.createdAt,
-      updatedAt: userEstate.updatedAt,
+      createdAt: userInstallation.createdAt,
+      updatedAt: userInstallation.updatedAt,
     };
   }),
 
-  // List all estates the user has access to
   listAllForUser: protectedProcedure.query(async ({ ctx }) => {
-    // Get all organizations the user is a member of (excluding external and guest roles)
     const memberships = await ctx.db.query.organizationUserMembership.findMany({
       where: and(
         eq(organizationUserMembership.userId, ctx.user.id),
@@ -238,36 +309,36 @@ export const estateRouter = router({
       with: {
         organization: {
           with: {
-            estates: true,
+            installations: true,
           },
         },
       },
     });
 
-    // Flatten estates from all organizations and check trial status
-    const estates = await Promise.all(
+    const installations = await Promise.all(
       memberships.flatMap((membership) =>
-        membership.organization.estates.map(async (est) => ({
-          id: est.id,
-          name: est.name,
-          organizationId: est.organizationId,
+        membership.organization.installations.map(async (inst) => ({
+          id: inst.id,
+          slug: inst.slug,
+          name: inst.name,
+          organizationId: inst.organizationId,
           organization: {
             id: membership.organization.id,
             name: membership.organization.name,
           },
-          isTrialEstate: await slackChannelOverrideExists(ctx.db, est.id),
-          createdAt: est.createdAt,
-          updatedAt: est.updatedAt,
+          isTrialInstallation: await slackChannelOverrideExists(ctx.db, inst.id),
+          createdAt: inst.createdAt,
+          updatedAt: inst.updatedAt,
         })),
       ),
     );
 
-    return estates;
+    return installations;
   }),
 
-  getCompiledIterateConfig: estateProtectedProcedure.query(async ({ ctx }) => {
+  getCompiledIterateConfig: installationProtectedProcedure.query(async ({ ctx }) => {
     const record = await ctx.db.query.iterateConfig.findFirst({
-      where: eq(iterateConfig.estateId, ctx.estate.id),
+      where: eq(iterateConfig.installationId, ctx.installation.id),
       with: { build: true },
     });
 
@@ -277,37 +348,38 @@ export const estateRouter = router({
     };
   }),
 
-  // Update estate name
-  updateName: estateProtectedProcedure
+  updateName: installationProtectedProcedure
     .input(
       z.object({
-        name: z.string().min(1, "Estate name cannot be empty").max(100, "Estate name too long"),
+        name: z
+          .string()
+          .min(1, "Installation name cannot be empty")
+          .max(100, "Installation name too long"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // The estate is already validated and available in context
-      const estateId = ctx.estate.id;
+      const installationId = ctx.installation.id;
 
-      // Update the estate name
-      const updatedEstate = await ctx.db
-        .update(estate)
+      const updatedInstallation = await ctx.db
+        .update(installation)
         .set({
           name: input.name,
           updatedAt: new Date(),
         })
-        .where(eq(estate.id, estateId))
+        .where(eq(installation.id, installationId))
         .returning();
 
-      if (!updatedEstate[0]) {
-        throw new Error("Failed to update estate");
+      if (!updatedInstallation[0]) {
+        throw new Error("Failed to update installation");
       }
 
       return {
-        id: updatedEstate[0].id,
-        name: updatedEstate[0].name,
-        organizationId: updatedEstate[0].organizationId,
-        createdAt: updatedEstate[0].createdAt,
-        updatedAt: updatedEstate[0].updatedAt,
+        id: updatedInstallation[0].id,
+        slug: updatedInstallation[0].slug,
+        name: updatedInstallation[0].name,
+        organizationId: updatedInstallation[0].organizationId,
+        createdAt: updatedInstallation[0].createdAt,
+        updatedAt: updatedInstallation[0].updatedAt,
       };
     }),
 
@@ -343,11 +415,10 @@ export const estateRouter = router({
       let sha = input.commit.expectedHeadOid;
 
       if (!branch || branch.status !== 200) {
-        // create the branch
         const defaultBranch = await ctx.github.rest.repos.getBranch({
           owner: ctx.repo.owner,
           repo: ctx.repo.repo,
-          branch: ctx.estate.connectedRepoRef!,
+          branch: ctx.installation.connectedRepoRef!,
         });
         const { data: newRef } = await ctx.github.rest.git.createRef({
           owner: ctx.repo.owner,
@@ -381,6 +452,7 @@ export const estateRouter = router({
       );
       return result;
     }),
+
   createPullRequest: githubInstallationScopedProcedure
     .input(
       z.object({
@@ -411,6 +483,7 @@ export const estateRouter = router({
 
       return pullRequest;
     }),
+
   getRepoFilesystem: githubInstallationScopedProcedure
     .input(
       z.object({
@@ -421,7 +494,6 @@ export const estateRouter = router({
       const requestedBranch = input?.branch ?? ctx.refName ?? "main";
       const defaultBranch = ctx.refName ?? "main";
 
-      // Check if the requested branch exists, fall back to default branch if not
       let branch = requestedBranch;
       let branchExists = true;
       let sha: string | undefined;
@@ -437,7 +509,6 @@ export const estateRouter = router({
           branch = defaultBranch;
         }
       } catch (_error: unknown) {
-        // Branch doesn't exist (404) or other error, use default branch
         branchExists = false;
         branch = defaultBranch;
       }
@@ -464,7 +535,7 @@ export const estateRouter = router({
       const filesystem: Record<string, string | null> = Object.fromEntries(
         Object.entries(unzipped)
           .map(([filename, data]) => [
-            filename.split("/").slice(1).join("/"), // root directory is `${owner}-${repo}-${sha}`
+            filename.split("/").slice(1).join("/"),
             fflate.strFromU8(data),
           ])
           .filter(([k, v]) => !k.endsWith("/") && v.trim())
@@ -545,8 +616,6 @@ export const estateRouter = router({
       }),
     )
     .query(async ({ input }) => {
-      // todo: consider moving to frontend? will break api.github.com requests unless a cors proxy is used
-      // who needs pnpm when you can just fetch the tarball and extract the dts files?
       const deps = { ...input.packageJson.dependencies, ...input.packageJson.devDependencies };
       type GottenPackage = {
         packageJson: import("type-fest").PackageJson;
@@ -570,7 +639,7 @@ export const estateRouter = router({
           const filesystem: Record<string, string> = Object.fromEntries(
             Object.entries(unzipped)
               .map(([zipballPath, data]) => {
-                const filename = zipballPath.split("/").slice(1).join("/"); // root dir is `${owner}-${repo}-${sha}`
+                const filename = zipballPath.split("/").slice(1).join("/");
                 return [filename, data] as const;
               })
               .filter(([filename]) => filename.endsWith(".d.ts") || filename === "package.json")
@@ -595,7 +664,6 @@ export const estateRouter = router({
             semver.maxSatisfying(allVersions, specifier) || specifier.replace(/^[~^]/, "");
           url = `https://registry.npmjs.org/${name}/-/${name}-${resolvedVersion}.tgz`;
         } else if (specifier.match(/^[\w-.]+$/)) {
-          // looks like a dist-tag to me
           const packageInfo: {
             "dist-tags": Record<string, string>;
             versions: Record<string, { version: string }>;
@@ -623,7 +691,6 @@ export const estateRouter = router({
 
         const files: Record<string, string> = {};
 
-        // Stream the response directly through gunzip into tar-stream
         const nodeStream = Readable.fromWeb(res.body as import("node:stream/web").ReadableStream);
         const gunzip = createGunzip();
         nodeStream.pipe(gunzip).pipe(extract);
@@ -690,44 +757,44 @@ export const estateRouter = router({
       return packages;
     }),
 
-  // Get builds for an estate
-  getBuilds: estateProtectedProcedure
+  getBuilds: installationProtectedProcedure
     .input(
       z.object({
         limit: z.number().min(1).max(100).default(20).optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
-      const { estateId } = input;
+      const { installationId } = input;
       const limit = input.limit || 20;
 
-      const builds = await ctx.db.query.builds.findMany({
-        where: eq(schema.builds.estateId, estateId),
+      const buildsWithConfig = await ctx.db.query.builds.findMany({
+        where: eq(schema.builds.installationId, installationId),
         orderBy: desc(schema.builds.createdAt),
-        with: { estate: { with: { iterateConfigs: true } } },
         limit: limit,
       });
 
-      return builds.map(({ estate, ...b }) => ({
+      const activeConfig = await ctx.db.query.iterateConfig.findFirst({
+        where: eq(schema.iterateConfig.installationId, installationId),
+      });
+
+      return buildsWithConfig.map((b) => ({
         ...b,
-        isActive: b.id === estate.iterateConfigs[0]?.buildId,
+        isActive: b.id === activeConfig?.buildId,
       }));
     }),
 
-  getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
-    const estateId = ctx.estate.id;
+  getOnboardingStatus: installationProtectedProcedure.query(async ({ ctx }) => {
+    const installationId = ctx.installation.id;
 
-    // Get the estate with onboarding agent name
-    const estateData = await ctx.db.query.estate.findFirst({
-      where: eq(estate.id, estateId),
+    const installationData = await ctx.db.query.installation.findFirst({
+      where: eq(installation.id, installationId),
     });
 
-    if (!estateData) {
-      throw new Error("Estate not found");
+    if (!installationData) {
+      throw new Error("Installation not found");
     }
 
-    // If no onboarding agent name, onboarding is completed
-    if (!estateData.onboardingAgentName) {
+    if (!installationData.onboardingAgentName) {
       return {
         status: "completed" as const,
         agentName: null,
@@ -735,24 +802,22 @@ export const estateRouter = router({
       };
     }
 
-    // Find the agent instance for this estate and agent name
     const agent = await ctx.db.query.agentInstance.findFirst({
       where: and(
-        eq(agentInstance.estateId, estateId),
-        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
+        eq(agentInstance.installationId, installationId),
+        eq(agentInstance.durableObjectName, installationData.onboardingAgentName),
       ),
     });
 
     if (!agent) {
       return {
         status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
+        agentName: installationData.onboardingAgentName,
         onboardingData: {},
       };
     }
 
     try {
-      // Get the agent stub using the existing helper
       const stub = await getAgentStubByName(toAgentClassName(agent.className), {
         db: ctx.db,
         agentInstanceName: agent.durableObjectName,
@@ -763,37 +828,33 @@ export const estateRouter = router({
 
       return {
         status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
+        agentName: installationData.onboardingAgentName,
         onboardingData: state.onboardingData ?? {},
       };
     } catch (_error) {
-      // If we can't fetch the state, return empty onboarding data
       return {
         status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
+        agentName: installationData.onboardingAgentName,
         onboardingData: {},
       };
     }
   }),
 
-  // Get latest onboarding results by calling the agent's getResults() tool
-  getOnboardingResults: estateProtectedProcedure.query(async ({ ctx }) => {
-    const estateId = ctx.estate.id;
+  getOnboardingResults: installationProtectedProcedure.query(async ({ ctx }) => {
+    const installationId = ctx.installation.id;
 
-    // Read the onboarding agent name from the estate
-    const estateData = await ctx.db.query.estate.findFirst({
-      where: eq(estate.id, estateId),
+    const installationData = await ctx.db.query.installation.findFirst({
+      where: eq(installation.id, installationId),
     });
 
-    if (!estateData?.onboardingAgentName) {
+    if (!installationData?.onboardingAgentName) {
       return { results: {} as Record<string, unknown> };
     }
 
-    // Find the agent instance for this estate and agent name
     const agent = await ctx.db.query.agentInstance.findFirst({
       where: and(
-        eq(agentInstance.estateId, estateId),
-        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
+        eq(agentInstance.installationId, installationId),
+        eq(agentInstance.durableObjectName, installationData.onboardingAgentName),
       ),
     });
 
@@ -801,13 +862,11 @@ export const estateRouter = router({
       return { results: {} as Record<string, unknown> };
     }
 
-    // Get the agent stub and call getResults() if it's an OnboardingAgent
     const stub = await getAgentStubByName(toAgentClassName(agent.className), {
       db: ctx.db,
       agentInstanceName: agent.durableObjectName,
     });
 
-    // Narrow to onboarding agent based on class name
     if (agent.className === "OnboardingAgent") {
       try {
         const results = await (stub as any).getResults({});
@@ -825,12 +884,11 @@ export const estateRouter = router({
       z.object({
         target: z.string().min(1, "Target is required"),
         targetType: z.enum(["branch", "commit"]).default("branch"),
-        /** if true, will skip triggering a new build if one is already in progress for the same commit */
         useExisting: z.boolean().default(false),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const { estateId, target, targetType } = input;
+      const { installationId, target, targetType } = input;
 
       let commitHash: string;
       let commitMessage: string;
@@ -872,7 +930,7 @@ export const estateRouter = router({
       if (input.useExisting) {
         const existing = await ctx.db.query.builds.findFirst({
           where: and(
-            eq(schema.builds.estateId, estateId),
+            eq(schema.builds.installationId, installationId),
             eq(schema.builds.commitHash, commitHash),
             or(eq(schema.builds.status, "in_progress"), eq(schema.builds.status, "queued")),
           ),
@@ -886,11 +944,10 @@ export const estateRouter = router({
         }
       }
 
-      // Use the helper function to trigger the rebuild
-      const build = await triggerEstateRebuild({
+      const build = await triggerInstallationRebuild({
         db: ctx.db,
         env: ctx.env,
-        estateId,
+        installationId,
         commitHash,
         commitMessage,
         isManual: true,
@@ -908,17 +965,16 @@ export const estateRouter = router({
       const { buildId } = input;
       const updated = await ctx.db
         .insert(schema.iterateConfig)
-        .values({ buildId, estateId: ctx.estate.id })
+        .values({ buildId, installationId: ctx.installation.id })
         .onConflictDoUpdate({
-          target: [schema.iterateConfig.estateId],
+          target: [schema.iterateConfig.installationId],
           set: { buildId },
         })
         .returning();
       return { updated: updated.length };
     }),
 
-  // Mark a user onboarding step as completed
-  completeUserOnboardingStep: estateProtectedProcedure
+  completeUserOnboardingStep: installationProtectedProcedure
     .input(
       z.object({
         step: z.enum(["confirm_org", "slack"]),
@@ -927,12 +983,11 @@ export const estateRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await ctx.db.transaction(async (tx) => {
-        // Append immutable confirmation event
         await tx
-          .insert(schema.estateOnboardingEvent)
+          .insert(schema.installationOnboardingEvent)
           .values({
-            estateId: ctx.estate.id,
-            organizationId: ctx.estate.organizationId,
+            installationId: ctx.installation.id,
+            organizationId: ctx.installation.organizationId,
             eventType: input.step === "confirm_org" ? "OrgNameConfirmed" : "SlackAdded",
             category: "user",
             detail: input.detail ?? null,
@@ -941,10 +996,10 @@ export const estateRouter = router({
           .onConflictDoNothing();
 
         await tx
-          .insert(schema.estateOnboardingEvent)
+          .insert(schema.installationOnboardingEvent)
           .values({
-            estateId: input.estateId,
-            organizationId: ctx.estate.organizationId,
+            installationId: input.installationId,
+            organizationId: ctx.installation.organizationId,
             eventType: "OnboardingCompleted",
             category: "user",
           })

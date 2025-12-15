@@ -3,10 +3,10 @@ import { eq } from "drizzle-orm";
 import { t } from "../config.ts";
 import { db, schema } from "../cli-db.ts";
 
-export const addUserToEstate = t.procedure
+export const addUserToInstallation = t.procedure
   .input(
     z.object({
-      estateId: z.string(),
+      installationId: z.string(),
       email: z.string().email("Invalid email address"),
       role: z
         .enum(["member", "admin", "owner", "guest"])
@@ -16,7 +16,7 @@ export const addUserToEstate = t.procedure
     }),
   )
   .mutation(async ({ input }) => {
-    const { estateId, email, role } = input;
+    const { installationId, email, role } = input;
 
     // Check if DRIZZLE_RW_POSTGRES_CONNECTION_STRING is available at runtime
     if (!process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING) {
@@ -34,16 +34,16 @@ export const addUserToEstate = t.procedure
       throw new Error(`User with email ${email} not found in the database`);
     }
 
-    // Find the estate and get its organization
-    const estate = await db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    // Find the installation and get its organization
+    const installation = await db.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
       with: {
         organization: true,
       },
     });
 
-    if (!estate) {
-      throw new Error(`Estate with ID ${estateId} not found`);
+    if (!installation) {
+      throw new Error(`Installation with ID ${installationId} not found`);
     }
 
     // Upsert the membership - this will insert if not exists, or update if it does
@@ -51,7 +51,7 @@ export const addUserToEstate = t.procedure
       .insert(schema.organizationUserMembership)
       .values({
         userId: user.id,
-        organizationId: estate.organizationId,
+        organizationId: installation.organizationId,
         role: role,
       })
       .onConflictDoUpdate({
@@ -71,7 +71,7 @@ export const addUserToEstate = t.procedure
 
     const action = isNew ? "added to" : "updated in";
     console.log(
-      `✅ Successfully ${action} user ${email} ${isNew ? "to" : "in"} organization ${estate.organization.name} with role: ${role}`,
+      `✅ Successfully ${action} user ${email} ${isNew ? "to" : "in"} organization ${installation.organization.name} with role: ${role}`,
     );
 
     return {
@@ -83,12 +83,12 @@ export const addUserToEstate = t.procedure
         name: user.name,
       },
       organization: {
-        id: estate.organization.id,
-        name: estate.organization.name,
+        id: installation.organization.id,
+        name: installation.organization.name,
       },
-      estate: {
-        id: estate.id,
-        name: estate.name,
+      installation: {
+        id: installation.id,
+        name: installation.name,
       },
       membership: {
         role: membership.role,

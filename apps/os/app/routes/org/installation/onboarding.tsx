@@ -8,7 +8,7 @@ import { z } from "zod";
 import { redirect } from "@tanstack/react-router";
 import { useState } from "react";
 import * as schema from "../../../../backend/db/schema.ts";
-import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
+import { isInstallationOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import { useTRPC } from "../../../lib/trpc.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
@@ -16,14 +16,17 @@ import { OnboardingSlackStep } from "./onboarding-slack-step.tsx";
 import { OnboardingConfirmOrgStep } from "./onboarding-confirm-org-step.tsx";
 
 const estateOnboardingLoader = authenticatedServerFn
-  .inputValidator(z.object({ organizationId: z.string(), estateId: z.string() }))
+  .inputValidator(z.object({ organizationId: z.string(), installationId: z.string() }))
   .handler(async ({ context, data }) => {
-    const { organizationId, estateId } = data;
+    const { organizationId, installationId } = data;
     const { db } = context.variables;
 
-    const required = await isEstateOnboardingRequired(db, estateId);
+    const required = await isInstallationOnboardingRequired(db, installationId);
     if (!required)
-      throw redirect({ to: `/$organizationId/$estateId`, params: { organizationId, estateId } });
+      throw redirect({
+        to: `/$organizationId/$installationId`,
+        params: { organizationId, installationId },
+      });
 
     const organization = await db.query.organization.findFirst({
       where: eq(schema.organization.id, organizationId),
@@ -31,17 +34,17 @@ const estateOnboardingLoader = authenticatedServerFn
 
     if (!organization) throw notFound();
 
-    return { organization, estateId, organizationId };
+    return { organization, installationId, organizationId };
   });
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/onboarding")({
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/onboarding")({
   component: EstateOnboarding,
   validateSearch: z.object({
     step: z.enum(["confirm_org", "slack", "slack_complete"]).default("confirm_org"),
   }),
   loader: ({ params }) =>
     estateOnboardingLoader({
-      data: { organizationId: params.organizationId, estateId: params.estateId },
+      data: { organizationId: params.organizationId, installationId: params.installationId },
     }),
   head: () => ({
     meta: [
@@ -52,13 +55,13 @@ export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId/on
 });
 
 export default function EstateOnboarding() {
-  const { organization, estateId, organizationId } = Route.useLoaderData();
+  const { organization, installationId, organizationId } = Route.useLoaderData();
   const trpc = useTRPC();
   const { step: initialStep } = Route.useSearch();
   const [step, setStep] = useState<typeof initialStep>(initialStep);
 
   const completeOnboardingStep = useMutation(
-    trpc.estate.completeUserOnboardingStep.mutationOptions({
+    trpc.installation.completeUserOnboardingStep.mutationOptions({
       onError: (error) => toast.error(error.message),
     }),
   );
@@ -68,7 +71,7 @@ export default function EstateOnboarding() {
   const { isFetching } = useQuery(
     trpc.integrations.list.queryOptions(
       {
-        estateId: estateId,
+        installationId: installationId,
       },
       {
         enabled: step === "slack_complete",
@@ -82,7 +85,7 @@ export default function EstateOnboarding() {
     <>
       {/* {!isSlackConnected && (
         <Button asChild>
-          <a href={`/${organizationId}/${estateId}/onboarding?step=slack`}>Connect bot to slack</a>
+          <a href={`/${organizationId}/${installationId}/onboarding?step=slack`}>Connect bot to slack</a>
         </Button>
       )} */}
       {match(step)
@@ -91,12 +94,12 @@ export default function EstateOnboarding() {
             <Button
               onClick={() => {
                 completeOnboardingStep.mutate(
-                  { estateId, step: "slack" },
+                  { installationId, step: "slack" },
                   {
                     onSuccess: () =>
                       navigate({
-                        to: `/$organizationId/$estateId`,
-                        params: { organizationId, estateId },
+                        to: `/$organizationId/$installationId`,
+                        params: { organizationId, installationId },
                       }),
                   },
                 );
@@ -116,7 +119,7 @@ export default function EstateOnboarding() {
         .otherwise(() => (
           <OnboardingSlackStep
             organizationId={organizationId}
-            estateId={estateId}
+            installationId={installationId}
             onComplete={() => setStep("slack_complete")}
           />
         ))}

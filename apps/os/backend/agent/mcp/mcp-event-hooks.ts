@@ -45,7 +45,7 @@ interface MCPEventHandlerParams<TEvent extends HookedMCPEvent = HookedMCPEvent> 
   event: TEvent;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   agentDurableObject: AgentDurableObjectInfo;
-  estateId: string;
+  installationId: string;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
   storage: DurableObjectStorage;
@@ -99,23 +99,23 @@ async function getMCPParamsCollectionURL(params: {
   connectionKey: string;
   requiredParams: MCPParam[];
   agentDurableObject: AgentDurableObjectInfo;
-  estateId: string;
+  installationId: string;
   integrationSlug: string;
   finalRedirectUrl: string | undefined;
 }): Promise<string> {
-  const estate = await params.db.query.estate.findFirst({
-    where: eq(schema.estate.id, params.estateId),
+  const estate = await params.db.query.installation.findFirst({
+    where: eq(schema.installation.id, params.installationId),
     columns: {
       organizationId: true,
     },
   });
 
   if (!estate) {
-    throw new Error(`Estate ${params.estateId} not found`);
+    throw new Error(`Estate ${params.installationId} not found`);
   }
 
   const url = new URL(
-    `${import.meta.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.estateId}/integrations/mcp-params`,
+    `${import.meta.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.installationId}/integrations/mcp-params`,
   );
   url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);
@@ -135,7 +135,7 @@ async function getMCPParamsCollectionURL(params: {
 export async function handleMCPConnectRequest(
   params: MCPEventHandlerParams<MCPConnectRequestEvent>,
 ): Promise<MCPEventHookReturnEvent[]> {
-  const { event, reducedState, agentDurableObject, estateId, mcpConnectionCache } = params;
+  const { event, reducedState, agentDurableObject, installationId, mcpConnectionCache } = params;
   const events: MCPEventHookReturnEvent[] = [];
   const db = getDb();
   const auth = getAuth(db);
@@ -189,7 +189,7 @@ export async function handleMCPConnectRequest(
   if (requiresParams && requiresParams.length > 0) {
     const storedParams = await db.query.mcpConnectionParam.findMany({
       where: and(
-        eq(mcpConnectionParam.estateId, estateId),
+        eq(mcpConnectionParam.installationId, installationId),
         eq(mcpConnectionParam.connectionKey, connectionKey),
       ),
     });
@@ -209,7 +209,7 @@ export async function handleMCPConnectRequest(
         connectionKey,
         requiredParams: missingParams,
         agentDurableObject,
-        estateId,
+        installationId,
         integrationSlug: guaranteedIntegrationSlug,
         finalRedirectUrl,
       });
@@ -254,7 +254,7 @@ export async function handleMCPConnectRequest(
     auth,
     db,
     userId,
-    estateId: estateId,
+    installationId: installationId,
     integrationSlug: guaranteedIntegrationSlug,
     serverUrl: modifiedServerUrl,
     callbackUrl: finalRedirectUrl,
@@ -532,7 +532,7 @@ export async function getOrCreateMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connectionRequestEvent: MCPConnectRequestEvent;
   agentDurableObject: AgentDurableObjectInfo;
-  estateId: string;
+  installationId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;
@@ -565,7 +565,7 @@ export async function getOrCreateMCPConnection(params: {
           event: params.connectionRequestEvent,
           reducedState: params.reducedState,
           agentDurableObject: params.agentDurableObject,
-          estateId: params.estateId,
+          installationId: params.installationId,
           mcpConnectionCache,
           mcpConnectionQueues,
           storage: params.storage,
@@ -627,7 +627,7 @@ export async function rehydrateExistingMCPConnection(params: {
   connectionKey: MCPConnectionKey;
   connection: MCPConnection;
   agentDurableObject: AgentDurableObjectInfo;
-  estateId: string;
+  installationId: string;
   reducedState: MergedStateForSlices<CoreAgentSlices>;
   mcpConnectionCache: MCPManagerCache;
   mcpConnectionQueues: MCPConnectionQueues;

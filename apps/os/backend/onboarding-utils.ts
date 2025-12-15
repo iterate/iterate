@@ -1,10 +1,13 @@
 import type { DB } from "./db/client.ts";
 
-export async function isEstateOnboardingRequired(db: DB, estateId: string): Promise<boolean> {
+export async function isInstallationOnboardingRequired(
+  db: DB,
+  installationId: string,
+): Promise<boolean> {
   // If we have a completion event, never require onboarding again
-  const completion = await db.query.estateOnboardingEvent.findFirst({
+  const completion = await db.query.installationOnboardingEvent.findFirst({
     where: (t, { and, eq }) =>
-      and(eq(t.estateId, estateId), eq(t.eventType, "OnboardingCompleted")),
+      and(eq(t.installationId, installationId), eq(t.eventType, "OnboardingCompleted")),
   });
   return !completion;
 }

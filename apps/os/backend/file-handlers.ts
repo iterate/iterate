@@ -27,14 +27,14 @@ export interface UploadArgs {
 const startUpload = async (
   db: DB,
   fileId: string,
-  estateId: string,
+  installationId: string,
   filename?: string,
 ): Promise<FileRecord> => {
   const newFile: NewFileRecord = {
     id: fileId,
     status: "started",
     filename,
-    estateId,
+    installationId,
   };
 
   const [insertedFile] = await db.insert(schema.files).values(newFile).returning();
@@ -128,9 +128,9 @@ export const uploadFileHandler = async (
       return c.json({ error: "Database unavailable" }, 500);
     }
 
-    const estateId = c.req.param("estateId");
-    if (!estateId) {
-      return c.json({ error: "estateId parameter is required" }, 400);
+    const installationId = c.req.param("installationId");
+    if (!installationId) {
+      return c.json({ error: "installationId parameter is required" }, 400);
     }
 
     const filename = c.req.query("filename");
@@ -147,7 +147,7 @@ export const uploadFileHandler = async (
       contentLength,
       filename,
       contentType,
-      estateId,
+      installationId,
       db,
     });
     return c.json(fileRecord);
@@ -165,13 +165,13 @@ export const uploadFileFromURL = async ({
   url,
   filename,
   headers,
-  estateId,
+  installationId,
   db,
 }: {
   url: string;
   filename: string;
   headers?: Record<string, string>;
-  estateId: string;
+  installationId: string;
   db: DB;
 }): Promise<FileRecord> => {
   // Fetch the file from URL
@@ -195,7 +195,7 @@ export const uploadFileFromURL = async ({
     contentLength,
     filename,
     contentType,
-    estateId,
+    installationId,
     db,
   });
 
@@ -206,8 +206,8 @@ export function getFilePublicURL(iterateFileId: string) {
   return `${getBaseURL({ replaceLocalhostWithNgrok: true })}/api/files/${iterateFileId}`;
 }
 
-export async function getFileContent(params: { iterateFileId: string; db: DB; estateId: string }) {
-  const { iterateFileId, db, estateId } = params;
+export async function getFileContent(params: { iterateFileId: string; db: DB; installationId: string }) {
+  const { iterateFileId, db, installationId } = params;
 
   // Get file record from database
   const [fileRecord] = await db.select().from(files).where(eq(files.id, iterateFileId)).limit(1);
@@ -217,8 +217,8 @@ export async function getFileContent(params: { iterateFileId: string; db: DB; es
   }
 
   // Verify the file belongs to the specified estate
-  if (fileRecord.estateId !== estateId) {
-    throw new Error(`File ${iterateFileId} does not belong to estate ${estateId}`);
+  if (fileRecord.installationId !== installationId) {
+    throw new Error(`File ${iterateFileId} does not belong to estate ${installationId}`);
   }
 
   if (fileRecord.status !== "completed") {
@@ -251,12 +251,12 @@ export const uploadFile = async ({
   contentLength,
   filename,
   contentType,
-  estateId,
+  installationId,
   db,
 }: {
   filename: string;
   contentType: string;
-  estateId: string;
+  installationId: string;
   db: DB;
 } & (
   | {
@@ -294,13 +294,13 @@ export const uploadFile = async ({
 
   try {
     // Start the upload process
-    await startUpload(db, fileId, estateId, filename);
+    await startUpload(db, fileId, installationId, filename);
     // Get the estate name for tracking purposes
-    const estate = await db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    const estate = await db.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
     });
     if (!estate) {
-      throw new Error(`Estate not found: ${estateId}`);
+      throw new Error(`Estate not found: ${installationId}`);
     }
     // Upload the file
     const fileRecord = await doUpload({
@@ -332,12 +332,12 @@ export const uploadFile = async ({
 export const uploadFileFromURLHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
-  const estateId = c.req.param("estateId");
+  const installationId = c.req.param("installationId");
   const url = c.req.query("url");
   const filename = c.req.query("filename");
 
-  if (!estateId) {
-    return c.json({ error: "estateId parameter is required" }, 400);
+  if (!installationId) {
+    return c.json({ error: "installationId parameter is required" }, 400);
   }
 
   if (!url) {
@@ -354,7 +354,7 @@ export const uploadFileFromURLHandler = async (
       return c.json({ error: "Database unavailable" }, 500);
     }
 
-    const fileRecord = await uploadFileFromURL({ url, filename, estateId, db });
+    const fileRecord = await uploadFileFromURL({ url, filename, installationId, db });
     return c.json(fileRecord);
   } catch (error) {
     logger.error("Upload from URL error:", error);
@@ -427,7 +427,7 @@ export const getExportHandler = async (
   c: Context<{ Bindings: CloudflareEnv; Variables: Variables }>,
 ) => {
   const exportId = c.req.param("exportId");
-  const estateId = c.req.param("estateId");
+  const installationId = c.req.param("installationId");
 
   try {
     const r2Key = `exports/${exportId}.zip`;
@@ -437,7 +437,7 @@ export const getExportHandler = async (
       return c.json({ error: "Export not found" }, 404);
     }
 
-    if (object.customMetadata?.estateId !== estateId) {
+    if (object.customMetadata?.installationId !== installationId) {
       return c.json({ error: "Export not found for this estate" }, 404);
     }
 

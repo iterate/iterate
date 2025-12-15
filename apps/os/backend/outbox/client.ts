@@ -3,8 +3,8 @@ import { waitUntil } from "../../env.ts";
 import { type TrpcEventTypes, createConsumerClient } from "./pgmq-lib.ts";
 import { queuer } from "./outbox-queuer.ts";
 
-export type EstateBuilderWorkflowInput = {
-  estateId: string;
+export type InstallationBuilderWorkflowInput = {
+  installationId: string;
   commitHash: string;
   commitMessage: string;
   repoUrl: string;
@@ -18,8 +18,8 @@ export type EstateBuilderWorkflowInput = {
 
 export type InternalEventTypes = {
   "testing:poke": { dbtime: string; message: string };
-  "estate:build:created": EstateBuilderWorkflowInput & { buildId: string };
-  "estate:created": { estateId: string };
+  "installation:build:created": InstallationBuilderWorkflowInput & { buildId: string };
+  "installation:created": { installationId: string };
 };
 
 type AppTrpcEventTypes = TrpcEventTypes<typeof appRouter>;

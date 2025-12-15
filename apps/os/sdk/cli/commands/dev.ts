@@ -75,16 +75,16 @@ async function runBootstrap(configPath?: string) {
     throw new Error("No default export found in iterate config");
   }
 
-  const estates = await db.query.estate.findMany({ with: recentActiveSources });
+  const installations = await db.query.installation.findMany({ with: recentActiveSources });
 
-  // Insert the same config for all estates
-  for (const estate of estates) {
+  // Insert the same config for all installations
+  for (const installation of installations) {
     await db.transaction(async (tx) => {
       const [fakeBuild] = await tx
         .insert(schema.builds)
         .values({
           config: config,
-          estateId: estate.id,
+          installationId: installation.id,
           commitHash: "dev",
           commitMessage: "dev",
           files,
@@ -94,13 +94,15 @@ async function runBootstrap(configPath?: string) {
         })
         .returning();
       await tx.insert(schema.iterateConfig).values({
-        estateId: estate.id,
+        installationId: installation.id,
         buildId: fakeBuild.id,
       });
     });
   }
 
-  console.log(`Bootstrapped ${estates.length} estates' iterateConfig from ${resolvedPath}`);
+  console.log(
+    `Bootstrapped ${installations.length} installations' iterateConfig from ${resolvedPath}`,
+  );
 }
 
 const bootstrap = t.procedure

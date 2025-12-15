@@ -2,8 +2,7 @@ import { agentsRouter } from "../agent/agents-router.ts";
 import { stripeRouter } from "../integrations/stripe/trpc-procedures.ts";
 import { router } from "./trpc.ts";
 import { integrationsRouter } from "./routers/integrations.ts";
-import { estateRouter } from "./routers/estate.ts";
-import { estatesRouter } from "./routers/estates.ts";
+import { installationRouter } from "./routers/installation.ts";
 import { userRouter } from "./routers/user.ts";
 import { testingRouter } from "./routers/testing.ts";
 import { adminRouter } from "./routers/admin.ts";
@@ -12,8 +11,7 @@ import { organizationRouter } from "./routers/organization.ts";
 export const appRouter = router({
   integrations: integrationsRouter,
   agents: agentsRouter,
-  estate: estateRouter,
-  estates: estatesRouter,
+  installation: installationRouter,
   user: userRouter,
   admin: adminRouter,
   testing: testingRouter,

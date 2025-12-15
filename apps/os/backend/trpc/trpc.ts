@@ -130,7 +130,7 @@ export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   .use(autoInvalidateMiddleware); // Add auto-invalidation to all protected procedures
 
 export const protectedProcedure = protectedProcedureWithNoEstateRestrictions.input(
-  z.object({ estateId: z.never().optional() }).optional(),
+  z.object({ installationId: z.never().optional() }).optional(),
 );
 
 // Create a version of protectedProcedure without auto-invalidation for special cases
@@ -185,14 +185,14 @@ export async function getUserOrganizations(db: DB, userId: string) {
   });
 }
 
-// Helper function to get user's non-external organizations with estates
-export async function getUserOrganizationsWithEstates(db: DB, userId: string) {
+// Helper function to get user's non-external organizations with installations
+export async function getUserOrganizationsWithInstallations(db: DB, userId: string) {
   return db.query.organizationUserMembership.findMany({
     where: getNonExternalOrganizationFilter(userId),
     with: {
       organization: {
         with: {
-          estates: { with: recentActiveSources },
+          installations: { with: recentActiveSources },
         },
       },
     },
@@ -222,44 +222,44 @@ export async function getUserOrganizationAccess(
   return { hasAccess: true, organization: membership.organization };
 }
 
-// Helper function to get user's estate if they have access
-export async function getUserEstateAccess(
+// Helper function to get user's installation if they have access
+export async function getUserInstallationAccess(
   db: DB,
   userId: string,
-  estateId: string,
+  installationId: string,
   organizationId?: string,
 ) {
-  const userWithEstates = await db.query.organizationUserMembership.findMany({
+  const userWithInstallations = await db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
-    with: { organization: { with: { estates: { with: recentActiveSources } } } },
+    with: { organization: { with: { installations: { with: recentActiveSources } } } },
   });
 
-  if (!userWithEstates?.length) {
-    return { hasAccess: false, estate: null } as const;
+  if (!userWithInstallations?.length) {
+    return { hasAccess: false, installation: null } as const;
   }
 
-  const allEstates = userWithEstates.flatMap(({ organization }) => organization.estates);
+  const allInstallations = userWithInstallations.flatMap(
+    ({ organization }) => organization.installations,
+  );
 
-  // Check if the estate belongs to the user's organization
-  const _userEstate = allEstates.find((e) => e.id === estateId);
-  const userEstate = _userEstate && {
-    ..._userEstate,
-    connectedRepoId: _userEstate?.sources?.[0]?.repoId,
-    connectedRepoPath: _userEstate?.sources?.[0]?.path,
-    connectedRepoRef: _userEstate?.sources?.[0]?.branch,
-    connectedRepoAccountId: _userEstate?.sources?.[0]?.accountId,
+  const _userInstallation = allInstallations.find((i) => i.id === installationId);
+  const userInstallation = _userInstallation && {
+    ..._userInstallation,
+    connectedRepoId: _userInstallation?.sources?.[0]?.repoId,
+    connectedRepoPath: _userInstallation?.sources?.[0]?.path,
+    connectedRepoRef: _userInstallation?.sources?.[0]?.branch,
+    connectedRepoAccountId: _userInstallation?.sources?.[0]?.accountId,
   };
 
-  if (!userEstate) {
-    return { hasAccess: false, estate: null } as const;
+  if (!userInstallation) {
+    return { hasAccess: false, installation: null } as const;
   }
 
-  // If organizationId is provided, verify it matches
-  if (organizationId && userEstate.organizationId !== organizationId) {
-    return { hasAccess: false, estate: null } as const;
+  if (organizationId && userInstallation.organizationId !== organizationId) {
+    return { hasAccess: false, installation: null } as const;
   }
 
-  return { hasAccess: true, estate: userEstate } as const;
+  return { hasAccess: true, installation: userInstallation } as const;
 }
 
 // Organization protected procedure that requires both authentication and organization membership
@@ -338,29 +338,28 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
   return next({ ctx });
 });
 
-// Estate protected procedure that requires both authentication and estate access
-export const estateProtectedProcedure = protectedProcedureWithNoEstateRestrictions
-  .use(autoInvalidateMiddleware) // Add auto-invalidation to all protected procedures
-  .input(z.object({ estateId: z.string() }))
+// Installation protected procedure that requires both authentication and installation access
+export const installationProtectedProcedure = protectedProcedureWithNoEstateRestrictions
+  .use(autoInvalidateMiddleware)
+  .input(z.object({ installationId: z.string() }))
   .use(async ({ ctx, input, next, path }) => {
-    const { hasAccess, estate: userEstate } = await getUserEstateAccess(
+    const { hasAccess, installation: userInstallation } = await getUserInstallationAccess(
       ctx.db,
       ctx.user.id,
-      input.estateId,
+      input.installationId,
     );
 
-    if (!hasAccess || !userEstate) {
+    if (!hasAccess || !userInstallation) {
       throw new TRPCError({
         code: "FORBIDDEN",
-        message: `Access to ${path} denied: User ${ctx.user.id} does not have permission to access this estate ${input.estateId}`,
+        message: `Access to ${path} denied: User ${ctx.user.id} does not have permission to access this installation ${input.installationId}`,
       });
     }
 
-    // Pass the estate data to the next middleware/resolver
     return next({
       ctx: {
         ...ctx,
-        estate: userEstate,
+        installation: userInstallation,
       },
     });
   });

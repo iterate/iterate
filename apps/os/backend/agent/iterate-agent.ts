@@ -91,7 +91,7 @@ const UNDER_PRO_PROCESSORS = ["lite", "base", "core", "core2x"] as const;
 export type AgentInstanceDatabaseRecord = typeof agentInstance.$inferSelect;
 export type AgentInitParams = {
   record: AgentInstanceDatabaseRecord;
-  estate: typeof schema.estate.$inferSelect;
+  installation: typeof schema.installation.$inferSelect;
   organization: typeof schema.organization.$inferSelect;
   iterateConfig: IterateConfig;
   // Optional props forwarded to PartyKit when setting the room name
@@ -196,7 +196,7 @@ export class IterateAgent<
   // Runtime slice list – inferred from the generic parameter.
   agentCore!: AgentCore<Slices, CoreAgentSlices>;
   _databaseRecord?: AgentInstanceDatabaseRecord;
-  _estate?: typeof schema.estate.$inferSelect;
+  _installation?: typeof schema.installation.$inferSelect;
   _organization?: typeof schema.organization.$inferSelect;
   _iterateConfig?: IterateConfig;
   // Instance-level MCP manager cache and connection queues to avoid sharing across DOs
@@ -234,7 +234,7 @@ export class IterateAgent<
    */
   private async persistInitParams(params: AgentInitParams) {
     this._databaseRecord = params.record;
-    this._estate = params.estate;
+    this._installation = params.installation;
     this._organization = params.organization;
     this._iterateConfig = params.iterateConfig;
 
@@ -264,10 +264,10 @@ export class IterateAgent<
     return this._databaseRecord;
   }
 
-  get estate() {
-    if (!this._estate)
-      throw new Error("this._estate not set in IterateAgent - this should never happen");
-    return this._estate;
+  get installation() {
+    if (!this._installation)
+      throw new Error("this._installation not set in IterateAgent - this should never happen");
+    return this._installation;
   }
 
   get organization() {
@@ -350,15 +350,15 @@ export class IterateAgent<
    */
   protected initAgentCore(): AgentCore<Slices, CoreAgentSlices> {
     const slices = this.getSlices();
-    const getEstate = pMemoize(() => this.getEstate());
+    const getInstallationInfo = pMemoize(() => this.getInstallationInfo());
     const getBraintrustParentSpanExportedId = pMemoize(async () => {
-      const estate = await getEstate();
-      return await this.getOrCreateBraintrustParentSpanExportedId(estate.name);
+      const installationInfo = await getInstallationInfo();
+      return await this.getOrCreateBraintrustParentSpanExportedId(installationInfo.name);
     });
     const posthogClient = pMemoize(async () => {
-      const estate = await getEstate();
+      const installationInfo = await getInstallationInfo();
       return new PosthogCloudflare(this.ctx, {
-        estateName: estate.name,
+        estateName: installationInfo.name,
         projectName: this.env.PROJECT_NAME,
       });
     });
@@ -524,9 +524,9 @@ export class IterateAgent<
       },
 
       getOpenAIClient: async () => {
-        const estate = await getEstate();
+        const installationInfo = await getInstallationInfo();
         return await openAIProvider({
-          estateName: estate.name,
+          estateName: installationInfo.name,
           posthog: {
             projectName: this.env.PROJECT_NAME,
             traceId: this.posthogTraceId,
@@ -556,7 +556,7 @@ export class IterateAgent<
       }) => {
         // Cloudflare needs to know the content length in advance, so we need to create a fixed-length stream
         const fileRecord = await uploadFile({
-          estateId: this.databaseRecord.estateId,
+          installationId: this.databaseRecord.installationId,
           db: this.db,
           stream: data.content,
           contentLength: data.contentLength,
@@ -627,7 +627,7 @@ export class IterateAgent<
               event: mcpEvent,
               reducedState,
               agentDurableObject: this.hydrationInfo,
-              estateId: this.databaseRecord.estateId,
+              installationId: this.databaseRecord.installationId,
               mcpConnectionCache: this.mcpManagerCache,
               mcpConnectionQueues: this.mcpConnectionQueues,
               storage: this.ctx.storage,
@@ -710,7 +710,7 @@ export class IterateAgent<
       },
       lazyConnectionDeps: {
         getDurableObjectInfo: () => this.hydrationInfo,
-        getEstateId: () => this.databaseRecord.estateId,
+        getInstallationId: () => this.databaseRecord.installationId,
         getReducedState: () => this.agentCore.state,
         mcpConnectionCache: this.mcpManagerCache,
         mcpConnectionQueues: this.mcpConnectionQueues,
@@ -794,7 +794,7 @@ export class IterateAgent<
       if (updated) {
         await this.persistInitParams({
           record: updated,
-          estate: this.estate,
+          installation: this.installation,
           organization: this.organization,
           iterateConfig: this.iterateConfig || {},
         });
@@ -900,7 +900,7 @@ export class IterateAgent<
   protected async getContextRules(): Promise<ContextRule[]> {
     // const { db, databaseRecord } = this;
     // sadly drizzle doesn't support abort signals yet https://github.com/drizzle-team/drizzle-orm/issues/1602
-    // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.estateId), {
+    // const rulesFromDb = await pTimeout(IterateAgent.getRulesFromDB(db, databaseRecord.installationId), {
     //   milliseconds: 250,
     //   fallback: () => logger.warn("getRulesFromDB timeout - DO initialisation deadlock?"),
     // });
@@ -926,8 +926,8 @@ export class IterateAgent<
    * Returns true if the user is a guest, false otherwise.
    */
   private async getUserRole(userId: string): Promise<UserRole | undefined> {
-    const estate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, this.databaseRecord.estateId),
+    const estate = await this.db.query.installation.findFirst({
+      where: eq(schema.installation.id, this.databaseRecord.installationId),
       with: {
         organization: {
           with: {
@@ -955,15 +955,15 @@ export class IterateAgent<
 
     const targetRecord = await this.db.query.agentInstance.findFirst({
       where: and(
-        eq(agentInstance.estateId, this.databaseRecord.estateId),
+        eq(agentInstance.installationId, this.databaseRecord.installationId),
         // agent names are prefixed by estate id
-        eq(agentInstance.durableObjectName, `${this.databaseRecord.estateId}-${agentName}`),
+        eq(agentInstance.durableObjectName, `${this.databaseRecord.installationId}-${agentName}`),
       ),
     });
 
     if (!targetRecord) {
       throw new Error(
-        `Agent instance ${agentName} not found in estate ${this.databaseRecord.estateId}`,
+        `Agent instance ${agentName} not found in estate ${this.databaseRecord.installationId}`,
       );
     }
 
@@ -1133,8 +1133,8 @@ export class IterateAgent<
     const exportId = typeid("export").toString();
     const events = this.getEvents();
 
-    const fullEstate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, this.databaseRecord.estateId),
+    const fullEstate = await this.db.query.installation.findFirst({
+      where: eq(schema.installation.id, this.databaseRecord.installationId),
     });
     if (!fullEstate) {
       throw new Error("Estate not found");
@@ -1148,7 +1148,7 @@ export class IterateAgent<
     }
 
     const iterateConfigRecord = await this.db.query.iterateConfig.findFirst({
-      where: eq(schema.iterateConfig.estateId, this.databaseRecord.estateId),
+      where: eq(schema.iterateConfig.installationId, this.databaseRecord.installationId),
     });
 
     const fileIds = new Set<string>();
@@ -1178,7 +1178,7 @@ export class IterateAgent<
       ? await getPermalink(this.state.braintrustParentSpanExportedId)
       : undefined;
 
-    const debugUrl = `${this.env.VITE_PUBLIC_URL}/${this.databaseRecord.estateId}/agents/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}`;
+    const debugUrl = `${this.env.VITE_PUBLIC_URL}/${this.databaseRecord.installationId}/agents/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}`;
 
     const reducedStateSnapshots: Record<number, any> = {};
     for (let i = 0; i < events.length; i++) {
@@ -1193,7 +1193,7 @@ export class IterateAgent<
         posthogTraceId: this.posthogTraceId,
         debugUrl,
         user: opts?.user ?? null,
-        estate: fullEstate,
+        installation: fullEstate,
         organization: organizationRecord,
         agentInstance: this.databaseRecord,
         iterateConfig: iterateConfigRecord ?? null,
@@ -1210,7 +1210,7 @@ export class IterateAgent<
       },
       customMetadata: {
         exportId,
-        estateId: this.databaseRecord.estateId,
+        installationId: this.databaseRecord.installationId,
         exportedAt: new Date().toISOString(),
       },
     });
@@ -1317,13 +1317,13 @@ export class IterateAgent<
 
     await multipartUpload.complete(uploadedParts);
 
-    const downloadUrl = `/api/estate/${this.databaseRecord.estateId}/exports/${exportId}`;
+    const downloadUrl = `/api/installation/${this.databaseRecord.installationId}/exports/${exportId}`;
     return downloadUrl;
   }
 
   // get the braintrust parent span exported id from the state
   // if it's not set, create it and set it in the state
-  async getOrCreateBraintrustParentSpanExportedId(estateName: string) {
+  async getOrCreateBraintrustParentSpanExportedId(installationName: string) {
     if (this.state.braintrustParentSpanExportedId) {
       return this.state.braintrustParentSpanExportedId;
     } else {
@@ -1331,7 +1331,7 @@ export class IterateAgent<
         braintrustKey: this.env.BRAINTRUST_API_KEY,
         projectName: this.env.PROJECT_NAME,
         spanName: `${this.constructor.name}-${this.name}`,
-        estateName,
+        estateName: installationName,
       });
       this.setState({
         ...this.state,
@@ -1366,18 +1366,18 @@ export class IterateAgent<
   doNothing() {
     return { __triggerLLMRequest: false } satisfies MagicAgentInstructions;
   }
-  async getEstate() {
+  async getInstallationInfo() {
     return {
       organizationId: this.organization.id,
-      id: this.estate.id,
-      name: this.estate.name,
+      id: this.installation.id,
+      name: this.installation.name,
     };
   }
 
   async getAgentDebugURL() {
-    const estate = await this.getEstate();
+    const installationInfo = await this.getInstallationInfo();
     return {
-      debugURL: `${this.env.VITE_PUBLIC_URL}/${estate.organizationId}/${estate.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
+      debugURL: `${this.env.VITE_PUBLIC_URL}/${installationInfo.organizationId}/${installationInfo.id}/agents/${this.constructor.name}/${encodeURIComponent(this.name)}`,
     };
   }
   async remindMyselfLater(input: Inputs["remindMyselfLater"]) {
@@ -1591,7 +1591,7 @@ export class IterateAgent<
         createdAt: new Date().toISOString(),
       },
       agentDurableObject: this.hydrationInfo,
-      estateId: this.databaseRecord.estateId,
+      installationId: this.databaseRecord.installationId,
       reducedState: this.getReducedState(),
       mcpConnectionCache: this.mcpManagerCache,
       mcpConnectionQueues: this.mcpConnectionQueues,
@@ -1650,7 +1650,7 @@ export class IterateAgent<
     return await getURLContent({
       ...input,
       db: this.db,
-      estateId: this.databaseRecord.estateId,
+      installationId: this.databaseRecord.installationId,
     });
   }
 
@@ -1851,7 +1851,7 @@ export class IterateAgent<
         const fileRecord = await uploadFileFromURL({
           url,
           filename: `generated-image-${now}-${index}.png`,
-          estateId: this.databaseRecord.estateId,
+          installationId: this.databaseRecord.installationId,
           db: this.db,
         });
         return {
@@ -1878,7 +1878,7 @@ export class IterateAgent<
   async generateVideo(input: Inputs["generateVideo"]) {
     const openai = await openAIProvider({
       env,
-      estateName: this.estate.name,
+      estateName: this.installation.name,
     });
 
     let inputReference: Uploadable | undefined;
@@ -1886,7 +1886,7 @@ export class IterateAgent<
       const { content, fileRecord } = await getFileContent({
         iterateFileId: input.inputReferenceFileId,
         db: this.db,
-        estateId: this.databaseRecord.estateId,
+        installationId: this.databaseRecord.installationId,
       });
       inputReference = await toFile(
         content as unknown as ToFileInput,
@@ -1958,7 +1958,7 @@ export class IterateAgent<
 
     const openai = await openAIProvider({
       env,
-      estateName: this.estate.name,
+      estateName: this.installation.name,
     });
 
     try {
@@ -1998,7 +1998,7 @@ export class IterateAgent<
             contentLength,
             filename: `generated-video-${Date.now()}.mp4`,
             contentType,
-            estateId: this.databaseRecord.estateId,
+            installationId: this.databaseRecord.installationId,
             db: this.db,
           });
           logger.info("video uploaded:", {
@@ -2043,8 +2043,8 @@ export class IterateAgent<
   }
 
   async uploadFile(input: Inputs["uploadFile"]) {
-    const estateId = this.databaseRecord.estateId;
-    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
+    const installationId = this.databaseRecord.installationId;
+    const { sandbox, sandboxId } = await this.getAgentSandbox(installationId);
 
     logger.info("Uploading file from sandbox", { sandboxId, path: input.path });
 
@@ -2066,7 +2066,7 @@ export class IterateAgent<
       stream: bytes,
       filename,
       contentType,
-      estateId,
+      installationId,
       db: this.db,
     });
 
@@ -2109,9 +2109,9 @@ export class IterateAgent<
   /**
    * Return sandbox and id for this agent instance/estate combination.
    */
-  private async getAgentSandbox(estateId: string) {
+  private async getAgentSandbox(installationId: string) {
     const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
+    const sandboxId = `agent-sandbox-${installationId}-${this.constructor.name}`;
     const sandbox = getSandbox(env.SANDBOX, sandboxId);
     return { sandbox, sandboxId };
   }
@@ -2124,11 +2124,11 @@ export class IterateAgent<
     // Get config
     // ------------------------------------------------------------------------
 
-    const estateId = this.databaseRecord.estateId;
+    const installationId = this.databaseRecord.installationId;
 
     // Get estate and repo information
-    const _estate = await this.db.query.estate.findFirst({
-      where: eq(schema.estate.id, estateId),
+    const _estate = await this.db.query.installation.findFirst({
+      where: eq(schema.installation.id, installationId),
       with: recentActiveSources,
     });
 
@@ -2141,14 +2141,14 @@ export class IterateAgent<
     };
 
     if (!estate) {
-      throw new Error(`Estate ${estateId} not found`);
+      throw new Error(`Estate ${installationId} not found`);
     }
 
     if (!estate.connectedRepoId) {
       throw new Error("No repository connected to this estate");
     }
 
-    const installation = await getGithubInstallationForEstate(this.db, estateId);
+    const installation = await getGithubInstallationForEstate(this.db, installationId);
     const octokit = await getOctokitForInstallation(
       installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
     );
@@ -2178,7 +2178,7 @@ export class IterateAgent<
     // ------------------------------------------------------------------------
 
     // Retrieve the sandbox
-    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
+    const { sandbox, sandboxId } = await this.getAgentSandbox(installationId);
 
     const execInSandbox = async () => {
       const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
@@ -2232,7 +2232,7 @@ export class IterateAgent<
         if (baseUrl.includes("localhost")) {
           baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
         }
-        const unsignedIngest = `${baseUrl}/api/agent-logs/${estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
+        const unsignedIngest = `${baseUrl}/api/agent-logs/${installationId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
         const ingestUrl = await signUrl(
           unsignedIngest,
           this.env.EXPIRING_URLS_SIGNING_KEY,
@@ -2246,7 +2246,7 @@ export class IterateAgent<
           isCommitHash: Boolean(commitHash),
           connectedRepoPath: estate.connectedRepoPath,
           ingestUrl,
-          estateId,
+          installationId,
           processId,
           command: input.command,
           env: input.env,
@@ -2364,7 +2364,7 @@ export class IterateAgent<
       });
       const url = await getGoogleOAuthURL({
         db: this.db,
-        estateId: this.databaseRecord.estateId,
+        installationId: this.databaseRecord.installationId,
         userId: impersonateUserId,
         agentDurableObject: this.databaseRecord,
         callbackUrl,

@@ -29,7 +29,7 @@ export function toAgentClassName(value: string): AgentClassName {
 
 export type GetOrCreateStubByNameParams = {
   db: DB;
-  estateId: string;
+  installationId: string;
   agentInstanceName: string;
   reason?: string;
 };
@@ -73,7 +73,7 @@ export async function getAgentStub(
   const doStubStub = stubStub(doStub as {} as IterateAgent, {
     className,
     durableObjectName: agentInitParams.record.durableObjectName,
-    estateId: agentInitParams.record.estateId,
+    installationId: agentInitParams.record.installationId,
     ...logger.tags,
   });
 
@@ -84,7 +84,7 @@ export async function getAgentStub(
 
 export async function getAgentStubByName(
   className: AgentClassName,
-  params: { db: DB; agentInstanceName: string; estateId?: string },
+  params: { db: DB; agentInstanceName: string; installationId?: string },
 ) {
   const { db, agentInstanceName } = params;
 
@@ -92,26 +92,28 @@ export async function getAgentStubByName(
     where: and(
       eq(agentInstance.durableObjectName, agentInstanceName),
       eq(agentInstance.className, className),
-      eq(agentInstance.estateId, params.estateId || agentInstance.estateId), // todo: make estateId required? seems safer. but we have lots of calls of this already, so will do separately
+      eq(agentInstance.installationId, params.installationId || agentInstance.installationId), // todo: make installationId required? seems safer. but we have lots of calls of this already, so will do separately
     ),
-    with: { estate: { with: { organization: true, iterateConfigs: { with: { build: true } } } } },
+    with: {
+      installation: { with: { organization: true, iterateConfigs: { with: { build: true } } } },
+    },
   });
 
   if (!row) throw new Error(`Agent instance ${agentInstanceName} not found`);
 
-  const { estate: estateJoined, ...record } = row;
+  const { installation: installationJoined, ...record } = row;
 
-  if (!estateJoined) {
-    throw new Error(`Estate ${record.estateId} not found for agent ${record.id}`);
+  if (!installationJoined) {
+    throw new Error(`Installation ${record.installationId} not found for agent ${record.id}`);
   }
 
-  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.build?.config ?? {};
+  const iterateConfig: IterateConfig = installationJoined.iterateConfigs?.[0]?.build?.config ?? {};
 
   return getAgentStub(className, {
     agentInitParams: {
       record,
-      estate: estateJoined,
-      organization: estateJoined.organization!,
+      installation: installationJoined,
+      organization: installationJoined.organization!,
       iterateConfig,
     },
   });
@@ -119,9 +121,9 @@ export async function getAgentStubByName(
 
 export async function getOrCreateAgentStubByRoute(
   className: AgentClassName,
-  params: { db: DB; estateId: string; route: string; reason?: string },
+  params: { db: DB; installationId: string; route: string; reason?: string },
 ) {
-  const { db, estateId, route, reason } = params;
+  const { db, installationId, route, reason } = params;
 
   const namespace = getNamespaceForClassName(className);
   const durableObjectName = `${className}-${route}-${typeid().toString()}`;
@@ -131,7 +133,7 @@ export async function getOrCreateAgentStubByRoute(
   await db
     .insert(schema.agentInstance)
     .values({
-      estateId,
+      installationId,
       className,
       durableObjectName,
       durableObjectId: durableObjectId.toString(),
@@ -142,18 +144,20 @@ export async function getOrCreateAgentStubByRoute(
 
   const existingAgent = await db.query.agentInstance.findFirst({
     where: eq(agentInstance.routingKey, route),
-    with: { estate: { with: { organization: true, iterateConfigs: { with: { build: true } } } } },
+    with: {
+      installation: { with: { organization: true, iterateConfigs: { with: { build: true } } } },
+    },
   });
 
   if (!existingAgent) throw new Error(`No agent at ${route} - we should have just inserted it!`);
 
-  const { estate: estateJoined, ...record } = existingAgent;
-  const iterateConfig: IterateConfig = estateJoined.iterateConfigs?.[0]?.build?.config ?? {};
+  const { installation: installationJoined, ...record } = existingAgent;
+  const iterateConfig: IterateConfig = installationJoined.iterateConfigs?.[0]?.build?.config ?? {};
   return getAgentStub(className, {
     agentInitParams: {
       record,
-      estate: estateJoined,
-      organization: estateJoined.organization!,
+      installation: installationJoined,
+      organization: installationJoined.organization!,
       iterateConfig,
     },
   });

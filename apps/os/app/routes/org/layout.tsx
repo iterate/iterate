@@ -18,8 +18,8 @@ const orgLoader = authenticatedServerFn
       throw notFound();
     }
 
-    const estates = await db.query.estate.findMany({
-      where: eq(schema.estate.organizationId, organizationId),
+    const installations = await db.query.installation.findMany({
+      where: eq(schema.installation.organizationId, organizationId),
       orderBy: (t, { asc }) => [asc(t.createdAt)],
       with: {
         organization: {
@@ -28,8 +28,8 @@ const orgLoader = authenticatedServerFn
       },
     });
 
-    if (!estates.length) {
-      // No estate for this org; redirect to home
+    if (!installations.length) {
+      // No installation for this org; redirect to home
       throw redirect({ to: "/" });
     }
 
@@ -62,7 +62,7 @@ const orgLoader = authenticatedServerFn
       updatedAt: organization.updatedAt.toISOString(),
     };
 
-    const serializedEstates = estates.map(({ organization, ...rest }) => ({
+    const serializedInstallations = installations.map(({ organization, ...rest }) => ({
       ...rest,
       createdAt: rest.createdAt.toISOString(),
       updatedAt: rest.updatedAt.toISOString(),
@@ -72,7 +72,7 @@ const orgLoader = authenticatedServerFn
     return {
       organization: serializedOrganization,
       organizations,
-      estates: serializedEstates,
+      installations: serializedInstallations,
     };
   });
 

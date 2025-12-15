@@ -7,7 +7,7 @@ import { createTRPCClient, httpLink } from "@trpc/client";
 import { testingRouter } from "../../backend/trpc/routers/testing.ts";
 import { appRouter } from "../../backend/trpc/root.ts";
 import { t } from "./config.ts";
-import { estate } from "./commands/checkout-estate.ts";
+import { installation } from "./commands/checkout-estate.ts";
 import { gh } from "./commands/gh-commands.ts";
 import { dev } from "./commands/dev.ts";
 import { db } from "./cli-db.ts";
@@ -22,7 +22,7 @@ if (dashdashIndex !== -1) {
 }
 
 const router = t.router({
-  estate,
+  installation,
   gh,
   dev,
   admin: adminRouter,

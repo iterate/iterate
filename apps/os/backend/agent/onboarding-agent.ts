@@ -157,7 +157,7 @@ export class OnboardingAgent
 
     return await startSlackAgentInChannel({
       db: this.db,
-      estateId: this.databaseRecord.estateId,
+      installationId: this.databaseRecord.installationId,
       slackChannelIdOrName: channel,
       firstMessage: firstMessage,
     });

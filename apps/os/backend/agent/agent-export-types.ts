@@ -1,4 +1,10 @@
-import type { user, organization, estate, agentInstance, iterateConfig } from "../db/schema.ts";
+import type {
+  user,
+  organization,
+  installation,
+  agentInstance,
+  iterateConfig,
+} from "../db/schema.ts";
 import type { AgentCoreEvent, AugmentedCoreReducedState } from "./agent-core-schemas.ts";
 
 export interface AgentTraceExportMetadata {
@@ -7,7 +13,7 @@ export interface AgentTraceExportMetadata {
   posthogTraceId: string;
   debugUrl: string;
   user: typeof user.$inferSelect | null;
-  estate: typeof estate.$inferSelect;
+  installation: typeof installation.$inferSelect;
   organization: typeof organization.$inferSelect;
   agentInstance: typeof agentInstance.$inferSelect;
   iterateConfig: typeof iterateConfig.$inferSelect | null;
