@@ -28,7 +28,7 @@ export async function callMethodImpl<T extends WithCallMethod>(
     const result = await (_this as {} as Record<string, Function>)[methodName](...args);
     return { ok: true, result };
   } catch (error) {
-    return { ok: false, error: { message: String(error), stack: String((error as Error).stack) } };
+    return { ok: false, error: { message: String(error), stack: (error as Error).stack || "" } };
   }
 }
 
