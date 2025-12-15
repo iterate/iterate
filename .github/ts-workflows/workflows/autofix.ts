@@ -41,14 +41,14 @@ export default workflow({
             echo "::remove-matcher owner=eslint-stylish::"
           `,
         },
-        {
-          name: "fix lint issues",
-          run: "pnpm run lint --fix --max-warnings=-1",
-        },
-        {
-          name: "fix format issues",
-          run: "pnpm run format",
-        },
+        // {
+        //   name: "fix lint issues",
+        //   run: "pnpm run lint --fix --max-warnings=-1",
+        // },
+        // {
+        //   name: "fix format issues",
+        //   run: "pnpm run format",
+        // },
         {
           name: "revert changes to workflows", // autofix.ci can't update this folder
           run: "git checkout .github/workflows",

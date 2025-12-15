@@ -23,7 +23,11 @@ type SlackStepProps = {
   onComplete: () => void;
 };
 
-export function OnboardingSlackStep({ organizationId, installationId, onComplete }: SlackStepProps) {
+export function OnboardingSlackStep({
+  organizationId,
+  installationId,
+  onComplete,
+}: SlackStepProps) {
   const navigate = useNavigate();
   const trpc = useTRPC();
   const [view, setView] = useState<SlackStepView>("choose-method");
