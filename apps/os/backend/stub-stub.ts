@@ -10,9 +10,7 @@ export interface WithCallMethod {
 }
 
 /**
- * Recommended implementation of `callMethod` for stub-able classes. Will catch and wrap errors to allow call stacks to cross boundaries.
- *
- * Use like this (in this example using a logger called `myLogger`):
+ * Recommended implementation of `callMethod` for stub-able classes. Will catch and wrap errors to allow call stacks to cross boundaries. Use like this (in this example using a logger called `myLogger`):
  * ```ts
  * class MyClass implements WithCallMethod {
  *   callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
@@ -31,12 +29,7 @@ export async function callMethodImpl<T extends WithCallMethod>(
     const result = await _this[methodName](...args);
     return { ok: true, result };
   } catch (error) {
-    if (error instanceof Error) {
-      const message = error.message;
-      const stack = String(error.stack);
-      return { ok: false, error: { message, stack } };
-    }
-    return { ok: false, error: { message: String(error), stack: "" } };
+    return { ok: false, error: { message: String(error), stack: String((error as Error).stack) } };
   }
 }
 
