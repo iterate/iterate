@@ -25,8 +25,7 @@ export async function callMethodImpl<T extends WithCallMethod>(
   args: unknown[],
 ): ReturnType<WithCallMethod["callMethod"]> {
   try {
-    // @ts-expect-error trust me bro
-    const result = await _this[methodName](...args);
+    const result = await (_this as {} as Record<string, Function>)[methodName](...args);
     return { ok: true, result };
   } catch (error) {
     return { ok: false, error: { message: String(error), stack: String((error as Error).stack) } };
