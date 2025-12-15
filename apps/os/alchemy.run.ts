@@ -151,7 +151,6 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    // In dev we don't need a planetscale db, just a hyperdrive that points to the local postgres instance
     const origin = "postgres://postgres:postgres@localhost:5432/iterate";
 
     await migrate(origin);
@@ -194,7 +193,7 @@ async function setupDatabase() {
     await migrate(role.connectionUrl.unencrypted);
 
     return {
-      DATABASE_URL: role.connectionUrl.unencrypted,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
@@ -218,7 +217,7 @@ async function setupDatabase() {
     await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
-      DATABASE_URL: role.connectionUrl.unencrypted,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
@@ -388,5 +387,4 @@ await uploadSourcemaps();
 
 await app.finalize();
 
-console.log("Deployment complete");
 if (!app.local) process.exit(0);
