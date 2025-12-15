@@ -618,7 +618,9 @@ export const adminRouter = router({
       .input(z.object({ message: z.string() }))
       .mutation(async ({ ctx, input }) => {
         return ctx.db.transaction(async (tx) => {
-          const [{ now: dbtime }] = await tx.execute(sql`select now()`);
+          const {
+            rows: [{ now: dbtime }],
+          } = await tx.execute(sql`select now()`);
           const reply = `You used ${input.message.split(" ").length} words, well done.`;
           return ctx.sendTrpc(tx, { dbtime, reply });
         });
@@ -627,7 +629,9 @@ export const adminRouter = router({
       .input(z.object({ message: z.string() }))
       .mutation(async ({ ctx, input }) => {
         await outboxClient.sendTx(ctx.db, "testing:poke", async (tx) => {
-          const [{ now: dbtime }] = await tx.execute<{ now: string }>(sql`select now()::text`);
+          const {
+            rows: [{ now: dbtime }],
+          } = await tx.execute<{ now: string }>(sql`select now()::text`);
           return {
             payload: { dbtime: dbtime, message: `${input.message} at ${new Date().toISOString()}` },
           };

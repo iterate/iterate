@@ -160,7 +160,7 @@ export const deleteOrganization = testingProcedure
         .returning();
       return {
         estatesDeleted: estatesDeleted.length,
-        consumerJobs: consumerJobs.length,
+        consumerJobs: consumerJobs.rowCount,
         organizationDeleted: organizationDeleted.length,
       };
     });

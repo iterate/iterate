@@ -105,9 +105,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         )
       `,
     );
-    if (jobQueueMessages.length) logger.info(`processing ${jobQueueMessages.length} messages`);
+    if (jobQueueMessages.rowCount) logger.info(`processing ${jobQueueMessages.rowCount} messages`);
     const results: Array<string | void> = [];
-    for (const _job of jobQueueMessages) {
+    for (const _job of jobQueueMessages.rows) {
       const parsed = ConsumerJobQueueMessage.safeParse(_job);
       if (!parsed.success) {
         const err = z.prettifyError(parsed.error);
@@ -172,7 +172,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
             logger.warn(
               `giving up on ${job.msg_id} after ${job.read_ct} attempts. Archiving - note that "DLQ" is just archive + status=failed`,
             );
-            const [archived] = await db.execute(sql`
+            const {
+              rows: [archived],
+            } = await db.execute(sql`
               select * from pgmq.archive(queue_name => ${queueName}::text, msg_id => ${job.msg_id}::bigint)
             `);
             if (!archived) throw new Error(`Failed to archive message ${job.msg_id}`);
@@ -191,7 +193,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
       });
     }
 
-    return `${jobQueueMessages.length} messages processed:\n\n${results.join("\n")}`.replace(
+    return `${jobQueueMessages.rowCount} messages processed:\n\n${results.join("\n")}`.replace(
       /:\n\n$/,
       "",
     );
@@ -201,7 +203,9 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
 
   const enqueue: Queuer<DBLike>["enqueue"] = async (db, params) => {
     logger.info(`adding to pgmq:${params.name}`);
-    const [_eventInsertion] = await db.execute(sql`
+    const {
+      rows: [_eventInsertion],
+    } = await db.execute(sql`
       insert into outbox_event (name, payload)
       values (${params.name}, ${JSON.stringify(params.payload)})
       returning id
@@ -250,7 +254,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         limit ${options.limit || 10}
         offset ${options.offset || 0}
       `);
-      return ConsumerJobQueueMessage.array().parse(rows);
+      return ConsumerJobQueueMessage.array().parse(rows.rows);
     },
     peekArchive: async (db, options = {}) => {
       const rows = await db.execute(sql`
@@ -260,7 +264,7 @@ export const createPgmqQueuer = (queueOptions: { queueName: string }): Queuer<DB
         limit ${options.limit || 10}
         offset ${options.offset || 0}
       `);
-      return ConsumerJobQueueMessage.array().parse(rows);
+      return ConsumerJobQueueMessage.array().parse(rows.rows);
     },
   };
 };
