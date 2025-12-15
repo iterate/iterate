@@ -39,25 +39,5 @@ export const isNonProd = !isProduction;
  * })());
  */
 export function waitUntil(promise: Promise<unknown>): void {
-<<<<<<< HEAD
   _waitUntil(promise.catch((error) => logger.error(error)));
-=======
-  // Preemptively create an error to ensure we log with the correct stack trace
-  const preemptiveError = new Error("[error message placeholder]");
-  const callerStack = String(preemptiveError.stack).split("\n").slice(2).join("\n");
-  _waitUntil(
-    promise.catch((error) => {
-      preemptiveError.cause = error;
-      preemptiveError.message = `${error.message} (in waitUntil callback, raw error in 'cause')`;
-      preemptiveError.stack = [
-        preemptiveError.message,
-        error?.stack?.split("\n").slice(1).join("\n"), // the first line is already in the preemptiveError.message
-        callerStack,
-      ]
-        .filter(Boolean)
-        .join("\n");
-      logger.error(preemptiveError);
-    }),
-  );
->>>>>>> 29182cd08ca98700878c5ec7f29dab89036a8882
 }
