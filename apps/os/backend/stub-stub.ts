@@ -1,5 +1,3 @@
-import { logger } from "./tag-logger.ts";
-
 export interface WithCallMethod {
   callMethod(
     methodName: string,
@@ -78,9 +76,6 @@ export const stubStub = <Stub extends WithCallMethod>(
   stub: Stub,
   context: Record<string, string>,
 ): StubStub<Stub> & { raw: Stub } => {
-  const creatorStack = "PreemptiveStackError:\n" + Error().stack?.split("\n").slice(2).join("\n");
-  context.creatorStack = creatorStack;
-
   return new Proxy({} as StubStub<Stub> & { raw: Stub }, {
     get: (_target, prop) => {
       if (prop === "raw") return stub;
@@ -89,8 +84,7 @@ export const stubStub = <Stub extends WithCallMethod>(
         return typeof value === "function" ? value.bind(stub) : value;
       }
       return async (...args: any[]) => {
-        const callerStack =
-          "PreemptiveStackError:\n" + Error().stack?.split("\n").slice(2).join("\n");
+        const callerStack = Error().stack?.split("\n").slice(2).join("\n");
         const result = await stub.callMethod(prop as string, args, context);
         if (result.ok) {
           return result.result;

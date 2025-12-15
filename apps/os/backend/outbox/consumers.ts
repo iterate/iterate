@@ -13,7 +13,6 @@ import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { createGithubRepoInEstatePool } from "../org-utils.ts";
 import { getOrCreateAgentStubByRoute } from "../agent/agents/stub-getters.ts";
-import { stubStub } from "../stub-stub.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
