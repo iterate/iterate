@@ -76,7 +76,7 @@ export const stubStub = <Stub extends WithCallMethod>(
         return typeof value === "function" ? value.bind(stub) : value;
       }
       return async (...args: any[]) => {
-        const callerStack = Error().stack?.split("\n").slice(2).join("\n");
+        const callerStack = Error().stack?.split("\n").slice(1).join("\n");
         const result = await stub.callMethod(prop as string, args, context);
         if (result.ok) {
           return result.result;
@@ -86,7 +86,12 @@ export const stubStub = <Stub extends WithCallMethod>(
           `${message} (in stubStub ${String(prop)} call, raw error in 'cause')`,
           { cause: result.error },
         );
-        error.stack = [stack, callerStack].filter(Boolean).join("\n");
+
+        error.stack = stack;
+        if (callerStack && !stack.includes(callerStack)) {
+          error.stack += `\n${callerStack}`;
+        }
+
         throw error;
       };
     },
