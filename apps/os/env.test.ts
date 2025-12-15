@@ -158,6 +158,9 @@ describe("waitUntil wrapper", () => {
   });
 
   test("call stacks are usefully tracked", async () => {
+    // this test deals with call stacks, so let's subtract the start line from the error stacks in this file to make it somewhat stable (will still change when the test source code itself is edited)
+    const startLine = Number(Error().stack?.split("\n")[1].split(":").at(-2));
+
     const loggerSpy = vi.spyOn(tagLogger.logger, "error");
 
     function functionWithBrokenWaitUntil() {
@@ -170,36 +173,42 @@ describe("waitUntil wrapper", () => {
 
     functionWithBrokenWaitUntil();
 
-    await vi.waitFor(() => {
-      const error = loggerSpy.mock.calls[0][0] as any;
-      const simplify = (stack: string) =>
-        stack
-          .replaceAll(import.meta.filename, import.meta.filename.split("/").pop()!)
-          .replaceAll(
-            /file:\/\/\/.*node_modules\/([^/]+)\/.*:\d+:\d+\b/g,
-            "node_modules-blah-blah/$1/node_modules-more-blah-blah",
-          )
-          .replaceAll(process.cwd(), "<cwd>");
-
-      expect(error).toHaveProperty("stack");
-
-      expect(simplify(error.stack)).toMatchInlineSnapshot(`
-        "Oh dear (in waitUntil callback, raw error in 'cause'):
-            at functionWithBrokenWaitUntil (env.test.ts:164:7)
-            at env.test.ts:171:5
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at new Promise (<anonymous>)
-            at runWithTimeout (node_modules-blah-blah/@vitest/node_modules-more-blah-blah)
-            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-            at Traces.$ (node_modules-blah-blah/vitest/node_modules-more-blah-blah)"
-      `);
-
-      expect(simplify(error.cause.stack)).toMatchInlineSnapshot(`
-        "Error: Oh dear
-            at env.test.ts:166:17"
-      `);
+    const error = await vi.waitUntil(() => {
+      const err = loggerSpy.mock.calls?.[0]?.[0] as any;
+      return err?.stack && err;
     });
+    const simplify = (stack: string) =>
+      stack
+        .replaceAll(
+          new RegExp(`${import.meta.filename}:(\\d+):(\\d+)\\b`, "g"),
+          (_, line, column) =>
+            `${import.meta.filename.split("/").pop()!}:${line - startLine}:${column}`,
+        )
+        .replaceAll(
+          /file:\/\/\/.*node_modules\/([^/]+)\/.*:\d+:\d+\b/g,
+          "node_modules-blah-blah/$1/node_modules-more-blah-blah",
+        );
+
+    expect(error).toHaveProperty("stack");
+
+    expect(simplify(error.stack)).toMatchInlineSnapshot(`
+      "Oh dear (in waitUntil callback, raw error in 'cause')
+          at env.test.ts:7:17
+          at functionWithBrokenWaitUntil (env.test.ts:5:7)
+          at env.test.ts:12:5
+          at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+          at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+          at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+          at new Promise (<anonymous>)
+          at runWithTimeout (node_modules-blah-blah/@vitest/node_modules-more-blah-blah)
+          at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+          at Traces.$ (node_modules-blah-blah/vitest/node_modules-more-blah-blah)"
+    `);
+
+    // this is what we would get if we didn't do some work to keep track of the caller call stack
+    expect(simplify(error.cause.stack)).toMatchInlineSnapshot(`
+      "Error: Oh dear
+          at env.test.ts:7:17"
+    `);
   });
 });
