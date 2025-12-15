@@ -37,7 +37,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Synchronous error (in waitUntil callback)",
+          message: "Synchronous error (in waitUntil callback, original error in cause property)",
           cause: synchronousError,
         }),
       );
@@ -58,7 +58,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Async error (in waitUntil callback)",
+          message: "Async error (in waitUntil callback, original error in cause property)",
           cause: asyncError,
         }),
       );
@@ -83,7 +83,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Async error (in waitUntil callback)",
+          message: "Async error (in waitUntil callback, original error in cause property)",
           cause: asyncError,
           stack: expect.stringContaining("functionWithBrokenWaitUntil"),
         }),
@@ -102,7 +102,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Rejection error (in waitUntil callback)",
+          message: "Rejection error (in waitUntil callback, original error in cause property)",
           cause: rejectionError,
         }),
       );
@@ -150,10 +150,56 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Delayed error (in waitUntil callback)",
+          message: "Delayed error (in waitUntil callback, original error in cause property)",
           cause: delayedError,
         }),
       );
+    });
+  });
+
+  test("call stacks are usefully tracked", async () => {
+    const loggerSpy = vi.spyOn(tagLogger.logger, "error");
+
+    function functionWithBrokenWaitUntil() {
+      waitUntil(
+        Promise.resolve().then(() => {
+          throw new Error("Oh dear");
+        }),
+      );
+    }
+
+    functionWithBrokenWaitUntil();
+
+    await vi.waitFor(() => {
+      const error = loggerSpy.mock.calls[0][0] as any;
+      const simplify = (stack: string) =>
+        stack
+          .replaceAll(import.meta.filename, import.meta.filename.split("/").pop()!)
+          .replaceAll(
+            /file:\/\/\/.*node_modules\/([^/]+)\/.*:\d+:\d+\b/g,
+            "node_modules-blah-blah/$1/node_modules-more-blah-blah",
+          )
+          .replaceAll(process.cwd(), "<cwd>");
+
+      expect(error).toHaveProperty("stack");
+
+      expect(simplify(error.stack)).toMatchInlineSnapshot(`
+        "Oh dear (in waitUntil callback, original error in cause property):
+            at functionWithBrokenWaitUntil (env.test.ts:164:7)
+            at env.test.ts:171:5
+            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+            at new Promise (<anonymous>)
+            at runWithTimeout (node_modules-blah-blah/@vitest/node_modules-more-blah-blah)
+            at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
+            at Traces.$ (node_modules-blah-blah/vitest/node_modules-more-blah-blah)"
+      `);
+
+      expect(simplify(error.cause.stack)).toMatchInlineSnapshot(`
+        "Error: Oh dear
+            at env.test.ts:166:17"
+      `);
     });
   });
 });
