@@ -92,9 +92,7 @@ export const stubStub = <Stub extends WithCallMethod>(
         const { message, stack } = result.error;
         const error = new Error(
           `${message} (in stubStub ${String(prop)} call, raw error in 'cause')`,
-          {
-            cause: result.error,
-          },
+          { cause: result.error },
         );
         error.stack = [stack, callerStack].filter(Boolean).join("\n");
         throw error;
