@@ -37,7 +37,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Synchronous error (in waitUntil callback, original error in cause property)",
+          message: "Synchronous error (in waitUntil callback, raw error in 'cause')",
           cause: synchronousError,
         }),
       );
@@ -58,7 +58,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Async error (in waitUntil callback, original error in cause property)",
+          message: "Async error (in waitUntil callback, raw error in 'cause')",
           cause: asyncError,
         }),
       );
@@ -83,7 +83,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Async error (in waitUntil callback, original error in cause property)",
+          message: "Async error (in waitUntil callback, raw error in 'cause')",
           cause: asyncError,
           stack: expect.stringContaining("functionWithBrokenWaitUntil"),
         }),
@@ -102,7 +102,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Rejection error (in waitUntil callback, original error in cause property)",
+          message: "Rejection error (in waitUntil callback, raw error in 'cause')",
           cause: rejectionError,
         }),
       );
@@ -150,7 +150,7 @@ describe("waitUntil wrapper", () => {
     await vi.waitFor(() => {
       expect(loggerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
-          message: "Delayed error (in waitUntil callback, original error in cause property)",
+          message: "Delayed error (in waitUntil callback, raw error in 'cause')",
           cause: delayedError,
         }),
       );
@@ -184,7 +184,7 @@ describe("waitUntil wrapper", () => {
       expect(error).toHaveProperty("stack");
 
       expect(simplify(error.stack)).toMatchInlineSnapshot(`
-        "Oh dear (in waitUntil callback, original error in cause property):
+        "Oh dear (in waitUntil callback, raw error in 'cause'):
             at functionWithBrokenWaitUntil (env.test.ts:164:7)
             at env.test.ts:171:5
             at node_modules-blah-blah/@vitest/node_modules-more-blah-blah

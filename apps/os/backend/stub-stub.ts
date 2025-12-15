@@ -1,9 +1,45 @@
+import { logger } from "./tag-logger.ts";
+
 export interface WithCallMethod {
   callMethod(
     methodName: string,
     args: unknown[],
     context: Record<string, string>,
-  ): Promise<unknown>;
+  ): Promise<
+    | { ok: true; result: unknown; error?: never }
+    | { ok: false; result?: never; error: { message: string; stack: string } }
+  >;
+}
+
+/**
+ * Recommended implementation of `callMethod` for stub-able classes. Will catch and wrap errors to allow call stacks to cross boundaries.
+ *
+ * Use like this (in this example using a logger called `myLogger`):
+ * ```ts
+ * class MyClass implements WithCallMethod {
+ *   callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
+ *     return myLogger.run(context, () => callMethodImpl(this, methodName, args));
+ *   }
+ * }
+ * ```
+ */
+export async function callMethodImpl<T extends WithCallMethod>(
+  _this: T,
+  methodName: string,
+  args: unknown[],
+): ReturnType<WithCallMethod["callMethod"]> {
+  try {
+    // @ts-expect-error trust me bro
+    const result = await _this[methodName](...args);
+    return { ok: true, result };
+  } catch (error) {
+    if (error instanceof Error) {
+      const message = error.message;
+      const stack = String(error.stack);
+      return { ok: false, error: { message, stack } };
+    }
+    return { ok: false, error: { message: String(error), stack: "" } };
+  }
 }
 
 export type StubStub<T extends WithCallMethod> = {
@@ -42,6 +78,9 @@ export const stubStub = <Stub extends WithCallMethod>(
   stub: Stub,
   context: Record<string, string>,
 ): StubStub<Stub> & { raw: Stub } => {
+  const creatorStack = "PreemptiveStackError:\n" + Error().stack?.split("\n").slice(2).join("\n");
+  context.creatorStack = creatorStack;
+
   return new Proxy({} as StubStub<Stub> & { raw: Stub }, {
     get: (_target, prop) => {
       if (prop === "raw") return stub;
@@ -49,7 +88,23 @@ export const stubStub = <Stub extends WithCallMethod>(
         const value = stub[prop as keyof Stub];
         return typeof value === "function" ? value.bind(stub) : value;
       }
-      return (...args: any[]) => stub.callMethod(prop as string, args, context);
+      return async (...args: any[]) => {
+        const callerStack =
+          "PreemptiveStackError:\n" + Error().stack?.split("\n").slice(2).join("\n");
+        const result = await stub.callMethod(prop as string, args, context);
+        if (result.ok) {
+          return result.result;
+        }
+        const { message, stack } = result.error;
+        const error = new Error(
+          `${message} (in stubStub ${String(prop)} call, raw error in 'cause')`,
+          {
+            cause: result.error,
+          },
+        );
+        error.stack = [stack, callerStack].filter(Boolean).join("\n");
+        throw error;
+      };
     },
   });
 };

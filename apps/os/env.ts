@@ -45,8 +45,14 @@ export function waitUntil(promise: Promise<unknown>): void {
   _waitUntil(
     promise.catch((error) => {
       preemptiveError.cause = error;
-      preemptiveError.message = `${error.message} (in waitUntil callback, original error in cause property)`;
-      preemptiveError.stack = `${preemptiveError.message}:\n${callerStack}`;
+      preemptiveError.message = `${error.message} (in waitUntil callback, raw error in 'cause')`;
+      preemptiveError.stack = [
+        preemptiveError.message,
+        error?.stack?.split("\n").slice(1).join("\n"), // the first line is already in the preemptiveError.message
+        callerStack,
+      ]
+        .filter(Boolean)
+        .join("\n");
       logger.error(preemptiveError);
     }),
   );

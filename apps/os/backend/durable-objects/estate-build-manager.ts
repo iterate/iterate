@@ -7,6 +7,8 @@ import { intoImmediateSSEResponse } from "../utils/sse-utils.ts";
 import { getDb } from "../db/client.ts";
 import * as schemas from "../db/schema.ts";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
+import { logger } from "../tag-logger.ts";
+import type { WithCallMethod } from "../stub-stub.ts";
 
 const RETENTION_TIME = ms("30 days");
 const TIMEOUT_TIME = ms("10 minutes");
@@ -83,6 +85,13 @@ export class EstateBuildManager extends Container {
         await this.housekeeping();
       })(),
     );
+  }
+
+  callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
+    return logger.run(context, async () => {
+      // @ts-expect-error trust me bro
+      return this[methodName](...args);
+    });
   }
 
   public async build({ buildId, repo, branch, path, authToken }: BuildInput) {
