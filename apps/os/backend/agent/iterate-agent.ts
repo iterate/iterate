@@ -43,7 +43,7 @@ import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
-import type { WithCallMethod } from "../stub-stub.ts";
+import { callMethodImpl, type WithCallMethod } from "../stub-stub.ts";
 import { recentActiveSources } from "../db/helpers.ts";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
@@ -323,11 +323,8 @@ export class IterateAgent<
     );
   }
 
-  callMethod(...[methodName, args, context]: Parameters<WithCallMethod["callMethod"]>) {
-    return logger.run(context, async () => {
-      // @ts-expect-error trust me bro
-      return this[methodName](...args);
-    });
+  callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
+    return logger.run(context, () => callMethodImpl(this, methodName, args));
   }
 
   /**
