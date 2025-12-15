@@ -1,5 +1,5 @@
 import { test, expect } from "vitest";
-import { parseSpecifier } from "./estate-specifier.ts";
+import { parseSpecifier } from "./installation-specifier.ts";
 
 // alphabetising key order makes snapshots confusing-looking and serve less well as self-documentation
 expect.addSnapshotSerializer({
@@ -13,7 +13,7 @@ expect.addSnapshotSerializer({
   print: (val) => String(val),
 });
 
-test("checkoutEstateCommand", async () => {
+test("checkoutInstallationCommand", async () => {
   expect(parseSpecifier("github:example-org/example-repo#ci/test&path:packages/example-package"))
     .toMatchInlineSnapshot(`
       {

@@ -88,7 +88,7 @@ export class OrganizationWebSocket extends DurableObject {
       return new Response("Unauthorized", { status: 401 });
     }
 
-    // Extract estate and organization from URL params
+    // Extract installation and organization from URL params
     const url = new URL(request.url);
     const installationId = url.searchParams.get("installationId");
     const organizationId = url.searchParams.get("organizationId");
@@ -97,8 +97,13 @@ export class OrganizationWebSocket extends DurableObject {
       return new Response("Missing required parameters", { status: 400 });
     }
 
-    // Verify user has access to this estate using the helper function
-    const { hasAccess } = await getUserInstallationAccess(db, session.user.id, installationId, organizationId);
+    // Verify user has access to this installation using the helper function
+    const { hasAccess } = await getUserInstallationAccess(
+      db,
+      session.user.id,
+      installationId,
+      organizationId,
+    );
 
     if (!hasAccess) {
       return new Response("Forbidden", { status: 403 });

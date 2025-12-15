@@ -1,13 +1,13 @@
 import { useParams } from "@tanstack/react-router";
 
-export interface EstateParams {
+export interface InstallationParams {
   organizationId: string;
   installationId: string;
 }
 
-// Simple hook to get estate params from URL
+// Simple hook to get installation params from URL
 // Access checking is now done in the loader
-export function useInstallation(): EstateParams | null {
+export function useInstallation(): InstallationParams | null {
   const params = useParams({ strict: false });
 
   const organizationId = params.organizationId;
@@ -23,14 +23,14 @@ export function useInstallation(): EstateParams | null {
   };
 }
 
-// Hook to get just the estate ID (for backward compatibility)
+// Hook to get just the installation ID (for backward compatibility)
 export function useInstallationId(): string {
   const params = useParams({ strict: false });
   const installationId = params.installationId;
 
   if (!installationId) {
     throw new Error(
-      "useInstallationId() can only be used on pages with estate ID in the URL path (/:organizationId/:installationId/*)",
+      "useInstallationId() can only be used on pages with installation ID in the URL path (/:organizationId/:installationId/*)",
     );
   }
 
@@ -50,7 +50,7 @@ export function useOrganizationId(): string {
   return organizationId;
 }
 
-// Hook to format navigation URLs with current org/estate
+// Hook to format navigation URLs with current org/installation
 export function useInstallationUrl() {
   const params = useParams({ strict: false });
   const organizationId = params.organizationId;
@@ -59,14 +59,14 @@ export function useInstallationUrl() {
   return (path: string) => {
     if (!organizationId || !installationId) {
       throw new Error(
-        "useInstallationUrl() can only be used on pages with organization and estate ID in the URL path (/:organizationId/:installationId/*)",
+        "useInstallationUrl() can only be used on pages with organization and installation ID in the URL path (/:organizationId/:installationId/*)",
       );
     }
 
     // Remove leading slash if present
     const cleanPath = path.startsWith("/") ? path.slice(1) : path;
 
-    // Return the full path with org and estate
+    // Return the full path with org and installation
     return `/${organizationId}/${installationId}${cleanPath ? `/${cleanPath}` : ""}`;
   };
 }

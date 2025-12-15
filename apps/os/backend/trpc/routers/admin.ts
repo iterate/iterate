@@ -3,11 +3,15 @@ import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
 import { typeid } from "typeid-js";
-import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
+import {
+  protectedProcedure,
+  protectedProcedureWithNoInstallationRestrictions,
+  router,
+} from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
 import { syncSlackForInstallationInBackground } from "../../integrations/slack/slack.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../../auth/token-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 import type { DB } from "../../db/client.ts";
 import { getAuth } from "../../auth/auth.ts";
@@ -25,7 +29,7 @@ import { outboxClient } from "../../outbox/client.ts";
 import { deleteUserAccount } from "./user.ts";
 
 // don't use `protectedProcedure` because that prevents the use of `installationId`. safe to use without the restrictions because we're checking the user is an admin
-const adminProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
+const adminProcedure = protectedProcedureWithNoInstallationRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -392,7 +396,7 @@ export const adminRouter = router({
   syncSlackForInstallation: adminProcedure
     .input(z.object({ installationId: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, input.installationId);
+      const slackAccount = await getSlackAccessTokenForInstallation(ctx.db, input.installationId);
 
       if (!slackAccount) {
         throw new TRPCError({
@@ -492,7 +496,7 @@ export const adminRouter = router({
 
   /**
    * Admin endpoint to manually create a trial Slack Connect channel
-   * Can create a new estate/org or use an existing one
+   * Can create a new installation/org or use an existing one
    */
   createTrialSlackChannel: adminProcedure
     .input(
@@ -500,8 +504,8 @@ export const adminRouter = router({
         userEmail: z.email(),
         userName: z.string().optional(),
         existingInstallationId: z.string().optional(),
-        createNewEstate: z.boolean().default(true),
-        estateName: z.string().optional(),
+        createNewInstallation: z.boolean().default(true),
+        installationName: z.string().optional(),
         organizationName: z.string().optional(),
       }),
     )
@@ -510,16 +514,16 @@ export const adminRouter = router({
         userEmail,
         userName,
         existingInstallationId,
-        createNewEstate,
-        estateName,
+        createNewInstallation,
+        installationName,
         organizationName,
       } = input;
 
       let installationId = existingInstallationId;
       let organizationId: string | undefined;
 
-      // Create estate/org if needed
-      if (createNewEstate) {
+      // Create installation/org if needed
+      if (createNewInstallation) {
         const [org] = await ctx.db
           .insert(schema.organization)
           .values({
@@ -530,7 +534,7 @@ export const adminRouter = router({
         const [installation] = await ctx.db
           .insert(schema.installation)
           .values({
-            name: estateName || `${userName || userEmail}'s Installation`,
+            name: installationName || `${userName || userEmail}'s Installation`,
             organizationId: org.id,
             slug: typeid("ins").toString(),
           })
@@ -545,23 +549,24 @@ export const adminRouter = router({
       } else if (!existingInstallationId) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message: "Either createNewEstate must be true or existingInstallationId must be provided",
+          message:
+            "Either createNewInstallation must be true or existingInstallationId must be provided",
         });
       } else {
-        // Get org ID from existing estate
-        const estate = await ctx.db.query.installation.findFirst({
+        // Get org ID from existing installation
+        const existingInstallation = await ctx.db.query.installation.findFirst({
           where: eq(schema.installation.id, existingInstallationId),
         });
-        if (!estate) {
+        if (!existingInstallation) {
           throw new TRPCError({
             code: "NOT_FOUND",
-            message: "Estate not found",
+            message: "Installation not found",
           });
         }
-        organizationId = estate.organizationId;
+        organizationId = existingInstallation.organizationId;
       }
 
-      // Get iterate's Slack workspace estate
+      // Get iterate's Slack workspace installation
       const iterateTeamId = env.SLACK_ITERATE_TEAM_ID;
       if (!iterateTeamId) {
         throw new Error("Iterate Slack workspace not configured (missing SLACK_ITERATE_TEAM_ID)");
@@ -569,16 +574,19 @@ export const adminRouter = router({
 
       const iterateInstallationId = await getIterateSlackInstallationId(ctx.db);
       if (!iterateInstallationId) {
-        throw new Error("Iterate Slack workspace estate not found");
+        throw new Error("Iterate Slack workspace installation not found");
       }
 
       // Get iterate's bot account and token
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateInstallationId);
+      const iterateBotAccount = await getSlackAccessTokenForInstallation(
+        ctx.db,
+        iterateInstallationId,
+      );
       if (!iterateBotAccount) {
         throw new Error("Iterate Slack bot account not found");
       }
 
-      // Link trial estate to iterate's bot account
+      // Link trial installation to iterate's bot account
       await ctx.db
         .insert(schema.installationAccountsPermissions)
         .values({
@@ -587,7 +595,7 @@ export const adminRouter = router({
         })
         .onConflictDoNothing();
 
-      logger.info(`Linked trial estate ${installationId} to iterate's bot account`);
+      logger.info(`Linked trial installation ${installationId} to iterate's bot account`);
 
       // Create trial channel and send invite
       const result = await createTrialSlackConnectChannel({
@@ -600,7 +608,7 @@ export const adminRouter = router({
       });
 
       logger.info(
-        `Admin created trial channel ${result.channelName} for ${userEmail} → estate ${installationId}`,
+        `Admin created trial channel ${result.channelName} for ${userEmail} → installation ${installationId}`,
       );
 
       return {
@@ -691,7 +699,7 @@ export async function syncSlackForAllInstallationsHelper(db: DB) {
 
   const syncPromises = installations.map(async (installation) => {
     try {
-      const slackAccount = await getSlackAccessTokenForEstate(db, installation.id);
+      const slackAccount = await getSlackAccessTokenForInstallation(db, installation.id);
 
       if (!slackAccount) {
         return {

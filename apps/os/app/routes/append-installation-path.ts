@@ -1,7 +1,7 @@
-export function appendEstatePath(redirectPath: string, estatePath: string) {
+export function appendInstallationPath(redirectPath: string, installationPath: string) {
   try {
     const redirectPathURL = new URL(redirectPath, "http://estate");
-    const tempURL = new URL(estatePath, "http://estate");
+    const tempURL = new URL(installationPath, "http://estate");
     // check that there's no sneaky stuff like //evil.com
     if (tempURL.origin === "http://estate") {
       redirectPathURL.pathname += tempURL.pathname;

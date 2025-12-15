@@ -2,7 +2,7 @@ import { eq, and } from "drizzle-orm";
 import { WebClient } from "@slack/web-api";
 import type { DB } from "../db/client.ts";
 import { slackChannel } from "../db/schema.ts";
-import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../auth/token-utils.ts";
 import { getRoutingKey } from "../integrations/slack/slack.ts";
 import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
 import { SlackAgent } from "./slack-agent.ts";
@@ -17,7 +17,7 @@ import { SlackAgent } from "./slack-agent.ts";
  * in order to even create our agent.
  *
  * @param db - Database connection
- * @param installationId - Estate ID
+ * @param installationId - Installation ID
  * @param slackChannelIdOrName - Slack channel ID or name (will be looked up in database first)
  * @param firstMessage - Initial message to post in the thread
  * @param additionalEvents - Optional additional events to send to the agent after initialization
@@ -39,7 +39,10 @@ export async function startSlackAgentInChannel(params: {
   // Look up the Slack channel ID in the database first by name, then fall back to treating as ID
   let channelId = slackChannelIdOrName;
   const channelRecord = await db.query.slackChannel.findFirst({
-    where: and(eq(slackChannel.installationId, installationId), eq(slackChannel.name, slackChannelIdOrName)),
+    where: and(
+      eq(slackChannel.installationId, installationId),
+      eq(slackChannel.name, slackChannelIdOrName),
+    ),
   });
 
   if (channelRecord) {
@@ -47,9 +50,9 @@ export async function startSlackAgentInChannel(params: {
   }
   // If not found by name, assume slackChannelIdOrName is already the channel ID
 
-  const slackAccount = await getSlackAccessTokenForEstate(db, installationId);
+  const slackAccount = await getSlackAccessTokenForInstallation(db, installationId);
   if (!slackAccount) {
-    throw new Error("No Slack integration found for this estate");
+    throw new Error("No Slack integration found for this installation");
   }
 
   const slackAPI = new WebClient(slackAccount.accessToken);

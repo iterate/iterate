@@ -17,7 +17,7 @@ export function useSlackConnection() {
     (i) => i.id === "slack-bot",
   );
   const isConnected = slackBotIntegration?.isConnected || false;
-  const isInstallationWide = slackBotIntegration?.isEstateWide || false;
+  const isInstallationWide = slackBotIntegration?.isInstallationWide || false;
   const isPersonal = slackBotIntegration?.isPersonal || false;
 
   const connectSlackBot = async (callbackPath?: string) => {
@@ -49,7 +49,9 @@ export function useSlackConnection() {
     trpc.integrations.disconnect.mutationOptions({}),
   );
 
-  const disconnectSlackBot = async (disconnectType: "estate" | "personal" | "both" = "both") => {
+  const disconnectSlackBot = async (
+    disconnectType: "installation" | "personal" | "both" = "both",
+  ) => {
     try {
       await disconnectIntegration({
         installationId: installationId,

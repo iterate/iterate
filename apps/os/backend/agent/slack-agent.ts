@@ -6,7 +6,7 @@ import pDebounce from "p-suite/p-debounce";
 import type { ResponseStreamEvent } from "openai/resources/responses/responses.mjs";
 import { env as _env, waitUntil } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
-import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../auth/token-utils.ts";
 import * as schema from "../db/schema.ts";
 import {
   slackWebhookEvent,
@@ -179,7 +179,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   async initIterateAgent(params: AgentInitParams) {
     await super.initIterateAgent(params);
 
-    const slackAccount = await getSlackAccessTokenForEstate(this.db, params.record.installationId);
+    const slackAccount = await getSlackAccessTokenForInstallation(
+      this.db,
+      params.record.installationId,
+    );
     if (slackAccount) {
       this.slackAPI = new WebClient(slackAccount.accessToken, {
         rejectRateLimitedCalls: true,
@@ -187,7 +190,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       });
     } else if (import.meta.env.VITE_APP_STAGE === "prd") {
       // in prd, it's never legitimate to have a slack agent without a token
-      logger.error("No Slack integration found for this estate", params.record);
+      logger.error("No Slack integration found for this installation", params.record);
     }
   }
 
@@ -205,7 +208,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
   protected async getContextRules(): Promise<ContextRule[]> {
     const rules = await super.getContextRules();
 
-    // Check if estate has an onboarding agent configured
+    // Check if installation has an onboarding agent configured
     if (this.installation.onboardingAgentName) {
       try {
         // Get a stub for the onboarding agent
@@ -225,7 +228,10 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
           prompt: onboardingPrompt,
         });
       } catch (error) {
-        logger.warn(`Failed to get onboarding context for estate ${this.installation.id}:`, error);
+        logger.warn(
+          `Failed to get onboarding context for installation ${this.installation.id}:`,
+          error,
+        );
       }
     }
 
@@ -774,8 +780,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
   /**
    * Gets the Slack team ID to use for syncing users.
-   * For regular estates, uses the estate's own provider mapping.
-   * For trial estates, finds the team ID via the channel override.
+   * For regular installations, uses the installation's own provider mapping.
+   * For trial installations, finds the team ID via the channel override.
    */
   private async getSyncingTeamId(installationId: string): Promise<string | null> {
     // First check if this is a trial installation (has a channel override)
@@ -804,12 +810,12 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
    * Helper function to query Slack users from the database.
    *
    * With the unique constraint on (providerId, installationId, externalId),
-   * each Slack user can have only one mapping per estate.
+   * each Slack user can have only one mapping per installation.
    *
    * Schema semantics:
-   * - installationId: The estate that discovered this user (always set)
+   * - installationId: The installation that discovered this user (always set)
    * - externalUserTeamId: The user's home team, only set if external (Slack Connect)
-   *   - null = user is from estate's own workspace (internal)
+   *   - null = user is from installation's own workspace (internal)
    *   - set = user is from different workspace (external)
    */
   private async querySlackUsersByExternalId(params: {
@@ -882,13 +888,13 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
 
     // If no result, try just-in-time sync before giving up
     if (results.length === 0) {
-      // Get Slack token and team ID for this estate
-      const slackAccount = await getSlackAccessTokenForEstate(this.db, installationId);
+      // Get Slack token and team ID for this installation
+      const slackAccount = await getSlackAccessTokenForInstallation(this.db, installationId);
       if (!slackAccount) {
         return [];
       }
 
-      // Get team ID (handles both regular and trial estates)
+      // Get team ID (handles both regular and trial installations)
       const syncingTeamId = await this.getSyncingTeamId(installationId);
 
       if (!syncingTeamId) {
@@ -1007,8 +1013,8 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
     const missingUserIds = newMentionedUserIds.filter((id) => !foundUserIds.has(id));
 
     if (missingUserIds.length > 0) {
-      // Get Slack token and team ID for this estate
-      const slackAccount = await getSlackAccessTokenForEstate(this.db, installationId);
+      // Get Slack token and team ID for this installation
+      const slackAccount = await getSlackAccessTokenForInstallation(this.db, installationId);
       if (slackAccount) {
         const syncingTeamId = await this.getSyncingTeamId(installationId);
 
@@ -1102,7 +1108,7 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
         slackChannelId: channelId,
         slackThreadId: threadTs,
         slackChannel,
-        estateName: this.installation.name,
+        installationName: this.installation.name,
       },
       triggerLLMRequest: false,
     });

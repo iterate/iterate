@@ -9,7 +9,7 @@ import { logger } from "../../tag-logger.ts";
 import {
   validateGithubWebhookSignature,
   getInstallationByRepoId,
-  getGithubInstallationForEstate,
+  getGithubInstallationForInstallation,
   triggerGithubBuild,
   githubAppInstance,
 } from "./github-utils.ts";
@@ -31,7 +31,7 @@ githubApp.get(
 
     // If there is state missing, that means the user might have clicked save in the github ui without initiating the flow
     // just redirect them to the home page, this should not show an error to the user
-    // TODO: Handle this better, find the associated estate and update stuff
+    // TODO: Handle this better, find the associated installation and update stuff
     if (!state) return c.redirect("/");
 
     const verification = await c.var.db.query.verification.findFirst({
@@ -82,11 +82,11 @@ githubApp.get(
       return c.json({ error: "Failed to get installations for user" }, 400);
     }
 
-    const installation = installationsForUser.data.installations.find(
-      (installation) => installation.id === installation_id,
+    const githubInstallation = installationsForUser.data.installations.find(
+      (inst) => inst.id === installation_id,
     );
 
-    if (!installation) {
+    if (!githubInstallation) {
       const message = `User ${userInfo.data.id} does not have access to installation ${installation_id}`;
       logger.error(message);
       return c.json({ error: message }, 400);
@@ -97,7 +97,7 @@ githubApp.get(
       }),
     );
 
-    const estate = await c.var.db.transaction(async (tx) => {
+    const iterateInstallation = await c.var.db.transaction(async (tx) => {
       const [account] = await tx
         .insert(schema.account)
         .values({
@@ -108,7 +108,7 @@ githubApp.get(
           refreshToken: oauthResult.authentication.refreshToken,
           accessTokenExpiresAt: new Date(oauthResult.authentication.expiresAt!),
           refreshTokenExpiresAt: new Date(oauthResult.authentication.refreshTokenExpiresAt!),
-          scope: Object.entries(installation.permissions)
+          scope: Object.entries(githubInstallation.permissions)
             .map(([key, value]) => `${key}:${value}`)
             .join(","),
         })
@@ -140,7 +140,10 @@ githubApp.get(
     });
 
     return c.redirect(
-      callbackURL || (estate ? `/${estate?.organizationId}/${estate?.id}/repo` : "/"),
+      callbackURL ||
+        (iterateInstallation
+          ? `/${iterateInstallation?.organizationId}/${iterateInstallation?.id}/repo`
+          : "/"),
     );
   },
 );
@@ -193,23 +196,26 @@ githubApp.post("/webhook", async (c) => {
 
     logger.log(`Processing push: branch=${branch}, commit=${commitHash.substring(0, 7)}`);
 
-    // Find the estate connected to this repository
-    const estate = await getInstallationByRepoId(c.var.db, repoId);
-    if (!estate) {
-      logger.log(`No estate found for repository ${repoId}`);
-      return c.json({ message: "Repository not connected to any estate" }, 200);
+    // Find the installation connected to this repository
+    const installation = await getInstallationByRepoId(c.var.db, repoId);
+    if (!installation) {
+      logger.log(`No installation found for repository ${repoId}`);
+      return c.json({ message: "Repository not connected to any installation" }, 200);
     }
 
     // Only process if the push is to the configured branch
-    if (branch && branch !== estate.connectedRepoRef) {
+    if (branch && branch !== installation.connectedRepoRef) {
       logger.log(
-        `Ignoring event on branch ${branch}, estate configured for ${estate.connectedRepoRef}`,
+        `Ignoring event on branch ${branch}, installation configured for ${installation.connectedRepoRef}`,
       );
       return c.json({ message: "Event not on configured branch" }, 200);
     }
 
-    // Get the GitHub installation for this estate
-    const githubInstallation = await getGithubInstallationForEstate(c.var.db, estate.id);
+    // Get the GitHub installation for this installation
+    const githubInstallation = await getGithubInstallationForInstallation(
+      c.var.db,
+      installation.id,
+    );
 
     const tokenResponse = await githubAppInstance().octokit.rest.apps.createInstallationAccessToken(
       {
@@ -238,13 +244,13 @@ githubApp.post("/webhook", async (c) => {
 
     // Use the common build trigger function
     const build = await triggerGithubBuild({
-      installationId: estate.id,
+      installationId: installation.id,
       commitHash: commitHash!,
       commitMessage: commitMessage || "No commit message",
       repoUrl,
       installationToken: tokenResponse.data.token,
-      connectedRepoPath: estate.connectedRepoPath || undefined,
-      branch: estate.connectedRepoRef || "main",
+      connectedRepoPath: installation.connectedRepoPath || undefined,
+      branch: installation.connectedRepoRef || "main",
       webhookId: event.id || `webhook-${Date.now()}`,
       workflowRunId: event.workflow_run?.id?.toString(),
       isManual: false,

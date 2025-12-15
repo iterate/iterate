@@ -482,10 +482,10 @@ function FileUploadDialog({
             reject(new Error("Network error during upload"));
           });
 
-          // Use the existing upload endpoint with estate ID
+          // Use the existing upload endpoint with installation ID
           xhr.open(
             "POST",
-            `/api/estate/${installationId}/files?filename=${encodeURIComponent(file.name)}`,
+            `/api/installation/${installationId}/files?filename=${encodeURIComponent(file.name)}`,
           );
           xhr.setRequestHeader("Content-Type", file.type || "application/octet-stream");
           xhr.send(file);

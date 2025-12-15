@@ -2,11 +2,11 @@ import { WebClient } from "@slack/web-api";
 import { getDb } from "../../db/client.ts";
 import { env } from "../../../env.ts";
 import { logger } from "../../tag-logger.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../../auth/token-utils.ts";
 
 /**
  * Send a notification message to iterate's Slack workspace.
- * This uses the estate ID configured in ITERATE_NOTIFICATION_ESTATE_ID.
+ * This uses the installation ID configured in ITERATE_NOTIFICATION_ESTATE_ID.
  *
  * @param message - The message to send (supports Slack markdown)
  * @param channel - The channel to post to (defaults to "#building")
@@ -24,11 +24,11 @@ export async function sendNotificationToIterateSlack(
 
   const db = getDb();
 
-  // Get Slack access token for the notification estate
-  const slackAccount = await getSlackAccessTokenForEstate(db, notificationInstallationId);
+  // Get Slack access token for the notification installation
+  const slackAccount = await getSlackAccessTokenForInstallation(db, notificationInstallationId);
 
   if (!slackAccount) {
-    logger.error("Slack access token not found for notification estate", {
+    logger.error("Slack access token not found for notification installation", {
       installationId: notificationInstallationId,
     });
     return;

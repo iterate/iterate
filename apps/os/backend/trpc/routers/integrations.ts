@@ -11,14 +11,14 @@ import {
 } from "../../db/schema.ts";
 import * as schema from "../../db/schema.ts";
 import {
-  getGithubInstallationForEstate,
-  getGithubRepoForEstate,
+  getGithubInstallationForInstallation,
+  getGithubRepoForInstallation,
   githubAppInstance,
   getOctokitForInstallation,
 } from "../../integrations/github/github-utils.ts";
 import { MCPParam } from "../../agent/tool-schemas.ts";
 import { getMCPVerificationKey } from "../../agent/mcp/mcp-oauth-provider.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../../auth/token-utils.ts";
 import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { startSlackAgentInChannel } from "../../agent/start-slack-agent-in-channel.ts";
 import { AdvisoryLocker } from "../../durable-objects/advisory-locker.ts";
@@ -90,7 +90,7 @@ export const integrationsRouter = router({
     // Group accounts by provider and track connection type
     const accountsByProvider: Record<
       string,
-      { account: typeof account.$inferSelect; isEstateWide: boolean }[]
+      { account: typeof account.$inferSelect; isInstallationWide: boolean }[]
     > = {};
 
     // Add installation-wide accounts
@@ -102,7 +102,7 @@ export const integrationsRouter = router({
       }
       accountsByProvider[acc_item.providerId]!.push({
         account: acc_item,
-        isEstateWide: true,
+        isInstallationWide: true,
       });
     });
 
@@ -121,7 +121,7 @@ export const integrationsRouter = router({
       if (!isAlreadyInstallationWide) {
         accountsByProvider[acc_item.providerId]!.push({
           account: acc_item,
-          isEstateWide: false,
+          isInstallationWide: false,
         });
       }
     });
@@ -130,8 +130,8 @@ export const integrationsRouter = router({
     const integrations = Object.entries(INTEGRATION_PROVIDERS).map(([providerId, provider]) => {
       const connections = accountsByProvider[providerId] || [];
       const latestConnection = connections[0]?.account; // Get the most recent connection
-      const hasEstateWide = connections.some((conn) => conn.isEstateWide);
-      const hasPersonal = connections.some((conn) => !conn.isEstateWide);
+      const hasInstallationWide = connections.some((conn) => conn.isInstallationWide);
+      const hasPersonal = connections.some((conn) => !conn.isInstallationWide);
 
       return {
         id: providerId as keyof typeof INTEGRATION_PROVIDERS,
@@ -140,7 +140,7 @@ export const integrationsRouter = router({
         icon: provider.icon,
         connections: connections.length,
         isConnected: connections.length > 0,
-        isEstateWide: hasEstateWide,
+        isInstallationWide: hasInstallationWide,
         isPersonal: hasPersonal,
         scope: latestConnection?.scope || null,
         connectedAt: latestConnection?.createdAt || null,
@@ -250,7 +250,7 @@ export const integrationsRouter = router({
     .query(async ({ ctx, input }) => {
       const installationId = input.installationId;
 
-      // Fetch estate-wide account connections for this provider
+      // Fetch installation-wide account connections for this provider
       const installationAccounts = await ctx.db.query.installationAccountsPermissions.findMany({
         where: eq(installationAccountsPermissions.installationId, installationId),
         with: {
@@ -318,14 +318,14 @@ export const integrationsRouter = router({
   listAvailableGithubRepos: installationProtectedProcedure.query(async ({ ctx, input }) => {
     const { installationId } = input;
 
-    const githubInstallation = await getGithubInstallationForEstate(ctx.db, installationId);
+    const githubInstallation = await getGithubInstallationForInstallation(ctx.db, installationId);
 
     if (!githubInstallation) {
       const scopedOctokit = await getOctokitForInstallation(
         ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
       );
 
-      const repo = await getGithubRepoForEstate(ctx.db, installationId);
+      const repo = await getGithubRepoForInstallation(ctx.db, installationId);
       if (!repo) return [];
       const repoInfo = await scopedOctokit.request("GET /repositories/{repository_id}", {
         repository_id: repo.connectedRepoId,
@@ -362,9 +362,9 @@ export const integrationsRouter = router({
 
     return repos;
   }),
-  getGithubRepoForEstate: installationProtectedProcedure.query(async ({ ctx, input }) => {
+  getGithubRepoForInstallation: installationProtectedProcedure.query(async ({ ctx, input }) => {
     const { installationId } = input;
-    const githubRepo = await getGithubRepoForEstate(ctx.db, installationId);
+    const githubRepo = await getGithubRepoForInstallation(ctx.db, installationId);
 
     if (!githubRepo?.connectedRepoAccountId)
       throw new TRPCError({
@@ -438,7 +438,7 @@ export const integrationsRouter = router({
       };
     }),
 
-  setGithubRepoForEstate: installationProtectedProcedure
+  setGithubRepoForInstallation: installationProtectedProcedure
     .input(
       z.object({
         repoId: z.number(),
@@ -449,7 +449,7 @@ export const integrationsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { installationId, repoId, branch, path } = input;
 
-      const githubInstallation = await getGithubInstallationForEstate(ctx.db, installationId);
+      const githubInstallation = await getGithubInstallationForInstallation(ctx.db, installationId);
 
       const accountId =
         githubInstallation?.accountId ?? ctx.env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID;
@@ -543,7 +543,10 @@ export const integrationsRouter = router({
         .where(eq(schema.iterateConfigSource.installationId, installationId));
 
       if (deleteInstallation) {
-        const githubInstallation = await getGithubInstallationForEstate(ctx.db, installationId);
+        const githubInstallation = await getGithubInstallationForInstallation(
+          ctx.db,
+          installationId,
+        );
 
         if (githubInstallation) {
           await ctx.db
@@ -561,24 +564,24 @@ export const integrationsRouter = router({
       };
     }),
 
-  // Disconnect an integration from the estate or personal account
+  // Disconnect an integration from the installation or personal account
   disconnect: installationProtectedProcedure
     .input(
       z.object({
         providerId: z.enum(
           Object.keys(INTEGRATION_PROVIDERS) as [keyof typeof INTEGRATION_PROVIDERS],
         ),
-        disconnectType: z.enum(["estate", "personal", "both"]).default("both"),
+        disconnectType: z.enum(["installation", "personal", "both"]).default("both"),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const { installationId, providerId, disconnectType } = input;
-      let estateDisconnected = 0;
+      let installationDisconnected = 0;
       let personalDisconnected = 0;
 
-      // Handle estate-wide disconnection
-      if (disconnectType === "estate" || disconnectType === "both") {
-        // Find all accounts for this provider connected to this estate
+      // Handle installation-wide disconnection
+      if (disconnectType === "installation" || disconnectType === "both") {
+        // Find all accounts for this provider connected to this installation
         const installationAccounts = await ctx.db.query.installationAccountsPermissions.findMany({
           where: eq(installationAccountsPermissions.installationId, installationId),
           with: {
@@ -591,7 +594,7 @@ export const integrationsRouter = router({
         );
 
         if (installationAccountsToDisconnect.length > 0) {
-          // Delete estate permissions for these accounts
+          // Delete installation permissions for these accounts
           const accountIds = installationAccountsToDisconnect.map(({ account: acc }) => acc!.id);
           await ctx.db
             .delete(installationAccountsPermissions)
@@ -601,7 +604,7 @@ export const integrationsRouter = router({
                 inArray(installationAccountsPermissions.accountId, accountIds),
               ),
             );
-          estateDisconnected = accountIds.length;
+          installationDisconnected = accountIds.length;
 
           // For GitHub integrations, also clear the connected repo information and revoke the installation
           if (providerId === "github-app") {
@@ -649,16 +652,16 @@ export const integrationsRouter = router({
 
           // Clean up orphaned accounts
           for (const accountId of accountIds) {
-            const otherEstatePermissions =
+            const otherInstallationPermissions =
               await ctx.db.query.installationAccountsPermissions.findFirst({
                 where: eq(installationAccountsPermissions.accountId, accountId),
               });
 
-            // If this account is not used by any other estate and belongs to the current user, delete it
+            // If this account is not used by any other installation and belongs to the current user, delete it
             const acc = installationAccountsToDisconnect.find(
               (ea) => ea.account?.id === accountId,
             )?.account;
-            if (!otherEstatePermissions && acc?.userId === ctx.user.id) {
+            if (!otherInstallationPermissions && acc?.userId === ctx.user.id) {
               await ctx.db.delete(account).where(eq(account.id, accountId));
             }
           }
@@ -667,24 +670,25 @@ export const integrationsRouter = router({
 
       // Handle personal disconnection
       if (disconnectType === "personal" || disconnectType === "both") {
-        // Find personal accounts for this provider (directly linked to user, not necessarily to estate)
+        // Find personal accounts for this provider (directly linked to user, not necessarily to installation)
         const personalAccounts = await ctx.db
           .select()
           .from(account)
           .where(and(eq(account.userId, ctx.user.id), eq(account.providerId, providerId)));
 
         if (personalAccounts.length > 0) {
-          // For personal accounts, we need to check if they're used by any estate
+          // For personal accounts, we need to check if they're used by any installation
           for (const personalAccount of personalAccounts) {
-            // Check if this account is used by any estate
-            const estatePermissions = await ctx.db.query.installationAccountsPermissions.findFirst({
-              where: eq(installationAccountsPermissions.accountId, personalAccount.id),
-            });
+            // Check if this account is used by any installation
+            const installationPermissions =
+              await ctx.db.query.installationAccountsPermissions.findFirst({
+                where: eq(installationAccountsPermissions.accountId, personalAccount.id),
+              });
 
-            // Only delete if not used by any estate (or if we're also disconnecting from estate)
-            if (!estatePermissions || disconnectType === "both") {
-              // First remove any estate permissions if they exist
-              if (estatePermissions) {
+            // Only delete if not used by any installation (or if we're also disconnecting from installation)
+            if (!installationPermissions || disconnectType === "both") {
+              // First remove any installation permissions if they exist
+              if (installationPermissions) {
                 await ctx.db
                   .delete(installationAccountsPermissions)
                   .where(eq(installationAccountsPermissions.accountId, personalAccount.id));
@@ -701,7 +705,7 @@ export const integrationsRouter = router({
         }
       }
 
-      if (estateDisconnected === 0 && personalDisconnected === 0) {
+      if (installationDisconnected === 0 && personalDisconnected === 0) {
         throw new TRPCError({
           code: "NOT_FOUND",
           message: `No ${providerId} integration found to disconnect`,
@@ -710,9 +714,9 @@ export const integrationsRouter = router({
 
       return ctx.sendTrpc(ctx.db, {
         success: true,
-        estateDisconnected,
+        installationDisconnected,
         personalDisconnected,
-        totalDisconnected: estateDisconnected + personalDisconnected,
+        totalDisconnected: installationDisconnected + personalDisconnected,
       });
     }),
 
@@ -734,16 +738,18 @@ export const integrationsRouter = router({
           .where(eq(schema.mcpConnectionParam.connectionKey, connectionId));
       } else {
         // Delete from account table (OAuth)
-        // First check if this account is linked to this estate
-        const estatePermission = await ctx.db.query.installationAccountsPermissions.findFirst({
-          where: and(
-            eq(installationAccountsPermissions.installationId, installationId),
-            eq(installationAccountsPermissions.accountId, connectionId),
-          ),
-        });
+        // First check if this account is linked to this installation
+        const installationPermission = await ctx.db.query.installationAccountsPermissions.findFirst(
+          {
+            where: and(
+              eq(installationAccountsPermissions.installationId, installationId),
+              eq(installationAccountsPermissions.accountId, connectionId),
+            ),
+          },
+        );
 
-        // Remove estate permission if it exists
-        if (estatePermission) {
+        // Remove installation permission if it exists
+        if (installationPermission) {
           await ctx.db
             .delete(installationAccountsPermissions)
             .where(
@@ -754,13 +760,13 @@ export const integrationsRouter = router({
             );
         }
 
-        // Check if account is used by other estates
-        const otherEstates = await ctx.db.query.installationAccountsPermissions.findFirst({
+        // Check if account is used by other installations
+        const otherInstallations = await ctx.db.query.installationAccountsPermissions.findFirst({
           where: eq(installationAccountsPermissions.accountId, connectionId),
         });
 
-        // Only delete the account if it's not used by any other estate
-        if (!otherEstates) {
+        // Only delete the account if it's not used by any other installation
+        if (!otherInstallations) {
           const acc = await ctx.db.query.account.findFirst({
             where: eq(account.id, connectionId),
           });
@@ -1067,7 +1073,7 @@ export const integrationsRouter = router({
     .query(async ({ ctx, input }) => {
       const { installationId, types, excludeArchived } = input;
 
-      const slackAccount = await getSlackAccessTokenForEstate(ctx.db, installationId);
+      const slackAccount = await getSlackAccessTokenForInstallation(ctx.db, installationId);
       if (!slackAccount) {
         throw new TRPCError({
           code: "NOT_FOUND",
@@ -1100,14 +1106,14 @@ export const integrationsRouter = router({
    * This is called from slack-connect.tsx, most commonly after Google Sign In with /trial/slack-connect redirect
    *
    * What this does:
-   * 1. Checks for existing trial with same email and reuses estate if found
-   * 2. Creates new organization/estate if no existing trial
-   * 3. Links estate to iterate's bot account
-   * 4. Creates provider estate mapping for the trial estate
+   * 1. Checks for existing trial with same email and reuses installation if found
+   * 2. Creates new organization/installation if no existing trial
+   * 3. Links installation to iterate's bot account
+   * 4. Creates provider installation mapping for the trial installation
    * 5. Creates/reuses Slack Connect channel and sends invite
    *
-   * Note: Trial estates are deduplicated by email. If a trial already exists for the given email,
-   * the existing estate will be reused and the current user will be added to its organization.
+   * Note: Trial installations are deduplicated by email. If a trial already exists for the given email,
+   * the existing installation will be reused and the current user will be added to its organization.
    *
    * User sync: External Slack Connect users are synced just-in-time when they send messages,
    * handled automatically by slack-agent.ts JIT sync logic.
@@ -1120,7 +1126,7 @@ export const integrationsRouter = router({
       const userName = ctx.user.name;
 
       logger.info(
-        `Setting up Slack Connect trial for ${userEmail} on estate ${ctx.installation.id}`,
+        `Setting up Slack Connect trial for ${userEmail} on installation ${ctx.installation.id}`,
       );
 
       const iterateTeamId = ctx.env.SLACK_ITERATE_TEAM_ID;
@@ -1130,11 +1136,14 @@ export const integrationsRouter = router({
       if (!iterateInstallationId) {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: "Iterate Slack workspace estate not found",
+          message: "Iterate Slack workspace installation not found",
         });
       }
 
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateInstallationId);
+      const iterateBotAccount = await getSlackAccessTokenForInstallation(
+        ctx.db,
+        iterateInstallationId,
+      );
       if (!iterateBotAccount) {
         throw new Error("Iterate Slack bot account not found");
       }
@@ -1148,7 +1157,7 @@ export const integrationsRouter = router({
           })
           .onConflictDoNothing();
 
-        logger.info(`Linked estate ${ctx.installation.id} to iterate's bot account`);
+        logger.info(`Linked installation ${ctx.installation.id} to iterate's bot account`);
 
         await tx
           .insert(schema.providerInstallationMapping)
@@ -1163,7 +1172,9 @@ export const integrationsRouter = router({
           })
           .onConflictDoNothing();
 
-        logger.info(`Created provider estate mapping for estate ${ctx.installation.id}`);
+        logger.info(
+          `Created provider installation mapping for installation ${ctx.installation.id}`,
+        );
 
         return ctx.sendTrpc(tx, {
           success: true,
@@ -1177,28 +1188,28 @@ export const integrationsRouter = router({
     }),
 
   /**
-   * Upgrades a trial estate to a full Slack installation
+   * Upgrades a trial installation to a full Slack installation
    * This removes all trial-specific configuration so the user can connect their own Slack workspace
    */
   upgradeTrialToFullInstallation: installationProtectedProcedure
-    .meta({ description: "Upgrades a trial estate to a full Slack installation" })
+    .meta({ description: "Upgrades a trial installation to a full Slack installation" })
     .mutation(async ({ ctx, input }) => {
       const { installationId } = input;
 
-      logger.info(`Upgrading trial estate ${installationId} to full installation`);
+      logger.info(`Upgrading trial installation ${installationId} to full installation`);
 
-      // Verify this is actually a trial estate
-      const estate = await ctx.db.query.installation.findFirst({
+      // Verify this is actually a trial installation
+      const installation = await ctx.db.query.installation.findFirst({
         where: eq(schema.installation.id, installationId),
         columns: {
           organizationId: true,
         },
       });
 
-      if (!estate) {
+      if (!installation) {
         throw new TRPCError({
           code: "NOT_FOUND",
-          message: "Estate not found",
+          message: "Installation not found",
         });
       }
 
@@ -1211,10 +1222,10 @@ export const integrationsRouter = router({
         });
       }
 
-      // Verify user has permission to modify this estate
+      // Verify user has permission to modify this installation
       const membership = await ctx.db.query.organizationUserMembership.findFirst({
         where: and(
-          eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+          eq(schema.organizationUserMembership.organizationId, installation.organizationId),
           eq(schema.organizationUserMembership.userId, ctx.user.id),
         ),
       });
@@ -1246,9 +1257,9 @@ export const integrationsRouter = router({
             ),
           );
 
-        logger.info(`Deleted channel override for estate ${installationId}`);
+        logger.info(`Deleted channel override for installation ${installationId}`);
 
-        // 2. Delete the provider estate mapping
+        // 2. Delete the provider installation mapping
         await tx
           .delete(schema.providerInstallationMapping)
           .where(
@@ -1258,7 +1269,7 @@ export const integrationsRouter = router({
             ),
           );
 
-        logger.info(`Deleted provider estate mapping for estate ${installationId}`);
+        logger.info(`Deleted provider installation mapping for installation ${installationId}`);
 
         // 3. Delete all old Slack provider user mappings
         // These were created during trial and will be stale after connecting own workspace
@@ -1271,10 +1282,10 @@ export const integrationsRouter = router({
             ),
           );
 
-        logger.info(`Deleted Slack provider user mappings for estate ${installationId}`);
+        logger.info(`Deleted Slack provider user mappings for installation ${installationId}`);
 
-        // 4. Get iterate's estate to find the bot account
-        const iterateEstateResult = await tx
+        // 4. Get iterate's installation to find the bot account
+        const iterateInstallationResult = await tx
           .select({
             installationId: schema.providerInstallationMapping.internalInstallationId,
           })
@@ -1287,7 +1298,7 @@ export const integrationsRouter = router({
           )
           .limit(1);
 
-        const iterateInstallationId = iterateEstateResult[0]?.installationId;
+        const iterateInstallationId = iterateInstallationResult[0]?.installationId;
 
         if (iterateInstallationId) {
           const iterateBotAccount = await tx
@@ -1308,7 +1319,7 @@ export const integrationsRouter = router({
             .limit(1);
 
           if (iterateBotAccount[0]) {
-            // 5. Delete the estate account permission
+            // 5. Delete the installation account permission
             await tx
               .delete(schema.installationAccountsPermissions)
               .where(
@@ -1321,7 +1332,9 @@ export const integrationsRouter = router({
                 ),
               );
 
-            logger.info(`Deleted estate account permission for estate ${installationId}`);
+            logger.info(
+              `Deleted installation account permission for installation ${installationId}`,
+            );
           }
         }
 

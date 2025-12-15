@@ -41,7 +41,7 @@ export const slackUpdateSliceStateFields = {
       })
       .nullable()
       .optional(),
-    estateName: z.string().nullable().optional(),
+    installationName: z.string().nullable().optional(),
   }),
 };
 
@@ -88,7 +88,7 @@ export interface SlackSliceState {
   } | null;
   botUserId?: string;
   typingIndicatorStatus?: string | null;
-  estateName?: string | null;
+  installationName?: string | null;
 }
 
 export interface SlackSliceDeps {}
@@ -106,7 +106,7 @@ export const slackSlice = defineAgentCoreSlice<{
     slackChannel: undefined,
     botUserId: undefined,
     typingIndicatorStatus: null,
-    estateName: undefined,
+    installationName: undefined,
   },
   reduce(state, _deps, event) {
     const next = { ...state };
@@ -122,8 +122,8 @@ export const slackSlice = defineAgentCoreSlice<{
         if (event.data.slackChannel !== undefined) {
           next.slackChannel = event.data.slackChannel;
         }
-        if (event.data.estateName !== undefined) {
-          next.estateName = event.data.estateName;
+        if (event.data.installationName !== undefined) {
+          next.installationName = event.data.installationName;
         }
         break;
       }
@@ -234,8 +234,8 @@ export function createSlackContextForState(params: {
 
   const channelThreadInfo: PromptFragment = [];
 
-  if (state.estateName) {
-    channelThreadInfo.push(`Estate: ${state.estateName}`);
+  if (state.installationName) {
+    channelThreadInfo.push(`Installation: ${state.installationName}`);
   }
 
   if (state.slackChannelId) {

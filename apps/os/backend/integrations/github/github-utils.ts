@@ -32,7 +32,7 @@ export const githubAppInstance = (): GithubAppInstance =>
     Octokit: Octokit.defaults({ userAgent: "Iterate OS" }),
   });
 
-export const getGithubInstallationForEstate = async (db: DB, installationId: string) => {
+export const getGithubInstallationForInstallation = async (db: DB, installationId: string) => {
   const installations = await db
     .select({
       accountId: schema.account.accountId,
@@ -56,24 +56,24 @@ export const getGithubInstallationForEstate = async (db: DB, installationId: str
   return installations.at(0);
 };
 
-export const getGithubRepoForEstate = async (db: DB, installationId: string) => {
+export const getGithubRepoForInstallation = async (db: DB, installationId: string) => {
   const e = await db.query.installation.findFirst({
     where: eq(schema.installation.id, installationId),
     with: recentActiveSources,
   });
   const s = e?.sources?.[0];
-  const estate = {
+  const installation = {
     connectedRepoId: s?.repoId,
     connectedRepoRef: s?.branch,
     connectedRepoPath: s?.path,
     connectedRepoAccountId: s?.accountId,
   };
 
-  if (!estate || !estate.connectedRepoId) {
+  if (!installation || !installation.connectedRepoId) {
     return null;
   }
 
-  return estate;
+  return installation;
 };
 
 export const getInstallationByRepoId = async (db: DB, repoId: number) => {

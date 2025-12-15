@@ -115,20 +115,22 @@ type MCPConnection = {
   connectedAt: Date | string;
 };
 
-export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/integrations/")({
-  component: Integrations,
-  head: () => ({
-    meta: [
-      {
-        title: "Iterate Connectors",
-      },
-      {
-        name: "description",
-        content: "Connect your iterate bot to third parties",
-      },
-    ],
-  }),
-});
+export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/integrations/")(
+  {
+    component: Integrations,
+    head: () => ({
+      meta: [
+        {
+          title: "Iterate Connectors",
+        },
+        {
+          name: "description",
+          content: "Connect your iterate bot to third parties",
+        },
+      ],
+    }),
+  },
+);
 
 function Integrations() {
   const installationId = useInstallationId();
@@ -193,7 +195,7 @@ function Integrations() {
 
   const handleDisconnect = async (
     integrationId: (typeof integrations)[number]["id"],
-    disconnectType: "estate" | "personal" | "both" = "both",
+    disconnectType: "installation" | "personal" | "both" = "both",
   ) => {
     try {
       if (integrationId === "slack-bot") {
@@ -272,7 +274,7 @@ function Integrations() {
                       <div className="text-xs text-muted-foreground">
                         {integration.id === "google"
                           ? "Personal connection"
-                          : integration.isEstateWide
+                          : integration.isInstallationWide
                             ? "Shared with organization"
                             : integration.isPersonal
                               ? "Personal connection"
@@ -294,8 +296,8 @@ function Integrations() {
                           Connected on {new Date(integration.connectedAt).toLocaleDateString()}
                         </p>
                       )}
-                      {/* Show dropdown if both estate-wide and personal connections exist */}
-                      {integration.isEstateWide && integration.isPersonal ? (
+                      {/* Show dropdown if both installation-wide and personal connections exist */}
+                      {integration.isInstallationWide && integration.isPersonal ? (
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="outline" size="sm" className="w-full">
@@ -305,9 +307,9 @@ function Integrations() {
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem
-                              onClick={() => handleDisconnect(integration.id, "estate")}
+                              onClick={() => handleDisconnect(integration.id, "installation")}
                             >
-                              Disconnect from Estate
+                              Disconnect from Installation
                             </DropdownMenuItem>
                             <DropdownMenuItem
                               onClick={() => handleDisconnect(integration.id, "personal")}

@@ -414,15 +414,15 @@ export const integrationsPlugin = () =>
               });
               user = existingUser.user;
 
-              // REMOVED AUTO-LINKING: Do not auto-link bot accounts to existing estates during signup.
-              // This was causing bot accounts to be linked to multiple estates when users were
+              // REMOVED AUTO-LINKING: Do not auto-link bot accounts to existing installations during signup.
+              // This was causing bot accounts to be linked to multiple installations when users were
               // synced across organizations via Slack Connect.
               //
               // Bot accounts should only be linked when:
               // 1. installationId is explicitly provided in OAuth state (link flow from integrations page)
-              // 2. A new estate is being created during signup (handled by redirect.tsx)
+              // 2. A new installation is being created during signup (handled by redirect.tsx)
               //
-              // If installationId is not provided, the signup flow in redirect.tsx will create a new estate
+              // If installationId is not provided, the signup flow in redirect.tsx will create a new installation
               // and link the bot account to it properly.
             } else {
               user = await ctx.context.internalAdapter.createUser({
@@ -531,9 +531,9 @@ export const integrationsPlugin = () =>
             return ctx.json({ error: "Failed to get account id" });
           }
 
-          // Link estate if we have an ID
+          // Link installation if we have an ID
           // TODO(rahul): figure out if there are any edge cases
-          // Only reason we don't have a installationId by this point is that the flow started with login, and the user already has an estate
+          // Only reason we don't have a installationId by this point is that the flow started with login, and the user already has an installation
           // So we can skip this step for them
           if (installationId) {
             // For linking flow, connect everything now
@@ -589,7 +589,7 @@ export const integrationsPlugin = () =>
               .returning();
           } else {
             // Don't auto-link in login flow - let redirect.tsx handle it
-            // This avoids linking to wrong estates when users share organizations via Slack sync
+            // This avoids linking to wrong installations when users share organizations via Slack sync
           }
 
           return ctx.redirect(callbackURL || import.meta.env.VITE_PUBLIC_URL);

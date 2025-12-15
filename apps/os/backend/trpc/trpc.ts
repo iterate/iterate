@@ -113,8 +113,8 @@ export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type })
   return result;
 });
 
-/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any estate-specific resources */
-export const protectedProcedureWithNoEstateRestrictions = publicProcedure
+/** Protected procedure that requires authentication - note that this just says that the user is signed in, not authorised to access any installation-specific resources */
+export const protectedProcedureWithNoInstallationRestrictions = publicProcedure
   .use(({ ctx, next }) => {
     if (!ctx.session || !ctx.user) {
       throw new TRPCError({ code: "UNAUTHORIZED" });
@@ -129,7 +129,7 @@ export const protectedProcedureWithNoEstateRestrictions = publicProcedure
   })
   .use(autoInvalidateMiddleware); // Add auto-invalidation to all protected procedures
 
-export const protectedProcedure = protectedProcedureWithNoEstateRestrictions.input(
+export const protectedProcedure = protectedProcedureWithNoInstallationRestrictions.input(
   z.object({ installationId: z.never().optional() }).optional(),
 );
 
@@ -339,7 +339,7 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
 });
 
 // Installation protected procedure that requires both authentication and installation access
-export const installationProtectedProcedure = protectedProcedureWithNoEstateRestrictions
+export const installationProtectedProcedure = protectedProcedureWithNoInstallationRestrictions
   .use(autoInvalidateMiddleware)
   .input(z.object({ installationId: z.string() }))
   .use(async ({ ctx, input, next, path }) => {

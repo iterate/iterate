@@ -506,7 +506,7 @@ const findIterateConfig = (root: string = process.cwd()): string | null => {
     // ignore call stack parsing errors
   }
 
-  // 3) Fallback: walk upwards from cwd (works if cwd is the estate dir)
+  // 3) Fallback: walk upwards from cwd (works if cwd is the installation dir)
   let currentDir = resolve(root);
   const rootDir = resolve("/");
   while (currentDir !== rootDir) {

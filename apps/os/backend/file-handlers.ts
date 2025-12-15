@@ -206,7 +206,11 @@ export function getFilePublicURL(iterateFileId: string) {
   return `${getBaseURL({ replaceLocalhostWithNgrok: true })}/api/files/${iterateFileId}`;
 }
 
-export async function getFileContent(params: { iterateFileId: string; db: DB; installationId: string }) {
+export async function getFileContent(params: {
+  iterateFileId: string;
+  db: DB;
+  installationId: string;
+}) {
   const { iterateFileId, db, installationId } = params;
 
   // Get file record from database
@@ -216,9 +220,9 @@ export async function getFileContent(params: { iterateFileId: string; db: DB; in
     throw new Error(`File not found: ${iterateFileId}`);
   }
 
-  // Verify the file belongs to the specified estate
+  // Verify the file belongs to the specified installation
   if (fileRecord.installationId !== installationId) {
-    throw new Error(`File ${iterateFileId} does not belong to estate ${installationId}`);
+    throw new Error(`File ${iterateFileId} does not belong to installation ${installationId}`);
   }
 
   if (fileRecord.status !== "completed") {
@@ -295,12 +299,12 @@ export const uploadFile = async ({
   try {
     // Start the upload process
     await startUpload(db, fileId, installationId, filename);
-    // Get the estate name for tracking purposes
-    const estate = await db.query.installation.findFirst({
+    // Get the installation name for tracking purposes
+    const installation = await db.query.installation.findFirst({
       where: eq(schema.installation.id, installationId),
     });
-    if (!estate) {
-      throw new Error(`Estate not found: ${installationId}`);
+    if (!installation) {
+      throw new Error(`Installation not found: ${installationId}`);
     }
     // Upload the file
     const fileRecord = await doUpload({
@@ -318,7 +322,7 @@ export const uploadFile = async ({
             POSTHOG_PUBLIC_KEY: env.POSTHOG_PUBLIC_KEY,
           }),
         },
-        estateName: estate.name,
+        installationName: installation.name,
       }),
     });
 
@@ -438,7 +442,7 @@ export const getExportHandler = async (
     }
 
     if (object.customMetadata?.installationId !== installationId) {
-      return c.json({ error: "Export not found for this estate" }, 404);
+      return c.json({ error: "Export not found for this installation" }, 404);
     }
 
     const headers = new Headers();

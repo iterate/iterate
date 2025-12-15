@@ -127,15 +127,15 @@ export const organizationRouter = router({
       },
     });
 
-    // Get estate for this organization to fetch slack channels
-    const estate = await ctx.db.query.installation.findFirst({
+    // Get installation for this organization to fetch slack channels
+    const installation = await ctx.db.query.installation.findFirst({
       where: eq(schema.installation.organizationId, ctx.organization.id),
     });
 
     // Fetch slack channels and metadata for all users
     const channelsByUser = new Map<string, string[]>();
 
-    if (estate && members.length > 0) {
+    if (installation && members.length > 0) {
       // Fetch provider mappings for all users to get Slack usernames
       const providerMappings = await ctx.db.query.providerUserMapping.findMany({
         where: inArray(
@@ -144,9 +144,9 @@ export const organizationRouter = router({
         ),
       });
 
-      // Fetch all slack channels for this estate
+      // Fetch all slack channels for this installation
       const slackChannels = await ctx.db.query.slackChannel.findMany({
-        where: eq(schema.slackChannel.installationId, estate.id),
+        where: eq(schema.slackChannel.installationId, installation.id),
       });
 
       const channelMap = new Map(slackChannels.map((c) => [c.externalId, c.name]));
@@ -194,7 +194,7 @@ export const organizationRouter = router({
       });
     }
 
-    // If no estate found, return basic member info without Slack metadata
+    // If no installation found, return basic member info without Slack metadata
     return members.map(
       (m): OrganizationMember => ({
         id: m.id,

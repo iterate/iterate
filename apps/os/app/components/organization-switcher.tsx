@@ -52,7 +52,7 @@ export function OrganizationSwitcher() {
   }
 
   const handleOrganizationSwitch = (organizationId: string) => {
-    // Navigate to the organization page (which will redirect to first estate)
+    // Navigate to the organization page (which will redirect to first installation)
     navigate({ to: `/$organizationId`, params: { organizationId } });
   };
 

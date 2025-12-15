@@ -103,19 +103,19 @@ async function getMCPParamsCollectionURL(params: {
   integrationSlug: string;
   finalRedirectUrl: string | undefined;
 }): Promise<string> {
-  const estate = await params.db.query.installation.findFirst({
+  const installation = await params.db.query.installation.findFirst({
     where: eq(schema.installation.id, params.installationId),
     columns: {
       organizationId: true,
     },
   });
 
-  if (!estate) {
-    throw new Error(`Estate ${params.installationId} not found`);
+  if (!installation) {
+    throw new Error(`Installation ${params.installationId} not found`);
   }
 
   const url = new URL(
-    `${import.meta.env.VITE_PUBLIC_URL || ""}/${estate.organizationId}/${params.installationId}/integrations/mcp-params`,
+    `${import.meta.env.VITE_PUBLIC_URL || ""}/${installation.organizationId}/${params.installationId}/integrations/mcp-params`,
   );
   url.searchParams.set("serverUrl", params.serverUrl);
   url.searchParams.set("mode", params.mode);

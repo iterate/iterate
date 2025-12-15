@@ -15,7 +15,7 @@ import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 import { OnboardingSlackStep } from "./onboarding-slack-step.tsx";
 import { OnboardingConfirmOrgStep } from "./onboarding-confirm-org-step.tsx";
 
-const estateOnboardingLoader = authenticatedServerFn
+const installationOnboardingLoader = authenticatedServerFn
   .inputValidator(z.object({ organizationId: z.string(), installationId: z.string() }))
   .handler(async ({ context, data }) => {
     const { organizationId, installationId } = data;
@@ -38,23 +38,23 @@ const estateOnboardingLoader = authenticatedServerFn
   });
 
 export const Route = createFileRoute("/_auth.layout/$organizationId/$installationId/onboarding")({
-  component: EstateOnboarding,
+  component: InstallationOnboarding,
   validateSearch: z.object({
     step: z.enum(["confirm_org", "slack", "slack_complete"]).default("confirm_org"),
   }),
   loader: ({ params }) =>
-    estateOnboardingLoader({
+    installationOnboardingLoader({
       data: { organizationId: params.organizationId, installationId: params.installationId },
     }),
   head: () => ({
     meta: [
       { title: "Onboarding - Iterate" },
-      { name: "description", content: "Complete your estate onboarding" },
+      { name: "description", content: "Complete your installation onboarding" },
     ],
   }),
 });
 
-export default function EstateOnboarding() {
+export default function InstallationOnboarding() {
   const { organization, installationId, organizationId } = Route.useLoaderData();
   const trpc = useTRPC();
   const { step: initialStep } = Route.useSearch();

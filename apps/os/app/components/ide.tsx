@@ -454,7 +454,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   const createPullRequestMutation = useMutation(
     trpc.installation.createPullRequest.mutationOptions({
       onSuccess: () => {
-        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+        queryClient.invalidateQueries(
+          trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+        );
         queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
       },
     }),
@@ -464,7 +466,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
     trpc.installation.mergePull.mutationOptions({
       onSuccess: () => {
         queryClient.invalidateQueries(trpc.installation.listPulls.queryFilter({ installationId }));
-        queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+        queryClient.invalidateQueries(
+          trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+        );
         removeCurrentPrBranch();
       },
     }),
@@ -937,7 +941,9 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
             await queryClient.refetchQueries(
               trpc.installation.listPulls.queryFilter({ installationId, state: "open" }),
             );
-            queryClient.invalidateQueries(trpc.installation.getRepoFilesystem.queryFilter({ installationId }));
+            queryClient.invalidateQueries(
+              trpc.installation.getRepoFilesystem.queryFilter({ installationId }),
+            );
 
             setSelectedFile(null);
           },
@@ -1187,7 +1193,10 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
                       if (currentPrBranch === defaultBranch) {
                         handleCreateNewBranch("createPr");
                       } else {
-                        createPullRequestMutation.mutate({ installationId, fromBranch: currentPrBranch });
+                        createPullRequestMutation.mutate({
+                          installationId,
+                          fromBranch: currentPrBranch,
+                        });
                       }
                     }}
                     disabled={createPullRequestMutation.isPending}
@@ -1227,7 +1236,7 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
                 onClick={() =>
                   handleNewFile({
                     fileName: "iterate.config.ts",
-                    contents: templateEstateConfigString,
+                    contents: templateInstallationConfigString,
                   })
                 }
                 disabled={localEdits?.["iterate.config.ts"] !== undefined}
@@ -1523,8 +1532,8 @@ export function IDE({ ref }: { ref: React.RefObject<IDEHandle | null> }) {
   );
 }
 
-// eslint + autofix will make sure the below variable stays in sync with estates/template/iterate.config.ts
-// codegen:start {preset: str, source: ../../../../estates/template/iterate.config.ts, const: templateEstateConfigString}
-const templateEstateConfigString =
+// eslint + autofix will make sure the below variable stays in sync with the template installation config
+// codegen:start {preset: str, source: ../../../../estates/template/iterate.config.ts, const: templateInstallationConfigString}
+const templateInstallationConfigString =
   'import { contextRulesFromFiles, defineConfig, matchers } from "@iterate-com/sdk";\n\nconst config = defineConfig({\n  contextRules: [\n    // You can use "matchers" to conditionally apply rules.\n    // For example to only be active when certain MCP connections are present.\n    {\n      key: "how-we-use-linear",\n      prompt: "Tag any new issues with the label `iterate-tutorial`",\n      match: matchers.hasMCPConnection("linear"),\n    },\n\n    // Or when a certain user is on a thread\n    {\n      key: "jonas-rules",\n      prompt: "When Jonas is on a thread, remind him to lock in",\n      match: matchers.hasParticipant("jonas"),\n    },\n\n    // You can also use mathcers.and, matchers.or and matchers.not\n    {\n      key: "jonas-in-the-evening",\n      prompt: "It\'s between 22:00 - 06:00, remind jonas to go to sleep",\n      match: matchers.and(\n        matchers.hasParticipant("jonas"),\n        matchers.timeWindow({\n          timeOfDay: { start: "22:00", end: "06:00" },\n        }),\n      ),\n    },\n    // This file is "just typescript", so you can do whatever you want\n    // e.g. structure your rules in markdown, too, and use a helper to load them\n    ...contextRulesFromFiles("rules/**/*.md"),\n  ],\n});\nexport default config;\n';
 // codegen:end

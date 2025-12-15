@@ -35,7 +35,7 @@ function NewOrganization() {
   const createOrganization = useMutation(
     trpc.organization.create.mutationOptions({
       onSuccess: (data) => {
-        // Navigate to the new organization's first estate
+        // Navigate to the new organization's first installation
         navigate({ to: `/${data.organization.id}/${data.installation.id}` });
       },
       onError: (error) => {

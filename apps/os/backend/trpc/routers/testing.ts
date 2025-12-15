@@ -2,7 +2,11 @@ import { z } from "zod";
 import { eq, ne, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { typeid } from "typeid-js";
-import { protectedProcedureWithNoEstateRestrictions, publicProcedure, router } from "../trpc.ts";
+import {
+  protectedProcedureWithNoInstallationRestrictions,
+  publicProcedure,
+  router,
+} from "../trpc.ts";
 import { getAuth } from "../../auth/auth.ts";
 import { schema } from "../../db/client.ts";
 import { createUserOrganizationAndInstallation } from "../../org-utils.ts";
@@ -13,7 +17,7 @@ import { AGENT_CLASS_NAMES, getAgentStubByName } from "../../agent/agents/stub-g
 import type { IterateAgent, SlackAgent } from "../../worker.ts";
 import { queuer } from "../../outbox/outbox-queuer.ts";
 
-const testingProcedure = protectedProcedureWithNoEstateRestrictions.use(({ ctx, next }) => {
+const testingProcedure = protectedProcedureWithNoInstallationRestrictions.use(({ ctx, next }) => {
   if (ctx.user.role !== "admin") {
     throw new TRPCError({
       code: "FORBIDDEN",
@@ -107,7 +111,7 @@ export const createOrganizationAndInstallation = testingProcedure
   .input(
     z.object({
       userId: z.string(),
-      /** If true, mark onboarding as completed so the estate doesn't redirect to onboarding flow */
+      /** If true, mark onboarding as completed so the installation doesn't redirect to onboarding flow */
       skipOnboarding: z.boolean().default(true),
     }),
   )

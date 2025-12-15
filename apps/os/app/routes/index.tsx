@@ -10,7 +10,7 @@ import { syncSlackUsersInBackground } from "../../backend/integrations/slack/sla
 import { logger } from "../../backend/tag-logger.ts";
 import type { DB } from "../../backend/db/client.ts";
 import { authenticatedServerFn } from "../lib/auth-middleware.ts";
-import { appendEstatePath } from "./append-estate-path.ts";
+import { appendInstallationPath } from "./append-installation-path.ts";
 
 // Server-side business logic for determining where to redirect
 async function determineRedirectPath({
@@ -239,7 +239,7 @@ const handleRedirect = authenticatedServerFn.handler(async ({ context }) => {
   if (redirectPath.match(/\/org_\w+\/inst_\w+$/)) {
     const installationPath = requestUrl.searchParams.get("installation_path");
     if (installationPath) {
-      redirectPath = appendEstatePath(redirectPath, installationPath);
+      redirectPath = appendInstallationPath(redirectPath, installationPath);
     }
   }
 

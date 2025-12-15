@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const EstateSpecifier = z.object({
+export const InstallationSpecifier = z.object({
   raw: z.string(),
   protocol: z.string(),
   cloneUrl: z.string(),
@@ -9,18 +9,22 @@ export const EstateSpecifier = z.object({
   ref: z.string().optional(),
   directory: z.string().optional(),
 });
-export type EstateSpecifier = z.infer<typeof EstateSpecifier>;
-export const EstateSpecifierFromString = z
+export type InstallationSpecifier = z.infer<typeof InstallationSpecifier>;
+export const InstallationSpecifierFromString = z
   .string()
   .transform((specifier, ctx) => {
     try {
       return parseSpecifier(specifier);
     } catch (e) {
-      ctx.addIssue({ code: "custom", message: `Couldn't parse estate specifier: ${e}`, path: [] });
+      ctx.addIssue({
+        code: "custom",
+        message: `Couldn't parse installation specifier: ${e}`,
+        path: [],
+      });
       return z.never();
     }
   })
-  .pipe(EstateSpecifier);
+  .pipe(InstallationSpecifier);
 
 const examples = [
   `A github repo: git:some-org/some-repo`,
@@ -30,7 +34,7 @@ const examples = [
   `A github repo with a path and a ref: git:some-org/some-repo#some-ref&path:some/path`,
 ];
 
-export const parseSpecifier = (specifier: string): EstateSpecifier => {
+export const parseSpecifier = (specifier: string): InstallationSpecifier => {
   let url;
   try {
     url = new URL(specifier);

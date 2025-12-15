@@ -51,22 +51,22 @@ export class PosthogCloudflare<
 > {
   private readonly ctx: { waitUntil: (promise: Promise<void>) => void };
   readonly client: PostHog;
-  readonly estateMeta: { estateName: string; projectName: string };
+  readonly installationMeta: { installationName: string; projectName: string };
 
   constructor(
     ctx: { waitUntil: (promise: Promise<void>) => void },
-    estateMeta: { estateName: string; projectName: string },
+    installationMeta: { installationName: string; projectName: string },
     client = createRawPosthogCloudflareClient(),
   ) {
     this.ctx = ctx;
     this.client = client;
-    this.estateMeta = estateMeta;
+    this.installationMeta = installationMeta;
 
     this.client.groupIdentify({
-      groupType: "estate",
-      groupKey: estateMeta.estateName,
+      groupType: "installation",
+      groupKey: installationMeta.installationName,
       properties: {
-        project: estateMeta.projectName,
+        project: installationMeta.projectName,
       },
     });
   }
@@ -74,14 +74,17 @@ export class PosthogCloudflare<
   identify(internalUserId: string, properties: IdentityAgent | IdentityUser | IdentityBot) {
     // `name` and `email` are special properties which get picked up as the UI label for a Person profile
     // This helps us identify agents/bots more clearly
-    const name = properties.type === "agent" ? `Agent on ${this.estateMeta.estateName}` : undefined;
+    const name =
+      properties.type === "agent"
+        ? `Agent on ${this.installationMeta.installationName}`
+        : undefined;
 
     this.ctx.waitUntil(
       this.client.identifyImmediate({
         distinctId: internalUserId,
         properties: {
           name,
-          ...this.estateMeta,
+          ...this.installationMeta,
           ...properties,
         },
       }),
@@ -103,10 +106,10 @@ export class PosthogCloudflare<
         distinctId,
         properties: {
           ...properties,
-          ...this.estateMeta,
+          ...this.installationMeta,
         },
         groups: {
-          estate: this.estateMeta.estateName,
+          installation: this.installationMeta.installationName,
         },
       }),
     );
@@ -120,4 +123,4 @@ export class PosthogCloudflare<
   }
 }
 
-export const SELF_AGENT_DISTINCT_ID = (estateName: string) => `AGENT[${estateName}]`;
+export const SELF_AGENT_DISTINCT_ID = (installationName: string) => `AGENT[${installationName}]`;

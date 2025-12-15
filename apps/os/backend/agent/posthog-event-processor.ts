@@ -109,7 +109,7 @@ async function getDistinctIdForSliceEventData({
 
   // for all other events, we mark as Agent
   return {
-    internalUserId: SELF_AGENT_DISTINCT_ID(posthog.estateMeta.estateName),
+    internalUserId: SELF_AGENT_DISTINCT_ID(posthog.installationMeta.installationName),
     identity: { type: "agent" },
   };
 }

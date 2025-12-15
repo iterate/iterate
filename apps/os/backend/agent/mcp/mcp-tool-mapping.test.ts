@@ -798,7 +798,7 @@ describe("mcp-tool-mapping", () => {
           durableObjectName: "test-durable-object-name",
           className: "TestClass",
         }),
-        getInstallationId: () => "test-estate-id",
+        getInstallationId: () => "test-installation-id",
         getReducedState: () => ({ mcpConnections: {} }) as any,
         mcpConnectionCache: mockCache,
         mcpConnectionQueues: mockConnectionQueues,

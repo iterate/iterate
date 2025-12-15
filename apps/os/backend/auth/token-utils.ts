@@ -8,7 +8,7 @@ import type { DB } from "../db/client.ts";
 import type { AgentDurableObjectInfo, GoogleOAuthState } from "./oauth-state-schemas.ts";
 import { GOOGLE_INTEGRATION_SCOPES } from "./integrations.ts";
 
-export const getSlackAccessTokenForEstate = async (db: DB, installationId: string) => {
+export const getSlackAccessTokenForInstallation = async (db: DB, installationId: string) => {
   const result = await db
     .select({
       accessToken: schema.account.accessToken,
@@ -44,7 +44,7 @@ export const GithubUserAccessTokenResponse = z.object({
   refresh_token_expires_in: z.number(),
 });
 
-export const getGithubUserAccessTokenForEstate = async (db: DB, installationId: string) => {
+export const getGithubUserAccessTokenForInstallation = async (db: DB, installationId: string) => {
   const [result] = await db
     .select({
       id: schema.account.id,
@@ -111,7 +111,7 @@ export const getGithubUserAccessTokenForEstate = async (db: DB, installationId: 
   }
 
   if (!result.accessToken) {
-    throw new Error(`GitHub user access token not found for estate ${installationId}`);
+    throw new Error(`GitHub user access token not found for installation ${installationId}`);
   }
 
   return {

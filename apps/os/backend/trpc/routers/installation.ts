@@ -14,7 +14,7 @@ import {
   installationProtectedProcedure,
   getUserInstallationAccess,
   router,
-  protectedProcedureWithNoEstateRestrictions,
+  protectedProcedureWithNoInstallationRestrictions,
 } from "../trpc.ts";
 import {
   installation,
@@ -194,7 +194,7 @@ export const installationRouter = router({
       return installations;
     }),
 
-  checkAccess: protectedProcedureWithNoEstateRestrictions
+  checkAccess: protectedProcedureWithNoInstallationRestrictions
     .input(
       z.object({
         installationId: z.string(),
@@ -228,7 +228,7 @@ export const installationRouter = router({
       }
     }),
 
-  getBySlug: protectedProcedureWithNoEstateRestrictions
+  getBySlug: protectedProcedureWithNoInstallationRestrictions
     .input(z.object({ slug: z.string() }))
     .query(async ({ ctx, input }) => {
       const inst = await ctx.db.query.installation.findFirst({

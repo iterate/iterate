@@ -4,7 +4,7 @@ import * as fs from "fs/promises";
 import { z } from "zod";
 import { x as exec } from "tinyexec";
 import { t } from "../config.ts";
-import { addUserToInstallation } from "./add-to-estate.ts";
+import { addUserToInstallation } from "./add-to-installation.ts";
 
 export const checkoutInstallationCommand = t.procedure
   .input(
@@ -57,7 +57,6 @@ export const checkoutInstallationCommand = t.procedure
     }
 
     if (repoRef) {
-      // Checkout the repository to the ref
       exec("git", ["checkout", repoRef], {
         nodeOptions: {
           cwd: repoPath,

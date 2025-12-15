@@ -6,9 +6,9 @@ import { createE2EHelper } from "./helpers.ts";
  *
  * This test simulates a complete user onboarding flow:
  * 1. Authenticate with service auth token
- * 2. Create a test user and organization/estate
+ * 2. Create a test user and organization/installation
  * 3. Impersonate that user using better-auth admin SDK
- * 4. Clone the estate-template repo and push to a new repo
+ * 4. Clone the installation-template repo and push to a new repo
  * 5. Link the repository through the UI
  * 6. Wait for the initial build to complete
  * 7. Send a message to Slack

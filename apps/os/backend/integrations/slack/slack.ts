@@ -16,7 +16,7 @@ import {
   isBotMentionedInMessage,
   getMentionedExternalUserIds,
 } from "../../agent/slack-agent-utils.ts";
-import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../../auth/token-utils.ts";
 import type { AgentCoreEvent } from "../../agent/agent-core.ts";
 import { getOrCreateAgentStubByRoute } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
@@ -27,15 +27,15 @@ type SlackMessage = NonNullable<ConversationsRepliesResponse["messages"]>[number
 export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
 
 /**
- * Looks up which estate owns a specific Slack bot user ID.
+ * Looks up which installation owns a specific Slack bot user ID.
  * Uses the account table where bot user IDs are stored in account.accountId.
  *
- * This is used for Slack Connect routing where we need to determine which estate
+ * This is used for Slack Connect routing where we need to determine which installation
  * a mentioned bot belongs to.
  *
  * @param db - Database connection
  * @param botUserId - Slack bot user ID (e.g., "U08UQSK9D2M")
- * @returns Estate ID or null if not found
+ * @returns Installation ID or null if not found
  */
 async function botUserIdToInstallationId(db: DB, botUserId: string): Promise<string | null> {
   const result = await db
@@ -54,16 +54,16 @@ async function botUserIdToInstallationId(db: DB, botUserId: string): Promise<str
 }
 
 /**
- * Resolves a Slack team ID (and optionally channel ID) to an estate ID.
+ * Resolves a Slack team ID (and optionally channel ID) to an installation ID.
  *
  * Resolution order:
  * 1. If channelId is provided, check slackChannelOverride table first
- * 2. Fall back to providerInstallationMapping (team_id → estate_id)
+ * 2. Fall back to providerInstallationMapping (team_id → installation_id)
  *
  * @param db - Database connection
  * @param teamId - Slack team/workspace ID
  * @param channelId - Optional Slack channel ID for channel-specific routing
- * @returns Estate ID or null if not found
+ * @returns Installation ID or null if not found
  */
 async function slackTeamIdToInstallationId({
   db,
@@ -88,13 +88,13 @@ async function slackTeamIdToInstallationId({
 
     if (overrideResult) {
       logger.info(
-        `Using channel override routing: channel=${channelId}, team=${teamId} → estate=${overrideResult.installationId}`,
+        `Using channel override routing: channel=${channelId}, team=${teamId} → installation=${overrideResult.installationId}`,
       );
       return overrideResult.installationId;
     }
   }
 
-  // Fall back to default team_id → estate_id mapping
+  // Fall back to default team_id → installation_id mapping
   const result = await db
     .select({
       installationId: schema.providerInstallationMapping.internalInstallationId,
@@ -127,11 +127,11 @@ export async function ensureUserSynced(params: {
   const { db, installationId, slackUserId, botToken, syncingTeamId } = params;
 
   logger.info(
-    `[JIT Sync] Starting sync for user ${slackUserId}, estate ${installationId}, syncingTeam ${syncingTeamId}`,
+    `[JIT Sync] Starting sync for user ${slackUserId}, installation ${installationId}, syncingTeam ${syncingTeamId}`,
   );
 
   try {
-    // Check if user already exists for this estate
+    // Check if user already exists for this installation
     const existing = await db.query.providerUserMapping.findFirst({
       where: and(
         eq(schema.providerUserMapping.providerId, "slack-bot"),
@@ -142,15 +142,15 @@ export async function ensureUserSynced(params: {
 
     if (existing) {
       logger.info(
-        `[JIT Sync] User ${slackUserId} already synced for estate ${installationId} (internalUserId=${existing.internalUserId})`,
+        `[JIT Sync] User ${slackUserId} already synced for installation ${installationId} (internalUserId=${existing.internalUserId})`,
       );
       return true; // Already synced
     }
 
     logger.info(`[JIT Sync] User ${slackUserId} not in database, proceeding with sync`);
 
-    // Check if this is a trial estate
-    const estate = await db.query.installation.findFirst({
+    // Check if this is a trial installation
+    const installation = await db.query.installation.findFirst({
       where: eq(schema.installation.id, installationId),
       columns: { organizationId: true },
     });
@@ -170,18 +170,18 @@ export async function ensureUserSynced(params: {
 
       if (!hasFullUserInfo) {
         logger.warn(
-          `[JIT Sync] Limited user info for ${slackUserId} on estate ${installationId} (${userInfoResponse.error})`,
+          `[JIT Sync] Limited user info for ${slackUserId} on installation ${installationId} (${userInfoResponse.error})`,
         );
       }
     } catch (error: any) {
       logger.warn(
-        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on estate ${installationId} (likely external Slack Connect user):`,
+        `[JIT Sync] Cannot fetch full user info for ${slackUserId} on installation ${installationId} (likely external Slack Connect user):`,
         error,
       );
-      // For trial estates, this is expected - all users are external
+      // For trial installations, this is expected - all users are external
       // Continue with minimal user record creation
       if (!isTrial) {
-        return false; // For non-trial estates, fail if we can't get user info
+        return false; // For non-trial installations, fail if we can't get user info
       }
     }
 
@@ -189,14 +189,14 @@ export async function ensureUserSynced(params: {
     const userHomeTeamId = userInfo?.team_id;
 
     // Determine if user is external by comparing team IDs
-    // For both trial and regular estates, users from other workspaces are external
-    // For trial estates:
+    // For both trial and regular installations, users from other workspaces are external
+    // For trial installations:
     //   - iterate team members are INTERNAL (same team ID as syncingTeamId)
     //   - trial users via Slack Connect are EXTERNAL (different team ID)
     //   - if we don't have userHomeTeamId, assume EXTERNAL (Slack Connect users have limited API access)
     const isExternalUser = isTrial
       ? userHomeTeamId !== syncingTeamId // For trials, assume external unless proven internal
-      : userHomeTeamId && userHomeTeamId !== syncingTeamId; // For regular estates, require proof
+      : userHomeTeamId && userHomeTeamId !== syncingTeamId; // For regular installations, require proof
 
     logger.info(
       `[JIT Sync] User ${slackUserId}: homeTeam=${userHomeTeamId}, syncingTeam=${syncingTeamId}, isTrial=${isTrial}, isExternal=${isExternalUser}, hasFullInfo=${hasFullUserInfo}`,
@@ -206,8 +206,8 @@ export async function ensureUserSynced(params: {
     // If we don't have full user info, always use synthetic email
     const email = userInfo?.profile?.email || `${slackUserId}@${syncingTeamId}.slack.iterate.com`;
 
-    if (!estate) {
-      logger.error(`[JIT Sync] Estate ${installationId} not found during JIT sync`);
+    if (!installation) {
+      logger.error(`[JIT Sync] Installation ${installationId} not found during JIT sync`);
       return false;
     }
 
@@ -269,7 +269,7 @@ export async function ensureUserSynced(params: {
       const existingMembership = await tx.query.organizationUserMembership.findFirst({
         where: and(
           eq(schema.organizationUserMembership.userId, user.id),
-          eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+          eq(schema.organizationUserMembership.organizationId, installation.organizationId),
         ),
       });
 
@@ -287,7 +287,7 @@ export async function ensureUserSynced(params: {
         await tx
           .insert(schema.organizationUserMembership)
           .values({
-            organizationId: estate.organizationId,
+            organizationId: installation.organizationId,
             userId: user.id,
             role: role as "guest" | "member" | "external",
           })
@@ -299,19 +299,19 @@ export async function ensureUserSynced(params: {
           .where(
             and(
               eq(schema.organizationUserMembership.userId, user.id),
-              eq(schema.organizationUserMembership.organizationId, estate.organizationId),
+              eq(schema.organizationUserMembership.organizationId, installation.organizationId),
             ),
           );
       }
     });
 
     logger.info(
-      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for estate ${installationId}`,
+      `[JIT Sync] ✅ Successfully synced user ${slackUserId} (${email}) for installation ${installationId}`,
     );
     return true;
   } catch (error) {
     logger.error(
-      `[JIT Sync] Error syncing user ${slackUserId} for estate ${installationId}:`,
+      `[JIT Sync] Error syncing user ${slackUserId} for installation ${installationId}:`,
       error instanceof Error ? error.message : error,
     );
     return false;
@@ -368,10 +368,10 @@ slackApp.post("/webhook", async (c) => {
     messageMetadata,
   });
 
-  // Process the webhook for each estate independently
+  // Process the webhook for each installation independently
   await Promise.all(
     processInstruction.installationIds.map((installationId) =>
-      processWebhookForEstate({
+      processWebhookForInstallation({
         db,
         body,
         messageMetadata,
@@ -392,7 +392,7 @@ async function determineInstallationIdsToProcess({
   db: DB;
   body: SlackWebhookPayload;
   messageMetadata: { channel?: string; threadTs?: string; ts?: string };
-  // todo: remove the `installationId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the estate?
+  // todo: remove the `installationId` column from the `slack_webhook_event` table. just store all of them and have a mapping table connecting them to the installation?
 }): Promise<{ installationIds: string[]; instruction: "process" | "store-webhooks" }> {
   if (!body.event) {
     return { installationIds: [], instruction: "process" };
@@ -408,7 +408,7 @@ async function determineInstallationIdsToProcess({
     }
   }
 
-  // Channel overrides (for trial estates) take priority over bot mention routing
+  // Channel overrides (for trial installations) take priority over bot mention routing
   if (messageMetadata.channel && body.team_id) {
     const channelOverrideInstallationId = await slackTeamIdToInstallationId({
       db,
@@ -469,7 +469,7 @@ async function determineInstallationIdsToProcess({
   return { installationIds: [], instruction: "process" };
 }
 
-async function processWebhookForEstate({
+async function processWebhookForInstallation({
   db,
   body,
   messageMetadata,
@@ -530,7 +530,7 @@ async function processWebhookForEstate({
   }
 
   waitUntil(
-    getSlackAccessTokenForEstate(db, installationId).then(async (slackAccount) => {
+    getSlackAccessTokenForInstallation(db, installationId).then(async (slackAccount) => {
       if (slackAccount) {
         await reactToSlackWebhook(body, new WebClient(slackAccount.accessToken), messageMetadata);
       }
@@ -561,7 +561,13 @@ slackApp.post("/interactive", async (c) => {
   return c.text("ok");
 });
 
-export function getRoutingKey({ installationId, threadTs }: { installationId: string; threadTs: string }) {
+export function getRoutingKey({
+  installationId,
+  threadTs,
+}: {
+  installationId: string;
+  threadTs: string;
+}) {
   const suffix = `slack-${installationId}`;
   return `ts-${threadTs}-${suffix}`;
 }
@@ -608,7 +614,7 @@ export async function reactToSlackWebhook(
 }
 
 /**
- * Syncs Slack channels for an estate.
+ * Syncs Slack channels for an installation.
  * Returns array of all channels and Set of shared channel IDs.
  */
 export async function syncSlackChannels(
@@ -681,7 +687,9 @@ export async function syncSlackChannels(
           });
       }
 
-      logger.info(`Synced ${channelMappings.length} Slack channels for estate ${installationId}`);
+      logger.info(
+        `Synced ${channelMappings.length} Slack channels for installation ${installationId}`,
+      );
     });
 
     const allChannels = channels.map((c) => ({
@@ -763,26 +771,26 @@ export async function saveSlackUsersToDatabase(
   }
 
   await db.transaction(async (tx) => {
-    // Get the organization ID from the estate
-    const estate = await tx.query.installation.findFirst({
+    // Get the organization ID from the installation
+    const installation = await tx.query.installation.findFirst({
       where: eq(schema.installation.id, installationId),
       columns: {
         organizationId: true,
       },
     });
 
-    if (!estate) {
-      logger.error(`Estate ${installationId} not found`);
+    if (!installation) {
+      logger.error(`Installation ${installationId} not found`);
       return;
     }
 
     // Create emails for all members
-    // Strategy: Always use syncing team ID for synthetic emails to ensure uniqueness per estate
+    // Strategy: Always use syncing team ID for synthetic emails to ensure uniqueness per installation
     // - Regular users with email: Use actual email (globally unique across Slack)
     // - Users without email: Generate team-scoped synthetic email {userId}@{teamId}.slack.iterate.com
     // - Slackbot: Generate team-specific email slackbot@{teamId}.slack.iterate.com
     //
-    // This means: If estate A and estate B both sync the same external user without email,
+    // This means: If installation A and installation B both sync the same external user without email,
     // they will get different iterate user records (different emails), which is the desired behavior.
     const memberEmails = validMembers.map((m) => {
       if (m.id === "USLACKBOT") {
@@ -850,7 +858,7 @@ export async function saveSlackUsersToDatabase(
       const role = member.is_ultra_restricted || member.is_restricted ? "guest" : "member";
 
       organizationMembershipsToUpsert.push({
-        organizationId: estate.organizationId,
+        organizationId: installation.organizationId,
         userId: user.id,
         role: role as "guest" | "member",
       });
@@ -964,7 +972,7 @@ export async function saveSlackUsersToDatabase(
           await tx
             .insert(schema.organizationUserMembership)
             .values({
-              organizationId: estate.organizationId,
+              organizationId: installation.organizationId,
               userId: slackbotUser.id,
               role: "member",
             })
@@ -994,7 +1002,7 @@ export async function saveSlackUsersToDatabase(
 }
 
 /**
- * Syncs internal Slack workspace users for an estate.
+ * Syncs internal Slack workspace users for an installation.
  * Fetches users from Slack API and saves them to the database.
  * Returns Set of Slack user IDs that are internal to the workspace.
  *
@@ -1042,7 +1050,7 @@ export async function syncSlackUsersInBackground(
 }
 
 /**
- * Orchestrates complete Slack sync for an estate:
+ * Orchestrates complete Slack sync for an installation:
  * 1. Syncs channels (parallel with users)
  * 2. Syncs internal workspace users (parallel with channels)
  * 3. Syncs external Slack Connect users from shared channels (sequential)
@@ -1058,7 +1066,7 @@ export async function syncSlackForInstallationInBackground(
   errors: string[];
 }> {
   try {
-    logger.info(`Starting complete Slack sync for estate ${installationId}`);
+    logger.info(`Starting complete Slack sync for installation ${installationId}`);
 
     // Phase 1: Sync channels and internal users in parallel
     const [channelsResult, internalUserIds] = await Promise.all([
@@ -1079,7 +1087,7 @@ export async function syncSlackForInstallationInBackground(
     );
 
     logger.info(
-      `Complete Slack sync finished for estate ${installationId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
+      `Complete Slack sync finished for installation ${installationId}: ${channelsResult.allChannels.length} channels (${sharedChannelIds.size} shared), ${internalUserIds.size} internal users, ${externalUsersResult.externalUserCount} external users`,
     );
 
     return {
@@ -1108,7 +1116,7 @@ export async function syncSlackForInstallationInBackground(
  * - External users without email: Generate synthetic email scoped to the syncing team: {slackUserId}@{iterateTeamId}.slack.iterate.com
  *
  * Note: We use iterateTeamId (the syncing team) not externalUserTeamId (user's home team) for synthetic emails.
- * This ensures the same external user appears as different iterate users when synced from different estates.
+ * This ensures the same external user appears as different iterate users when synced from different installations.
  */
 export async function syncSlackConnectUsers(
   db: DB,
@@ -1227,13 +1235,13 @@ export async function syncSlackConnectUsers(
 
   // Insert/update external users in database
   await db.transaction(async (tx) => {
-    const estate = await tx.query.installation.findFirst({
+    const installation = await tx.query.installation.findFirst({
       where: eq(schema.installation.id, installationId),
       columns: { organizationId: true },
     });
 
-    if (!estate) {
-      throw new Error(`Estate ${installationId} not found`);
+    if (!installation) {
+      throw new Error(`Installation ${installationId} not found`);
     }
 
     for (const [
@@ -1252,7 +1260,7 @@ export async function syncSlackConnectUsers(
 
       // Use actual email from Slack profile, or generate synthetic email scoped to the syncing team
       // Pattern: {slackUserId}@{iterateTeamId}.slack.iterate.com
-      // This ensures external users get unique emails per syncing estate
+      // This ensures external users get unique emails per syncing installation
       const email =
         userInfo.profile?.email || `${externalUserId}@${iterateTeamId}.slack.iterate.com`;
 
@@ -1317,7 +1325,7 @@ export async function syncSlackConnectUsers(
       await tx
         .insert(schema.organizationUserMembership)
         .values({
-          organizationId: estate.organizationId,
+          organizationId: installation.organizationId,
           userId: user.id,
           role: "external",
         })
@@ -1325,7 +1333,7 @@ export async function syncSlackConnectUsers(
     }
 
     logger.info(
-      `Synced ${externalUsersByIdMap.size} external Slack Connect users for estate ${installationId}`,
+      `Synced ${externalUsersByIdMap.size} external Slack Connect users for installation ${installationId}`,
     );
   });
 
@@ -1341,7 +1349,7 @@ async function handleBotChannelJoin(params: {
 }) {
   const { db, installationId, channelId, botUserId } = params;
 
-  const slackAccount = await getSlackAccessTokenForEstate(db, installationId);
+  const slackAccount = await getSlackAccessTokenForInstallation(db, installationId);
   if (!slackAccount) {
     logger.error("No Slack token available for channel join handling");
     return;

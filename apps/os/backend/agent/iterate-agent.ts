@@ -40,7 +40,7 @@ import { getGoogleAccessTokenForUser, getGoogleOAuthURL } from "../auth/token-ut
 import { GOOGLE_INTEGRATION_SCOPES } from "../auth/integrations.ts";
 import { getSecret } from "../utils/get-secret.ts";
 import {
-  getGithubInstallationForEstate,
+  getGithubInstallationForInstallation,
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
 import type { WithCallMethod } from "../stub-stub.ts";
@@ -212,7 +212,7 @@ export class IterateAgent<
     await this.persistInitParams(params);
 
     // We pass all control-plane DB records from the caller to avoid extra DB roundtrips.
-    // These records (estate, organization, iterateConfig) change infrequently and callers
+    // These records (installation, organization, iterateConfig) change infrequently and callers
     // typically already fetched them. This also helps when the DO is not colocated with
     // the worker that created the stub; passing the data avoids a potentially slow cross-region read.
 
@@ -358,7 +358,7 @@ export class IterateAgent<
     const posthogClient = pMemoize(async () => {
       const installationInfo = await getInstallationInfo();
       return new PosthogCloudflare(this.ctx, {
-        estateName: installationInfo.name,
+        installationName: installationInfo.name,
         projectName: this.env.PROJECT_NAME,
       });
     });
@@ -526,7 +526,7 @@ export class IterateAgent<
       getOpenAIClient: async () => {
         const installationInfo = await getInstallationInfo();
         return await openAIProvider({
-          estateName: installationInfo.name,
+          installationName: installationInfo.name,
           posthog: {
             projectName: this.env.PROJECT_NAME,
             traceId: this.posthogTraceId,
@@ -906,7 +906,7 @@ export class IterateAgent<
     // });
     const rules = [
       ...defaultContextRules,
-      // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less estate"
+      // If this.iterateConfig.contextRules is not set, it means we're in a "repo-less installation"
       // That means we want to pull in the tutorial rules
       ...(this.iterateConfig?.contextRules || []),
     ];
@@ -922,11 +922,11 @@ export class IterateAgent<
   }
 
   /**
-   * Check if a user is a guest in the organization that owns this estate.
+   * Check if a user is a guest in the organization that owns this installation.
    * Returns true if the user is a guest, false otherwise.
    */
   private async getUserRole(userId: string): Promise<UserRole | undefined> {
-    const estate = await this.db.query.installation.findFirst({
+    const installation = await this.db.query.installation.findFirst({
       where: eq(schema.installation.id, this.databaseRecord.installationId),
       with: {
         organization: {
@@ -939,7 +939,7 @@ export class IterateAgent<
         },
       },
     });
-    return estate?.organization.members.at(0)?.role;
+    return installation?.organization.members.at(0)?.role;
   }
 
   addEvent(event: MergedEventForSlices<Slices>): { eventIndex: number }[] {
@@ -956,14 +956,14 @@ export class IterateAgent<
     const targetRecord = await this.db.query.agentInstance.findFirst({
       where: and(
         eq(agentInstance.installationId, this.databaseRecord.installationId),
-        // agent names are prefixed by estate id
+        // agent names are prefixed by installation id
         eq(agentInstance.durableObjectName, `${this.databaseRecord.installationId}-${agentName}`),
       ),
     });
 
     if (!targetRecord) {
       throw new Error(
-        `Agent instance ${agentName} not found in estate ${this.databaseRecord.installationId}`,
+        `Agent instance ${agentName} not found in installation ${this.databaseRecord.installationId}`,
       );
     }
 
@@ -1133,15 +1133,15 @@ export class IterateAgent<
     const exportId = typeid("export").toString();
     const events = this.getEvents();
 
-    const fullEstate = await this.db.query.installation.findFirst({
+    const fullInstallation = await this.db.query.installation.findFirst({
       where: eq(schema.installation.id, this.databaseRecord.installationId),
     });
-    if (!fullEstate) {
-      throw new Error("Estate not found");
+    if (!fullInstallation) {
+      throw new Error("Installation not found");
     }
 
     const organizationRecord = await this.db.query.organization.findFirst({
-      where: eq(schema.organization.id, fullEstate.organizationId),
+      where: eq(schema.organization.id, fullInstallation.organizationId),
     });
     if (!organizationRecord) {
       throw new Error("Organization not found");
@@ -1193,7 +1193,7 @@ export class IterateAgent<
         posthogTraceId: this.posthogTraceId,
         debugUrl,
         user: opts?.user ?? null,
-        installation: fullEstate,
+        installation: fullInstallation,
         organization: organizationRecord,
         agentInstance: this.databaseRecord,
         iterateConfig: iterateConfigRecord ?? null,
@@ -1331,7 +1331,7 @@ export class IterateAgent<
         braintrustKey: this.env.BRAINTRUST_API_KEY,
         projectName: this.env.PROJECT_NAME,
         spanName: `${this.constructor.name}-${this.name}`,
-        estateName: installationName,
+        installationName: installationName,
       });
       this.setState({
         ...this.state,
@@ -1878,7 +1878,7 @@ export class IterateAgent<
   async generateVideo(input: Inputs["generateVideo"]) {
     const openai = await openAIProvider({
       env,
-      estateName: this.installation.name,
+      installationName: this.installation.name,
     });
 
     let inputReference: Uploadable | undefined;
@@ -1958,7 +1958,7 @@ export class IterateAgent<
 
     const openai = await openAIProvider({
       env,
-      estateName: this.installation.name,
+      installationName: this.installation.name,
     });
 
     try {
@@ -2107,7 +2107,7 @@ export class IterateAgent<
   }
 
   /**
-   * Return sandbox and id for this agent instance/estate combination.
+   * Return sandbox and id for this agent instance/installation combination.
    */
   private async getAgentSandbox(installationId: string) {
     const { getSandbox } = await import("@cloudflare/sandbox");
@@ -2126,46 +2126,46 @@ export class IterateAgent<
 
     const installationId = this.databaseRecord.installationId;
 
-    // Get estate and repo information
-    const _estate = await this.db.query.installation.findFirst({
+    // Get installation and repo information
+    const _installation = await this.db.query.installation.findFirst({
       where: eq(schema.installation.id, installationId),
       with: recentActiveSources,
     });
 
-    const estate = _estate && {
-      ..._estate,
+    const installationWithRepo = _installation && {
+      ..._installation,
       sources: undefined,
-      connectedRepoId: _estate?.sources?.[0]?.repoId ?? null,
-      connectedRepoRef: _estate?.sources?.[0]?.branch ?? null,
-      connectedRepoPath: _estate?.sources?.[0]?.path ?? null,
+      connectedRepoId: _installation?.sources?.[0]?.repoId ?? null,
+      connectedRepoRef: _installation?.sources?.[0]?.branch ?? null,
+      connectedRepoPath: _installation?.sources?.[0]?.path ?? null,
     };
 
-    if (!estate) {
-      throw new Error(`Estate ${installationId} not found`);
+    if (!installationWithRepo) {
+      throw new Error(`Installation ${installationId} not found`);
     }
 
-    if (!estate.connectedRepoId) {
-      throw new Error("No repository connected to this estate");
+    if (!installationWithRepo.connectedRepoId) {
+      throw new Error("No repository connected to this installation");
     }
 
-    const installation = await getGithubInstallationForEstate(this.db, installationId);
+    const githubInstallation = await getGithubInstallationForInstallation(this.db, installationId);
     const octokit = await getOctokitForInstallation(
-      installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+      githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
     );
 
     const { data: repoData } = await octokit.request("GET /repositories/{repository_id}", {
-      repository_id: estate.connectedRepoId,
+      repository_id: installationWithRepo.connectedRepoId,
     });
     const githubRepoUrl = repoData.html_url;
-    const branch = estate.connectedRepoRef || repoData.default_branch || "main";
+    const branch = installationWithRepo.connectedRepoRef || repoData.default_branch || "main";
     const commitHash = undefined; // Use the latest commit on the branch
 
     const scopedToken = await octokit.rest.apps
       .createInstallationAccessToken({
         installation_id: parseInt(
-          installation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
+          githubInstallation?.accountId ?? env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
         ),
-        repository_ids: [estate.connectedRepoId],
+        repository_ids: [installationWithRepo.connectedRepoId],
       })
       .catch(() => null);
 
@@ -2244,7 +2244,7 @@ export class IterateAgent<
           githubToken: scopedToken.data.token,
           checkoutTarget: commitHash || branch || "main",
           isCommitHash: Boolean(commitHash),
-          connectedRepoPath: estate.connectedRepoPath,
+          connectedRepoPath: installationWithRepo.connectedRepoPath,
           ingestUrl,
           installationId,
           processId,

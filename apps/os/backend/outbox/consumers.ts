@@ -1,7 +1,7 @@
 import { WebClient } from "@slack/web-api";
 import { getContainer } from "@cloudflare/containers";
 import { and, eq, isNull } from "drizzle-orm";
-import { getSlackAccessTokenForEstate } from "../auth/token-utils.ts";
+import { getSlackAccessTokenForInstallation } from "../auth/token-utils.ts";
 import { getDb, schema } from "../db/client.ts";
 import { logger } from "../tag-logger.ts";
 import {
@@ -24,7 +24,7 @@ export const registerConsumers = () => {
     handler: async (params) => {
       const { input, output } = params.payload;
       const db = getDb();
-      const iterateBotAccount = await getSlackAccessTokenForEstate(db, input.installationId);
+      const iterateBotAccount = await getSlackAccessTokenForInstallation(db, input.installationId);
       if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
 
       const result = await createTrialSlackConnectChannel({
@@ -36,7 +36,7 @@ export const registerConsumers = () => {
         iterateBotToken: iterateBotAccount.accessToken,
       });
 
-      return `Set up trial for ${output.userName}: channel ${result.channelName} → estate ${input.installationId}`;
+      return `Set up trial for ${output.userName}: channel ${result.channelName} → installation ${input.installationId}`;
     },
   });
 
@@ -46,9 +46,12 @@ export const registerConsumers = () => {
     handler: async (params) => {
       const ctx = { db: getDb() };
       const iterateInstallationId = await getIterateSlackInstallationId(ctx.db);
-      if (!iterateInstallationId) throw new Error("Iterate Slack workspace estate not found");
+      if (!iterateInstallationId) throw new Error("Iterate Slack workspace installation not found");
 
-      const iterateBotAccount = await getSlackAccessTokenForEstate(ctx.db, iterateInstallationId);
+      const iterateBotAccount = await getSlackAccessTokenForInstallation(
+        ctx.db,
+        iterateInstallationId,
+      );
       if (!iterateBotAccount) throw new Error("Iterate Slack bot account not found");
 
       const slackAPI = new WebClient(iterateBotAccount.accessToken);

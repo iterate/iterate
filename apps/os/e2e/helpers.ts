@@ -181,7 +181,7 @@ export async function createTestHelper({
   fakeSlackUsers[aliceId] = { name: "Alice", id: aliceId };
   fakeSlackUsers[bobId] = { name: "Bob", id: bobId };
 
-  // Add fake slack users to the estate database so they can be looked up
+  // Add fake slack users to the installation database so they can be looked up
   const fakeMembers = Object.values(fakeSlackUsers).map((user) => ({
     id: user.id,
     name: user.name,
@@ -548,7 +548,7 @@ export const createDisposer = () => {
 /**
  * Consolidated E2E test helper that sets up everything needed for most e2e tests:
  * - Admin trpc client (authenticated via service auth)
- * - Test user with organization and estate
+ * - Test user with organization and installation
  * - User trpc client (impersonated as the test user)
  * - Mocked Slack API
  * - Auto-cleanup via Symbol.asyncDispose
@@ -556,7 +556,7 @@ export const createDisposer = () => {
  * Usage:
  * ```ts
  * await using h = await createE2EHelper('my-test-slug')
- * // h.adminTrpc, h.userTrpc, h.user, h.estate, h.organization, etc.
+ * // h.adminTrpc, h.userTrpc, h.user, h.installation, h.organization, etc.
  * ```
  */
 export async function createE2EHelper(inputSlug: string) {

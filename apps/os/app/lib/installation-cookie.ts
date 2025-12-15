@@ -1,48 +1,50 @@
-const INSTALLATION_COOKIE_NAME = "iterate-selected-estate";
+const INSTALLATION_COOKIE_NAME = "iterate-selected-installation";
 
-export interface SelectedEstate {
+export interface SelectedInstallation {
   organizationId: string;
   installationId: string;
 }
 
-export function getSelectedEstate(): SelectedEstate | null {
+export function getSelectedInstallation(): SelectedInstallation | null {
   if (typeof document === "undefined") {
     return null;
   }
 
   const cookies = document.cookie.split(";");
-  const estateCookie = cookies.find((cookie) => cookie.trim().startsWith(`${INSTALLATION_COOKIE_NAME}=`));
+  const installationCookie = cookies.find((cookie) =>
+    cookie.trim().startsWith(`${INSTALLATION_COOKIE_NAME}=`),
+  );
 
-  if (!estateCookie) {
+  if (!installationCookie) {
     return null;
   }
 
   try {
-    const value = estateCookie.split("=")[1];
+    const value = installationCookie.split("=")[1];
     if (!value) {
       return null;
     }
 
     // Decode and parse the JSON value
     const decoded = decodeURIComponent(value);
-    return JSON.parse(decoded) as SelectedEstate;
+    return JSON.parse(decoded) as SelectedInstallation;
   } catch {
     // If parsing fails, return null and clear the invalid cookie
-    clearSelectedEstate();
+    clearSelectedInstallation();
     return null;
   }
 }
 
-export function setSelectedEstate(organizationId: string, installationId: string): void {
+export function setSelectedInstallation(organizationId: string, installationId: string): void {
   if (typeof document === "undefined") {
     return;
   }
 
-  // Create the estate object
-  const estate: SelectedEstate = { organizationId, installationId };
+  // Create the installation object
+  const installation: SelectedInstallation = { organizationId, installationId };
 
   // Encode the JSON value
-  const encoded = encodeURIComponent(JSON.stringify(estate));
+  const encoded = encodeURIComponent(JSON.stringify(installation));
 
   // Set cookie with 30 day expiration
   const expires = new Date();
@@ -51,7 +53,7 @@ export function setSelectedEstate(organizationId: string, installationId: string
   document.cookie = `${INSTALLATION_COOKIE_NAME}=${encoded}; expires=${expires.toUTCString()}; path=/; SameSite=Lax`;
 }
 
-export function clearSelectedEstate(): void {
+export function clearSelectedInstallation(): void {
   if (typeof document === "undefined") {
     return;
   }

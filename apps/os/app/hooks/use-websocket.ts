@@ -111,7 +111,7 @@ export function useOrganizationWebSocket(organizationId: string, installationId:
           } else if (invalidateInfo.type === "TRPC_QUERY") {
             queryClient.invalidateQueries({
               predicate: (q) => {
-                // TRPC queries have queryKey like [["estate", "get"], { input: {...} }]
+                // TRPC queries have queryKey like [["installation", "get"], { input: {...} }]
                 const queryKey = q.queryKey as any[];
                 if (!Array.isArray(queryKey) || !Array.isArray(queryKey[0])) {
                   return false;

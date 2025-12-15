@@ -83,7 +83,7 @@ const IDELazy = React.lazy(() =>
 );
 import { type IDEHandle } from "../../../components/ide.tsx";
 import {
-  getGithubInstallationForEstate,
+  getGithubInstallationForInstallation,
   getOctokitForInstallation,
 } from "../../../../backend/integrations/github/github-utils.ts";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
@@ -107,10 +107,10 @@ const installationRepoLoader = authenticatedServerFn
     const [githubIntegration, githubRepoResult, githubInstallation] = await Promise.all([
       trpc.integrations.get({ installationId: installationId, providerId: "github-app" }),
       trpc.integrations
-        .getGithubRepoForEstate({ installationId: installationId })
+        .getGithubRepoForInstallation({ installationId: installationId })
         .then((r) => ({ success: true, data: r, error: null }) as const)
         .catch((e) => ({ success: false, data: null, error: String(e.message || e) }) as const),
-      getGithubInstallationForEstate(db, installationId),
+      getGithubInstallationForInstallation(db, installationId),
     ]);
 
     const authInfo =
@@ -229,8 +229,8 @@ function EstateContent({
       onSuccess: () => window.location.reload(),
     }),
   );
-  const setGithubRepoForEstateMutation = useMutation(
-    trpc.integrations.setGithubRepoForEstate.mutationOptions({}),
+  const setGithubRepoForInstallationMutation = useMutation(
+    trpc.integrations.setGithubRepoForInstallation.mutationOptions({}),
   );
   const startGithubAppInstallFlowMutation = useMutation(
     trpc.integrations.startGithubAppInstallFlow.mutationOptions({}),
@@ -256,12 +256,12 @@ function EstateContent({
       return;
     }
 
-    setGithubRepoForEstateMutation.mutate(
+    setGithubRepoForInstallationMutation.mutate(
       {
         installationId: installationId!,
         repoId: parseInt(selectedRepo),
         path: repoPath,
-        branch: repoBranch,
+        branch: repoBranch!,
       },
       {
         onSuccess: () => {
@@ -273,7 +273,7 @@ function EstateContent({
           setRepoPath(undefined);
           setRepoBranch(undefined);
           queryClient.invalidateQueries({
-            queryKey: trpc.integrations.getGithubRepoForEstate.queryKey({ installationId }),
+            queryKey: trpc.integrations.getGithubRepoForInstallation.queryKey({ installationId }),
           });
         },
         onError: () => {
@@ -433,7 +433,7 @@ function EstateContent({
                 <Select
                   value={selectedRepo}
                   onValueChange={setSelectedRepo}
-                  disabled={reposQuery.isLoading || setGithubRepoForEstateMutation.isPending}
+                  disabled={reposQuery.isLoading || setGithubRepoForInstallationMutation.isPending}
                 >
                   <SelectTrigger id="repository">
                     <SelectValue placeholder="Select a repository" />
@@ -472,7 +472,7 @@ function EstateContent({
                         value={repoBranch}
                         onChange={(e) => setRepoBranch(e.target.value)}
                         placeholder="main"
-                        disabled={setGithubRepoForEstateMutation.isPending}
+                        disabled={setGithubRepoForInstallationMutation.isPending}
                       />
                       <FieldDescription>The branch to monitor for changes.</FieldDescription>
                     </Field>
@@ -485,7 +485,7 @@ function EstateContent({
                         value={repoPath}
                         onChange={(e) => setRepoPath(e.target.value)}
                         placeholder="/"
-                        disabled={setGithubRepoForEstateMutation.isPending}
+                        disabled={setGithubRepoForInstallationMutation.isPending}
                       />
                       <FieldDescription>
                         The path to the folder in which your <code>iterate.config.ts</code> file is
@@ -526,10 +526,10 @@ function EstateContent({
             </Button>
             <Button
               type="submit"
-              disabled={!selectedRepo || setGithubRepoForEstateMutation.isPending}
+              disabled={!selectedRepo || setGithubRepoForInstallationMutation.isPending}
               className="flex-1"
             >
-              {setGithubRepoForEstateMutation.isPending ? (
+              {setGithubRepoForInstallationMutation.isPending ? (
                 <>
                   <Spinner className="w-4 h-4 mr-2" />
                   {connectedRepo ? "Updating..." : "Connecting..."}
