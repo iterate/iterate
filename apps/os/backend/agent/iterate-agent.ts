@@ -43,7 +43,7 @@ import {
   getGithubInstallationForEstate,
   getOctokitForInstallation,
 } from "../integrations/github/github-utils.ts";
-import { callMethodImpl, type WithCallMethod } from "../stub-stub.ts";
+import { stubStub } from "../stub-stub.ts";
 import { recentActiveSources } from "../db/helpers.ts";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
@@ -187,7 +187,7 @@ export class IterateAgent<
   State extends IterateAgentState = IterateAgentState,
 >
   extends CloudflareAgent<{}, State>
-  implements ToolsInterface, WithCallMethod
+  implements ToolsInterface, stubStub.Callable
 {
   declare env: CloudflareEnv;
   override observability = undefined;
@@ -323,10 +323,10 @@ export class IterateAgent<
     );
   }
 
-  callMethod(...[method, args, context, meta]: Parameters<WithCallMethod["callMethod"]>) {
-    return logger.run(context, () => {
-      logger.context.onError = (error) => (error.stack = `${error.stack}\n${meta.callerStack}`);
-      return callMethodImpl(this, method, args);
+  callMethod(params: stubStub.CallMethodParams) {
+    return logger.run(params.context, () => {
+      logger.context.onError = (error) => (error.stack = `${error.stack}\n${params.callerStack}`);
+      return stubStub.callMethodImpl(this, params);
     });
   }
 

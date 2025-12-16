@@ -1,52 +1,11 @@
-export interface WithCallMethod {
-  callMethod(
-    methodName: string,
-    args: unknown[],
-    context: Record<string, string>,
-    meta: { callerStack: string },
-  ): Promise<
-    | { ok: true; result: unknown; error?: never }
-    | { ok: false; result?: never; error: { message: string; stack: string } }
-  >;
-}
-
-/**
- * Recommended implementation of `callMethod` for stub-able classes. Will catch and wrap errors to allow call stacks to cross boundaries. Use like this (in this example using a logger called `myLogger`):
- * ```ts
- * class MyClass implements WithCallMethod {
- *   callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
- *     return myLogger.run(context, () => callMethodImpl(this, methodName, args));
- *   }
- * }
- * ```
- */
-export async function callMethodImpl<T extends WithCallMethod>(
-  _this: T,
-  methodName: string,
-  args: unknown[],
-): ReturnType<WithCallMethod["callMethod"]> {
-  try {
-    const result = await (_this as {} as Record<string, Function>)[methodName](...args);
-    return { ok: true, result };
-  } catch (error) {
-    return { ok: false, error: { message: String(error), stack: (error as Error).stack || "" } };
-  }
-}
-
-export type StubStub<T extends WithCallMethod> = {
-  [K in keyof T]: T[K] extends (...args: infer A) => infer R
-    ? (...args: A) => Promise<Awaited<R>>
-    : never;
-};
-
 /**
  * Wraps an object conforming to @see WithCallMethod in a proxy stub which replaces method calls with `.callMethod(...)`.
  *
  * @example
- * class MyCalculator implements WithCallMethod {
- *   callMethod(methodName, args, context) {
+ * class MyCalculator implements stubStub.Callable {
+ *   callMethod(params: stubStub.CallMethodParams) {
  *     // assuming a logger which uses async_hooks to manage context
- *     return logger.run(context, () => this[methodName](...args));
+ *     return logger.run(context, () => stubStub.callMethodImpl(this, params));
  *   }
  *
  *   add(a: number, b: number) {
@@ -65,11 +24,11 @@ export type StubStub<T extends WithCallMethod> = {
  * const stub = stubStub(myClass, { className: "MyClass" });
  * stub.add(1, 2); // returns 3, logs "adding 1 + 2 {context: { className: 'MyClass' }}"
  */
-export const stubStub = <Stub extends WithCallMethod>(
+export function stubStub<Stub extends stubStub.Callable>(
   stub: Stub,
   context: Record<string, string>,
-): StubStub<Stub> & { raw: Stub } => {
-  return new Proxy({} as StubStub<Stub> & { raw: Stub }, {
+): stubStub.StubStub<Stub> & { raw: Stub } {
+  return new Proxy({} as stubStub.StubStub<Stub> & { raw: Stub }, {
     get: (_target, prop) => {
       if (prop === "raw") return stub;
       if (prop === "fetch" || prop === "then") {
@@ -78,7 +37,8 @@ export const stubStub = <Stub extends WithCallMethod>(
       }
       return async (...args: any[]) => {
         const callerStack = Error().stack?.split("\n").slice(1).join("\n") || "";
-        const result = await stub.callMethod(prop as string, args, context, { callerStack });
+        const method = prop as string;
+        const result = await stub.callMethod({ method, args, context, callerStack });
         if (result.ok) {
           return result.result;
         }
@@ -97,4 +57,57 @@ export const stubStub = <Stub extends WithCallMethod>(
       };
     },
   });
-};
+}
+
+export namespace stubStub {
+  export type CallMethodParams = {
+    /** The name of the method the target should call */
+    method: string;
+    /** Arguments to pass to @see method */
+    args: unknown[];
+    /** Arbitrary string context/tags. This might look like `{ requestId: "abc123", appStage: "prod" }` or similar */
+    context: Record<string, string>;
+    /** A stack trace captured at the point of the call. This can be used to append to errors thrown in the target, in cases when the call crosses a boundary that loses call stacks. */
+    callerStack: string;
+  };
+
+  /** The expected return type of @see CallMethod - which is expected *not* to throw errors, so that call stacks can be preserved across boundaries */
+  export type CallMethodResult =
+    | { ok: true; result: unknown; error?: never }
+    | { ok: false; result?: never; error: { message: string; stack: string } };
+
+  export type CallMethod = (params: CallMethodParams) => Promise<CallMethodResult>;
+
+  export interface Callable {
+    callMethod: CallMethod;
+  }
+
+  export type StubStub<T extends Callable> = {
+    [K in keyof T]: T[K] extends (...args: infer A) => infer R
+      ? (...args: A) => Promise<Awaited<R>>
+      : never;
+  };
+
+  /**
+   * Recommended implementation of `callMethod` for stub-able classes. Will catch and wrap errors to allow call stacks to cross boundaries. Use like this (in this example using a logger called `myLogger`):
+   * ```ts
+   * class MyClass implements stubStub.Callable {
+   *   callMethod(params: stubStub.CallMethodParams) {
+   *     return myLogger.run(params.context, () => stubStub.callMethodImpl(this, params));
+   *   }
+   * }
+   * ```
+   */
+  export async function callMethodImpl<T extends Callable>(
+    callable: T,
+    params: Pick<CallMethodParams, "method" | "args">,
+  ): ReturnType<CallMethod> {
+    try {
+      const fn = (callable as {} as Record<string, Function>)[params.method];
+      const result = await fn(...params.args);
+      return { ok: true, result };
+    } catch (error) {
+      return { ok: false, error: { message: String(error), stack: (error as Error).stack || "" } };
+    }
+  }
+}

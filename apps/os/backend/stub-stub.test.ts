@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "async_hooks";
 import { expect, expectTypeOf, test, vi } from "vitest";
-import { stubStub, type WithCallMethod, callMethodImpl } from "./stub-stub.ts";
+import { stubStub } from "./stub-stub.ts";
 
 test("stubStub", async () => {
   const storage = new AsyncLocalStorage<Record<string, string>>();
 
-  class MyClass implements WithCallMethod {
-    callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
-      return storage.run(context, () => callMethodImpl(this, methodName, args));
+  class MyClass implements stubStub.Callable {
+    callMethod(params: stubStub.CallMethodParams) {
+      return storage.run(params.context, () => stubStub.callMethodImpl(this, params));
     }
 
     async getGreeting({ language }: { language: "en" | "fr" }) {
@@ -33,16 +33,16 @@ test("stubStub", async () => {
     await stub.getGreeting({ language: "de" as never }).catch((e) => simplifyCallStack(e.stack)),
   ).toMatchInlineSnapshot(`
     "Error: Invalid language. Context: {"requestId":"abc123"}
-        at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
-        at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
-        at {cwd}/backend/stub-stub.test.ts:10:41
+        at getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
+        at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:28)
+        at {cwd}/backend/stub-stub.test.ts:10:57
         at AsyncLocalStorage.run (node:internal/...)
         at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:10:22)
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
+        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:41:35)
         at {cwd}/backend/stub-stub.test.ts:33:16
         at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
+        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:39:29)
         at {cwd}/backend/stub-stub.test.ts:33:16
         at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
@@ -53,10 +53,10 @@ test("stubStub passes caller stack", async () => {
   const mockLog = vi.fn();
   const storage = new AsyncLocalStorage<{ context: Record<string, string>; callerStack: string }>();
 
-  class MyClass implements WithCallMethod {
-    callMethod(...[methodName, args, context, meta]: Parameters<WithCallMethod["callMethod"]>) {
-      return storage.run({ context, callerStack: meta.callerStack }, () =>
-        callMethodImpl(this, methodName, args),
+  class MyClass implements stubStub.Callable {
+    callMethod(params: stubStub.CallMethodParams) {
+      return storage.run({ context: params.context, callerStack: params.callerStack }, () =>
+        stubStub.callMethodImpl(this, params),
       );
     }
 
@@ -84,7 +84,7 @@ test("stubStub passes caller stack", async () => {
   const call = mockLog.mock.calls[0][0] as Error;
   const { callerStack } = JSON.parse(call.message.slice(call.message.indexOf("{")));
   expect(simplifyCallStack(callerStack)).toMatchInlineSnapshot(`
-    "    at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
+    "    at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:39:29)
         at {cwd}/backend/stub-stub.test.ts:80:21
         at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
@@ -92,12 +92,12 @@ test("stubStub passes caller stack", async () => {
   expect(simplifyCallStack(call.stack!.replace(/Context: {.*}/, "Context: {***}")))
     .toMatchInlineSnapshot(`
       "Error: Invalid language. Context: {***}
-          at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
-          at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
-          at {cwd}/backend/stub-stub.test.ts:59:9
+          at getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
+          at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:28)
+          at {cwd}/backend/stub-stub.test.ts:59:18
           at AsyncLocalStorage.run (node:internal/...)
           at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:58:22)
-          at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
+          at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:41:35)
           at {cwd}/backend/stub-stub.test.ts:80:21
           at processTicksAndRejections (node:internal/...)
           at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
