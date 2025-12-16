@@ -212,7 +212,7 @@ app.get("/api/estate/:estateId/builds/:buildId/sse", async (c) => {
   return logs;
 });
 
-// Ingest agent background task logs (from sandbox/codex), batched every ~10s
+// Ingest agent background task logs (from container/codex), batched every ~10s
 app.post("/api/agent-logs/:estateId/:className/:durableObjectName/ingest", async (c) => {
   const estateId = c.req.param("estateId");
   const durableObjectName = c.req.param("durableObjectName");
@@ -351,4 +351,4 @@ export {
   AdvisoryLocker,
   EstateBuildManager,
 };
-export { Sandbox } from "@cloudflare/sandbox";
+export { AgentExecContainer } from "./durable-objects/agent-exec-container.ts";

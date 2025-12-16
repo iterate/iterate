@@ -320,7 +320,7 @@ const defaultSlackAgentPrompt_withCodemode = dedent`
   const { iterateFileId } = await uploadFile({ path: "/tmp/green-rectangle.png" })
   await shareFileWithSlack({ iterateFileId })
 
-  // Example 2: Upload a report generated in the sandbox and share it
+  // Example 2: Upload a report generated in the container and share it
   const { iterateFileId: reportFileId } = await uploadFile({ path: "/tmp/output/report.txt" })
   await shareFileWithSlack({ iterateFileId: reportFileId })
 
@@ -619,12 +619,12 @@ export const defaultContextRules = defineRules([
     match: matchers.hasTool("deepResearch"),
   },
   {
-    key: "sandbox-starting",
+    key: "container-starting",
     prompt: dedent`
-      The sandbox is currently starting up. This takes approximately 10 seconds.
-      When you run exec commands, the sandbox will automatically be initialized if it's not already running.
+      The exec container is currently starting up. This takes approximately 10 seconds.
+      When you run exec commands, the container will automatically be initialized if it's not already running.
     `,
-    match: matchers.sandboxStatus("starting"),
+    match: matchers.containerStatus("starting"),
   },
   {
     key: "google-gmail-tools",
@@ -1038,12 +1038,12 @@ export const defaultContextRules = defineRules([
     ],
   },
   {
-    key: "sandbox-attached",
+    key: "container-attached",
     prompt: dedent`
-      The sandbox is currently running and attached.
+      The exec container is currently running and attached.
       You can execute commands immediately using the exec tool.
     `,
-    match: matchers.sandboxStatus("attached"),
+    match: matchers.containerStatus("attached"),
   },
   {
     key: "external-users-present",
@@ -1147,7 +1147,7 @@ export const defaultContextRules = defineRules([
         - don't worry about authentication for git and gh, this is already configured
       - ONLY use the exec tool for running git, gh and to perform simple read-only shell commands. Use execCodex for everything else.
       - When you delegate to the Codex AI Agent using execCodex, always give it all the information and context it needs to perform the task, the Codex agent does not have access to Linear, Notion, etc. so you must pass through information from external systems in your instructions to Codex. It is always better to pass through more information to codex than less.
-      - Use the uploadFile tool to upload files from the sandbox to iterate. Files in the sandbox are NOT automatically uploaded. You must upload them yourself. If you will need to share a file, ask codex to include the ABSOLUTE file path in the output so you can find it. The working directory is randomized so cannot be inferred.
+      - Use the uploadFile tool to upload files from the container to iterate. Files in the container are NOT automatically uploaded. You must upload them yourself. If you will need to share a file, ask codex to include the ABSOLUTE file path in the output so you can find it. The working directory is randomized so cannot be inferred.
       - After uploading a file, you must call shareFileWithSlack with the returned iterate file id to share it in the current Slack thread if the user needs to see it.
       - Always create a commit and PR after a succesful codex command execution. Always include details of the name of the branch and include a link to the PR in your message to the user.
       - Before pushing to github always ask Codex to check that recent commits have not added any serets, sensitive information, large files or anything else that should not be in git to the repository. Update the .gitignore and do a commit --amend or rebase to remove the unwanted items. You don't need to tell the user about the secret scan, just do it.

@@ -181,7 +181,7 @@ export const iterateAgentTools = defineDOTools({
   },
   exec: {
     description:
-      "Execute a shell in a sandbox. This should be used for making commits and PRs using git, gh and to perform simple-read-only shell commands.",
+      "Execute a shell command in the container. This should be used for making commits and PRs using git, gh and to perform simple-read-only shell commands.",
     statusIndicatorText: "⚙️ running command",
     input: z.object({
       command: z.string(),
@@ -191,20 +191,20 @@ export const iterateAgentTools = defineDOTools({
             path: z
               .string()
               .describe(
-                "The path to the file in the sandbox. If the path is a relative path, it will be created in a sandbox working directory",
+                "The path to the file in the container. If the path is a relative path, it will be created in a container working directory",
               ),
             content: z.string(),
           }),
         )
         .optional()
         .describe(
-          "Files to create in the sandbox before running the command (generally not required)",
+          "Files to create in the container before running the command (generally not required)",
         ),
       env: z.record(z.string(), z.string()).optional(),
     }),
   },
   execCodex: {
-    description: "Ask codex to perform a task in the sandbox.",
+    description: "Ask codex to perform a task in the container.",
     statusIndicatorText: "⚙️ running command",
     input: z.object({
       command: z.string(),
@@ -242,10 +242,10 @@ export const iterateAgentTools = defineDOTools({
   },
   uploadFile: {
     description:
-      "Upload a file from the sandbox to iterate. Returns the file id, which you can then use to share via slack or other means.",
+      "Upload a file from the container to iterate. Returns the file id, which you can then use to share via slack or other means.",
     statusIndicatorText: "📂 uploading file",
     input: z.object({
-      path: z.string().describe("The absolute path to the file in the sandbox."),
+      path: z.string().describe("The absolute path to the file in the container."),
     }),
   },
   generateVideo: {

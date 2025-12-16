@@ -5,15 +5,14 @@ packages:
   - estates/*/apps/*
   - vibe-rules
   - .github/ts-workflows
-  - apps/os/backend/sandbox/scripts
   - apps/os/build-manager
+  - apps/os/backend/agent-exec
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
   - drizzle-kit
   - miniflare
   - wrangler
-  - '@cloudflare/sandbox'
   - alchemy
   - '@mmkal/jsonata'
   - '@mmkal/json-schema-to-typescript'

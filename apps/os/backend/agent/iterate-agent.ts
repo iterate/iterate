@@ -45,6 +45,7 @@ import {
 } from "../integrations/github/github-utils.ts";
 import { stubStub } from "../stub-stub.ts";
 import { recentActiveSources } from "../db/helpers.ts";
+import { getContainer } from "@cloudflare/containers";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
@@ -2065,22 +2066,21 @@ export class IterateAgent<
 
   async uploadFile(input: Inputs["uploadFile"]) {
     const estateId = this.databaseRecord.estateId;
-    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
+    const container = this.getAgentExecContainer(estateId);
 
-    logger.info("Uploading file from sandbox", { sandboxId, path: input.path });
+    logger.info("Uploading file from container", { estateId, path: input.path });
 
     // WARNING: This buffers the entire file in memory, so it may fail on large files.
-    const fileInfo = await sandbox.readFile(input.path);
-    const encoding = (fileInfo as any).encoding || "utf-8";
-    const detectedMime = (fileInfo as any).mimeType;
+    // readFile throws on error, so we can directly destructure the success response
+    const { encoding, mimeType, content } = await container.readFile(input.path);
     const filename = basename(input.path);
-    const contentType = detectedMime || "application/octet-stream";
+    const contentType = mimeType || "application/octet-stream";
 
     let bytes: Uint8Array;
     if (encoding === "base64") {
-      bytes = new Uint8Array(Buffer.from((fileInfo as any).content, "base64"));
+      bytes = new Uint8Array(Buffer.from(content, "base64"));
     } else {
-      bytes = new TextEncoder().encode((fileInfo as any).content as string);
+      bytes = new TextEncoder().encode(content);
     }
 
     const fileRecord = await uploadFile({
@@ -2128,23 +2128,16 @@ export class IterateAgent<
   }
 
   /**
-   * Return sandbox and id for this agent instance/estate combination.
+   * Return container for this agent's estate (per-estate isolation).
    */
-  private async getAgentSandbox(estateId: string) {
-    const { getSandbox } = await import("@cloudflare/sandbox");
-    const sandboxId = `agent-sandbox-${estateId}-${this.constructor.name}`;
-    const sandbox = getSandbox(env.SANDBOX, sandboxId);
-    return { sandbox, sandboxId };
+  private getAgentExecContainer(estateId: string) {
+    return getContainer(env.AGENT_EXEC_CONTAINER, estateId);
   }
 
   private async runExecWithOptions(
     input: Inputs["exec"],
     opts?: { formatOutput?: (stdout: string) => string | null; formatterKey?: string },
   ) {
-    // ------------------------------------------------------------------------
-    // Get config
-    // ------------------------------------------------------------------------
-
     const estateId = this.databaseRecord.estateId;
 
     // Get estate and repo information
@@ -2194,153 +2187,80 @@ export class IterateAgent<
       throw new Error("Failed to create scoped token");
     }
 
-    // ------------------------------------------------------------------------
-    // Init sandbox
-    // ------------------------------------------------------------------------
+    // Get container for this estate
+    const container = this.getAgentExecContainer(estateId);
 
-    // Retrieve the sandbox
-    const { sandbox, sandboxId } = await this.getAgentSandbox(estateId);
+    // Generate process ID and ingest URL
+    const processId = typeid("exec").toString();
+    logger.info(`Executing in container for estate ${estateId} with processId ${processId}`);
+    let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
+    if (baseUrl.includes("localhost")) {
+      baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
+    }
+    const unsignedIngest = `${baseUrl}/api/agent-logs/${estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
+    const ingestUrl = await signUrl(unsignedIngest, this.env.EXPIRING_URLS_SIGNING_KEY, 60 * 60);
 
-    const execInSandbox = async () => {
-      const sessionId = `${this.ctx.id.toString()}`.toLowerCase();
-      logger.info(`Executing in sandbox ${sandboxId} with session ${sessionId}`);
-      // Ensure that the session directory exists
-      // Hash the session ID to 8 base32 characters for file-system safe usage - using the full session id makes for really long paths that consume a lot of AI tokens
-      // Use a unique working directory per exec to avoid contention
-      const sessionDir = `/tmp/session-${hashSessionId(sessionId)}-${R.randomInteger(0, 99999)}`;
-      const nodePath = "/opt/node24/bin/node";
+    try {
+      const result = await container.exec({
+        githubRepoUrl,
+        githubToken: scopedToken.data.token,
+        checkoutTarget: commitHash || branch || "main",
+        isCommitHash: Boolean(commitHash),
+        connectedRepoPath: estate.connectedRepoPath ?? undefined,
+        ingestUrl,
+        estateId,
+        processId,
+        command: input.command,
+        env: input.env,
+        files: input.files,
+      });
 
-      try {
-        await sandbox.mkdir(sessionDir, { recursive: true });
-      } catch (err) {
-        logger.error("Error creating session directory", err);
-        const { success, exitCode } = await sandbox.listFiles(sessionDir);
-        logger.info("List files in session directory:", { success, exitCode });
-
-        if (success && exitCode === 0) {
-          // continue with the session
-        } else {
-          throw new Error("Error creating session directory", { cause: err });
-        }
-      }
-
-      let sandboxSession: Awaited<ReturnType<typeof sandbox.createSession>>;
-      try {
-        // Create an isolated session
-        sandboxSession = await sandbox.createSession({
-          id: sessionId,
-          cwd: sessionDir,
-          isolation: true,
-          env: {
-            ...input.env,
-            // use the node24 binaries by preference
-            PATH: "/opt/node24/bin:/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-          },
-        });
-      } catch (err) {
-        if (err instanceof Error && err.message.includes("already exists")) {
-          logger.info("Session already exists, getting existing session");
-          sandboxSession = await sandbox.getSession(sessionId);
-        } else {
-          logger.error("Error creating session", err);
-          throw new Error("Error creating session");
-        }
-      }
-      try {
-        // Start background exec runner; it will perform repo setup (auth/clone/install)
-        const processId = typeid("exec").toString();
-        let baseUrl = this.env.VITE_PUBLIC_URL.replace("iterate.com", "iterateproxy.com");
-        if (baseUrl.includes("localhost")) {
-          baseUrl = `https://${this.env.ITERATE_USER}.dev.iterate.com`;
-        }
-        const unsignedIngest = `${baseUrl}/api/agent-logs/${estateId}/${this.databaseRecord.className}/${this.databaseRecord.durableObjectName}/ingest`;
-        const ingestUrl = await signUrl(
-          unsignedIngest,
-          this.env.EXPIRING_URLS_SIGNING_KEY,
-          60 * 60,
-        );
-        const startArgs = {
-          sessionDir,
-          githubRepoUrl,
-          githubToken: scopedToken.data.token,
-          checkoutTarget: commitHash || branch || "main",
-          isCommitHash: Boolean(commitHash),
-          connectedRepoPath: estate.connectedRepoPath,
-          ingestUrl,
-          estateId,
-          processId,
-          command: input.command,
-          env: input.env,
-          files: input.files,
-        };
-        const startJsonArgs = JSON.stringify(startArgs).replace(/'/g, "'\\''");
-        const commandStart = `${nodePath} /tmp/sandbox-exec-runner.js start '${startJsonArgs}'`;
-        const res = await sandboxSession.startProcess(commandStart);
-        if (res.status !== "running") {
-          logger.error("Failed to start exec process:", res);
-          return {
-            success: false,
-            error: "Failed to start background exec process",
-          };
-        }
-        // Ensure a metadata row exists for monitoring (formatter may be null)
-        try {
-          this.ctx.storage.sql.exec(
-            "INSERT OR REPLACE INTO bg_processes (process_id, formatter, last_heartbeat, status) VALUES (?, ?, ?, ?)",
-            processId,
-            opts?.formatterKey ?? null,
-            Date.now(),
-            "in_progress",
-          );
-        } catch {}
-        // Schedule monitor for timeouts
-        await this.schedule(120, "monitorBackgroundProcess", { processId });
+      if (!result.ok) {
+        logger.error("Exec failed to start", result);
         return {
-          success: true,
-          output: {
-            message: `Started background exec task with process id ${processId}. You will get an event when it completes, you do not need to monitor it yourself.`,
-            processId,
-          },
+          success: false,
+          error: "Failed to start background exec process",
           __addAgentCoreEvents: [
-            { type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } },
+            { type: "CORE:SET_METADATA", data: { containerStatus: "attached" } },
           ],
         };
-      } finally {
-        // TODO: uncomment when cloudflare sandbox is fixed
-        // await sandbox.deleteSession(sessionId);
-        logger.info(`TODO: delete session ${sessionId}`);
       }
-    };
 
-    // If sandbox is not ready, start it, and schedule exec after it boots up.
-    // NOTE: according to the exposed API this should be the correct way to
-    //       check if the sandbox is running and start it up if it isnt'. But
-    //       the logs are confusing:
-    // ... Sandbox successfully shut down
-    // ... Error checking if container is ready: connect(): Connection refused: container port not found. Make sure you exposed the port in your container definition.
-    // ... Error checking if container is ready: The operation was aborted
-    // ... Port 3000 is ready
-    const sandboxState = await sandbox.getState();
-    const runningStatuses = ["healthy", "running"];
-    if (!runningStatuses.includes(sandboxState.status)) {
-      await sandbox.startAndWaitForPorts(3000); // default sandbox port
-    }
-    logger.info("Sandbox state:", sandboxState);
+      // Ensure a metadata row exists for monitoring (formatter may be null)
+      try {
+        this.ctx.storage.sql.exec(
+          "INSERT OR REPLACE INTO bg_processes (process_id, formatter, last_heartbeat, status) VALUES (?, ?, ?, ?)",
+          processId,
+          opts?.formatterKey ?? null,
+          Date.now(),
+          "in_progress",
+        );
+      } catch {}
 
-    // If sandbox is already running, just run the command
-    const resultExec = await execInSandbox();
+      // Schedule monitor for timeouts
+      await this.schedule(120, "monitorBackgroundProcess", { processId });
 
-    if (!resultExec.success) {
-      logger.error("Exec failed to start", resultExec);
+      logger.info("Exec background task started");
+      return {
+        success: true,
+        output: {
+          message: `Started background exec task with process id ${processId}. You will get an event when it completes, you do not need to monitor it yourself.`,
+          processId,
+        },
+        __addAgentCoreEvents: [
+          { type: "CORE:SET_METADATA", data: { containerStatus: "attached" } },
+        ],
+      };
+    } catch (err) {
+      logger.error("Exec failed", err);
       return {
         success: false,
-        error: resultExec.error || "Failed to start background exec process",
-        __addAgentCoreEvents: [{ type: "CORE:SET_METADATA", data: { sandboxStatus: "attached" } }],
+        error: err instanceof Error ? err.message : "Failed to start background exec process",
+        __addAgentCoreEvents: [
+          { type: "CORE:SET_METADATA", data: { containerStatus: "attached" } },
+        ],
       };
     }
-
-    logger.info("Exec background task started");
-    return resultExec;
   }
 
   async exec(input: Inputs["exec"]) {
@@ -2561,7 +2481,7 @@ export class IterateAgent<
   }
 
   /**
-   * Ingest background task logs (from sandbox runners) into DO storage and emit progress events.
+   * Ingest background task logs (from container runners) into DO storage and emit progress events.
    * Stores logs idempotently in an internal SQL table keyed by process_id and seq.
    */
   async ingestBackgroundLogs(input: {
@@ -2792,34 +2712,6 @@ function parseEventRows(rawSqlResults: unknown[]) {
   }));
 
   return parsedEvents;
-}
-
-function hashSessionId(sessionId: string): string {
-  // Use sha256 for good entropy, then take first 5 bytes (40 bits = 8 base32 chars)
-  const hash = createHash("sha256").update(sessionId).digest();
-  const hashSlice = hash.subarray(0, 5); // first 5 bytes
-  // Use base32 for file path safe encoding
-  const base32 = "abcdefghijklmnopqrstuvwxyz234567";
-  let out = "";
-  let bits = 0,
-    value = 0,
-    i = 0;
-  while (i < hashSlice.length || bits > 0) {
-    if (bits < 5) {
-      if (i < hashSlice.length) {
-        value = (value << 8) | hashSlice[i++];
-        bits += 8;
-      } else {
-        // Padding zero bits if done with all bytes
-        value <<= 5 - bits;
-        bits = 5;
-      }
-    }
-    out += base32[(value >>> (bits - 5)) & 31];
-    bits -= 5;
-    if (out.length === 8) break; // Only 8 characters
-  }
-  return out;
 }
 
 /**

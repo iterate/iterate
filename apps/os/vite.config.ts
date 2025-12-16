@@ -7,7 +7,7 @@ import { devtools } from "@tanstack/devtools-vite";
 
 export default defineConfig({
   resolve: {
-    dedupe: ["@cloudflare/sandbox", "agents", "react", "react-dom"],
+    dedupe: ["agents", "react", "react-dom"],
   },
   build: {
     sourcemap: true,

@@ -234,19 +234,21 @@ async function setupDatabase() {
 }
 
 async function setupDurableObjects() {
-  const SANDBOX = await Container<import("./backend/worker.ts").Sandbox>("sandbox", {
-    className: "Sandbox",
-    name: isProduction ? "os-sandbox" : undefined,
-    build: {
-      dockerfile: "Dockerfile",
-      context: "./backend/sandbox",
-      platform: "linux/amd64",
+  const AGENT_EXEC_CONTAINER = await Container<import("./backend/worker.ts").AgentExecContainer>(
+    "agent-exec-container",
+    {
+      className: "AgentExecContainer",
+      name: isProduction ? "os-agent-exec" : undefined,
+      build: {
+        dockerfile: "Dockerfile",
+        context: "./backend/agent-exec",
+        platform: "linux/amd64",
+      },
+      instanceType: "standard-4",
+      maxInstances: 10,
+      adopt: true,
     },
-    instanceType: "standard-4",
-    maxInstances: 10,
-    // todo: ask sam to support rollout_active_grace_period
-    adopt: true,
-  });
+  );
 
   const ITERATE_AGENT = DurableObjectNamespace<import("./backend/worker.ts").IterateAgent>(
     "iterate-agent",
@@ -307,7 +309,7 @@ async function setupDurableObjects() {
     SLACK_AGENT,
     ONBOARDING_AGENT,
     ORGANIZATION_WEBSOCKET,
-    SANDBOX,
+    AGENT_EXEC_CONTAINER,
     ADVISORY_LOCKER,
     ESTATE_BUILD_MANAGER,
   };

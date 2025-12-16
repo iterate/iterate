@@ -92,9 +92,8 @@ export function forAgentClass(className: string) {
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
-export function sandboxStatus(status: "starting" | "attached") {
-  // Construct JSONata expression that checks if agentCoreState.metadata.sandboxStatus matches the provided status
-  const expression = `agentCoreState.metadata.sandboxStatus = ${JSON.stringify(status)}`;
+export function containerStatus(status: "starting" | "attached") {
+  const expression = `agentCoreState.metadata.containerStatus = ${JSON.stringify(status)}`;
   return { type: "jsonata", expression } satisfies ContextRuleMatcher;
 }
 
@@ -115,7 +114,7 @@ export const matchers = {
   hasTool,
   hasMCPConnection,
   forAgentClass,
-  sandboxStatus,
+  containerStatus,
   hasLabel,
   and,
   or,

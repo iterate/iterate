@@ -9,10 +9,6 @@ export async function resolve(specifier, context, nextResolve) {
     const url = new URL("./shimmed-email.mjs", import.meta.url).href;
     return { url, shortCircuit: true, format: "module" };
   }
-  if (specifier === "@cloudflare/sandbox") {
-    const url = new URL("./shimmed-sandbox.mjs", import.meta.url).href;
-    return { url, shortCircuit: true, format: "module" };
-  }
   if (specifier === "@cloudflare/containers") {
     const url = new URL("./shimmed-container.mjs", import.meta.url).href;
     return { url, shortCircuit: true, format: "module" };
