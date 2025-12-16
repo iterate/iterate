@@ -167,11 +167,15 @@ export default {
             .map(([name]) => name);
           const { release_name, ...outputs } = needs.variables?.outputs as Record<string, string>;
           const outputsString = new URLSearchParams(outputs).toString().replaceAll("&", ", ");
+          let message = `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}.`;
+          if (failedJobs.includes("e2e")) {
+            message += ` <https://artifact.ci/artifact/view/\${{ github.repository }}/run/\${{ github.run_id }}/\${{ github.run_attempt }}/e2e-logs|View Artifacts>.`;
+          }
+          message +=
+            " <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>";
           await slack.chat.postMessage({
             channel: slackChannelIds["#error-pulse"],
-            text:
-              `🚨 ${failedJobs.join(", ")} failed on \${{ github.ref_name }}. ${outputsString}. ` +
-              "<${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View Workflow Run>",
+            text: message,
           });
         }),
       ],
