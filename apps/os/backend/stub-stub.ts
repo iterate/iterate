@@ -103,8 +103,8 @@ export namespace stubStub {
     params: Pick<CallMethodParams, "method" | "args">,
   ): ReturnType<CallMethod> {
     try {
-      const fn = (callable as {} as Record<string, Function>)[params.method];
-      const result = await fn(...params.args);
+      const _this = callable as {} as Record<string, Function>;
+      const result = await _this[params.method](...params.args);
       return { ok: true, result };
     } catch (error) {
       return { ok: false, error: { message: String(error), stack: (error as Error).stack || "" } };
