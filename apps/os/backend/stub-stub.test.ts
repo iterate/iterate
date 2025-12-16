@@ -36,15 +36,15 @@ test("stubStub", async () => {
         at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
         at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
         at {cwd}/backend/stub-stub.test.ts:10:41
-        at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
+        at AsyncLocalStorage.run (node:internal/...)
         at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:10:22)
         at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
         at {cwd}/backend/stub-stub.test.ts:33:16
-        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
         at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
         at {cwd}/backend/stub-stub.test.ts:33:16
-        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
   `);
 });
@@ -86,7 +86,7 @@ test("stubStub passes caller stack", async () => {
   expect(simplifyCallStack(callerStack)).toMatchInlineSnapshot(`
     "    at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
         at {cwd}/backend/stub-stub.test.ts:80:21
-        at processTicksAndRejections (node:internal/process/task_queues:105:5)
+        at processTicksAndRejections (node:internal/...)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
   `);
   expect(simplifyCallStack(call.stack!.replace(/Context: {.*}/, "Context: {***}")))
@@ -95,11 +95,11 @@ test("stubStub passes caller stack", async () => {
           at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
           at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
           at {cwd}/backend/stub-stub.test.ts:59:9
-          at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
+          at AsyncLocalStorage.run (node:internal/...)
           at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:58:22)
           at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
           at {cwd}/backend/stub-stub.test.ts:80:21
-          at processTicksAndRejections (node:internal/process/task_queues:105:5)
+          at processTicksAndRejections (node:internal/...)
           at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
     `);
 });
@@ -111,7 +111,7 @@ const simplifyCallStack = (stack: string) =>
       /file:\/\/\/.*node_modules\/([^/]+)\/.*:\d+:\d+\b/g,
       "node_modules-blah-blah/$1/node_modules-more-blah-blah",
     )
-    // .replaceAll(/:\d+:\d+\b/g, "")
+    .replaceAll(/\(node:internal.*\)/g, "(node:internal/...)")
     .replaceAll(
       new RegExp(`${import.meta.filename}:(\\d+):(\\d+)\\b`, "g"),
       () => `${import.meta.filename.split("/").pop()!}:{line}:{column}`,
