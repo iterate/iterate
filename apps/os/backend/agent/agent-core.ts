@@ -1384,17 +1384,8 @@ export class AgentCore<
    * Run an LLM request in the background with error handling
    */
   private runLLMRequestInBackground(requestIndex: number, params: ResponsesAPIParams): void {
-    if (JSON.stringify(params).includes("trigger_fake_error:runLLMRequestInBackground")) {
-      throw new Error(`Fake runLLMRequestInBackground error triggered!`);
-    }
     this.deps.background(async () => {
-      if (JSON.stringify(params).includes("trigger_fake_error:preTry")) {
-        throw new Error(`Fake preTry error triggered!`);
-      }
       try {
-        if (JSON.stringify(params).includes("trigger_fake_error:preMakeLLMRequest")) {
-          throw new Error(`Fake preMakeLLMRequest error triggered!`);
-        }
         await this.makeLLMRequest(requestIndex, params);
       } catch (err: any) {
         logger.error(err);
