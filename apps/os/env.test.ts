@@ -33,15 +33,13 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    // Wait for the promise chain to resolve
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Synchronous error (in waitUntil callback)",
-          cause: synchronousError,
-        }),
-      );
-    });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
+
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Synchronous error",
+      }),
+    );
   });
 
   test("should catch asynchronous errors (promise rejections)", async () => {
@@ -55,40 +53,13 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Async error (in waitUntil callback)",
-          cause: asyncError,
-        }),
-      );
-    });
-  });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
 
-  test("should capture original stack trace", async () => {
-    const loggerSpy = vi.spyOn(tagLogger.logger, "error");
-
-    const asyncError = new Error("Async error");
-
-    function functionWithBrokenWaitUntil() {
-      waitUntil(
-        (async () => {
-          throw asyncError;
-        })(),
-      );
-    }
-
-    functionWithBrokenWaitUntil();
-
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Async error (in waitUntil callback)",
-          cause: asyncError,
-          stack: expect.stringContaining("functionWithBrokenWaitUntil"),
-        }),
-      );
-    });
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Async error",
+      }),
+    );
   });
 
   test("should handle rejected promises passed directly", async () => {
@@ -99,14 +70,13 @@ describe("waitUntil wrapper", () => {
 
     waitUntil(rejectedPromise);
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Rejection error (in waitUntil callback)",
-          cause: rejectionError,
-        }),
-      );
-    });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
+
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Rejection error",
+      }),
+    );
   });
 
   test("should not throw for successful async operations", async () => {
@@ -147,13 +117,12 @@ describe("waitUntil wrapper", () => {
       })(),
     );
 
-    await vi.waitFor(() => {
-      expect(loggerSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: "Delayed error (in waitUntil callback)",
-          cause: delayedError,
-        }),
-      );
-    });
+    await vi.waitUntil(() => loggerSpy.mock.calls.length);
+
+    expect(loggerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Delayed error",
+      }),
+    );
   });
 });

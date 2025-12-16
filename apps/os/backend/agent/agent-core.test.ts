@@ -14,7 +14,7 @@ import {
 import type { ContextItem } from "./context-schemas.ts";
 
 beforeEach(() => {
-  logger.defaultStore = { level: "info", tags: {}, logs: [] };
+  logger.defaultStore = { level: "info", tags: {}, logs: [], onError: () => {} };
 });
 
 export const logsMatcher = (level: TagLogger.Level, matcher?: string | {}) =>

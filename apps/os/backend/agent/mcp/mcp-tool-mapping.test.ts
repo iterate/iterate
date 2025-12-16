@@ -605,7 +605,7 @@ describe("mcp-tool-mapping", () => {
     });
 
     it("should skip tools with schema conflicts", () => {
-      logger.defaultStore = { level: "info", tags: {}, logs: [] };
+      logger.defaultStore = { level: "info", tags: {}, logs: [], onError: () => {} };
       const mockUploadFile = createMockUploadFile();
       const tool1 = createMockTool("search");
       const tool2 = {
