@@ -709,7 +709,12 @@ export class AgentCore<
 
     try {
       const originalEvents = [...this._events];
-      const originalState = { ...this._state };
+      // Deep copy arrays that get mutated by reducers to ensure rollback works correctly
+      const originalState = {
+        ...this._state,
+        inputItems: this._state.inputItems.slice(),
+        recordedToolCalls: this._state.recordedToolCalls?.slice(),
+      };
       const eventsAddedThisBatch: Array<{
         event: MergedEventForSlices<Slices> & { eventIndex: number; createdAt: string };
         reducedState: MergedStateForSlices<Slices>;
