@@ -2,7 +2,6 @@ import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import alchemy, { type Scope } from "alchemy";
 import {
-  Hyperdrive,
   R2Bucket,
   Container,
   DurableObjectNamespace,
@@ -152,21 +151,12 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    // In dev we don't need a planetscale db, just a hyperdrive that points to the local postgres instance
     const origin = "postgres://postgres:postgres@localhost:5432/iterate";
-    const hyperdrive = await Hyperdrive("iterate-postgres", {
-      origin,
-      name: "iterate-postgres",
-      adopt: true,
-      dev: {
-        origin,
-      },
-    });
 
     await migrate(origin);
 
     return {
-      ITERATE_POSTGRES: hyperdrive,
+      DATABASE_URL: origin,
     };
   }
 
@@ -200,18 +190,10 @@ async function setupDatabase() {
       delete: true,
     });
 
-    const hyperdrive = await Hyperdrive("iterate-postgres", {
-      origin: role.connectionUrl,
-      adopt: true,
-      caching: {
-        disabled: true,
-      },
-    });
-
     await migrate(role.connectionUrl.unencrypted);
 
     return {
-      ITERATE_POSTGRES: hyperdrive,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
@@ -231,36 +213,20 @@ async function setupDatabase() {
       delete: false,
     });
 
-    const hyperdrive = await Hyperdrive("iterate-postgres", {
-      origin: role.connectionUrl,
-      adopt: true,
-      caching: {
-        disabled: true,
-      },
-    });
-
     // Use the preset admin connection string to run migrations
     await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
-      ITERATE_POSTGRES: hyperdrive,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
   if (isProduction) {
     // Use predefined connection strings for production
-    const hyperdrive = await Hyperdrive("iterate-postgres", {
-      origin: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
-      adopt: true,
-      caching: {
-        disabled: true,
-      },
-    });
-
     await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
 
     return {
-      ITERATE_POSTGRES: hyperdrive,
+      DATABASE_URL: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
     };
   }
 
@@ -421,5 +387,4 @@ await uploadSourcemaps();
 
 await app.finalize();
 
-console.log("Deployment complete");
 if (!app.local) process.exit(0);
