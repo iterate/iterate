@@ -661,12 +661,17 @@ async function getURLContentFromFile(params: {
 
   logger.log(`File uploaded for ${url}: ${fileRecord.id}`);
 
+  if (!fileRecord.openAIFileId) {
+    throw new Error("File record does not have an openAIFileId");
+  }
+
   const additionalEvents: AgentCoreEvent[] = [
     {
       type: "CORE:FILE_SHARED",
       data: {
         direction: "from-agent-to-user",
         iterateFileId: fileRecord.id,
+        openAIFileId: fileRecord.openAIFileId,
         mimeType: contentType || "application/octet-stream",
       },
     },
