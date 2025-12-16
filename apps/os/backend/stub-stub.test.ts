@@ -33,8 +33,8 @@ test("stubStub", async () => {
     await stub.getGreeting({ language: "de" as never }).catch((e) => simplifyCallStack(e.stack)),
   ).toMatchInlineSnapshot(`
     "Error: Invalid language. Context: {"requestId":"abc123"}
-        at getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
-        at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:28)
+        at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
+        at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:47)
         at {cwd}/backend/stub-stub.test.ts:10:57
         at AsyncLocalStorage.run (node:internal/...)
         at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:10:22)
@@ -92,8 +92,8 @@ test("stubStub passes caller stack", async () => {
   expect(simplifyCallStack(call.stack!.replace(/Context: {.*}/, "Context: {***}")))
     .toMatchInlineSnapshot(`
       "Error: Invalid language. Context: {***}
-          at getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
-          at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:28)
+          at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
+          at stubStub.callMethodImpl ({cwd}/backend/stub-stub.ts:107:47)
           at {cwd}/backend/stub-stub.test.ts:59:18
           at AsyncLocalStorage.run (node:internal/...)
           at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:58:22)
