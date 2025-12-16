@@ -34,15 +34,15 @@ test("stubStub", async () => {
   ).toMatchInlineSnapshot(`
     "Error: Invalid language. Context: {"requestId":"abc123"}
         at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
-        at callMethodImpl ({cwd}/backend/stub-stub.ts:28:78)
+        at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
         at {cwd}/backend/stub-stub.test.ts:10:41
         at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
         at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:10:22)
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:35)
+        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
         at {cwd}/backend/stub-stub.test.ts:33:16
         at processTicksAndRejections (node:internal/process/task_queues:105:5)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:79:29)
+        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
         at {cwd}/backend/stub-stub.test.ts:33:16
         at processTicksAndRejections (node:internal/process/task_queues:105:5)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
@@ -65,6 +65,7 @@ test("stubStub passes caller stack", async () => {
       if (language === "fr") return "Bonjour";
 
       mockLog(new Error("Invalid language. Context: " + JSON.stringify(storage.getStore())));
+      return null;
     }
   }
 
@@ -74,29 +75,33 @@ test("stubStub passes caller stack", async () => {
   await expect(stub.getGreeting({ language: "en" })).resolves.toBe("Hello");
   await expect(stub.getGreeting({ language: "fr" })).resolves.toBe("Bonjour");
 
-  expectTypeOf(stub.getGreeting).returns.toEqualTypeOf<Promise<"Hello" | "Bonjour" | undefined>>();
+  expectTypeOf(stub.getGreeting).returns.toEqualTypeOf<Promise<"Hello" | "Bonjour" | null>>();
 
-  await expect(stub.getGreeting({ language: "de" as never })).rejects.toThrow(
-    'Invalid language. Context: {"requestId":"abc123"}',
+  await expect(stub.getGreeting({ language: "de" as never })).resolves.toBeNull();
+  expect(mockLog).toHaveBeenCalledWith(
+    expect.objectContaining({ message: expect.stringMatching(/Invalid language. Context: {.*}/) }),
   );
-  expect(
-    await stub.getGreeting({ language: "de" as never }).catch((e) => simplifyCallStack(e.stack)),
-  ).toMatchInlineSnapshot(`
-    "Error: Invalid language. Context: {"requestId":"abc123"}
-        at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:17:13)
-        at callMethodImpl ({cwd}/backend/stub-stub.ts:28:78)
-        at {cwd}/backend/stub-stub.test.ts:10:41
-        at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
-        at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:10:22)
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:35)
-        at {cwd}/backend/stub-stub.test.ts:33:16
-        at processTicksAndRejections (node:internal/process/task_queues:105:5)
-        at node_modules-blah-blah/@vitest/node_modules-more-blah-blah
-        at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:79:29)
-        at {cwd}/backend/stub-stub.test.ts:33:16
+  const call = mockLog.mock.calls[0][0] as Error;
+  const { callerStack } = JSON.parse(call.message.slice(call.message.indexOf("{")));
+  expect(simplifyCallStack(callerStack)).toMatchInlineSnapshot(`
+    "    at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:80:29)
+        at {cwd}/backend/stub-stub.test.ts:80:21
         at processTicksAndRejections (node:internal/process/task_queues:105:5)
         at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
   `);
+  expect(simplifyCallStack(call.stack!.replace(/Context: {.*}/, "Context: {***}")))
+    .toMatchInlineSnapshot(`
+      "Error: Invalid language. Context: {***}
+          at MyClass.getGreeting ({cwd}/backend/stub-stub.test.ts:67:15)
+          at callMethodImpl ({cwd}/backend/stub-stub.ts:29:78)
+          at {cwd}/backend/stub-stub.test.ts:59:9
+          at AsyncLocalStorage.run (node:internal/async_local_storage/async_context_frame:63:14)
+          at MyClass.callMethod ({cwd}/backend/stub-stub.test.ts:58:22)
+          at Proxy.<anonymous> ({cwd}/backend/stub-stub.ts:81:35)
+          at {cwd}/backend/stub-stub.test.ts:80:21
+          at processTicksAndRejections (node:internal/process/task_queues:105:5)
+          at node_modules-blah-blah/@vitest/node_modules-more-blah-blah"
+    `);
 });
 
 const simplifyCallStack = (stack: string) =>

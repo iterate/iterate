@@ -1388,7 +1388,13 @@ export class AgentCore<
       throw new Error(`Fake runLLMRequestInBackground error triggered!`);
     }
     this.deps.background(async () => {
+      if (JSON.stringify(params).includes("trigger_fake_error:preTry")) {
+        throw new Error(`Fake preTry error triggered!`);
+      }
       try {
+        if (JSON.stringify(params).includes("trigger_fake_error:preMakeLLMRequest")) {
+          throw new Error(`Fake preMakeLLMRequest error triggered!`);
+        }
         await this.makeLLMRequest(requestIndex, params);
       } catch (err: any) {
         logger.error(err);

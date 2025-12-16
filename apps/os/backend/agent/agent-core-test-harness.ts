@@ -422,7 +422,7 @@ export function createAgentCoreTest<Slices extends ReadonlyArray<AgentCoreSlice>
 ) {
   return base.extend<{ h: CoreTestHarness<Slices> }>({
     h: async ({ task }, playwrightUse) => {
-      logger.defaultStore = { level: "info", tags: {}, logs: [] };
+      logger.defaultStore = { level: "info", tags: {}, logs: [], onError: () => {} };
       // Reset ID counters for deterministic tests
       resetIdCounters();
 
