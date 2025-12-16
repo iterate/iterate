@@ -12,6 +12,7 @@ export namespace TagLogger {
       tags: Record<string, string>;
       args: unknown[];
     }>;
+    onError: (error: Error) => void;
   };
   /** "driver" for tag-logger. Expected to be responsible for printing logs to stdout/stdin. But if you want to email your grandma when we log an error, go for it. */
   export type ConsoleImplementation = Pick<typeof console, TagLogger.Level>;
@@ -48,7 +49,8 @@ export class TagLogger {
    */
   static consoleLogFn(console: TagLogger.ConsoleImplementation): TagLogger.LogFn {
     return function consoleLog({ level, args }) {
-      args = JSON.parse(JSON.stringify(args, (_, value) => errorToPOJO(value)));
+      const { onError } = this.context;
+      args = JSON.parse(JSON.stringify(args, (_, value) => errorToPOJO(value, onError)));
       if (Object.keys(this.tags).length) console[level](this.tagsString(), ...args);
       else console[level](...args);
     };
@@ -61,7 +63,10 @@ export class TagLogger {
   }
 
   get context(): TagLogger.Context {
-    return this._storage.getStore() || this.defaultStore || { level: "info", tags: {}, logs: [] };
+    return (
+      this._storage.getStore() ||
+      this.defaultStore || { level: "info", tags: {}, logs: [], onError: () => {} }
+    );
   }
 
   get level() {
@@ -237,7 +242,7 @@ export class TagLogger {
 // #region: utils, could be moved to a separate file if needed
 
 /** checks if value is error-like and swaps it out for a plain object which can be serialized to JSON, and has a `rootCause` property */
-function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
+function errorToPOJO<T>(error: T, onError: (error: Error) => void): { [K in keyof T]: T[K] } {
   if (error instanceof Error) {
     type PlainError = {
       class: string;
@@ -258,7 +263,7 @@ function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
 
     // Include cause if present (recursively serialize it)
     if ("cause" in error) {
-      const plainCause = errorToPOJO(error.cause) as PlainError;
+      const plainCause = errorToPOJO(error.cause, onError) as PlainError;
       plain.cause = plainCause;
       if (plainCause?.rootCause) {
         plain.rootCause = `${plain.rootCause}\n👆 ${plainCause.rootCause}`;
@@ -271,6 +276,8 @@ function errorToPOJO<T>(error: T): { [K in keyof T]: T[K] } {
         Object.assign(plain, { [key]: error[key as keyof Error] });
       }
     });
+
+    onError(plain);
 
     return plain as T;
   }
@@ -330,7 +337,7 @@ function getLogger() {
     };
     // for now let's use console.info always. But we could do `console[level](...)`, not sure if that'll work as well in Cloudflare/AWS CloudWatch/etc.
     // eslint-disable-next-line no-console -- only usage
-    console.info(JSON.stringify(toLog, (_, value) => errorToPOJO(value)));
+    console.info(JSON.stringify(toLog, (_, value) => errorToPOJO(value, this.context.onError)));
   });
 }
 

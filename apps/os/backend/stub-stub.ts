@@ -3,6 +3,7 @@ export interface WithCallMethod {
     methodName: string,
     args: unknown[],
     context: Record<string, string>,
+    meta: { callerStack: string },
   ): Promise<
     | { ok: true; result: unknown; error?: never }
     | { ok: false; result?: never; error: { message: string; stack: string } }
@@ -76,8 +77,8 @@ export const stubStub = <Stub extends WithCallMethod>(
         return typeof value === "function" ? value.bind(stub) : value;
       }
       return async (...args: any[]) => {
-        const callerStack = Error().stack?.split("\n").slice(1).join("\n");
-        const result = await stub.callMethod(prop as string, args, context);
+        const callerStack = Error().stack?.split("\n").slice(1).join("\n") || "";
+        const result = await stub.callMethod(prop as string, args, context, { callerStack });
         if (result.ok) {
           return result.result;
         }
@@ -88,7 +89,7 @@ export const stubStub = <Stub extends WithCallMethod>(
         );
 
         error.stack = stack;
-        if (callerStack && !stack.includes(callerStack)) {
+        if (!stack.includes(callerStack)) {
           error.stack += `\n${callerStack}`;
         }
 

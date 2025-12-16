@@ -323,8 +323,11 @@ export class IterateAgent<
     );
   }
 
-  callMethod(methodName: string, args: unknown[], context: Record<string, string>) {
-    return logger.run(context, () => callMethodImpl(this, methodName, args));
+  callMethod(...[method, args, context, meta]: Parameters<WithCallMethod["callMethod"]>) {
+    return logger.run(context, () => {
+      logger.context.onError = (error) => (error.stack = `${error.stack}\n${meta.callerStack}`);
+      return callMethodImpl(this, method, args);
+    });
   }
 
   /**
