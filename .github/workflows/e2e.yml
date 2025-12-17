@@ -2,6 +2,9 @@
 
 name: e2e tests
 on:
+  push:
+    branches:
+      - "**/*e2e*"
   workflow_call:
     inputs:
       stage:
@@ -12,13 +15,11 @@ on:
         description: The deployed url to run the e2e tests against.
         required: true
         type: string
-  schedule:
-    - cron: 0 9 * * *
 jobs:
   run:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     env:
-      WORKER_URL: ${{ inputs.worker_url }}
+      WORKER_URL: ${{ inputs.worker_url || 'http://localhost:5173' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -37,6 +38,38 @@ jobs:
         run: doppler setup --config ${{ inputs.stage }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+      - if: "!inputs.worker_url"
+        name: run preview server
+        run: |-
+          # for some reason `doppler run -- ...` doesn't inject env vars into the server process, so write to .env
+          doppler run -- printenv > apps/os/.env
+
+          cd apps/os
+          pnpm preview &
+
+          echo '
+            const main = async () => {
+              for (let i = 0; i < 120; i++) {
+                try {
+                  const res = await fetch("http://localhost:5173");
+                  if (!res.ok) throw new Error("Preview not ready");
+                  console.log("Preview ready");
+                  return;
+                } catch (error) {
+                  console.log(`Preview not ready, retrying ${i + 1}/120`);
+                  await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+              }
+              throw new Error("Preview not ready");
+            }
+            await main();
+          ' > wait.mjs
+
+          node wait.mjs
+
+          # finally, run the tests
+          export PROJECT_NAME=gh-evals-${{ github.head_ref || github.ref_name }}
+          doppler run -- pnpm evalite export --output ignoreme/evalite-ui
       - name: Install Playwright browsers
         working-directory: apps/os
         run: pnpm exec playwright install && pnpm exec playwright install-deps
@@ -49,7 +82,6 @@ jobs:
           retry_wait_seconds: 30
           command: doppler run --config ${{ inputs.stage }} -- pnpm os e2e --reporter default --reporter html
         env:
-          WORKER_URL: ${{ inputs.worker_url }}
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - name: upload e2e logs
         if: failure()

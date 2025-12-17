@@ -1,3 +1,4 @@
+import dedent from "dedent";
 import type { Step, Workflow } from "@jlarky/gha-ts/workflow-types";
 
 export * from "./github-script.ts";
@@ -53,3 +54,42 @@ export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
       },
     },
   ] as const satisfies Step[];
+
+/**
+ * Starts up the apps/os server and waits for it to be ready
+ * Assumes code is checked out, node_modules are installed, and doppler is setup
+ */
+export const runPreviewServer = {
+  name: "run preview server",
+  run: dedent`
+    # for some reason \`doppler run -- ...\` doesn't inject env vars into the server process, so write to .env
+    doppler run -- printenv > apps/os/.env
+
+    cd apps/os
+    pnpm preview &
+
+    echo '
+      const main = async () => {
+        for (let i = 0; i < 120; i++) {
+          try {
+            const res = await fetch("http://localhost:5173");
+            if (!res.ok) throw new Error("Preview not ready");
+            console.log("Preview ready");
+            return;
+          } catch (error) {
+            console.log(\`Preview not ready, retrying \${i + 1}/120\`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        throw new Error("Preview not ready");
+      }
+      await main();
+    ' > wait.mjs
+
+    node wait.mjs
+
+    # finally, run the tests
+    export PROJECT_NAME=gh-evals-\${{ github.head_ref || github.ref_name }}
+    doppler run -- pnpm evalite export --output ignoreme/evalite-ui
+  `,
+};

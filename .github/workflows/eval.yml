@@ -44,7 +44,7 @@ jobs:
           FROM docker.io/cloudflare/sandbox:0.3.2
           EXPOSE 3000
           ' > apps/os/backend/sandbox/Dockerfile
-      - name: run server and test
+      - name: run preview server
         run: |-
           # for some reason `doppler run -- ...` doesn't inject env vars into the server process, so write to .env
           doppler run -- printenv > apps/os/.env

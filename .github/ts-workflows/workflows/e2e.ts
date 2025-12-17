@@ -4,6 +4,9 @@ import * as utils from "../utils/index.ts";
 export default workflow({
   name: "e2e tests",
   on: {
+    push: {
+      branches: ["**/*e2e*"],
+    },
     workflow_call: {
       inputs: {
         stage: {
@@ -19,13 +22,12 @@ export default workflow({
         },
       },
     },
-    schedule: [{ cron: "0 9 * * *" }],
   },
   jobs: {
     run: {
       ...utils.runsOn,
       env: {
-        WORKER_URL: "${{ inputs.worker_url }}",
+        WORKER_URL: "${{ inputs.worker_url || 'http://localhost:5173' }}",
       },
       steps: [
         {
@@ -60,6 +62,10 @@ export default workflow({
           },
         },
         {
+          if: "!inputs.worker_url",
+          ...utils.runPreviewServer,
+        },
+        {
           name: "Install Playwright browsers",
           "working-directory": "apps/os",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",
@@ -76,7 +82,6 @@ export default workflow({
               "doppler run --config ${{ inputs.stage }} -- pnpm os e2e --reporter default --reporter html",
           },
           env: {
-            WORKER_URL: "${{ inputs.worker_url }}",
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
         },
