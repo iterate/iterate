@@ -67,36 +67,59 @@ export const runPreviewServer = {
 
     cd apps/os
 
+    echo '
+      import * as fs from 'fs';
+      const waitFor = process.argv[2];
+      const timeoutSeconds = Number(process.argv[3]);
+
+      for (let i = 0; i < timeoutSeconds; i++) {
+        if (fs.existsSync(waitFor)) {
+          console.log(\`\${waitFor} exists\`);
+          return;
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        console.log(\`\${waitFor} not found yet, retrying \${i + 1}/\${timeoutSeconds}\`);
+      }
+      throw new Error(\`\${waitFor} not found after \${timeoutSeconds} seconds\`);
+    ' > wait-for-file.mjs
+
+    echo '
+      const main = async () => {
+        const waitFor = process.argv[2];
+        const timeoutSeconds = Number(process.argv[3]);
+        for (let i = 0; i < timeoutSeconds; i++) {
+          try {
+            const res = await fetch(waitFor);
+            if (!res.ok) throw new Error(\`\${waitFor} not ready\`);
+            console.log(\`\${waitFor} ready\`);
+            return;
+          } catch (error) {
+            console.log(\`\${waitFor} not ready, retrying \${i + 1}/\${timeoutSeconds}\`);
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        }
+        throw new Error(\`\${waitFor} not ready after \${timeoutSeconds} seconds\`);
+      }
+      await main();
+    ' > wait-for-url.mjs
+
     doppler run -- printenv >> .env
     echo SLACK_CLIENT_ID=fake >> .env
 
     SLACK_CLIENT_ID=fake doppler run -- pnpm dev &
+    DEV_PID=\$!
 
-    echo '
-      const main = async () => {
-        const timeout = 60 * 5;
-        for (let i = 0; i < timeout; i++) {
-          try {
-            const res = await fetch("http://localhost:5173");
-            if (!res.ok) throw new Error("Preview not ready");
-            console.log("Preview ready");
-            return;
-          } catch (error) {
-            console.log(\`Preview not ready, retrying \${i + 1}/\${timeout}\`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-          }
-        }
-        throw new Error("Preview not ready");
-      }
-      await main();
-    ' > wait.mjs
+    SLACK_CLIENT_ID=fake doppler run -- pnpm build &
+    BUILD_PID=\$!
 
-    node wait.mjs
+    node wait-for-file.mjs "$(pwd)/.alchemy/local/wrangler.jsonc" 240
+    # kill dev process
+    kill -9 \$DEV_PID
 
-    kill -9 $(lsof -t -i:5173)
+    wait
 
     SLACK_CLIENT_ID=fake doppler run -- pnpm preview &
 
-    node wait.mjs
+    node wait-for-url.mjs "http://localhost:5173" 240
   `,
 };
