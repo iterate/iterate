@@ -63,6 +63,11 @@ export default workflow({
         },
         {
           if: "!inputs.worker_url",
+          name: "run dependencies",
+          run: "pnpm docker:up",
+        },
+        {
+          if: "!inputs.worker_url",
           ...utils.runPreviewServer,
         },
         {

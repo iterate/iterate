@@ -39,6 +39,9 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - if: "!inputs.worker_url"
+        name: run dependencies
+        run: pnpm docker:up
+      - if: "!inputs.worker_url"
         name: run preview server
         id: preview_server
         run: |-
