@@ -40,6 +40,14 @@ export default workflow({
           uses: "pnpm/action-setup@v4",
         },
         {
+          if: "!inputs.worker_url",
+          name: "Enable QEMU",
+          uses: "docker/setup-qemu-action@v3",
+          with: {
+            platforms: "all",
+          },
+        },
+        {
           name: "Setup Node",
           uses: "actions/setup-node@v4",
           with: {
@@ -67,17 +75,17 @@ export default workflow({
           name: "run dependencies",
           run: "pnpm docker:up",
         },
-        {
-          if: "!inputs.worker_url",
-          name: "simplify sandbox Dockerfile",
-          run: dedent`
-            # For some reason the nodejs v24 installation in the Dockerfile fails in CI, but the built-in version of nodejs works for these purposes
-            echo '
-            FROM docker.io/cloudflare/sandbox:0.3.2
-            EXPOSE 3000
-            ' > apps/os/backend/sandbox/Dockerfile
-          `,
-        },
+        // {
+        //   if: "!inputs.worker_url",
+        //   name: "simplify sandbox Dockerfile",
+        //   run: dedent`
+        //     # For some reason the nodejs v24 installation in the Dockerfile fails in CI, but the built-in version of nodejs works for these purposes
+        //     echo '
+        //     FROM docker.io/cloudflare/sandbox:0.3.2
+        //     EXPOSE 3000
+        //     ' > apps/os/backend/sandbox/Dockerfile
+        //   `,
+        // },
         {
           if: "!inputs.worker_url",
           ...utils.runPreviewServer,
