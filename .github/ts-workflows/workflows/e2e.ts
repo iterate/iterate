@@ -102,7 +102,7 @@ export default workflow({
             timeout_minutes: 15,
             max_attempts: 3,
             retry_wait_seconds: 30,
-            command: "pnpm os e2e --reporter default --reporter html",
+            command: "doppler run -- pnpm os e2e --reporter default --reporter html",
           },
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
