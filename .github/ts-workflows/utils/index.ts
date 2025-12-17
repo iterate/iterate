@@ -70,7 +70,7 @@ export const runPreviewServer = {
     doppler run -- printenv >> .env
     echo SLACK_CLIENT_ID=fake >> .env
 
-    pnpm dev &
+    SLACK_CLIENT_ID=fake doppler run -- pnpm dev &
 
     echo '
       const main = async () => {
@@ -95,7 +95,7 @@ export const runPreviewServer = {
 
     kill -9 $(lsof -t -i:5173)
 
-    SLACK_CLIENT_ID=fake pnpm preview &
+    SLACK_CLIENT_ID=fake doppler run -- pnpm preview &
 
     node wait.mjs
   `,
