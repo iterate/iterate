@@ -48,6 +48,7 @@ evaliterate("agent knows when to end their turn", {
 
     const h = await createTestHelper({
       trpcClient,
+      adminTrpcClient: adminTrpc,
       inputSlug: input.slug,
       braintrustSpanExportedId,
     });

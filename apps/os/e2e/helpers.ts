@@ -39,6 +39,7 @@ export const authClient = createAuthClient({
 
 export async function getAuthedTrpcClient() {
   const { sessionCookies } = await getServiceAuthCredentials();
+
   const client = createTRPCClient<AppRouter>({
     links: [httpLink({ url: `${baseURL}/api/trpc`, headers: { cookie: sessionCookies } })],
   });
@@ -51,6 +52,7 @@ export async function getAuthedTrpcClient() {
 const E2EEnv = z.object({
   SERVICE_AUTH_TOKEN: z.string(),
 });
+
 export const getServiceAuthCredentials = async () => {
   const env = E2EEnv.parse(process.env);
   const serviceAuthResponse = await fetch(`${baseURL}/api/auth/service-auth/create-session`, {
@@ -121,37 +123,25 @@ export const getImpersonatedTrpcClient = async (params: {
 
 export async function createTestHelper({
   trpcClient,
+  adminTrpcClient,
   inputSlug,
   braintrustSpanExportedId,
   logger = console,
-  /** The user ID to link Slack users to. If provided, fake Slack users will be linked to this user. */
   userId,
 }: {
   trpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
+  adminTrpcClient: Awaited<ReturnType<typeof getAuthedTrpcClient>>["client"];
   inputSlug: string;
   braintrustSpanExportedId?: string;
   logger?: Pick<Console, "info" | "error">;
-  /** The user ID to link Slack users to. If provided, fake Slack users will be linked to this user. */
   userId?: string;
 }) {
-  const { client: adminTrpcClient } = await getAuthedTrpcClient();
-
-  // Get estateId first since we need it for the routing key
   const estates = await trpcClient.estates.list.query();
   const estateId = estates[0].id;
   expect(estateId).toBeTruthy();
 
-  // Create threadTs and channel before the routing key since the webhook handler
-  // uses a LIKE query to find agents by threadTs and "-slack-" pattern
   const channel = "C0123456789";
-  // TODO, we are using magical 4 digit timestamps for the test. This should be replaced with a mapping table.
   const threadTs = "0234";
-
-  // Build a routing key that matches what the webhook handler expects:
-  // - Must contain threadTs (for LIKE %{threadTs}% query)
-  // - Must contain "-slack-" (for LIKE %-slack-% query)
-  // - Add "test-" prefix so we can identify it came from a test
-
   const agentRoutingKey = getRoutingKey({ estateId, threadTs });
   expect(agentRoutingKey).toBeTruthy();
 
@@ -171,9 +161,6 @@ export async function createTestHelper({
 
   await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
 
-  // Generate unique Slack user IDs per test run to avoid conflicts between tests
-  // Format: TEST_{unique-suffix}_{name} to identify as test users
-  // Use a combination of inputSlug and timestamp to ensure uniqueness across tests
   const uniqueSuffix = `${inputSlug.slice(0, 8)}_${Date.now().toString(36)}`;
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
   const aliceId = `TEST_${uniqueSuffix}_ALICE`;
@@ -181,7 +168,6 @@ export async function createTestHelper({
   fakeSlackUsers[aliceId] = { name: "Alice", id: aliceId };
   fakeSlackUsers[bobId] = { name: "Bob", id: bobId };
 
-  // Add fake slack users to the estate database so they can be looked up
   const fakeMembers = Object.values(fakeSlackUsers).map((user) => ({
     id: user.id,
     name: user.name,
@@ -196,9 +182,9 @@ export async function createTestHelper({
   await adminTrpcClient.testing.addSlackUsersToEstate.mutate({
     estateId,
     members: fakeMembers,
-    // Link the fake Slack users to the test user if userId is provided
     ...(userId && { linkToUserId: userId }),
   });
+
   await adminTrpcClient.testing.setupTeamId.mutate({
     estateId,
     teamId,
@@ -210,8 +196,6 @@ export async function createTestHelper({
       braintrustParentSpanExportedId: braintrustSpanExportedId,
     });
 
-  // initialise slack state - right now we require channel and thread to be set independently of the webhook
-  // (although this is in the onWebhookReceived method, we don't actually call that in the eval, we create events directly)
   await addEvents([
     {
       type: "SLACK:UPDATE_SLICE_STATE",
@@ -275,7 +259,7 @@ export async function createTestHelper({
         }
         return null;
       },
-      { timeout: 20_000, interval: 1000, ...options },
+      { timeout: 20_000, interval: 300, ...options },
     );
   };
 
@@ -581,6 +565,7 @@ export async function createE2EHelper(inputSlug: string) {
   const testHelper = await createTestHelper({
     inputSlug,
     trpcClient: userTrpc,
+    adminTrpcClient: adminTrpc,
     userId: user.id,
   });
 
