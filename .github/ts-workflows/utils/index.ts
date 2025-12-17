@@ -64,14 +64,17 @@ export const runPreviewServer = {
   id: "preview_server",
   run: dedent`
     # for some reason \`doppler run -- ...\` doesn't inject env vars into the server process, so write to .env
-    doppler run -- printenv > apps/os/.env
 
     cd apps/os
+
+    doppler run -- printenv >> .env
+    echo SLACK_CLIENT_ID=fake >> .env
+
     pnpm dev &
 
     echo '
       const main = async () => {
-        const timeout = 180;
+        const timeout = 60 * 5;
         for (let i = 0; i < timeout; i++) {
           try {
             const res = await fetch("http://localhost:5173");
