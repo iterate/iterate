@@ -40,6 +40,7 @@ jobs:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - if: "!inputs.worker_url"
         name: run preview server
+        id: preview_server
         run: |-
           # for some reason `doppler run -- ...` doesn't inject env vars into the server process, so write to .env
           doppler run -- printenv > apps/os/.env
@@ -66,10 +67,6 @@ jobs:
           ' > wait.mjs
 
           node wait.mjs
-
-          # finally, run the tests
-          export PROJECT_NAME=gh-evals-${{ github.head_ref || github.ref_name }}
-          doppler run -- pnpm evalite export --output ignoreme/evalite-ui
       - name: Install Playwright browsers
         working-directory: apps/os
         run: pnpm exec playwright install && pnpm exec playwright install-deps

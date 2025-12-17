@@ -75,6 +75,15 @@ export default workflow({
         },
         utils.runPreviewServer,
         {
+          name: "run the tests",
+          run: dedent`
+            cd apps/os
+            # finally, run the tests
+            export PROJECT_NAME=gh-evals-\${{ github.head_ref || github.ref_name }}
+            doppler run -- pnpm evalite export --output ignoreme/evalite-ui
+          `,
+        },
+        {
           name: "upload evalite ui",
           uses: "actions/upload-artifact@v4",
           if: "always()",

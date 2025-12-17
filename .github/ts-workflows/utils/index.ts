@@ -61,6 +61,7 @@ export const setupDoppler = ({ config }: { config: DopplerConfigName }) =>
  */
 export const runPreviewServer = {
   name: "run preview server",
+  id: "preview_server",
   run: dedent`
     # for some reason \`doppler run -- ...\` doesn't inject env vars into the server process, so write to .env
     doppler run -- printenv > apps/os/.env
@@ -87,9 +88,5 @@ export const runPreviewServer = {
     ' > wait.mjs
 
     node wait.mjs
-
-    # finally, run the tests
-    export PROJECT_NAME=gh-evals-\${{ github.head_ref || github.ref_name }}
-    doppler run -- pnpm evalite export --output ignoreme/evalite-ui
   `,
 };
