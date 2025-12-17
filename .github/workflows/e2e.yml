@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - "**/*e2e*"
+  merge_group: {}
   workflow_call:
     inputs:
       stage:
