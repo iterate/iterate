@@ -58,14 +58,15 @@ jobs:
 
           echo '
             const main = async () => {
-              for (let i = 0; i < 120; i++) {
+              const timeout = 180;
+              for (let i = 0; i < timeout; i++) {
                 try {
                   const res = await fetch("http://localhost:5173");
                   if (!res.ok) throw new Error("Preview not ready");
                   console.log("Preview ready");
                   return;
                 } catch (error) {
-                  console.log(`Preview not ready, retrying ${i + 1}/120`);
+                  console.log(`Preview not ready, retrying ${i + 1}/${timeout}`);
                   await new Promise(resolve => setTimeout(resolve, 1000));
                 }
               }
