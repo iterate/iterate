@@ -108,9 +108,9 @@ export const runPreviewServer = {
     ' > wait-for-url.mjs
 
     doppler run -- printenv >> .env
-    echo SLACK_CLIENT_ID=fake >> .env
+    echo "SLACK_CLIENT_ID=fake" >> .env
 
-    SLACK_CLIENT_ID=fake doppler run -- pnpm dev &
+    SLACK_CLIENT_ID=fake doppler run -- sh -c "SLACK_CLIENT_ID=fake pnpm dev" &
     DEV_PID=\$!
 
     echo "Waiting for wrangler.jsonc to be created"
