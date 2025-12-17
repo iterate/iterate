@@ -47,10 +47,6 @@ import { stubStub } from "../stub-stub.ts";
 import { recentActiveSources } from "../db/helpers.ts";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
-import {
-  betterWaitUntil,
-  monkeyPatchAgentWithBetterWaitUntilSupport,
-} from "./better-wait-until.ts";
 import type { MCPParam } from "./tool-schemas.ts";
 import {
   AgentCore,
@@ -171,6 +167,8 @@ export type IterateAgentState = z.infer<typeof IterateAgentState>;
 type ToolsInterface = typeof iterateAgentTools.$infer.interface;
 type Inputs = typeof iterateAgentTools.$infer.inputTypes;
 
+const KEEP_ALIVE_INTERVAL_SECONDS = 15;
+
 // -----------------------------------------------------------------------------
 // Generic IterateAgentBase -----------------------------------------------------
 // -----------------------------------------------------------------------------
@@ -203,6 +201,8 @@ export class IterateAgent<
   protected mcpManagerCache: MCPManagerCache;
   protected mcpConnectionQueues: MCPConnectionQueues;
   _isInitialized = false;
+  _backgroundPromises: Set<Promise<void>> = new Set();
+  _keepAliveScheduled = false;
 
   // This runs between the synchronous durable object constructor and the asynchronous onStart of the agents SDK
   // It also performs the PartyKit set-name fetch internally to trigger onStart.
@@ -282,8 +282,6 @@ export class IterateAgent<
 
   constructor(ctx: DurableObjectState, env: CloudflareEnv) {
     super(ctx, env);
-    monkeyPatchAgentWithBetterWaitUntilSupport(this);
-
     this.db = getDb();
     // Initialize instance-level MCP manager cache and connection queues
     this.mcpManagerCache = createMCPManagerCache();
@@ -321,6 +319,24 @@ export class IterateAgent<
     this.ctx.storage.sql.exec(
       "CREATE TABLE IF NOT EXISTS bg_processes (process_id TEXT PRIMARY KEY, formatter TEXT, last_heartbeat INTEGER, status TEXT NOT NULL DEFAULT 'in_progress')",
     );
+  }
+
+  async scheduleKeepAlive() {
+    if (this._keepAliveScheduled) return;
+    this._keepAliveScheduled = true;
+    await this.schedule(KEEP_ALIVE_INTERVAL_SECONDS, "keepAlive");
+  }
+
+  async keepAlive() {
+    this._keepAliveScheduled = false;
+    if (this.agentCore.llmRequestInProgress() || this._backgroundPromises.size > 0) {
+      logger.info(
+        `Keeping agent alive, LLM request in progress: ${this.agentCore.llmRequestInProgress()}, background promises in progress: ${this._backgroundPromises.size}`,
+      );
+      await this.scheduleKeepAlive();
+    } else {
+      logger.info("No LLM request or background promises in progress, stopping keep alive process");
+    }
   }
 
   callMethod(params: stubStub.CallMethodParams) {
@@ -515,12 +531,11 @@ export class IterateAgent<
         void this.updateAgentInstanceAfterEvents(events);
       },
 
-      background: (fn: () => Promise<void>) => {
-        betterWaitUntil(this, fn(), {
-          logErrorAfter: new Date(Date.now() + 1000 * 60 * 60 * 2), // 2 hours
-          logWarningAfter: new Date(Date.now() + 1000 * 60 * 30), // 30 minutes
-          timeout: new Date(Date.now() + 1000 * 60 * 60 * 6), // 6 hours
-        });
+      background: (fn) => {
+        const task = fn();
+        this._backgroundPromises.add(task);
+        task.finally(() => this._backgroundPromises.delete(task));
+        this.ctx.waitUntil(Promise.allSettled([task, this.scheduleKeepAlive()]));
       },
 
       getOpenAIClient: async () => {
@@ -1688,14 +1703,16 @@ export class IterateAgent<
       ? 20 * 60 * 1000
       : 60 * 60 * 1000;
 
-    await this.schedule(5, "pollForDeepResearch", {
-      runId: taskRun.run_id,
-      query: input.query,
-      processor: input.processor,
-      outputFormat: "text",
-      pollUntil: Date.now() + maxPollTime,
-      pollCount: 0,
-    });
+    this.agentCore.deps.background(() =>
+      this.pollForDeepResearch({
+        runId: taskRun.run_id,
+        query: input.query,
+        processor: input.processor,
+        outputFormat: "text",
+        pollUntil: Date.now() + maxPollTime,
+        pollCount: 0,
+      }),
+    );
 
     return {
       status: "queued",
@@ -1737,7 +1754,60 @@ export class IterateAgent<
       });
     };
 
-    // Check if we've exceeded the polling time limit
+    const POLL_TIMEOUT_SECONDS = 15;
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    while (Date.now() < data.pollUntil) {
+      try {
+        const result = await checkDeepResearchStatus(data.runId);
+
+        // Check result status
+        if (result.status === "running") {
+          // Still running - schedule next poll
+          const nextPollCount = data.pollCount + 1;
+
+          // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
+          if (nextPollCount % 8 === 0) {
+            const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
+            addDeveloperMessage({
+              text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
+              triggerLLMRequest: false, // Don't trigger a new turn, just inform
+            });
+          }
+          await sleep(POLL_TIMEOUT_SECONDS * 1000);
+          continue;
+        }
+
+        if (result.status === "completed") {
+          // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
+          const rawOutput = result.data as unknown as { output?: { content?: string } } | null;
+          const content =
+            rawOutput?.output?.content ??
+            (result.data ? JSON.stringify(result.data) : "(no data returned)");
+
+          addDeveloperMessage({
+            text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${content}`,
+            triggerLLMRequest: true,
+          });
+          return;
+        }
+
+        // Unknown status - log and continue polling
+        logger.info("deep research unknown response, continuing to poll:", {
+          runId: data.runId,
+          result,
+        });
+
+        await sleep(POLL_TIMEOUT_SECONDS * 1000);
+      } catch (err) {
+        logger.error("deep research polling error:", err);
+        addDeveloperMessage({
+          text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
+          triggerLLMRequest: true,
+        });
+      }
+    }
+
     if (Date.now() > data.pollUntil) {
       // Under pro: 20 min timeout, pro+: 60 min timeout
       const expectedMinutes = UNDER_PRO_PROCESSORS.includes(
@@ -1752,63 +1822,6 @@ export class IterateAgent<
       });
       addDeveloperMessage({
         text: `Deep research polling timeout reached for run ${data.runId}. The research is taking longer than expected (>${expectedMinutes} minutes for ${data.processor} processor). The query was: "${data.query}"`,
-        triggerLLMRequest: true,
-      });
-      return;
-    }
-
-    try {
-      const result = await checkDeepResearchStatus(data.runId);
-
-      // Helper to schedule next poll with incremented count
-      // Each poll can take up to 15 seconds (long polling timeout), then we schedule next poll after 5s
-      const POLL_TIMEOUT_SECONDS = 15;
-      const scheduleNextPoll = async (sendProgressMessage = false) => {
-        const nextPollCount = data.pollCount + 1;
-
-        // Send occasional progress messages to reassure the agent (every ~1 minute = 4 polls at 15s each)
-        if (sendProgressMessage && nextPollCount % 8 === 0) {
-          const elapsedMinutes = Math.floor((nextPollCount * POLL_TIMEOUT_SECONDS) / 60);
-          addDeveloperMessage({
-            text: `Deep research for "${data.query}" is still in progress (${elapsedMinutes} minutes elapsed). I'll share results when ready.`,
-            triggerLLMRequest: false, // Don't trigger a new turn, just inform
-          });
-        }
-
-        await this.schedule(5, "pollForDeepResearch", { ...data, pollCount: nextPollCount });
-      };
-
-      // Check result status
-      if (result.status === "running") {
-        // Still running - schedule next poll
-        await scheduleNextPoll(true);
-        return;
-      }
-
-      if (result.status === "completed") {
-        // Research completed! Pass the raw JSON to the model (handle null/empty data gracefully)
-        const rawOutput = result.data as unknown as { output?: { content?: string } } | null;
-        const content =
-          rawOutput?.output?.content ??
-          (result.data ? JSON.stringify(result.data) : "(no data returned)");
-
-        addDeveloperMessage({
-          text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${content}`,
-          triggerLLMRequest: true,
-        });
-        return;
-      }
-
-      // Unknown status - log and continue polling
-      logger.info("deep research unknown response, continuing to poll:", {
-        runId: data.runId,
-        result,
-      });
-      await scheduleNextPoll(true);
-    } catch (err) {
-      logger.error("deep research polling error:", err);
-      addDeveloperMessage({
-        text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
         triggerLLMRequest: true,
       });
     }
