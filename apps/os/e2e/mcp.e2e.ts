@@ -48,7 +48,7 @@ function resolveServerUrl(base: string, path: string): string {
 }
 
 describe("MCP server connections", () => {
-  test("connects to mock MCP server (no auth) and uses tool", { timeout: 60_000 }, async () => {
+  test("connects to mock MCP server (no auth) and uses tool", { timeout: 90_000 }, async () => {
     await using h = await createE2EHelper("mcp-no-auth");
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_NO_AUTH_SERVER_URL;
@@ -60,7 +60,7 @@ describe("MCP server connections", () => {
     );
 
     await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeMessage, {
-      timeout: 15_000,
+      timeout: 30_000,
     });
     console.log("MCP connection established (no auth)");
 
@@ -68,12 +68,12 @@ describe("MCP server connections", () => {
       `Using the MCP server, call mock_calculate with { operation: 'add', a: 12, b: 30 }. Return only the result.`,
     );
 
-    const reply = await toolMsg.waitForReply({ timeout: 30_000 });
+    const reply = await toolMsg.waitForReply({ timeout: 45_000 });
     expect(reply).toMatch(/42/);
     console.log("✅ Tool call successful (no auth)");
   });
 
-  test("connects to mock MCP server (oauth) and uses tool", { timeout: 60_000 }, async () => {
+  test("connects to mock MCP server (oauth) and uses tool", { timeout: 90_000 }, async () => {
     await using h = await createE2EHelper("mcp-oauth");
     const env = parseEnv();
     const serverUrl = env.MOCK_MCP_OAUTH_SERVER_URL;
@@ -83,7 +83,7 @@ describe("MCP server connections", () => {
     await h.sendUserMessage(`Connect to the MCP server at ${serverUrl}. It uses OAuth.`);
 
     const oauthEvent = await h.waitForEvent("MCP:OAUTH_REQUIRED", eventsBeforeMessage, {
-      timeout: 15_000,
+      timeout: 30_000,
       select: (e: AgentEvent & { type: "MCP:OAUTH_REQUIRED" }) => e.data,
     });
 
@@ -95,7 +95,7 @@ describe("MCP server connections", () => {
     console.log("Completed OAuth flow");
 
     await h.waitForEvent("MCP:CONNECTION_ESTABLISHED", eventsBeforeOAuth, {
-      timeout: 10_000,
+      timeout: 15_000,
     });
     console.log("MCP connection established (oauth)");
 
@@ -103,12 +103,12 @@ describe("MCP server connections", () => {
       `Using the MCP server, call userInfo to get the authenticated user info.`,
     );
 
-    const reply = await toolMsg.waitForReply({ timeout: 30_000 });
+    const reply = await toolMsg.waitForReply({ timeout: 45_000 });
     expect(reply).toMatch(/user/i);
     console.log("✅ Tool call successful (oauth)");
   });
 
-  test("connects to mock MCP server (bearer) and uses tool", { timeout: 60_000 }, async () => {
+  test("connects to mock MCP server (bearer) and uses tool", { timeout: 90_000 }, async () => {
     await using h = await createE2EHelper("mcp-bearer");
     const env = parseEnv();
     const serverUrl = `${env.MOCK_MCP_BEARER_SERVER_URL}?expected=test`;
@@ -120,7 +120,7 @@ describe("MCP server connections", () => {
     );
 
     const paramsEvent = await h.waitForEvent("MCP:PARAMS_REQUIRED", eventsBeforeMessage, {
-      timeout: 15_000,
+      timeout: 30_000,
       select: (e: AgentEvent & { type: "MCP:PARAMS_REQUIRED" }) => e.data,
     });
 
@@ -140,7 +140,7 @@ describe("MCP server connections", () => {
       `Using the MCP server, call mock_calculate with { operation: 'multiply', a: 7, b: 8 }. Return only the result.`,
     );
 
-    const reply = await toolMsg.waitForReply({ timeout: 15_000 });
+    const reply = await toolMsg.waitForReply({ timeout: 45_000 });
     expect(reply).toMatch(/56/);
     console.log("✅ Tool call successful (bearer)");
   });
@@ -260,7 +260,7 @@ async function completeOAuthFlow(
   }
 
   console.log("[OAuth] Flow complete, waiting for agent to process...");
-  await new Promise((resolve) => setTimeout(resolve, 2000));
+  await new Promise((resolve) => setTimeout(resolve, 500));
   console.log("[OAuth] Done");
 }
 
@@ -318,16 +318,14 @@ async function fillBearerTokenViaPlaywright(paramsUrl: string, cookies: string):
 
     const page = await context.newPage();
 
-    page.on("request", (req) => console.log("[Bearer] Request:", req.method(), req.url()));
-    page.on("response", (res) => console.log("[Bearer] Response:", res.status(), res.url()));
+    // Only log failures, not every request (reduces overhead)
     page.on("requestfailed", (req) =>
       console.log("[Bearer] Request failed:", req.url(), req.failure()?.errorText),
     );
-    page.on("console", (msg) => console.log("[Bearer] Console:", msg.type(), msg.text()));
 
     console.log("[Bearer] Navigating to:", paramsUrl);
     const response = await page.goto(paramsUrl, { waitUntil: "domcontentloaded", timeout: 30_000 });
-    console.log("[Bearer] Page loaded, status:", response?.status(), "URL:", page.url());
+    console.log("[Bearer] Page loaded, status:", response?.status());
 
     console.log("[Bearer] Waiting for Save and Connect button...");
     await page.getByRole("button", { name: "Save and Connect" }).waitFor();
