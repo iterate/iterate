@@ -329,7 +329,7 @@ export class AgentCore<
       if (newEnabledContextRulesString === enabledContextRulesString) {
         const codemodeified = this.codemodeifyState(next);
         // shortcut: rule-enabling didn't change anything, so we can return early, but codemode might have changed something
-        return { modified: codemodeified.modified };
+        return { modified: codemodeified.modified, reason: "codemode-modified" };
       }
 
       enabledContextRulesString = newEnabledContextRulesString;
@@ -352,16 +352,16 @@ export class AgentCore<
       // todo: change matchers.hasTool so that this doesn't empty out the runtimeTools array, making it always return false
       this.codemodeifyState(next);
 
-      return { modified: true };
+      return { modified: true, reason: "newEnabledContextRulesString-differed" };
     };
 
     for (let i = 10; i >= 0; i--) {
-      const { modified } = setEnabledContextRules();
+      const { modified, reason } = setEnabledContextRules();
       if (!modified) break;
       if (i === 0)
         logger.error(
           "Enabled context rules loop did not converge after 10 iterations, this may be an insanely complex set of matchers but is probably a bug",
-          next,
+          reason,
         );
     }
 
