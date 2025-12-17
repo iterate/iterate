@@ -60,6 +60,11 @@ export default workflow({
           },
         },
         {
+          name: "Run app server locally",
+          if: "startsWith(inputs.worker_url, 'http://localhost:')",
+          run: "doppler run -- pnpm os preview",
+        },
+        {
           name: "Install Playwright browsers",
           "working-directory": "apps/os",
           run: "pnpm exec playwright install && pnpm exec playwright install-deps",

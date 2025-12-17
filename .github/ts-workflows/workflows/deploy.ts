@@ -28,6 +28,7 @@ export default {
   },
   jobs: {
     "deploy-os": {
+      if: "inputs.stage != 'local'",
       name: "deploy-os ${{ inputs.stage }}",
       "timeout-minutes": 15,
       ...utils.runsOn,
@@ -76,6 +77,7 @@ export default {
     "deploy-mcp-mock-server": {
       "runs-on":
         "${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}",
+      if: "inputs.stage != 'local'",
       steps: [
         ...utils.setupRepo,
         ...utils.setupDoppler({ config: "${{ inputs.stage }}" }),

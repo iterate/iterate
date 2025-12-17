@@ -8,7 +8,7 @@ on:
   push:
     branches:
       - main
-      - mmkal/25/10/29/slackclientinworkflows
+      - "**/*runcipls*"
   workflow_dispatch:
     inputs:
       stage:
@@ -22,7 +22,7 @@ jobs:
       - id: get_env
         name: Get environment variables
         run: |-
-          echo stage=${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+          echo stage=${{ inputs.stage || 'local' }} >> $GITHUB_OUTPUT
           echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
     outputs:
       stage: ${{ steps.get_env.outputs.stage }}
@@ -139,7 +139,7 @@ jobs:
       - variables
       - deploy
     with:
-      worker_url: ${{ needs.deploy.outputs.worker_url || 'some_garbage' }}
+      worker_url: ${{ needs.deploy.outputs.worker_url || (needs.variables.outputs.stage == 'local' && 'http://localhost:5173') || 'some_garbage' }}
       stage: ${{ needs.variables.outputs.stage }}
   slack_failure:
     needs:

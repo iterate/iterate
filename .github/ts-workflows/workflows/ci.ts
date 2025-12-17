@@ -10,7 +10,7 @@ export default {
   },
   on: {
     push: {
-      branches: ["main", "mmkal/25/10/29/slackclientinworkflows"],
+      branches: ["main", "**/*runcipls*"],
     },
     workflow_dispatch: {
       inputs: {
@@ -46,7 +46,7 @@ export default {
           // todo: parse the PR number/body/whatever to get a stage like `pr_1234` and any other deployment flags
 
           run: dedent`
-            echo stage=\${{ inputs.stage || 'stg' }} >> $GITHUB_OUTPUT
+            echo stage=\${{ inputs.stage || 'local' }} >> $GITHUB_OUTPUT
             echo release_name="v$(TZ=Europe/London date +%Y-%m-%d-%H-%M-%S)" >> $GITHUB_OUTPUT
           `,
         },
@@ -147,7 +147,8 @@ export default {
       secrets: "inherit",
       needs: ["variables", "deploy"],
       with: {
-        worker_url: "${{ needs.deploy.outputs.worker_url || 'some_garbage' }}",
+        worker_url:
+          "${{ needs.deploy.outputs.worker_url || (needs.variables.outputs.stage == 'local' && 'http://localhost:5173') || 'some_garbage' }}",
         stage: "${{ needs.variables.outputs.stage }}",
       },
     },
