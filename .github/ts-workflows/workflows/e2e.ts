@@ -56,7 +56,7 @@ export default workflow({
         },
         {
           name: "Setup Doppler",
-          run: "doppler setup --config ${{ inputs.stage }} --project os",
+          run: "doppler setup --config ${{ inputs.stage || 'dev' }} --project os",
           env: {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },

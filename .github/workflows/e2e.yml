@@ -35,7 +35,7 @@ jobs:
       - name: Install Doppler CLI
         uses: dopplerhq/cli-action@v2
       - name: Setup Doppler
-        run: doppler setup --config ${{ inputs.stage }} --project os
+        run: doppler setup --config ${{ inputs.stage || 'dev' }} --project os
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
       - if: "!inputs.worker_url"
