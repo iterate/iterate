@@ -94,7 +94,8 @@ jobs:
           doppler run -- printenv >> .env
           echo "SLACK_CLIENT_ID=fake" >> .env
 
-          SLACK_CLIENT_ID=fake doppler run -- sh -c "SLACK_CLIENT_ID=fake pnpm dev" &
+          SLACK_CLIENT_ID=fake doppler run -- sh -c "SLACK_CLIENT_ID=fake2 printenv | grep SLACK_CLIENT_ID"
+          SLACK_CLIENT_ID=fake doppler run -- sh -c "SLACK_CLIENT_ID=fake pnpm tsx ./alchemy.run cli --dev --stage local-$USER" &
           DEV_PID=$!
 
           echo "Waiting for wrangler.jsonc to be created"
