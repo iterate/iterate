@@ -67,7 +67,7 @@ export const runPreviewServer = {
     doppler run -- printenv > apps/os/.env
 
     cd apps/os
-    pnpm preview &
+    pnpm dev &
 
     echo '
       const main = async () => {
@@ -86,6 +86,12 @@ export const runPreviewServer = {
       }
       await main();
     ' > wait.mjs
+
+    node wait.mjs
+
+    kill -9 $(lsof -t -i:5173)
+
+    pnpm preview &
 
     node wait.mjs
   `,
