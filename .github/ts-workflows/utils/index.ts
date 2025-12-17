@@ -68,7 +68,7 @@ export const runPreviewServer = {
     cd apps/os
 
     echo '
-      import * as fs from 'fs';
+      import * as fs from "fs";
       const waitFor = process.argv[2];
       const timeoutSeconds = Number(process.argv[3]);
 
