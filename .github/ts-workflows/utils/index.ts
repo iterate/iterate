@@ -110,7 +110,7 @@ export const runPreviewServer = {
     doppler run -- printenv >> .env
     echo "SLACK_CLIENT_ID=fake" >> .env
 
-    doppler run -- SLACK_CLIENT_ID=fake pnpm tsx ./alchemy.run cli --dev --stage local-$USER &
+    doppler run -- sh -c "SLACK_CLIENT_ID=fake pnpm tsx ./alchemy.run cli --dev --stage local-$USER" &
     DEV_PID=\$!
 
     echo "Waiting for wrangler.jsonc to be created"
@@ -121,7 +121,7 @@ export const runPreviewServer = {
 
     echo "Starting preview server"
 
-    SLACK_CLIENT_ID=fake doppler run -- SLACK_CLIENT_ID=fake pnpm preview &
+    SLACK_CLIENT_ID=fake doppler run -- sh -c "SLACK_CLIENT_ID=fake pnpm preview" &
 
     echo "Waiting for preview server to be ready"
 
