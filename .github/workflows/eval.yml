@@ -53,18 +53,22 @@ jobs:
 
           echo '
             import * as fs from "fs";
-            const waitFor = process.argv[2];
-            const timeoutSeconds = Number(process.argv[3]);
 
-            for (let i = 0; i < timeoutSeconds; i++) {
-              if (fs.existsSync(waitFor)) {
-                console.log(`${waitFor} exists`);
-                return;
+            const main = async () => {
+              const waitFor = process.argv[2];
+              const timeoutSeconds = Number(process.argv[3]);
+
+              for (let i = 0; i < timeoutSeconds; i++) {
+                if (fs.existsSync(waitFor)) {
+                  console.log(`${waitFor} exists`);
+                  return;
+                }
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                console.log(`${waitFor} not found yet, retrying ${i + 1}/${timeoutSeconds}`);
               }
-              await new Promise(resolve => setTimeout(resolve, 1000));
-              console.log(`${waitFor} not found yet, retrying ${i + 1}/${timeoutSeconds}`);
-            }
-            throw new Error(`${waitFor} not found after ${timeoutSeconds} seconds`);
+              throw new Error(`${waitFor} not found after ${timeoutSeconds} seconds`);
+            };
+            main();
           ' > wait-for-file.mjs
 
           echo '
