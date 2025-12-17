@@ -93,18 +93,21 @@ jobs:
           SLACK_CLIENT_ID=fake doppler run -- pnpm dev &
           DEV_PID=$!
 
-          SLACK_CLIENT_ID=fake doppler run -- pnpm build &
-          BUILD_PID=$!
+          echo "Waiting for wrangler.jsonc to be created"
 
           node wait-for-file.mjs "$(pwd)/.alchemy/local/wrangler.jsonc" 240
-          # kill dev process
+          echo "Wrangler.jsonc created, killing dev process"
           kill -9 $DEV_PID
 
-          wait
+          echo "Starting preview server"
 
           SLACK_CLIENT_ID=fake doppler run -- pnpm preview &
 
+          echo "Waiting for preview server to be ready"
+
           node wait-for-url.mjs "http://localhost:5173" 240
+
+          echo "Preview server ready"
       - name: run the tests
         run: |-
           cd apps/os
