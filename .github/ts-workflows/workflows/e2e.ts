@@ -1,4 +1,3 @@
-import dedent from "dedent";
 import { uses, workflow } from "@jlarky/gha-ts/workflow-types";
 import * as utils from "../utils/index.ts";
 

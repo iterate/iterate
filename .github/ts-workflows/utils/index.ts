@@ -92,7 +92,7 @@ export const runPreviewServer = {
 
     kill -9 $(lsof -t -i:5173)
 
-    pnpm preview &
+    SLACK_CLIENT_ID=fake pnpm preview &
 
     node wait.mjs
   `,
