@@ -324,7 +324,11 @@ export class IterateAgent<
   async scheduleKeepAlive() {
     if (this._keepAliveScheduled) return;
     this._keepAliveScheduled = true;
-    await this.schedule(KEEP_ALIVE_INTERVAL_SECONDS, "keepAlive");
+    await this.schedule(KEEP_ALIVE_INTERVAL_SECONDS, "keepAlive").catch((error) => {
+      this._keepAliveScheduled = false;
+      logger.error("Failed to schedule keep alive", error);
+      throw error;
+    });
   }
 
   async keepAlive() {
@@ -1775,6 +1779,7 @@ export class IterateAgent<
             });
           }
           await sleep(POLL_TIMEOUT_SECONDS * 1000);
+          data.pollCount = nextPollCount;
           continue;
         }
 
@@ -1789,7 +1794,7 @@ export class IterateAgent<
             text: `Deep research completed for query: "${data.query}"\n\nHere is the full research result:\n\n${content}`,
             triggerLLMRequest: true,
           });
-          return;
+          break;
         }
 
         // Unknown status - log and continue polling
@@ -1805,7 +1810,10 @@ export class IterateAgent<
           text: `Deep research polling error for run ${data.runId}: ${err}. The query was: "${data.query}"`,
           triggerLLMRequest: true,
         });
+        await sleep(POLL_TIMEOUT_SECONDS * 1000);
       }
+
+      data.pollCount += 1;
     }
 
     if (Date.now() > data.pollUntil) {
