@@ -196,7 +196,9 @@ export class EstateBuildManager extends Container {
       "builder-metadata",
     );
     if (metadata) return metadata;
-    const sampleBuild = this._sql.exec<{ id: string }>("SELECT id FROM builds").one();
+    const sampleBuild = this._sql
+      .exec<{ id: string }>("SELECT id FROM builds LIMIT 1")
+      .toArray()[0];
     if (!sampleBuild) throw new Error(`Attempted get metadata for builder, but no builds found`);
     const { estateId, orgId } = await this.db.query.builds
       .findFirst({
