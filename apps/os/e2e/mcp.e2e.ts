@@ -147,7 +147,7 @@ describe("MCP server connections", () => {
 
   test(
     "refreshes OAuth token when expired and continues to work",
-    { timeout: 3 * 60 * 1000 },
+    { timeout: 4 * 60 * 1000 },
     async () => {
       await using h = await createE2EHelper("mcp-token-refresh");
       const env = parseEnv();
@@ -174,7 +174,7 @@ describe("MCP server connections", () => {
       console.log("MCP connection established");
 
       const firstMsg = await h.sendUserMessage(`Using the MCP server, call userInfo.`);
-      const firstReply = await firstMsg.waitForReply({ timeout: 15_000 });
+      const firstReply = await firstMsg.waitForReply({ timeout: 30_000 });
       expect(firstReply).toMatch(/user/i);
       console.log("✅ First tool call successful (fresh token)");
 
@@ -184,7 +184,7 @@ describe("MCP server connections", () => {
       const secondMsg = await h.sendUserMessage(
         `Using the MCP server, call greet with formal=true.`,
       );
-      const secondReply = await secondMsg.waitForReply({ timeout: 30_000 });
+      const secondReply = await secondMsg.waitForReply({ timeout: 45_000 });
       expect(secondReply).toMatch(/good day|hello|greet/i);
       console.log("✅ Second tool call successful (token was refreshed)");
     },

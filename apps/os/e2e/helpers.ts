@@ -159,8 +159,6 @@ export async function createTestHelper({
     estateId,
   } as const;
 
-  await adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps);
-
   const uniqueSuffix = `${inputSlug.slice(0, 8)}_${Date.now().toString(36)}`;
   const fakeSlackUsers = {} as Record<string, { name: string; id: string }>;
   const aliceId = `TEST_${uniqueSuffix}_ALICE`;
@@ -179,29 +177,31 @@ export async function createTestHelper({
   }));
 
   const teamId = "TEST_TEAM";
-  await adminTrpcClient.testing.addSlackUsersToEstate.mutate({
-    estateId,
-    members: fakeMembers,
-    ...(userId && { linkToUserId: userId }),
-  });
 
-  await adminTrpcClient.testing.setupTeamId.mutate({
-    estateId,
-    teamId,
-  });
-
-  if (braintrustSpanExportedId)
-    await trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
-      ...agentProcedureProps,
-      braintrustParentSpanExportedId: braintrustSpanExportedId,
-    });
-
-  await addEvents([
-    {
-      type: "SLACK:UPDATE_SLICE_STATE",
-      data: { slackChannelId: channel, slackThreadId: threadTs },
-      triggerLLMRequest: false,
-    },
+  await Promise.all([
+    adminTrpcClient.testing.mockSlackAPI.mutate(agentProcedureProps),
+    adminTrpcClient.testing.addSlackUsersToEstate.mutate({
+      estateId,
+      members: fakeMembers,
+      ...(userId && { linkToUserId: userId }),
+    }),
+    adminTrpcClient.testing.setupTeamId.mutate({
+      estateId,
+      teamId,
+    }),
+    braintrustSpanExportedId
+      ? trpcClient.agents.setBraintrustParentSpanExportedId.mutate({
+          ...agentProcedureProps,
+          braintrustParentSpanExportedId: braintrustSpanExportedId,
+        })
+      : Promise.resolve(),
+    addEvents([
+      {
+        type: "SLACK:UPDATE_SLICE_STATE",
+        data: { slackChannelId: channel, slackThreadId: threadTs },
+        triggerLLMRequest: false,
+      },
+    ]),
   ]);
 
   async function addEvents(
@@ -259,7 +259,7 @@ export async function createTestHelper({
         }
         return null;
       },
-      { timeout: 20_000, interval: 300, ...options },
+      { timeout: 20_000, interval: 100, ...options },
     );
   };
 
@@ -315,25 +315,49 @@ export async function createTestHelper({
       body: rawBody,
     });
 
-    const eventsAtSend = await getEvents();
+    // Wait until our specific message appears in events and get its event index
+    const messageTs = event.ts;
+    const ourMessageEventIndex = await vi.waitUntil(
+      async () => {
+        const events = await getEvents();
+        const ourEvent = events.find(
+          (e) =>
+            e.type === "SLACK:WEBHOOK_EVENT_RECEIVED" &&
+            (e.data as { payload?: { event?: { ts?: string } } })?.payload?.event?.ts === messageTs,
+        );
+        return ourEvent?.eventIndex ?? null;
+      },
+      { timeout: 10_000, interval: 100 },
+    );
 
     const waitForReply = async (options?: WaitUntilOptions) => {
-      const reply = await waitForEvent("CORE:LOCAL_FUNCTION_TOOL_CALL", eventsAtSend, {
-        select: (e) => {
-          if (e.data.call.status !== "completed" || e.data.call.name !== "sendSlackMessage") return;
-          const { text, endTurn } = JSON.parse(e.data.call.arguments) as {
-            text: string;
-            endTurn?: boolean;
-          };
-          return endTurn ? text : undefined;
+      // Look for sendSlackMessage events that come AFTER our specific message
+      const reply = await vi.waitUntil(
+        async () => {
+          const events: AgentEvent[] = (await getEvents()) as never;
+          for (const event of events) {
+            if (event.type !== "CORE:LOCAL_FUNCTION_TOOL_CALL") continue;
+            if (event.eventIndex <= ourMessageEventIndex) continue;
+            const data = event.data as {
+              call: { status: string; name: string; arguments: string };
+            };
+            if (data.call.status !== "completed" || data.call.name !== "sendSlackMessage") continue;
+            const { text, endTurn } = JSON.parse(data.call.arguments) as {
+              text: string;
+              endTurn?: boolean;
+            };
+            if (endTurn) return text;
+          }
+          return null;
         },
-        ...(options as {}),
-      });
+        { timeout: 20_000, interval: 100, ...options },
+      );
       logger.info(`[${agentName}] Received reply: ${reply}`);
       return reply;
     };
 
-    return { events: eventsAtSend, waitForReply };
+    // Return our message's event index for reference
+    return { events: [{ eventIndex: ourMessageEventIndex }], waitForReply };
   };
 
   const waitForCompletedToolCall = async <T>(
