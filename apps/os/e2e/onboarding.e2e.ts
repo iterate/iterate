@@ -33,10 +33,29 @@ test("onboarding", { timeout: 15 * 60 * 1000 }, async () => {
     await adminTrpc.testing.deleteIterateManagedRepo.mutate({ repoFullName: foundRepo.full_name });
   });
 
-  // ideally we'd rely on the github webhook, but then this won't work outside of prod/staging
-  await userTrpc.estate.triggerRebuild.mutate({ estateId, target: "main", useExisting: true });
-
   console.log(`Found repository in available repos: ${foundRepo?.full_name}`);
+
+  // Wait for the GitHub template repo to be fully created (branch may not be immediately available)
+  await vi.waitUntil(
+    async () => {
+      try {
+        await userTrpc.estate.triggerRebuild.mutate({
+          estateId,
+          target: "main",
+          useExisting: true,
+        });
+        return true;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (message.includes("Branch not found") || message.includes("Not Found")) {
+          console.log("Waiting for main branch to be available...");
+          return false;
+        }
+        throw error;
+      }
+    },
+    { interval: 2000, timeout: 60_000 },
+  );
 
   console.log("Waiting for initial build to complete...");
 

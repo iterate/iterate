@@ -109,7 +109,10 @@ async function buildConfig(options: BuildConfigInput) {
       }),
       log,
     );
-    if (clone.exitCode !== 0) return;
+    if (clone.exitCode !== 0) {
+      await log({ event: "error", data: `Git clone failed with exit code ${clone.exitCode}` });
+      return;
+    }
 
     await log({
       event: "info",
@@ -126,7 +129,10 @@ async function buildConfig(options: BuildConfigInput) {
       }),
       log,
     );
-    if (install.exitCode !== 0) return;
+    if (install.exitCode !== 0) {
+      await log({ event: "error", data: `pnpm install failed with exit code ${install.exitCode}` });
+      return;
+    }
 
     await log({
       event: "info",
