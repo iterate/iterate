@@ -69,6 +69,8 @@ export class EstateBuildManager extends Container {
             created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS build_log_lines_build_idx ON build_log_lines (build_id, idx);
     `);
 
     waitUntil(
@@ -173,9 +175,8 @@ export class EstateBuildManager extends Container {
       .toArray();
 
     if (buildsInProgress.length === 0) {
-      // stop the container if there are no in-progress builds
-      this.stop();
       this.stopRequested = true;
+      this.stop();
     }
   }
 
@@ -240,15 +241,20 @@ export class EstateBuildManager extends Container {
     );
 
     for (const { buildId, logs } of logsResponse) {
-      this._sql.exec(`delete from build_log_lines where build_id = ?`, buildId);
       for (const [index, data] of logs.entries()) {
         this._sql.exec(
-          `insert into build_log_lines (build_id, data, idx) values (?, ?, ?)`,
+          `INSERT OR REPLACE INTO build_log_lines (build_id, data, idx, created_at, updated_at) 
+           VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
           buildId,
           JSON.stringify(data),
           index,
         );
       }
+      this._sql.exec(
+        `DELETE FROM build_log_lines WHERE build_id = ? AND idx >= ?`,
+        buildId,
+        logs.length,
+      );
     }
   }
 
@@ -358,10 +364,15 @@ export class EstateBuildManager extends Container {
       waitUntil(
         (async () => {
           const reader = res.body?.getReader();
-          if (!reader) return;
-          // wait till sse stream is closed
+          if (!reader) {
+            resolve();
+            return;
+          }
+          const timeoutPromise = new Promise<{ done: true; value: undefined }>((r) =>
+            setTimeout(() => r({ done: true, value: undefined }), TIMEOUT_TIME),
+          );
           while (true) {
-            const { done } = await reader.read();
+            const { done } = await Promise.race([reader.read(), timeoutPromise]);
             if (done) {
               resolve();
               break;
