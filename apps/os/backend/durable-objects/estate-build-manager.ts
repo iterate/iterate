@@ -140,8 +140,20 @@ export class EstateBuildManager extends Container {
   }
 
   public async getSSELogStream(buildId: string) {
-    waitUntil(this.syncLogsForAllOngoingBuilds());
+    // Check if build is completed - if so, serve from database directly
+    const build = this._sql
+      .exec<{ status: string }>("SELECT status FROM builds WHERE id = ?", buildId)
+      .toArray()[0];
 
+    if (build && build.status !== "in_progress") {
+      const logLines = this.getLogsFromDatabase(buildId);
+      if (logLines.length > 0) {
+        return intoImmediateSSEResponse(logLines);
+      }
+      // Build completed but no logs - try to sync from container if running
+    }
+
+    // Build is in progress or completed without logs - try streaming from container
     if (this.ctx.container?.running && !this.stopRequested) {
       const logsRes = await Promise.race([
         this.containerFetch(
@@ -152,17 +164,58 @@ export class EstateBuildManager extends Container {
       ]);
 
       if (!logsRes.ok) {
-        // If the current container doesn't have the logs, they might be old logs, try to fetch them from the database
+        // SSE endpoint failed - try to sync from JSON endpoint
+        await this.syncLogsForBuild(buildId);
         const logLines = this.getLogsFromDatabase(buildId);
         return intoImmediateSSEResponse(logLines);
       }
 
       return logsRes;
-    } else {
-      // If the container is not running, fetch the logs from the database
-      const logLines = this.getLogsFromDatabase(buildId);
-      return intoImmediateSSEResponse(logLines);
     }
+
+    // Container not running - serve whatever we have from database
+    const logLines = this.getLogsFromDatabase(buildId);
+    return intoImmediateSSEResponse(logLines);
+  }
+
+  private async syncLogsForBuild(buildId: string) {
+    if (!this.ctx.container?.running) return;
+
+    try {
+      const logRes = await this.containerFetch(
+        new Request(`http://localhost:3000/logs?buildId=${buildId}`),
+        3000,
+      );
+      if (!logRes.ok) return;
+
+      const logs = await logRes
+        .json<{ logs: Array<Log> }>()
+        .catch(() => ({ logs: <Array<Log>>[] }));
+
+      this.persistLogsToDatabase(buildId, logs.logs);
+    } catch {
+      // Ignore errors - we'll fall back to whatever is in the database
+    }
+  }
+
+  private persistLogsToDatabase(buildId: string, logs: Log[]) {
+    // Don't persist empty logs - this would delete existing logs
+    if (logs.length === 0) return;
+
+    for (const [index, log] of logs.entries()) {
+      this._sql.exec(
+        `INSERT OR REPLACE INTO build_log_lines (build_id, data, idx, created_at, updated_at) 
+         VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        buildId,
+        JSON.stringify(log),
+        index,
+      );
+    }
+    this._sql.exec(
+      `DELETE FROM build_log_lines WHERE build_id = ? AND idx >= ?`,
+      buildId,
+      logs.length,
+    );
   }
 
   async onActivityExpired() {
@@ -186,7 +239,11 @@ export class EstateBuildManager extends Container {
         .exec("select data, idx from build_log_lines where build_id = ?", buildId)
         .toArray()
         .sort((a, b) => Number(a.idx) - Number(b.idx)); // for some reason order by in the sql statement makes the whole thing fail
-      return lines.map((line) => JSON.parse(line.data as string) as Log);
+      return lines
+        .map((line) => JSON.parse(line.data as string) as Log)
+        .filter(
+          (log) => log.data.trim() !== "" || log.event === "complete" || log.event === "error",
+        );
     } catch {
       return [];
     }
@@ -220,41 +277,32 @@ export class EstateBuildManager extends Container {
 
   private async syncLogsForAllOngoingBuilds() {
     if (!this.ctx.container?.running) return;
-    const ongoingBuilds = this._sql
-      .exec<{ id: string }>("SELECT id FROM builds WHERE status = 'in_progress'")
+
+    // Sync in_progress builds AND any builds that have no logs yet (may have completed before sync)
+    const buildsToSync = this._sql
+      .exec<{ id: string }>(
+        `SELECT DISTINCT b.id FROM builds b 
+         LEFT JOIN build_log_lines l ON b.id = l.build_id 
+         WHERE b.status = 'in_progress' OR l.build_id IS NULL`,
+      )
       .toArray();
 
-    if (ongoingBuilds.length === 0) return;
+    if (buildsToSync.length === 0) return;
 
     const logsResponse = await Promise.all(
-      ongoingBuilds.map(async (build) => {
+      buildsToSync.map(async (build) => {
         const logRes = await this.containerFetch(
           new Request(`http://localhost:3000/logs?buildId=${build.id}`),
           3000,
         );
-        if (!logRes.ok) return { buildId: build.id, logs: [] };
-        const logs = await logRes
-          .json<{ logs: Array<Log> }>()
-          .catch(() => ({ logs: <Array<Log>>[] }));
+        if (!logRes.ok) return { buildId: build.id, logs: [] as Log[] };
+        const logs = await logRes.json<{ logs: Log[] }>().catch(() => ({ logs: [] as Log[] }));
         return { buildId: build.id, logs: logs.logs };
       }),
     );
 
     for (const { buildId, logs } of logsResponse) {
-      for (const [index, data] of logs.entries()) {
-        this._sql.exec(
-          `INSERT OR REPLACE INTO build_log_lines (build_id, data, idx, created_at, updated_at) 
-           VALUES (?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-          buildId,
-          JSON.stringify(data),
-          index,
-        );
-      }
-      this._sql.exec(
-        `DELETE FROM build_log_lines WHERE build_id = ? AND idx >= ?`,
-        buildId,
-        logs.length,
-      );
+      this.persistLogsToDatabase(buildId, logs);
     }
   }
 
@@ -356,7 +404,12 @@ export class EstateBuildManager extends Container {
         new Request(`http://localhost:3000/wait-for-build?buildId=${build.id}`),
         3000,
       );
-      if (!res.ok) continue;
+      if (!res.ok) {
+        // Build might have already completed - sync its logs before continuing
+        await this.syncLogsForBuild(build.id);
+        await this.handleTerminatingLogs();
+        continue;
+      }
 
       const { promise, resolve } = Promise.withResolvers<void>();
 
