@@ -1091,22 +1091,40 @@ export const defaultContextRules = defineRules([
 
       ### Saving Skills
 
-      If the user asks you to save a skill:
-      1. Copy the skill files to your estate repository's \`skills/\` folder (create it if it doesn't exist)
-      2. Use a descriptive folder name based on the skill name, e.g., \`skills/data-analysis/\`
+      If the user asks you to save a skill so it's automatically loaded by iterate:
+
+      1. Save the skill as a markdown file in your estate repository's \`rules/\` folder (create it if it doesn't exist)
+         - Use a descriptive filename based on the skill name, e.g., \`rules/data-analysis.md\`
+         - The file path relative to the repository root will be automatically added as a header comment when loaded
+
+      2. Update \`iterate.config.ts\` in the estate repository root to include the skill using \`contextRulesFromFiles\`:
+         \`\`\`typescript
+         import { defineConfig, contextRulesFromFiles } from "@iterate-com/sdk";
+
+         const config = defineConfig({
+           contextRules: [...contextRulesFromFiles("rules/**/*.md")],
+         });
+         export default config;
+         \`\`\`
+         If \`iterate.config.ts\` already exists with \`contextRulesFromFiles("rules/**/*.md")\`, no changes are needed.
+         If it exists but doesn't include the rules pattern, add it to the \`contextRules\` array.
+
       3. Create a branch, commit the changes, push, and open a pull request
-      4. The skill will be available for future use once the PR is merged
 
       Example:
       \`\`\`bash
       git checkout -b add-my-skill
-      mkdir -p skills/my-skill
-      cp -r /tmp/skill/* skills/my-skill/
-      git add skills/my-skill
+      mkdir -p rules
+      # Convert the SKILL.md to a rules file
+      cp /tmp/skill/SKILL.md rules/my-skill.md
+      # Update iterate.config.ts if needed (check if contextRulesFromFiles already includes rules/**/*.md)
+      git add rules/my-skill.md iterate.config.ts
       git commit -m "Add my-skill"
       git push -u origin add-my-skill
       gh pr create --title "Add my-skill" --body "Adds the my-skill skill to the estate repository"
       \`\`\`
+
+      The skill will be automatically loaded in future conversations once the PR is merged.
 
       Note: If a previous prompt or context rule specifies a different location for skills, use that instead.
     `,
