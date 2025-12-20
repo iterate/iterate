@@ -12,6 +12,7 @@ build/
 routeTree.gen.ts
 worker-configuration.d.ts
 logs.json
+.github/workflows/
 
 # Git
 .git/
