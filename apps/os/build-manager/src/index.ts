@@ -45,26 +45,67 @@ type Log = {
   data: string;
 };
 
+function createBatchLogger(logFilePath: string) {
+  let buffer: Log[] = [];
+  let flushTimer: ReturnType<typeof setTimeout> | null = null;
+  const FLUSH_INTERVAL_MS = 100;
+
+  const flush = async () => {
+    if (buffer.length === 0) return;
+    const toWrite = buffer;
+    buffer = [];
+    const lines = toWrite.map((log) => JSON.stringify(log)).join("\n") + "\n";
+    await appendFile(logFilePath, lines);
+    for (const log of toWrite) {
+      console.log(JSON.stringify(log));
+    }
+  };
+
+  const scheduleFlush = () => {
+    if (flushTimer) return;
+    flushTimer = setTimeout(async () => {
+      flushTimer = null;
+      await flush();
+    }, FLUSH_INTERVAL_MS);
+  };
+
+  return {
+    log: async (log: Log) => {
+      buffer.push(log);
+      if (log.event === "complete" || log.event === "error") {
+        if (flushTimer) {
+          clearTimeout(flushTimer);
+          flushTimer = null;
+        }
+        await flush();
+      } else {
+        scheduleFlush();
+      }
+    },
+    flush,
+  };
+}
+
 async function buildConfig(options: BuildConfigInput) {
   const { repo, branch, path, authToken, buildId } = options;
   const targetDir = join(process.cwd(), "builds", buildId);
   const logFilePath = join(process.cwd(), "logs", `${buildId}.jsonl`);
   console.log(`Writing logs to ${logFilePath}`);
 
-  const log = async (log: Log) => {
-    console.log(JSON.stringify(log));
-    await appendFile(logFilePath, JSON.stringify(log) + "\n");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  };
+  const logger = createBatchLogger(logFilePath);
+  const log = logger.log;
   await mkdir(targetDir, { recursive: true });
 
   try {
-    // Mask auth token for logging
-    if (options.authToken)
-      options.authToken = options.authToken.slice(0, 4) + "*".repeat(options.authToken.length - 4);
+    const maskedOptions = {
+      ...options,
+      authToken: options.authToken
+        ? options.authToken.slice(0, 4) + "*".repeat(options.authToken.length - 4)
+        : undefined,
+    };
     await log({
       event: "info",
-      data: `Build started with config: ${JSON.stringify(options)}`,
+      data: `Build started with config: ${JSON.stringify(maskedOptions)}`,
     });
 
     if (authToken) {
@@ -207,18 +248,27 @@ app.post(
   ),
   async (c) => {
     const { buildId, repo, branch, path, authToken } = c.req.valid("json");
+
+    if (runningBuilds.has(buildId)) {
+      return c.json({
+        error: "Build is already triggered, use `/logs` to get the logs",
+      });
+    }
+    runningBuilds.set(buildId, Promise.resolve());
+
     await mkdir(join(process.cwd(), "logs"), { recursive: true });
     const logFile = join(process.cwd(), "logs", `${buildId}.jsonl`);
     const isBuilding = await access(logFile)
       .then(() => true)
       .catch(() => false);
 
-    if (isBuilding || runningBuilds.has(buildId))
+    if (isBuilding) {
+      runningBuilds.delete(buildId);
       return c.json({
         error: "Build is already triggered, use `/logs` to get the logs",
       });
+    }
 
-    // Run build in background
     const buildPromise = buildConfig({ buildId, repo, branch, path, authToken });
     runningBuilds.set(buildId, buildPromise);
     buildPromise.finally(() => runningBuilds.delete(buildId));
@@ -287,23 +337,39 @@ app.get(
         await file.start();
         const { promise, resolve, reject } = Promise.withResolvers();
 
+        const cleanup = async () => {
+          rl.close();
+          await file.quit();
+        };
+
+        const timeout = setTimeout(
+          async () => {
+            await api.writeSSE({ event: "error", data: "Build timed out waiting for logs" });
+            await api.close();
+            await cleanup();
+            resolve(null);
+          },
+          10 * 60 * 1000,
+        );
+
         rl.on("line", async (line) => {
           const log = tryParseLogLine(line);
           if (!log) return;
           await api.writeSSE({ event: log.event, data: log.data });
-          // Close SSE stream when build is complete or failed
           if (log.event === "complete" || log.event === "error") {
+            clearTimeout(timeout);
             await api.close();
-            rl.close();
+            await cleanup();
             resolve(null);
           }
         });
 
         file.on("error", async (error) => {
+          clearTimeout(timeout);
           console.error(`Error reading log file`, error);
           await api.writeSSE({ event: "error", data: String(error) });
           await api.close();
-          rl.close();
+          await cleanup();
           reject(error);
         });
         await promise;

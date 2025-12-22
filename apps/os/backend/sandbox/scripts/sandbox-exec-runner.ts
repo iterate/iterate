@@ -106,6 +106,7 @@ async function start() {
       complete: true,
     });
     await logStreamer.flush();
+    await logStreamer.stop();
     process.exit(exitCode);
   } catch (error) {
     logStreamer.enqueue({
@@ -119,9 +120,8 @@ async function start() {
       complete: true,
     });
     await logStreamer.flush();
-    process.exit(1);
-  } finally {
     await logStreamer.stop();
+    process.exit(1);
   }
 }
 
