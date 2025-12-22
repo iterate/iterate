@@ -442,10 +442,11 @@ export function contextRulesFromFiles(pattern: string, overrides: Partial<Contex
       const { frontMatter, body } = parseFrontMatter(fileContent);
 
       const defaultKey = filePath.replace(/\.md$/, "");
+      const promptWithHeader = `<!-- Source: ${filePath} -->\n\n${body}`;
 
       return defineRule({
         key: defaultKey,
-        prompt: body,
+        prompt: promptWithHeader,
         ...frontMatter,
         ...overrides,
       });
