@@ -72,7 +72,9 @@ async function setupRepo(opts: {
   if (clone.exitCode !== 0) throw new Error(`Clone failed: ${clone.stderr}`);
 
   if (isCommitHash) {
-    const fetch = await execCommand("git", ["fetch", "--depth", "1", "origin", checkoutTarget], { cwd: sessionDir });
+    const fetch = await execCommand("git", ["fetch", "--depth", "1", "origin", checkoutTarget], {
+      cwd: sessionDir,
+    });
     if (fetch.exitCode !== 0) throw new Error(`Fetch failed: ${fetch.stderr}`);
     const co = await execCommand("git", ["checkout", checkoutTarget], { cwd: sessionDir });
     if (co.exitCode !== 0) throw new Error(`Checkout failed: ${co.stderr}`);

@@ -14,6 +14,7 @@ import Replicate from "replicate";
 import { toFile, type Uploadable } from "openai";
 import type { ToFileInput } from "openai/uploads";
 import { match, P } from "ts-pattern";
+import { getContainer } from "@cloudflare/containers";
 import { logger } from "../tag-logger.ts";
 import { env, waitUntil, type CloudflareEnv } from "../../env.ts";
 import { getDb, schema, type DB } from "../db/client.ts";
@@ -45,7 +46,6 @@ import {
 } from "../integrations/github/github-utils.ts";
 import { stubStub } from "../stub-stub.ts";
 import { recentActiveSources } from "../db/helpers.ts";
-import { getContainer } from "@cloudflare/containers";
 import * as codemode from "./codemode.ts";
 import type { AgentTraceExport, FileMetadata } from "./agent-export-types.ts";
 import type { MCPParam } from "./tool-schemas.ts";
