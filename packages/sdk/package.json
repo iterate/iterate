@@ -20,7 +20,7 @@
     "./tsconfig.json": "./tsconfig.json"
   },
   "dependencies": {
-    "dedent": "^1.7.0",
+    "dedent": "^1.7.1",
     "zod": "^4.1.13",
     "yaml": "^2.8.2"
   }

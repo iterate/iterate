@@ -15,7 +15,7 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
-    "dedent": "^1.7.0",
+    "dedent": "^1.7.1",
     "typescript": "^5.9.3",
     "vibe-rules": "^0.3.91"
   }
