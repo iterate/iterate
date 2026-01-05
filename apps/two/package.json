@@ -1,0 +1,22 @@
+{
+  "name": "@iterate-com/two",
+  "type": "module",
+  "version": "0.0.1",
+  "scripts": {
+    "dev": "node --experimental-strip-types --watch src/index.ts",
+    "start": "node --experimental-strip-types src/index.ts",
+    "typecheck": "tsc -b"
+  },
+  "dependencies": {
+    "effect": "^3.16.0",
+    "@effect/platform": "^0.76.1",
+    "@effect/platform-node": "^0.72.1",
+    "@effect/sql": "^0.29.1",
+    "@effect/sql-sqlite-node": "^0.30.1",
+    "@effect/experimental": "^0.40.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  }
+}
