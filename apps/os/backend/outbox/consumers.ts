@@ -12,7 +12,6 @@ import { env } from "../../env.ts";
 import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../integrations/stripe/stripe.ts";
 import { createGithubRepoInEstatePool } from "../org-utils.ts";
-import { getOrCreateAgentStubByRoute } from "../agent/agents/stub-getters.ts";
 import { outboxClient as cc } from "./client.ts";
 
 export const registerConsumers = () => {
@@ -124,16 +123,6 @@ export const registerConsumers = () => {
       if (!user) throw new Error("Missing user to create Stripe customer");
 
       await createStripeCustomerAndSubscriptionForOrganization(db, estate.organization, user);
-
-      await db
-        .insert(schema.estateOnboardingEvent)
-        .values({
-          estateId,
-          organizationId: estate.organizationId,
-          eventType: "StripeCustomerCreated",
-          category: "system",
-        })
-        .onConflictDoNothing();
     },
   });
 
@@ -174,40 +163,6 @@ export const registerConsumers = () => {
           repoId: repo.id,
           branch: repo.default_branch,
           accountId: env.GITHUB_ESTATES_DEFAULT_INSTALLATION_ID,
-        })
-        .onConflictDoNothing();
-    },
-  });
-
-  cc.registerConsumer({
-    name: "warmOnboardingAgent",
-    on: "estate:created",
-    async handler(params) {
-      const { estateId } = params.payload;
-      const db = getDb();
-
-      const estate = await db.query.estate.findFirst({
-        where: eq(schema.estate.id, estateId),
-      });
-      if (!estate) throw new Error(`Estate ${estateId} not found`);
-      if (!estate.onboardingAgentName)
-        throw new Error(`Estate ${estateId} has no onboardingAgentName`);
-
-      const agent = await getOrCreateAgentStubByRoute("OnboardingAgent", {
-        db,
-        estateId,
-        route: estate.onboardingAgentName,
-        reason: `Provisioned via estate onboarding outbox for estate named ${estate.name}`,
-      });
-      await agent.doNothing();
-
-      await db
-        .insert(schema.estateOnboardingEvent)
-        .values({
-          estateId,
-          organizationId: estate.organizationId,
-          eventType: "OnboardingAgentWarmed",
-          category: "system",
         })
         .onConflictDoNothing();
     },

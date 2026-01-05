@@ -166,9 +166,6 @@ export const estate = pgTable("estate", (t) => ({
     .text()
     .notNull()
     .references(() => organization.id, { onDelete: "cascade" }),
-  // Onboarding agent name. Semantics: if null, user is done with onboarding.
-  // If not null, use that agent to get onboarding information from it.
-  onboardingAgentName: t.text(),
   ...withTimestamps,
 }));
 
@@ -406,7 +403,7 @@ export const agentInstance = pgTable(
       .text()
       .notNull()
       .references(() => estate.id, { onDelete: "cascade" }),
-    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent" | "OnboardingAgent"
+    className: t.text().notNull(), // e.g. "IterateAgent" | "SlackAgent"
     durableObjectName: t.text().notNull(),
     durableObjectId: t.text().notNull(),
     routingKey: t.text().unique(), // todo: make not null?
@@ -576,33 +573,6 @@ export const mcpConnectionParamRelations = relations(mcpConnectionParam, ({ one 
     references: [estate.id],
   }),
 }));
-
-// Estate events (append-only, immutable)
-export const estateOnboardingEvent = pgTable(
-  "estate_onboarding_event",
-  (t) => ({
-    id: iterateId("onbe"),
-    estateId: t
-      .text()
-      .notNull()
-      .references(() => estate.id, { onDelete: "cascade" }),
-    organizationId: t
-      .text()
-      .notNull()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    eventType: t.text().notNull(),
-    category: t.text({ enum: ["system", "user"] }).notNull(),
-    detail: t.text(),
-    metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
-    ...withTimestamps,
-  }),
-  (t) => [
-    uniqueIndex().on(t.estateId, t.eventType),
-    index().on(t.estateId),
-    index().on(t.estateId, t.category),
-    index().on(t.category),
-  ],
-);
 
 export const outboxEvent = pgTable("outbox_event", (t) => ({
   id: bigserial("id", { mode: "number" }).primaryKey(),

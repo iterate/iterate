@@ -1,1 +1,1 @@
-export type SystemTaskType = "CreateStripeCustomer" | "WarmOnboardingAgent";
+export type SystemTaskType = "CreateStripeCustomer";

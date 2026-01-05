@@ -30,8 +30,6 @@ import {
 } from "../../integrations/github/github-utils.ts";
 import { schema, type DB } from "../../db/client.ts";
 import { type CloudflareEnv } from "../../../env.ts";
-import type { OnboardingData } from "../../agent/onboarding-agent.ts";
-import { getAgentStubByName, toAgentClassName } from "../../agent/agents/stub-getters.ts";
 import { slackChannelOverrideExists } from "../../utils/trial-channel-setup.ts";
 import { logger } from "../../tag-logger.ts";
 import { recentActiveSources } from "../../db/helpers.ts";
@@ -214,7 +212,6 @@ export const estateRouter = router({
       id: userEstate.id,
       name: userEstate.name,
       organizationId: userEstate.organizationId,
-      onboardingAgentName: userEstate.onboardingAgentName ?? null,
       isTrialEstate: isTrial,
       organization: org
         ? {
@@ -714,112 +711,6 @@ export const estateRouter = router({
       }));
     }),
 
-  getOnboardingStatus: estateProtectedProcedure.query(async ({ ctx }) => {
-    const estateId = ctx.estate.id;
-
-    // Get the estate with onboarding agent name
-    const estateData = await ctx.db.query.estate.findFirst({
-      where: eq(estate.id, estateId),
-    });
-
-    if (!estateData) {
-      throw new Error("Estate not found");
-    }
-
-    // If no onboarding agent name, onboarding is completed
-    if (!estateData.onboardingAgentName) {
-      return {
-        status: "completed" as const,
-        agentName: null,
-        onboardingData: null,
-      };
-    }
-
-    // Find the agent instance for this estate and agent name
-    const agent = await ctx.db.query.agentInstance.findFirst({
-      where: and(
-        eq(agentInstance.estateId, estateId),
-        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
-      ),
-    });
-
-    if (!agent) {
-      return {
-        status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
-        onboardingData: {},
-      };
-    }
-
-    try {
-      // Get the agent stub using the existing helper
-      const stub = await getAgentStubByName(toAgentClassName(agent.className), {
-        db: ctx.db,
-        agentInstanceName: agent.durableObjectName,
-      });
-
-      const response = await stub.raw.fetch("http://do/state" as never);
-      const state = (await response.json()) as { onboardingData?: OnboardingData };
-
-      return {
-        status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
-        onboardingData: state.onboardingData ?? {},
-      };
-    } catch (_error) {
-      // If we can't fetch the state, return empty onboarding data
-      return {
-        status: "in-progress" as const,
-        agentName: estateData.onboardingAgentName,
-        onboardingData: {},
-      };
-    }
-  }),
-
-  // Get latest onboarding results by calling the agent's getResults() tool
-  getOnboardingResults: estateProtectedProcedure.query(async ({ ctx }) => {
-    const estateId = ctx.estate.id;
-
-    // Read the onboarding agent name from the estate
-    const estateData = await ctx.db.query.estate.findFirst({
-      where: eq(estate.id, estateId),
-    });
-
-    if (!estateData?.onboardingAgentName) {
-      return { results: {} as Record<string, unknown> };
-    }
-
-    // Find the agent instance for this estate and agent name
-    const agent = await ctx.db.query.agentInstance.findFirst({
-      where: and(
-        eq(agentInstance.estateId, estateId),
-        eq(agentInstance.durableObjectName, estateData.onboardingAgentName),
-      ),
-    });
-
-    if (!agent) {
-      return { results: {} as Record<string, unknown> };
-    }
-
-    // Get the agent stub and call getResults() if it's an OnboardingAgent
-    const stub = await getAgentStubByName(toAgentClassName(agent.className), {
-      db: ctx.db,
-      agentInstanceName: agent.durableObjectName,
-    });
-
-    // Narrow to onboarding agent based on class name
-    if (agent.className === "OnboardingAgent") {
-      try {
-        const results = await (stub as any).getResults({});
-        return { results: results ?? {} };
-      } catch (_err) {
-        return { results: {} as Record<string, unknown> };
-      }
-    }
-
-    return { results: {} as Record<string, unknown> };
-  }),
-
   triggerRebuild: githubInstallationScopedProcedure
     .input(
       z.object({
@@ -915,42 +806,5 @@ export const estateRouter = router({
         })
         .returning();
       return { updated: updated.length };
-    }),
-
-  // Mark a user onboarding step as completed
-  completeUserOnboardingStep: estateProtectedProcedure
-    .input(
-      z.object({
-        step: z.enum(["confirm_org", "slack"]),
-        detail: z.string().optional(),
-      }),
-    )
-    .mutation(async ({ ctx, input }) => {
-      await ctx.db.transaction(async (tx) => {
-        // Append immutable confirmation event
-        await tx
-          .insert(schema.estateOnboardingEvent)
-          .values({
-            estateId: ctx.estate.id,
-            organizationId: ctx.estate.organizationId,
-            eventType: input.step === "confirm_org" ? "OrgNameConfirmed" : "SlackAdded",
-            category: "user",
-            detail: input.detail ?? null,
-            metadata: { skipped: false },
-          })
-          .onConflictDoNothing();
-
-        await tx
-          .insert(schema.estateOnboardingEvent)
-          .values({
-            estateId: input.estateId,
-            organizationId: ctx.estate.organizationId,
-            eventType: "OnboardingCompleted",
-            category: "user",
-          })
-          .onConflictDoNothing();
-      });
-
-      return { success: true } as const;
     }),
 });

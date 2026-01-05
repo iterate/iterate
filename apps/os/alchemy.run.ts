@@ -264,14 +264,6 @@ async function setupDurableObjects() {
     },
   );
 
-  const ONBOARDING_AGENT = DurableObjectNamespace<import("./backend/worker.ts").OnboardingAgent>(
-    "onboarding-agent",
-    {
-      className: "OnboardingAgent",
-      sqlite: true,
-    },
-  );
-
   const ORGANIZATION_WEBSOCKET = DurableObjectNamespace<
     import("./backend/worker.ts").OrganizationWebSocket
   >("organization-websocket", {
@@ -305,7 +297,6 @@ async function setupDurableObjects() {
   return {
     ITERATE_AGENT,
     SLACK_AGENT,
-    ONBOARDING_AGENT,
     ORGANIZATION_WEBSOCKET,
     SANDBOX,
     ADVISORY_LOCKER,

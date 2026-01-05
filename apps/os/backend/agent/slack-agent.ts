@@ -19,7 +19,6 @@ import {
 import { getFileContent, uploadFileFromURL } from "../file-handlers.ts";
 import { ensureUserSynced } from "../integrations/slack/slack.ts";
 import { slackChannelOverrideExists } from "../utils/trial-channel-setup.ts";
-import { getDefaultOnboardingAgentName } from "../org-utils.ts";
 import type { AgentCoreDeps, MergedEventForSlices } from "./agent-core.ts";
 import type { DOToolDefinitions } from "./do-tools.ts";
 import { iterateAgentTools } from "./iterate-agent-tools.ts";
@@ -44,8 +43,6 @@ import {
 } from "./slack-agent-utils.ts";
 import type { MagicAgentInstructions } from "./magic.ts";
 import { createSlackAPIMock } from "./slack-api-mock.ts";
-import { getOrCreateAgentStubByRoute } from "./agents/stub-getters.ts";
-import type { ContextRule } from "./context-schemas.ts";
 import type { AgentInitParams } from "./iterate-agent.ts";
 import { getConnectionKey } from "./mcp/mcp-slice.ts";
 
@@ -200,36 +197,6 @@ export class SlackAgent extends IterateAgent<SlackAgentSlices> implements ToolsI
       ...iterateAgentTools,
       ...slackAgentTools,
     };
-  }
-
-  protected async getContextRules(): Promise<ContextRule[]> {
-    const rules = await super.getContextRules();
-
-    // Check if estate has an onboarding agent configured
-    if (this.estate.onboardingAgentName) {
-      try {
-        // Get a stub for the onboarding agent
-        const onboardingAgentStub = await getOrCreateAgentStubByRoute("OnboardingAgent", {
-          db: this.db,
-          estateId: this.estate.id,
-          route: getDefaultOnboardingAgentName(this.estate.id),
-          reason: `Getting onboarding agent for context rules - not expected to create a new one here`,
-        });
-
-        // Call onboardingPromptFragment on the stub
-        const onboardingPrompt = await (onboardingAgentStub as any).onboardingPromptFragment();
-
-        // Add the onboarding context as a context rule
-        rules.push({
-          key: "onboarding-context",
-          prompt: onboardingPrompt,
-        });
-      } catch (error) {
-        logger.warn(`Failed to get onboarding context for estate ${this.estate.id}:`, error);
-      }
-    }
-
-    return rules;
   }
 
   protected getExtraDependencies(deps: AgentCoreDeps) {

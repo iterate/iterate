@@ -2,7 +2,6 @@ import { z } from "zod";
 import { and, eq, desc, like, sql } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { parseRouter, type AnyRouter } from "trpc-cli";
-import { typeid } from "typeid-js";
 import { protectedProcedure, protectedProcedureWithNoEstateRestrictions, router } from "../trpc.ts";
 import { schema } from "../../db/client.ts";
 import { sendNotificationToIterateSlack } from "../../integrations/slack/slack-utils.ts";
@@ -10,10 +9,7 @@ import { syncSlackForEstateInBackground } from "../../integrations/slack/slack.t
 import { getSlackAccessTokenForEstate } from "../../auth/token-utils.ts";
 import { createStripeCustomerAndSubscriptionForOrganization } from "../../integrations/stripe/stripe.ts";
 import type { DB } from "../../db/client.ts";
-import { getAuth } from "../../auth/auth.ts";
-import { createUserOrganizationAndEstate } from "../../org-utils.ts";
 import { logger } from "../../tag-logger.ts";
-import { E2ETestParams } from "../../utils/test-helpers/onboarding-test-schema.ts";
 import {
   createTrialSlackConnectChannel,
   getIterateSlackEstateId,
@@ -119,107 +115,6 @@ const deleteUserByEmail = adminProcedure
     return deleteUserAccount({ db: ctx.db, user });
   });
 
-const setupTestOnboardingUser = adminProcedure.mutation(async ({ ctx }) => {
-  const auth = getAuth(ctx.db);
-  const userEmail = `${typeid(`test_user`).toString()}@example.com`;
-
-  const { user } = await auth.api.createUser({
-    body: {
-      email: userEmail,
-      name: userEmail.split("@")[0],
-      password: typeid("pass").toString(),
-      role: "user",
-    },
-  });
-
-  const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
-
-  if (!estate) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to create estate",
-    });
-  }
-
-  let hasSeedData = false;
-  if (ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS) {
-    try {
-      const seedData = E2ETestParams.parse(JSON.parse(ctx.env.ONBOARDING_E2E_TEST_SETUP_PARAMS));
-
-      const [_userAccount, botAccount] = await ctx.db
-        .insert(schema.account)
-        .values([
-          {
-            providerId: "slack",
-            userId: user.id,
-            accountId: seedData.slack.user.id,
-            accessToken: seedData.slack.user.accessToken,
-          },
-          {
-            providerId: "slack-bot",
-            userId: user.id,
-            accountId: seedData.slack.bot.id,
-            accessToken: seedData.slack.bot.accessToken,
-          },
-        ])
-        .onConflictDoNothing()
-        .returning();
-
-      await ctx.db
-        .insert(schema.providerEstateMapping)
-        .values([
-          {
-            providerId: "slack-bot",
-            internalEstateId: estate.id,
-            externalId: seedData.slack.teamId,
-            providerMetadata: {
-              botUserId: seedData.slack.bot.id,
-            },
-          },
-        ])
-        .onConflictDoNothing();
-
-      await ctx.db
-        .insert(schema.estateAccountsPermissions)
-        .values([
-          {
-            accountId: botAccount.id,
-            estateId: estate.id,
-          },
-        ])
-        .onConflictDoNothing();
-
-      hasSeedData = true;
-    } catch (error) {
-      logger.error(`Failed to setup test onboarding user: ${error}`);
-    }
-  }
-
-  return { user, organization, estate, hasSeedData };
-});
-
-const markTestUserAsOnboarded = adminProcedure
-  .input(
-    z.object({
-      organizationId: z.string(),
-      estateId: z.string(),
-    }),
-  )
-  .mutation(async ({ ctx, input }) => {
-    await ctx.db.insert(schema.estateOnboardingEvent).values({
-      estateId: input.estateId,
-      organizationId: input.organizationId,
-      eventType: "OnboardingCompleted",
-      category: "user",
-    });
-    await ctx.db
-      .update(schema.organization)
-      .set({
-        stripeCustomerId: "TEST_CUSTOMER_ID",
-      })
-      .where(eq(schema.organization.id, input.organizationId));
-  });
-
 const allProcedureInputs = adminProcedure.query(async () => {
   const { appRouter: router } = (await import("../root.ts")) as unknown as { appRouter: AnyRouter };
   const parsed = parseRouter({ router });
@@ -236,8 +131,6 @@ export const adminRouter = router({
   searchUsersByEmail,
   getEstateOwner,
   deleteUserByEmail,
-  setupTestOnboardingUser,
-  markTestUserAsOnboarded,
   allProcedureInputs,
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     // || undefined means non-admins and non-impersonated users get `{}` from this endpoint, revealing no information

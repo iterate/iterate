@@ -1,53 +1,28 @@
 import { z } from "zod";
-import { notFound, Outlet, redirect, createFileRoute } from "@tanstack/react-router";
+import { notFound, Outlet, createFileRoute } from "@tanstack/react-router";
 import { setResponseHeader } from "@tanstack/react-start/server";
 import { getUserEstateAccess } from "../../../../backend/trpc/trpc.ts";
-import { isEstateOnboardingRequired } from "../../../../backend/onboarding-utils.ts";
 import { isValidTypeID } from "../../../../backend/utils/utils.ts";
 import { authenticatedServerFn } from "../../../lib/auth-middleware.ts";
 
-// Paths that should bypass the onboarding check (OAuth callbacks, etc.)
-function shouldBypassOnboardingCheck(pathname: string): boolean {
-  if (pathname.endsWith("/onboarding")) return true;
-  if (pathname.includes("/integrations/redirect")) return true;
-  if (pathname.includes("/integrations/mcp-params")) return true;
-  return false;
-}
-
-const assertDoesNotNeedOnboarding = authenticatedServerFn
-  .inputValidator(
-    z.object({ organizationId: z.string(), estateId: z.string(), pathname: z.string() }),
-  )
+const assertEstateAccess = authenticatedServerFn
+  .inputValidator(z.object({ organizationId: z.string(), estateId: z.string() }))
   .handler(async ({ context, data }) => {
-    const { organizationId, estateId, pathname } = data;
+    const { organizationId, estateId } = data;
     if (!isValidTypeID(organizationId, "org") || !isValidTypeID(estateId, "est")) throw notFound();
 
-    const bypassOnboardingCheck = shouldBypassOnboardingCheck(pathname);
-
-    const [accessResult, needsOnboarding] = await Promise.all([
-      getUserEstateAccess(
-        context.variables.db,
-        context.variables.session.user.id,
-        estateId,
-        organizationId,
-      ),
-      bypassOnboardingCheck
-        ? Promise.resolve(false)
-        : isEstateOnboardingRequired(context.variables.db, estateId),
-    ]);
+    const accessResult = await getUserEstateAccess(
+      context.variables.db,
+      context.variables.session.user.id,
+      estateId,
+      organizationId,
+    );
 
     if (!accessResult.hasAccess || !accessResult.estate) {
       throw notFound({
         headers: {
           "Set-Cookie": "iterate-selected-estate=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT",
         },
-      });
-    }
-
-    if (needsOnboarding && !bypassOnboardingCheck) {
-      throw redirect({
-        to: `/$organizationId/$estateId/onboarding`,
-        params: { organizationId, estateId },
       });
     }
 
@@ -68,12 +43,11 @@ const assertDoesNotNeedOnboarding = authenticatedServerFn
 
 export const Route = createFileRoute("/_auth.layout/$organizationId/$estateId")({
   component: Outlet,
-  beforeLoad: ({ params, location }) =>
-    assertDoesNotNeedOnboarding({
+  beforeLoad: ({ params }) =>
+    assertEstateAccess({
       data: {
         organizationId: params.organizationId,
         estateId: params.estateId,
-        pathname: location.pathname,
       },
     }),
 });

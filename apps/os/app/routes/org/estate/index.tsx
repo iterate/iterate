@@ -212,7 +212,6 @@ function Home() {
   const [sortField, setSortField] = useState<SortField>("updatedAt");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [agentName, setAgentName] = useState("");
-  const [agentType, setAgentType] = useState<"IterateAgent" | "OnboardingAgent">("IterateAgent");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [channel, setChannel] = useState("");
   const [firstMessage, setFirstMessage] = useState("");
@@ -267,7 +266,7 @@ function Home() {
 
   const handleCreateAgent = () => {
     if (agentName.trim()) {
-      navigate({ to: getEstateUrl(`/agents/${agentType}/${estateId}-${agentName.trim()}`) });
+      navigate({ to: getEstateUrl(`/agents/IterateAgent/${estateId}-${agentName.trim()}`) });
     }
   };
 
@@ -354,14 +353,6 @@ function Home() {
               </Button>
               {estateInfo?.isTrialEstate && <UpgradeTrialButton estateId={estateId} />}
             </div>
-
-            {estateInfo?.onboardingAgentName && user?.debugMode ? (
-              <div className="pt-4">
-                <Suspense fallback={<Skeleton className="h-[120px] w-full" />}>
-                  <OnboardingHero estateId={estateId} />
-                </Suspense>
-              </div>
-            ) : null}
           </div>
         </CardContent>
       </Card>
@@ -394,25 +385,9 @@ function Home() {
                     }}
                   />
                 </div>
-                <div className="flex gap-2">
-                  <Select
-                    value={agentType}
-                    onValueChange={(value: "IterateAgent" | "OnboardingAgent") =>
-                      setAgentType(value)
-                    }
-                  >
-                    <SelectTrigger className="flex-1">
-                      <SelectValue placeholder="Select agent type" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="IterateAgent">IterateAgent</SelectItem>
-                      <SelectItem value="OnboardingAgent">OnboardingAgent</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Button onClick={handleCreateAgent} disabled={!agentName.trim()}>
-                    Go
-                  </Button>
-                </div>
+                <Button onClick={handleCreateAgent} disabled={!agentName.trim()}>
+                  Go
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -699,27 +674,3 @@ function Home() {
   );
 }
 
-function OnboardingHero({ estateId }: { estateId: string }) {
-  const trpc = useTRPC();
-  const { data } = useQuery(trpc.estate.getOnboardingResults.queryOptions({ estateId }));
-
-  const results = data?.results ?? {};
-
-  if (Object.keys(results).length === 0) {
-    return (
-      <Alert>
-        <AlertCircle className="h-4 w-4" />
-        <AlertDescription>
-          We're gathering onboarding insights. Check back in a moment.
-        </AlertDescription>
-      </Alert>
-    );
-  }
-
-  return (
-    <div className="space-y-2">
-      <div className="text-lg font-semibold">Onboarding Data</div>
-      <SerializedObjectCodeBlock data={results} className="h-64" />
-    </div>
-  );
-}
