@@ -14,7 +14,9 @@ import {
   messagesReducer,
   createInitialState,
   type MessagesState,
-  type ChatMessage,
+  type FeedItem,
+  type MessageFeedItem,
+  type EventFeedItem,
   type ContentBlock,
 } from "./messages-reducer"
 
@@ -255,9 +257,10 @@ function getMessageText(content: ContentBlock[]): string {
   return content.filter((b) => b.type === "text").map((b) => b.text).join("")
 }
 
-function MessageBubble({ msg, isStreaming }: { msg: ChatMessage; isStreaming?: boolean }) {
+function MessageBubble({ msg, isStreaming }: { msg: MessageFeedItem; isStreaming?: boolean }) {
   const isUser = msg.role === "user"
   const text = getMessageText(msg.content)
+  const timeStr = new Date(msg.timestamp).toLocaleTimeString()
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -270,9 +273,11 @@ function MessageBubble({ msg, isStreaming }: { msg: ChatMessage; isStreaming?: b
             : "bg-zinc-800 text-zinc-100"
         }`}
       >
-        <div className={`text-xs mb-1 ${isUser ? "text-indigo-200" : "text-zinc-500"}`}>
-          {isUser ? "You" : "Assistant"}
-          {isStreaming && <span className="ml-2 animate-pulse">●</span>}
+        <div className={`text-xs mb-1 flex items-center gap-2 ${isUser ? "text-indigo-200" : "text-zinc-500"}`}>
+          <span>{isUser ? "You" : "Assistant"}</span>
+          <span className={isUser ? "text-indigo-300/60" : "text-zinc-600"}>·</span>
+          <span className={isUser ? "text-indigo-300/60" : "text-zinc-600"}>{timeStr}</span>
+          {isStreaming && <span className="ml-1 animate-pulse">●</span>}
         </div>
         <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
           {text || <span className="text-zinc-500 italic">{isStreaming ? "Thinking..." : "Empty"}</span>}
@@ -282,6 +287,37 @@ function MessageBubble({ msg, isStreaming }: { msg: ChatMessage; isStreaming?: b
   )
 }
 
+function EventLine({ event }: { event: EventFeedItem }) {
+  const [expanded, setExpanded] = useState(false)
+  const timeStr = new Date(event.timestamp).toLocaleTimeString()
+
+  return (
+    <div className="flex flex-col">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors py-0.5 cursor-pointer"
+      >
+        <span className="text-zinc-600">{expanded ? "▼" : "▶"}</span>
+        <span className="font-mono">{event.eventType}</span>
+        <span className="text-zinc-600">·</span>
+        <span className="text-zinc-600">{timeStr}</span>
+      </button>
+      {expanded && (
+        <pre className="text-xs bg-zinc-800/50 p-2 rounded mt-1 mb-2 overflow-x-auto font-mono text-zinc-400 border border-zinc-700/50">
+          {JSON.stringify(event.raw, null, 2)}
+        </pre>
+      )}
+    </div>
+  )
+}
+
+function FeedItemRenderer({ item, isStreaming }: { item: FeedItem; isStreaming?: boolean }) {
+  if (item.kind === "message") {
+    return <MessageBubble msg={item} isStreaming={isStreaming} />
+  }
+  return <EventLine event={item} />
+}
+
 function AgentChat({ agentPath }: { agentPath: string }) {
   const [input, setInput] = useState("")
   const [sending, setSending] = useState(false)
@@ -289,7 +325,7 @@ function AgentChat({ agentPath }: { agentPath: string }) {
   const endRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const { messages, isStreaming, streamingMessage, rawEvents } = useStreamReducer<MessagesState, unknown>(
+  const { feed, isStreaming, streamingMessage, rawEvents } = useStreamReducer<MessagesState, unknown>(
     `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
     messagesReducer,
     createInitialState()
@@ -297,7 +333,7 @@ function AgentChat({ agentPath }: { agentPath: string }) {
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, streamingMessage])
+  }, [feed, streamingMessage])
 
   // Focus input when navigating to agent
   useEffect(() => {
@@ -331,7 +367,7 @@ function AgentChat({ agentPath }: { agentPath: string }) {
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto p-6 space-y-4">
+      <main className="flex-1 overflow-y-auto p-6 space-y-2">
         {showRaw ? (
           rawEvents.length === 0 ? (
             <p className="text-zinc-500 text-center py-8">No events yet</p>
@@ -342,15 +378,15 @@ function AgentChat({ agentPath }: { agentPath: string }) {
               </pre>
             ))
           )
-        ) : messages.length === 0 && !streamingMessage ? (
+        ) : feed.length === 0 && !streamingMessage ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <div className="text-4xl mb-2">💬</div>
             <p>Start a conversation</p>
           </div>
         ) : (
           <>
-            {messages.map((msg, i) => (
-              <MessageBubble key={i} msg={msg} />
+            {feed.map((item, i) => (
+              <FeedItemRenderer key={i} item={item} />
             ))}
             {streamingMessage && <MessageBubble msg={streamingMessage} isStreaming />}
           </>

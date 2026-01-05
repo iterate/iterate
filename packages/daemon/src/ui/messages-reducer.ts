@@ -1,5 +1,5 @@
 /**
- * Pure reducer for transforming Pi agent events into chat messages.
+ * Pure reducer for transforming Pi agent events into a unified feed.
  * This module has no side effects and can be easily unit tested.
  */
 
@@ -12,16 +12,26 @@ export interface ContentBlock {
   text: string
 }
 
-export interface ChatMessage {
+export interface MessageFeedItem {
+  kind: "message"
   role: "user" | "assistant"
   content: ContentBlock[]
-  timestamp?: number
+  timestamp: number
 }
 
+export interface EventFeedItem {
+  kind: "event"
+  eventType: string
+  timestamp: number
+  raw: unknown
+}
+
+export type FeedItem = MessageFeedItem | EventFeedItem
+
 export interface MessagesState {
-  messages: ChatMessage[]
+  feed: FeedItem[]
   isStreaming: boolean
-  streamingMessage?: ChatMessage
+  streamingMessage?: MessageFeedItem
   rawEvents: unknown[]
 }
 
@@ -31,11 +41,36 @@ export interface MessagesState {
 
 export function createInitialState(): MessagesState {
   return {
-    messages: [],
+    feed: [],
     isStreaming: false,
     streamingMessage: undefined,
     rawEvents: [],
   }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+function getTimestamp(e: Record<string, unknown>): number {
+  return typeof e.timestamp === "number" ? e.timestamp : Date.now()
+}
+
+function createMessageItem(role: "user" | "assistant", content: ContentBlock[], timestamp: number): MessageFeedItem {
+  return { kind: "message", role, content, timestamp }
+}
+
+function createEventItem(eventType: string, timestamp: number, raw: unknown): EventFeedItem {
+  return { kind: "event", eventType, timestamp, raw }
+}
+
+function hasDuplicateMessage(feed: FeedItem[], role: "user" | "assistant", text: string): boolean {
+  return feed.some(
+    (item) =>
+      item.kind === "message" &&
+      item.role === role &&
+      item.content.some((c) => c.text === text)
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,28 +80,29 @@ export function createInitialState(): MessagesState {
 export function messagesReducer(state: MessagesState, event: unknown): MessagesState {
   const e = event as Record<string, unknown>
   const rawEvents = [...state.rawEvents, event]
+  const timestamp = getTimestamp(e)
 
   // Historical/stored events (legacy format)
   if (e.type === "user_prompt") {
     const text = typeof e.text === "string" ? e.text : ""
-    if (state.messages.some((m) => m.role === "user" && m.content.some((c) => c.text === text))) {
+    if (hasDuplicateMessage(state.feed, "user", text)) {
       return { ...state, rawEvents }
     }
     return {
       ...state,
-      messages: [...state.messages, { role: "user", content: [{ type: "text", text }] }],
+      feed: [...state.feed, createMessageItem("user", [{ type: "text", text }], timestamp)],
       rawEvents,
     }
   }
 
   if (e.type === "assistant_text") {
     const text = typeof e.text === "string" ? e.text : ""
-    if (state.messages.some((m) => m.role === "assistant" && m.content.some((c) => c.text === text))) {
+    if (hasDuplicateMessage(state.feed, "assistant", text)) {
       return { ...state, rawEvents }
     }
     return {
       ...state,
-      messages: [...state.messages, { role: "assistant", content: [{ type: "text", text }] }],
+      feed: [...state.feed, createMessageItem("assistant", [{ type: "text", text }], timestamp)],
       rawEvents,
     }
   }
@@ -83,25 +119,25 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   // ─────────────────────────────────────────────────────────────────────────────
 
   if (e.type === "message_start") {
-    const msg = e.message as ChatMessage | undefined
+    const msg = e.message as { role?: string; content?: ContentBlock[]; timestamp?: number } | undefined
     if (msg?.role === "assistant") {
       // Start streaming an assistant message
       return {
         ...state,
         isStreaming: true,
-        streamingMessage: { role: "assistant", content: [], timestamp: msg.timestamp },
+        streamingMessage: createMessageItem("assistant", [], msg.timestamp ?? timestamp),
         rawEvents,
       }
     }
     if (msg?.role === "user" && Array.isArray(msg.content)) {
-      // User message - add to messages immediately
+      // User message - add to feed immediately
       const userText = msg.content.find((c) => c.type === "text")?.text || ""
-      if (state.messages.some((m) => m.role === "user" && m.content.some((c) => c.text === userText))) {
+      if (hasDuplicateMessage(state.feed, "user", userText)) {
         return { ...state, rawEvents }
       }
       return {
         ...state,
-        messages: [...state.messages, { role: "user", content: msg.content, timestamp: msg.timestamp }],
+        feed: [...state.feed, createMessageItem("user", msg.content, msg.timestamp ?? timestamp)],
         rawEvents,
       }
     }
@@ -113,7 +149,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
     if (!assistantEvent) return { ...state, rawEvents }
 
     // Extract the partial message from the event
-    const partial = assistantEvent.partial as ChatMessage | undefined
+    const partial = assistantEvent.partial as { content?: unknown[]; timestamp?: number } | undefined
     if (partial) {
       // Use the partial content which accumulates text as it streams
       const content: ContentBlock[] = Array.isArray(partial.content)
@@ -126,11 +162,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
       return {
         ...state,
         isStreaming: true,
-        streamingMessage: {
-          role: "assistant",
-          content,
-          timestamp: partial.timestamp,
-        },
+        streamingMessage: createMessageItem("assistant", content, partial.timestamp ?? timestamp),
         rawEvents,
       }
     }
@@ -138,9 +170,9 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   }
 
   if (e.type === "message_end") {
-    const msg = e.message as ChatMessage | undefined
+    const msg = e.message as { role?: string; content?: unknown[]; timestamp?: number } | undefined
     if (msg?.role === "assistant" && Array.isArray(msg.content)) {
-      // Finalize the assistant message - move from streaming to messages
+      // Finalize the assistant message - move from streaming to feed
       const content: ContentBlock[] = msg.content
         .filter((c: any) => c.type === "text")
         .map((c: any) => ({
@@ -152,7 +184,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
       if (content.some((c) => c.text.trim())) {
         return {
           ...state,
-          messages: [...state.messages, { role: "assistant", content, timestamp: msg.timestamp }],
+          feed: [...state.feed, createMessageItem("assistant", content, msg.timestamp ?? timestamp)],
           isStreaming: false,
           streamingMessage: undefined,
           rawEvents,
@@ -168,7 +200,14 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   }
 
   // Pass through other events (turn_start, agent_start, tool events, etc.)
-  return { ...state, rawEvents }
+  // Add them as event feed items to display in the UI
+  const eventType = typeof e.type === "string" ? e.type : "unknown"
+  
+  return {
+    ...state,
+    feed: [...state.feed, createEventItem(eventType, timestamp, event)],
+    rawEvents,
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
