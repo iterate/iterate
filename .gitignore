@@ -31,3 +31,6 @@ CLAUDE.md
 # ad-hoc ignored files/paths
 *ignoreme*
 evalite-export
+
+# Daemon session files
+.iterate/
