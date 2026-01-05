@@ -13,7 +13,7 @@ import { stubStub } from "../../stub-stub.ts";
 // single durable object with runtime-loadable facets sourced from
 // iterate.config.ts. At that point we can remove this manual binding lookup.
 
-export const AGENT_CLASS_NAMES = ["IterateAgent", "SlackAgent", "OnboardingAgent"] as const;
+export const AGENT_CLASS_NAMES = ["IterateAgent", "SlackAgent"] as const;
 
 export type AgentClassName = (typeof AGENT_CLASS_NAMES)[number];
 

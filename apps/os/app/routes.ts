@@ -33,7 +33,6 @@ export const routes = rootRoute("root.tsx", [
       // Estate-specific routes with their own loader
       route("$estateId", "org/estate/layout.tsx", [
         index("org/estate/index.tsx"),
-        route("onboarding", "org/estate/onboarding.tsx"),
         route("repo", "org/estate/repo.tsx"),
         route("integrations", [
           index("org/estate/integrations/index.tsx"),

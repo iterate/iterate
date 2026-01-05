@@ -162,7 +162,7 @@ function ToolCallInjector({
 }: {
   estateId: string;
   agentInstanceName: string;
-  agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
+  agentClassName: "IterateAgent" | "SlackAgent";
   reducedState: any;
   onClose: () => void;
 }) {
@@ -395,7 +395,7 @@ function FileUploadDialog({
 }: {
   estateId: string;
   agentInstanceName: string;
-  agentClassName: "IterateAgent" | "SlackAgent" | "OnboardingAgent";
+  agentClassName: "IterateAgent" | "SlackAgent";
   onClose: () => void;
 }) {
   const [files, setFiles] = useState<File[]>([]);
@@ -634,11 +634,7 @@ function AgentsPage() {
   const trpcClient = useTRPCClient();
 
   if (
-    !(
-      agentClassName === "IterateAgent" ||
-      agentClassName === "SlackAgent" ||
-      agentClassName === "OnboardingAgent"
-    ) ||
+    !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
     !durableObjectName
   ) {
     throw new Error("Invalid agent class name or durable object name");

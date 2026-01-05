@@ -21,7 +21,6 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { IterateAgent } from "./agent/iterate-agent.ts";
-import { OnboardingAgent } from "./agent/onboarding-agent.ts";
 import { SlackAgent } from "./agent/slack-agent.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
@@ -104,11 +103,7 @@ app.all("/api/agents/:estateId/:className/:agentInstanceName", async (c) => {
   const agentClassName = c.req.param("className")!;
   const agentInstanceName = c.req.param("agentInstanceName")!;
 
-  if (
-    agentClassName !== "IterateAgent" &&
-    agentClassName !== "SlackAgent" &&
-    agentClassName !== "OnboardingAgent"
-  ) {
+  if (agentClassName !== "IterateAgent" && agentClassName !== "SlackAgent") {
     return c.json({ error: "Invalid agent class name" }, 400);
   }
 
@@ -343,12 +338,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export {
-  IterateAgent,
-  OnboardingAgent,
-  SlackAgent,
-  OrganizationWebSocket,
-  AdvisoryLocker,
-  EstateBuildManager,
-};
+export { IterateAgent, SlackAgent, OrganizationWebSocket, AdvisoryLocker, EstateBuildManager };
 export { Sandbox } from "@cloudflare/sandbox";

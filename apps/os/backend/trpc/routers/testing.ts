@@ -107,8 +107,6 @@ export const createOrganizationAndEstate = testingProcedure
   .input(
     z.object({
       userId: z.string(),
-      /** If true, mark onboarding as completed so the estate doesn't redirect to onboarding flow */
-      skipOnboarding: z.boolean().default(true),
     }),
   )
   .mutation(async ({ ctx, input }) => {
@@ -120,17 +118,6 @@ export const createOrganizationAndEstate = testingProcedure
     const { organization, estate } = await createUserOrganizationAndEstate(ctx.db, user);
 
     if (!estate) throw new Error("Failed to create estate");
-
-    // Mark onboarding as completed to avoid redirecting to onboarding flow
-    if (input.skipOnboarding) {
-      await ctx.db.insert(schema.estateOnboardingEvent).values({
-        estateId: estate.id,
-        organizationId: organization.id,
-        eventType: "OnboardingCompleted",
-        category: "system",
-        detail: "Skipped for testing",
-      });
-    }
 
     return { organization, estate };
   });
@@ -259,7 +246,6 @@ export const setupTeamId = testingProcedure
 export const testingRouter = router({
   nuke: testingProcedure.mutation(async ({ ctx }) => {
     await ctx.db.transaction(async (tx) => {
-      await tx.delete(schema.estateOnboardingEvent);
       await tx.delete(schema.organization);
       await tx.delete(schema.user).where(ne(schema.user.id, ctx.user.id));
     });
