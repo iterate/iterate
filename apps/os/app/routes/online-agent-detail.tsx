@@ -633,7 +633,10 @@ function AgentsPage() {
   const queryClient = useQueryClient();
   const trpcClient = useTRPCClient();
 
-  if (!(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") || !durableObjectName) {
+  if (
+    !(agentClassName === "IterateAgent" || agentClassName === "SlackAgent") ||
+    !durableObjectName
+  ) {
     throw new Error("Invalid agent class name or durable object name");
   }
 

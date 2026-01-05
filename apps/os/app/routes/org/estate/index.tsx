@@ -673,4 +673,3 @@ function Home() {
     </>
   );
 }
-
