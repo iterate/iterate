@@ -28,7 +28,6 @@ import { Route as orgSettingsRouteImport } from './routes/org/settings.tsx'
 import { Route as orgEstateLayoutRouteImport } from './routes/org/estate/layout.tsx'
 import { Route as orgEstateIndexRouteImport } from './routes/org/estate/index.tsx'
 import { Route as orgEstateRepoRouteImport } from './routes/org/estate/repo.tsx'
-import { Route as orgEstateOnboardingRouteImport } from './routes/org/estate/onboarding.tsx'
 import { Route as orgEstateIntegrationsIndexRouteImport } from './routes/org/estate/integrations/index.tsx'
 import { Route as orgEstateIntegrationsRedirectRouteImport } from './routes/org/estate/integrations/redirect.tsx'
 import { Route as orgEstateIntegrationsMcpParamsRouteImport } from './routes/org/estate/integrations/mcp-params.tsx'
@@ -129,11 +128,6 @@ const orgEstateRepoRoute = orgEstateRepoRouteImport.update({
   path: '/repo',
   getParentRoute: () => orgEstateLayoutRoute,
 } as any)
-const orgEstateOnboardingRoute = orgEstateOnboardingRouteImport.update({
-  id: '/onboarding',
-  path: '/onboarding',
-  getParentRoute: () => orgEstateLayoutRoute,
-} as any)
 const orgEstateIntegrationsIndexRoute =
   orgEstateIntegrationsIndexRouteImport.update({
     id: '/integrations/',
@@ -180,7 +174,6 @@ export interface FileRoutesByFullPath {
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationId/': typeof orgIndexRoute
   '/admin/': typeof adminIndexRoute
-  '/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
   '/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
   '/$organizationId/$estateId/': typeof orgEstateIndexRoute
   '/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
@@ -203,7 +196,6 @@ export interface FileRoutesByTo {
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationId': typeof orgIndexRoute
   '/admin': typeof adminIndexRoute
-  '/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
   '/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
   '/$organizationId/$estateId': typeof orgEstateIndexRoute
   '/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
@@ -231,7 +223,6 @@ export interface FileRoutesById {
   '/_auth.layout/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/_auth.layout/$organizationId/': typeof orgIndexRoute
   '/_auth.layout/admin/': typeof adminIndexRoute
-  '/_auth.layout/$organizationId/$estateId/onboarding': typeof orgEstateOnboardingRoute
   '/_auth.layout/$organizationId/$estateId/repo': typeof orgEstateRepoRoute
   '/_auth.layout/$organizationId/$estateId/': typeof orgEstateIndexRoute
   '/_auth.layout/$organizationId/$estateId/agents/offline': typeof offlineAgentDetailRoute
@@ -259,7 +250,6 @@ export interface FileRouteTypes {
     | '/admin/trpc-tools'
     | '/$organizationId/'
     | '/admin/'
-    | '/$organizationId/$estateId/onboarding'
     | '/$organizationId/$estateId/repo'
     | '/$organizationId/$estateId/'
     | '/$organizationId/$estateId/agents/offline'
@@ -282,7 +272,6 @@ export interface FileRouteTypes {
     | '/admin/trpc-tools'
     | '/$organizationId'
     | '/admin'
-    | '/$organizationId/$estateId/onboarding'
     | '/$organizationId/$estateId/repo'
     | '/$organizationId/$estateId'
     | '/$organizationId/$estateId/agents/offline'
@@ -309,7 +298,6 @@ export interface FileRouteTypes {
     | '/_auth.layout/admin/trpc-tools'
     | '/_auth.layout/$organizationId/'
     | '/_auth.layout/admin/'
-    | '/_auth.layout/$organizationId/$estateId/onboarding'
     | '/_auth.layout/$organizationId/$estateId/repo'
     | '/_auth.layout/$organizationId/$estateId/'
     | '/_auth.layout/$organizationId/$estateId/agents/offline'
@@ -459,13 +447,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgEstateRepoRouteImport
       parentRoute: typeof orgEstateLayoutRoute
     }
-    '/_auth.layout/$organizationId/$estateId/onboarding': {
-      id: '/_auth.layout/$organizationId/$estateId/onboarding'
-      path: '/onboarding'
-      fullPath: '/$organizationId/$estateId/onboarding'
-      preLoaderRoute: typeof orgEstateOnboardingRouteImport
-      parentRoute: typeof orgEstateLayoutRoute
-    }
     '/_auth.layout/$organizationId/$estateId/integrations/': {
       id: '/_auth.layout/$organizationId/$estateId/integrations/'
       path: '/integrations'
@@ -505,7 +486,6 @@ declare module '@tanstack/react-router' {
 }
 
 interface orgEstateLayoutRouteChildren {
-  orgEstateOnboardingRoute: typeof orgEstateOnboardingRoute
   orgEstateRepoRoute: typeof orgEstateRepoRoute
   orgEstateIndexRoute: typeof orgEstateIndexRoute
   offlineAgentDetailRoute: typeof offlineAgentDetailRoute
@@ -516,7 +496,6 @@ interface orgEstateLayoutRouteChildren {
 }
 
 const orgEstateLayoutRouteChildren: orgEstateLayoutRouteChildren = {
-  orgEstateOnboardingRoute: orgEstateOnboardingRoute,
   orgEstateRepoRoute: orgEstateRepoRoute,
   orgEstateIndexRoute: orgEstateIndexRoute,
   offlineAgentDetailRoute: offlineAgentDetailRoute,
