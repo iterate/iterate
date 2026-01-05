@@ -399,6 +399,7 @@ function EmptyState() {
 
 function App() {
   const [selectedAgent, setSelectedAgent] = useRouter()
+  const [agentReady, setAgentReady] = useState(false)
   const agents = useStreamReducer<AgentInfo[], RegistryEvent>(
     `${API_URL}/agents/__registry__`,
     registryReducer,
@@ -406,12 +407,22 @@ function App() {
   )
 
   // Auto-create agent if navigating to non-existent one
+  // Wait for agent to exist before rendering AgentChat to avoid SSE race condition
   useEffect(() => {
-    if (!selectedAgent) return
+    if (!selectedAgent) {
+      setAgentReady(false)
+      return
+    }
     const exists = agents.some((a) => a.path === selectedAgent)
-    if (!exists && agents.length > 0) {
-      // Registry is loaded but agent doesn't exist - create it
-      createAgent(selectedAgent)
+    if (exists) {
+      setAgentReady(true)
+    } else if (agents.length > 0) {
+      // Registry is loaded but agent doesn't exist - create it first
+      setAgentReady(false)
+      createAgent(selectedAgent).then(() => {
+        // Agent is now created, wait for registry update
+        // The next render cycle will set agentReady to true when registry updates
+      })
     }
   }, [selectedAgent, agents])
 
@@ -423,6 +434,9 @@ function App() {
     }
   }
 
+  // Only render AgentChat once the agent exists in the registry
+  const shouldShowChat = selectedAgent && agentReady
+
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
       <Sidebar
@@ -433,7 +447,12 @@ function App() {
         onCreate={setSelectedAgent}
       />
       <main className="flex-1 bg-zinc-900">
-        {selectedAgent ? <AgentChat key={selectedAgent} agentPath={selectedAgent} /> : <EmptyState />}
+        {shouldShowChat ? <AgentChat key={selectedAgent} agentPath={selectedAgent} /> : selectedAgent ? (
+          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
+            <div className="animate-pulse text-2xl">⏳</div>
+            <p className="mt-2">Creating agent...</p>
+          </div>
+        ) : <EmptyState />}
       </main>
     </div>
   )

@@ -299,6 +299,16 @@ app.post("/agents/*", async (c) => {
 
   const agent = getAgent(streamPath)!;
 
+  // Lazily create Pi session for agents loaded from disk that don't have one yet
+  if (!agent.piSession && !streamPath.startsWith("__")) {
+    try {
+      agent.piSession = await createPiSession(streamPath);
+      console.log(`Lazily created Pi session for agent: ${streamPath}`);
+    } catch (error) {
+      console.error(`Failed to lazily create Pi session for ${streamPath}:`, error);
+    }
+  }
+
   if (agent.piSession) {
     let promptText: string;
     if (typeof body === "string") promptText = body;
