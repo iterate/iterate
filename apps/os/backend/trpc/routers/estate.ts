@@ -18,7 +18,6 @@ import {
 } from "../trpc.ts";
 import {
   estate,
-  agentInstance,
   iterateConfig,
   organizationUserMembership,
   organization,

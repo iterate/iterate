@@ -1,4 +1,3 @@
-import { eq } from "drizzle-orm";
 import dedent from "dedent";
 import { typeid } from "typeid-js";
 import { waitUntil, env } from "../env.ts";

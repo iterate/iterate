@@ -1,4 +1,4 @@
-import { useState, useMemo, Suspense } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryState } from "nuqs";
 import {
@@ -26,7 +26,6 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "../../../components/ui/dialog.tsx";
-import { SerializedObjectCodeBlock } from "../../../components/serialized-object-code-block.tsx";
 import { Label } from "../../../components/ui/label.tsx";
 import { Textarea } from "../../../components/ui/textarea.tsx";
 import { Skeleton } from "../../../components/ui/skeleton.tsx";
