@@ -630,9 +630,18 @@ importers:
       '@effect/sql-sqlite-node':
         specifier: ^0.30.1
         version: 0.30.1(@effect/experimental@0.40.1(@effect/platform-node@0.72.1(@effect/platform@0.76.1(effect@3.19.14))(bufferutil@4.0.9)(effect@3.19.14)(utf-8-validate@5.0.10))(@effect/platform@0.76.1(effect@3.19.14))(effect@3.19.14)(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@effect/platform@0.76.1(effect@3.19.14))(@effect/sql@0.29.1(@effect/experimental@0.40.1(@effect/platform-node@0.72.1(@effect/platform@0.76.1(effect@3.19.14))(bufferutil@4.0.9)(effect@3.19.14)(utf-8-validate@5.0.10))(@effect/platform@0.76.1(effect@3.19.14))(effect@3.19.14)(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)))(@effect/platform@0.76.1(effect@3.19.14))(effect@3.19.14))(effect@3.19.14)
+      '@opencode-ai/plugin':
+        specifier: 0.0.0-snapshot-learn-agent-202601011707
+        version: 0.0.0-snapshot-learn-agent-202601011707
+      '@opencode-ai/sdk':
+        specifier: 0.0.0-snapshot-learn-agent-202601011707
+        version: 0.0.0-snapshot-learn-agent-202601011707
       effect:
         specifier: ^3.16.0
         version: 3.19.14
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -2944,6 +2953,12 @@ packages:
   '@oozcitak/util@10.0.0':
     resolution: {integrity: sha512-hAX0pT/73190NLqBPPWSdBVGtbY6VOhWYK3qqHqtXQ1gK7kS2yz4+ivsN07hpJ6I3aeMtKP6J6npsEKOAzuTLA==}
     engines: {node: '>=20.0'}
+
+  '@opencode-ai/plugin@0.0.0-snapshot-learn-agent-202601011707':
+    resolution: {integrity: sha512-2D0T1F2PCSPtZdb1gswKcOwjY2T9vSlTY2skoHsslwXKIH1LbLo2UR4wCC7QA8Z/VrolFNXqwdVQhLMZawLcYg==}
+
+  '@opencode-ai/sdk@0.0.0-snapshot-learn-agent-202601011707':
+    resolution: {integrity: sha512-NEu6gsmovWTk4Ps16uNesxLQcJjIuKiVeOZCEIn79U/jol+aMRM8Wi4pNclGZiZw2MoZ3oDr4r+6h4Nk/yfvCg==}
 
   '@opentelemetry/api@1.9.0':
     resolution: {integrity: sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg==}
@@ -10284,6 +10299,9 @@ packages:
   zod@4.1.13:
     resolution: {integrity: sha512-AvvthqfqrAhNH9dnfmrfKzX5upOdjUVJYFqNSlkmGf64gRaTzlPwz99IHYnVs28qYAybvAlBV+H7pn0saFY4Ig==}
 
+  zod@4.1.8:
+    resolution: {integrity: sha512-5R1P+WwQqmmMIEACyzSvo4JXHY5WiAFHRMg+zBZKgKS+Q1viRa0C1hmUKtHltoIFKtIdki3pRxkmpP74jnNYHQ==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -12633,6 +12651,13 @@ snapshots:
       '@oozcitak/util': 10.0.0
 
   '@oozcitak/util@10.0.0': {}
+
+  '@opencode-ai/plugin@0.0.0-snapshot-learn-agent-202601011707':
+    dependencies:
+      '@opencode-ai/sdk': 0.0.0-snapshot-learn-agent-202601011707
+      zod: 4.1.8
+
+  '@opencode-ai/sdk@0.0.0-snapshot-learn-agent-202601011707': {}
 
   '@opentelemetry/api@1.9.0': {}
 
@@ -21194,6 +21219,8 @@ snapshots:
   zod@4.1.12: {}
 
   zod@4.1.13: {}
+
+  zod@4.1.8: {}
 
   zwitch@2.0.4: {}
 

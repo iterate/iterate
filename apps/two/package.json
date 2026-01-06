@@ -13,7 +13,10 @@
     "@effect/platform-node": "^0.72.1",
     "@effect/sql": "^0.29.1",
     "@effect/sql-sqlite-node": "^0.30.1",
-    "@effect/experimental": "^0.40.1"
+    "@effect/experimental": "^0.40.1",
+    "@opencode-ai/sdk": "0.0.0-snapshot-learn-agent-202601011707",
+    "@opencode-ai/plugin": "0.0.0-snapshot-learn-agent-202601011707",
+    "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

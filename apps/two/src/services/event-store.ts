@@ -7,6 +7,7 @@ export class EventStore extends Context.Tag("EventStore")<
   {
     readonly createAgent: (name: string) => Effect.Effect<boolean, SqlError.SqlError>;
     readonly agentExists: (name: string) => Effect.Effect<boolean, SqlError.SqlError>;
+    readonly listAgents: () => Effect.Effect<string[], SqlError.SqlError>;
     readonly appendEvents: (
       agentName: string,
       events: readonly AgentEventInput[],
@@ -20,6 +21,7 @@ export class EventStore extends Context.Tag("EventStore")<
       agentName: string,
       fromOffset: number,
     ) => Stream.Stream<AgentEvent, SqlError.SqlError>;
+    readonly getLatestOffset: (agentName: string) => Effect.Effect<number, SqlError.SqlError>;
   }
 >() {}
 
@@ -70,6 +72,11 @@ export const EventStoreLive = Layer.effect(
 
       agentExists: (name) =>
         sql`SELECT 1 FROM agents WHERE name = ${name}`.pipe(Effect.map((rows) => rows.length > 0)),
+
+      listAgents: () =>
+        sql<{ name: string }>`SELECT name FROM agents ORDER BY created_at DESC`.pipe(
+          Effect.map((rows) => rows.map((r) => r.name)),
+        ),
 
       appendEvents: (agentName, events) =>
         Effect.gen(function* () {
@@ -204,6 +211,11 @@ export const EventStoreLive = Layer.effect(
             yield* Effect.forever(poll.pipe(Effect.delay(pollInterval))).pipe(Effect.forkScoped);
           }),
         ),
+
+      getLatestOffset: (agentName) =>
+        sql<{ max_offset: number | null }>`
+          SELECT MAX("offset") as max_offset FROM events WHERE agent_name = ${agentName}
+        `.pipe(Effect.map((rows) => rows[0]?.max_offset ?? -1)),
     };
   }),
 );

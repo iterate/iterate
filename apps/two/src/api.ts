@@ -3,8 +3,14 @@ import { Schema } from "effect";
 import { AgentEvent, AgentEventInput, SlackWebhookPayload } from "./schemas/events.ts";
 
 const agentNameParam = HttpApiSchema.param("agentName", Schema.String);
+const sessionIdParam = HttpApiSchema.param("sessionId", Schema.String);
+const secretKeyParam = HttpApiSchema.param("key", Schema.String);
 
 export class SqlError extends Schema.TaggedError<SqlError>()("SqlError", {
+  message: Schema.String,
+}) {}
+
+export class NotFoundError extends Schema.TaggedError<NotFoundError>()("NotFoundError", {
   message: Schema.String,
 }) {}
 
@@ -39,4 +45,24 @@ const SlackGroup = HttpApiGroup.make("slack").add(
     .addError(SqlError, { status: 500 }),
 );
 
-export class TwoApi extends HttpApi.make("two").add(AgentsGroup).add(SlackGroup) {}
+const InternalGroup = HttpApiGroup.make("internal")
+  .add(
+    HttpApiEndpoint.get("getSessionMapping")`/internal/session-mapping/${sessionIdParam}`
+      .addSuccess(Schema.Struct({ agentId: Schema.String }))
+      .addError(NotFoundError, { status: 404 }),
+  )
+  .add(
+    HttpApiEndpoint.get("getSecret")`/internal/secrets/${secretKeyParam}`
+      .addSuccess(Schema.Struct({ value: Schema.String }))
+      .addError(NotFoundError, { status: 404 }),
+  )
+  .add(
+    HttpApiEndpoint.get("listAgents", "/internal/agents").addSuccess(
+      Schema.Array(Schema.Struct({ name: Schema.String, createdAt: Schema.String })),
+    ),
+  );
+
+export class TwoApi extends HttpApi.make("two")
+  .add(AgentsGroup)
+  .add(SlackGroup)
+  .add(InternalGroup) {}
