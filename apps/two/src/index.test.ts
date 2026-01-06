@@ -55,10 +55,17 @@ test("slack webhook triggers agent response with correct answer", async () => {
 
   const agentName = `slack:${slackPayload.team_id}:${slackPayload.event.ts}`;
 
-  const pollForOutgoingMessage = async (
+  const outgoingMessage = await pollForOutgoingMessage();
+
+  expect(outgoingMessage).not.toBeNull();
+  expect(outgoingMessage!.text.toLowerCase()).toMatch(/3|three/);
+
+  // helpers
+
+  async function pollForOutgoingMessage(
     maxAttempts = 60,
     delayMs = 1000,
-  ): Promise<{ text: string } | null> => {
+  ): Promise<{ text: string } | null> {
     for (let i = 0; i < maxAttempts; i++) {
       const eventsResponse = await fetch(`${server.baseUrl}/agents/${agentName}`);
       if (!eventsResponse.ok) {
@@ -82,10 +89,5 @@ test("slack webhook triggers agent response with correct answer", async () => {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
     return null;
-  };
-
-  const outgoingMessage = await pollForOutgoingMessage();
-
-  expect(outgoingMessage).not.toBeNull();
-  expect(outgoingMessage!.text.toLowerCase()).toMatch(/3|three/);
+  }
 });
