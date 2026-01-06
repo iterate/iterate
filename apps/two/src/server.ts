@@ -1,9 +1,8 @@
 import { createServer } from "node:http";
-import * as path from "node:path";
 import { HttpApiBuilder, HttpMiddleware, HttpServer } from "@effect/platform";
 import { NodeHttpServer } from "@effect/platform-node";
 import { SqliteClient } from "@effect/sql-sqlite-node";
-import { Effect, Exit, Layer, Scope } from "effect";
+import { Effect, Exit, Layer, Logger, LogLevel, Scope } from "effect";
 import { TwoApi } from "./api.ts";
 import { AgentsHandlersLive } from "./handlers/agents.ts";
 import { InternalHandlersLive } from "./handlers/internal.ts";
@@ -32,7 +31,12 @@ export const defaultConfig: ServerConfig = {
   workspacesDir: process.cwd(),
 };
 
-export function createServerLayers(config: ServerConfig) {
+export interface LoggingConfig {
+  minLevel?: LogLevel.LogLevel;
+  format?: "pretty" | "json" | "structured";
+}
+
+export function createServerLayers(config: ServerConfig, logging?: LoggingConfig) {
   const SqliteLive = SqliteClient.layer({
     filename: config.dbFilename,
   });
@@ -56,6 +60,16 @@ export function createServerLayers(config: ServerConfig) {
     }),
   );
 
+  const LoggerLive = (() => {
+    const format = logging?.format ?? "structured";
+    const minLevel = logging?.minLevel ?? LogLevel.Info;
+
+    const baseLogger =
+      format === "pretty" ? Logger.pretty : format === "json" ? Logger.json : Logger.structured;
+
+    return baseLogger.pipe(Layer.merge(Logger.minimumLogLevel(minLevel)));
+  })();
+
   const ServerLive = HttpApiBuilder.serve(HttpMiddleware.logger).pipe(
     Layer.provide(ApiLive),
     Layer.provide(StartSubscriptionsLive),
@@ -64,6 +78,7 @@ export function createServerLayers(config: ServerConfig) {
     Layer.provide(SessionManagerLive),
     Layer.provide(EventStoreLive),
     Layer.provide(SqliteLive),
+    Layer.provide(LoggerLive),
     HttpServer.withLogAddress,
     Layer.provide(NodeHttpServer.layer(createServer, { port: config.httpPort })),
   );
@@ -71,9 +86,12 @@ export function createServerLayers(config: ServerConfig) {
   return ServerLive;
 }
 
-export async function startServer(config: Partial<ServerConfig> = {}): Promise<RunningServer> {
+export async function startServer(
+  config: Partial<ServerConfig> = {},
+  logging?: LoggingConfig,
+): Promise<RunningServer> {
   const fullConfig = { ...defaultConfig, ...config };
-  const ServerLive = createServerLayers(fullConfig);
+  const ServerLive = createServerLayers(fullConfig, logging);
 
   const scope = Effect.runSync(Scope.make());
 

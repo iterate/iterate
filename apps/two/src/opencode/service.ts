@@ -1,5 +1,4 @@
-import * as path from "node:path";
-import * as fs from "node:fs";
+import { execSync } from "node:child_process";
 import { createOpencode, type OpencodeClient } from "@opencode-ai/sdk";
 import { Context, Effect, Layer, Option, Queue, Ref, Stream } from "effect";
 import { SessionManager } from "./session-manager.ts";
@@ -40,7 +39,30 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
         return config.baseWorkingDirectory;
       };
 
-      const baseUrl = `http://${config.hostname ?? "127.0.0.1"}:${config.port ?? 4096}`;
+      const port = config.port ?? 4096;
+      const hostname = config.hostname ?? "127.0.0.1";
+      const baseUrl = `http://${hostname}:${port}`;
+
+      const forceKillOnPort = (targetPort: number) =>
+        Effect.sync(() => {
+          try {
+            const result = execSync(`lsof -ti :${targetPort}`, { encoding: "utf-8" });
+            const pids = result.trim().split("\n").filter(Boolean);
+            const myPid = process.pid.toString();
+            for (const pid of pids) {
+              if (pid === myPid) {
+                continue; // Don't kill ourselves
+              }
+              try {
+                execSync(`kill -9 ${pid}`, { stdio: "ignore" });
+              } catch {
+                // Process might have already exited
+              }
+            }
+          } catch {
+            // No processes on port
+          }
+        });
 
       const start = () =>
         Effect.gen(function* () {
@@ -49,8 +71,7 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
             return;
           }
 
-          const port = config.port ?? 4096;
-          const hostname = config.hostname ?? "127.0.0.1";
+          yield* Effect.logDebug(`Starting OpenCode server on ${hostname}:${port}`);
 
           const result = yield* Effect.tryPromise({
             try: async () => {
@@ -62,7 +83,7 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
               return { client, server };
             },
             catch: (error) => new Error(`Failed to start OpenCode server: ${error}`),
-          });
+          }).pipe(Effect.withSpan("opencode.createServer"));
 
           yield* Ref.set(clientRef, result.client);
           yield* Ref.set(serverCloseRef, () => result.server.close());
@@ -89,17 +110,24 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
               })();
             }),
           );
-        });
+
+          yield* Effect.logDebug("OpenCode server started and event stream connected");
+        }).pipe(Effect.withSpan("opencode.start"));
 
       const stop = () =>
         Effect.gen(function* () {
+          yield* Effect.logDebug("Stopping OpenCode server...");
           const closeServer = yield* Ref.get(serverCloseRef);
           if (closeServer) {
             closeServer();
             yield* Ref.set(serverCloseRef, null);
+            // Give graceful shutdown a moment, then force kill
+            yield* Effect.sleep("200 millis");
+            yield* forceKillOnPort(port);
           }
           yield* Ref.set(clientRef, null);
-        });
+          yield* Effect.logDebug("OpenCode server stopped");
+        }).pipe(Effect.withSpan("opencode.stop"));
 
       const getClient = Effect.gen(function* () {
         const client = yield* Ref.get(clientRef);
@@ -117,11 +145,16 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
           );
 
           if (existingSessionId) {
+            yield* Effect.logDebug(
+              `Reusing existing session ${existingSessionId} for agent ${agentId}`,
+            );
             return existingSessionId;
           }
 
           const client = yield* getClient;
           const workingDirectory = ensureWorkingDirectory(agentId);
+
+          yield* Effect.logDebug(`Creating new session for agent ${agentId}`);
 
           const session = yield* Effect.tryPromise({
             try: async () => {
@@ -138,14 +171,19 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
           });
 
           yield* sessionManager.createMapping(agentId, session.id, workingDirectory);
+          yield* Effect.logDebug(`Created session ${session.id} for agent ${agentId}`);
           return session.id;
-        });
+        }).pipe(Effect.withSpan("opencode.getOrCreateSession", { attributes: { agentId } }));
 
       const sendPromptAsync = (agentId: string, text: string) =>
         Effect.gen(function* () {
           yield* getClient;
           const sessionId = yield* getOrCreateSession(agentId);
           const workingDirectory = ensureWorkingDirectory(agentId);
+
+          yield* Effect.logDebug(
+            `Sending prompt to session ${sessionId}: "${text.slice(0, 50)}${text.length > 50 ? "..." : ""}"`,
+          );
 
           yield* Effect.tryPromise({
             try: async () => {
@@ -165,7 +203,13 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
             },
             catch: (error) => new Error(`Failed to send prompt: ${error}`),
           });
-        });
+
+          yield* Effect.logDebug(`Prompt sent successfully to session ${sessionId}`);
+        }).pipe(
+          Effect.withSpan("opencode.sendPromptAsync", {
+            attributes: { agentId, promptLength: text.length },
+          }),
+        );
 
       const subscribeToEvents = () =>
         Stream.fromQueue(eventQueue).pipe(Stream.mapError((e) => new Error(String(e))));

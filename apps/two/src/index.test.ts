@@ -1,4 +1,6 @@
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
+import { LogLevel } from "effect";
 import { test, expect, beforeAll, afterAll } from "vitest";
 import { startServer, type RunningServer } from "./server.ts";
 
@@ -11,25 +13,59 @@ process.env.TWO_SERVER_URL = `http://localhost:${TEST_HTTP_PORT}`;
 
 let server: RunningServer;
 
+function killProcessesOnPort(port: number): void {
+  try {
+    const result = execSync(`lsof -ti :${port}`, { encoding: "utf-8" });
+    const pids = result.trim().split("\n").filter(Boolean);
+    const myPid = process.pid.toString();
+    for (const pid of pids) {
+      if (pid === myPid) {
+        continue; // Don't kill ourselves
+      }
+      try {
+        execSync(`kill -9 ${pid}`, { stdio: "ignore" });
+        console.log(`[cleanup] Killed process ${pid} on port ${port}`);
+      } catch {
+        // Process might have already exited
+      }
+    }
+  } catch {
+    // No processes on port (lsof returns non-zero)
+  }
+}
+
 beforeAll(async () => {
+  killProcessesOnPort(TEST_HTTP_PORT);
+  killProcessesOnPort(TEST_OPENCODE_PORT);
+
   for (const file of [TEST_DB_FILE, `${TEST_DB_FILE}-shm`, `${TEST_DB_FILE}-wal`]) {
     if (fs.existsSync(file)) {
       fs.unlinkSync(file);
     }
   }
 
-  server = await startServer({
-    httpPort: TEST_HTTP_PORT,
-    openCodePort: TEST_OPENCODE_PORT,
-    dbFilename: TEST_DB_FILE,
-    workspacesDir: TEST_WORKSPACES_DIR,
-  });
+  server = await startServer(
+    {
+      httpPort: TEST_HTTP_PORT,
+      openCodePort: TEST_OPENCODE_PORT,
+      dbFilename: TEST_DB_FILE,
+      workspacesDir: TEST_WORKSPACES_DIR,
+    },
+    {
+      minLevel: LogLevel.Debug,
+      format: "structured",
+    },
+  );
 });
 
 afterAll(async () => {
   if (server) {
     await server.shutdown();
+    // Give graceful shutdown more time to complete
+    await new Promise((resolve) => setTimeout(resolve, 1000));
   }
+  // Force kill any remaining processes (shouldn't be needed but ensures cleanup)
+  killProcessesOnPort(TEST_OPENCODE_PORT);
 });
 
 test("slack webhook triggers agent response with correct answer", async () => {
@@ -57,6 +93,7 @@ test("slack webhook triggers agent response with correct answer", async () => {
 
   const outgoingMessage = await pollForOutgoingMessage();
 
+  console.log({ outgoingMessage });
   expect(outgoingMessage).not.toBeNull();
   expect(outgoingMessage!.text.toLowerCase()).toMatch(/3|three/);
 
