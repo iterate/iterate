@@ -141,17 +141,25 @@ function useStreamReducer<T, E>(
 
     const es = new EventSource(url.toString())
 
-    es.addEventListener("data", (evt) => {
-      try {
-        const items = JSON.parse(evt.data)
-        if (Array.isArray(items)) items.forEach((item) => dispatch(item as E))
-      } catch {}
-    })
-
     es.addEventListener("control", (evt) => {
       try {
         const ctrl = JSON.parse(evt.data)
         if (ctrl.streamNextOffset) offsetRef.current = ctrl.streamNextOffset
+      } catch {}
+    })
+
+    // Handle data events from the SSE stream (backend uses "data" event name)
+    es.addEventListener("data", (evt) => {
+      try {
+        const data = JSON.parse(evt.data)
+        // Backend wraps content in an array: [message.content]
+        if (Array.isArray(data)) {
+          for (const item of data) {
+            dispatch(item)
+          }
+        } else {
+          dispatch(data)
+        }
       } catch {}
     })
 
