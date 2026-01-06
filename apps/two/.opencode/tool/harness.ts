@@ -84,3 +84,38 @@ export const harness_listAgents = tool({
     return `Known agents:\n${data.map((a) => `- ${a.name} (created: ${a.createdAt})`).join("\n")}`;
   },
 });
+
+export const harness_sendMessageToUser = tool({
+  description:
+    "Send a message back to the user who initiated this conversation. Use this to reply to the user's questions or requests.",
+  args: {
+    message: tool.schema.string().describe("The message to send to the user"),
+  },
+  async execute(args, context) {
+    const mappingResponse = await fetch(
+      `${TWO_SERVER_URL}/internal/session-mapping/${context.sessionID}`,
+    );
+    if (!mappingResponse.ok) {
+      return `Failed to find agent for session ${context.sessionID}`;
+    }
+    const { agentId } = (await mappingResponse.json()) as { agentId: string };
+
+    const response = await fetch(`${TWO_SERVER_URL}/agents/${agentId}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        type: "outgoing_message",
+        payload: {
+          text: args.message,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      return `Failed to send message to user: ${response.status} - ${errorText}`;
+    }
+
+    return `Message sent to user: "${args.message}"`;
+  },
+});

@@ -1,4 +1,4 @@
-import { Context, Effect, Fiber, Layer, Ref, Schedule, Stream } from "effect";
+import { Context, Effect, Fiber, Layer, Ref, Scope, Stream } from "effect";
 import { EventStore } from "./event-store.ts";
 import { OpenCodeService } from "../opencode/service.ts";
 import { AgentEvent } from "../schemas/events.ts";
@@ -19,7 +19,7 @@ function extractTextFromEvent(event: AgentEvent): string | null {
 export class SubscriptionManager extends Context.Tag("SubscriptionManager")<
   SubscriptionManager,
   {
-    readonly start: () => Effect.Effect<void, never>;
+    readonly start: () => Effect.Effect<void, never, Scope.Scope>;
     readonly getActiveAgents: () => Effect.Effect<string[], never>;
   }
 >() {}
@@ -61,7 +61,15 @@ export const SubscriptionManagerLive = Layer.scoped(
                 `[${agentName}] Received ${event.type}, triggering OpenCode: "${text.slice(0, 80)}${text.length > 80 ? "..." : ""}"`,
               );
 
-              yield* opencode.sendPromptAsync(agentName, text).pipe(
+              const promptWithInstructions = `You are a helpful assistant responding to a user message via Slack.
+
+IMPORTANT: After processing the user's request, you MUST use the harness_sendMessageToUser tool to send your response back to the user. Do not just think about the answer - you must actually call the tool with your response.
+
+User's message: ${text}
+
+Remember: Call harness_sendMessageToUser with your response.`;
+
+              yield* opencode.sendPromptAsync(agentName, promptWithInstructions).pipe(
                 Effect.tap(() => Effect.logInfo(`[${agentName}] Prompt sent to OpenCode`)),
                 Effect.catchAll((error) =>
                   Effect.logError(`[${agentName}] Failed to send prompt: ${error.message}`),
@@ -85,10 +93,13 @@ export const SubscriptionManagerLive = Layer.scoped(
       const agents = yield* eventStore.listAgents().pipe(Effect.orElseSucceed(() => []));
       const subscriptions = yield* Ref.get(activeSubscriptions);
 
-      for (const agentName of agents) {
-        if (!subscriptions.has(agentName)) {
-          yield* startAgentSubscriber(agentName);
-        }
+      const newAgents = agents.filter((a) => !subscriptions.has(a));
+      if (newAgents.length > 0) {
+        yield* Effect.logInfo(`Sync found ${newAgents.length} new agents: ${newAgents.join(", ")}`);
+      }
+
+      for (const agentName of newAgents) {
+        yield* startAgentSubscriber(agentName);
       }
     });
 
@@ -103,7 +114,11 @@ export const SubscriptionManagerLive = Layer.scoped(
 
         yield* syncSubscriptions;
 
-        yield* syncSubscriptions.pipe(Effect.repeat(Schedule.spaced("5 seconds")), Effect.fork);
+        yield* syncSubscriptions.pipe(
+          Effect.delay("500 millis"),
+          Effect.forever,
+          Effect.forkScoped,
+        );
 
         yield* Effect.logInfo("Subscription manager started");
       });

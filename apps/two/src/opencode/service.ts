@@ -36,12 +36,8 @@ export const makeOpenCodeService = (config: OpenCodeConfig) =>
       const serverCloseRef = yield* Ref.make<(() => void) | null>(null);
       const eventQueue = yield* Queue.unbounded<TranslatedEvent>();
 
-      const ensureWorkingDirectory = (agentId: string): string => {
-        const agentDir = path.join(config.baseWorkingDirectory, "agents", agentId);
-        if (!fs.existsSync(agentDir)) {
-          fs.mkdirSync(agentDir, { recursive: true });
-        }
-        return agentDir;
+      const ensureWorkingDirectory = (_agentId: string): string => {
+        return config.baseWorkingDirectory;
       };
 
       const baseUrl = `http://${config.hostname ?? "127.0.0.1"}:${config.port ?? 4096}`;

@@ -27,6 +27,9 @@ export const SlackWebhookPayload = Schema.Struct({
   event: Schema.Struct({
     thread_ts: Schema.optional(Schema.String),
     ts: Schema.String,
+    text: Schema.optional(Schema.String),
+    user: Schema.optional(Schema.String),
+    channel: Schema.optional(Schema.String),
   }),
 });
 

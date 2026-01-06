@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node --experimental-strip-types --watch src/index.ts",
     "start": "node --experimental-strip-types src/index.ts",
-    "typecheck": "tsc -b"
+    "typecheck": "tsc -b",
+    "test": "vitest"
   },
   "dependencies": {
     "effect": "^3.16.0",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.0"
   }
 }

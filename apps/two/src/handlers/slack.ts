@@ -19,10 +19,25 @@ export const SlackHandlersLive = HttpApiBuilder.group(TwoApi, "slack", (handlers
 
         yield* store.appendEvents(agentName, [
           {
-            type: "slack_webhook",
+            type: "slack_webhook_raw",
             payload: payload,
           },
         ]);
+
+        const messageText = payload.event.text;
+        if (messageText) {
+          yield* store.appendEvents(agentName, [
+            {
+              type: "user_message",
+              payload: {
+                text: messageText,
+                source: "slack",
+                user: payload.event.user,
+                channel: payload.event.channel,
+              },
+            },
+          ]);
+        }
 
         return { ok: true };
       }).pipe(mapSqlError),
