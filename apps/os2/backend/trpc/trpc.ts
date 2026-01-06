@@ -1,9 +1,11 @@
 import { initTRPC, TRPCError } from "@trpc/server";
-import { prettifyError, z, ZodError } from "zod";
+import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
 import { organizationUserMembership, organization, instance } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
+import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
+import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -69,15 +71,26 @@ type AuthenticatedContext = Context & {
   session: NonNullable<Context["session"]>;
 };
 
-// Middleware to automatically invalidate queries after mutations
-// This is now a no-op - individual procedures handle their own cache invalidation if needed
-// Removing this because:
-// 1. It added an extra DB query to EVERY mutation
-// 2. The Durable Object broadcast in dev mode was slow
-// 3. Clients already invalidate their own queries via queryClient.invalidateQueries
-export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next }) => {
+export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
   const authCtx = ctx as AuthenticatedContext;
-  return next({ ctx: authCtx });
+  const result = await next({ ctx: authCtx });
+
+  if (type === "mutation" && result.ok && ctx.user) {
+    const organizationId = (authCtx as AuthenticatedContext & { organization?: { id: string } })
+      .organization?.id;
+    if (organizationId) {
+      await invalidateOrganizationQueries(ctx.env, organizationId, {
+        type: "INVALIDATE",
+        invalidateInfo: {
+          type: "ALL",
+        },
+      }).catch((error) => {
+        logger.error("Failed to invalidate queries:", error);
+      });
+    }
+  }
+
+  return result;
 });
 
 /** Protected procedure that requires authentication */

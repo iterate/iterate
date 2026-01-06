@@ -14,6 +14,7 @@ import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
+import { logger } from "./tag-logger.ts";
 
 export type Variables = {
   auth: Auth;
@@ -60,12 +61,15 @@ app.use("*", async (c, next) => {
     url: c.req.url,
     traceId: typeid("req").toString(),
   };
-  console.log("Request:", requestTags);
+  logger.info("Request:", requestTags);
   return next();
 });
 
 app.onError((err, c) => {
-  console.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
+  logger.error(
+    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
+    err,
+  );
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
@@ -83,9 +87,9 @@ app.all("/api/trpc/*", (c) => {
       const procedurePath = path ?? "unknown";
       const status = getHTTPStatusCodeFromError(error);
       if (status >= 500) {
-        console.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
+        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
       } else {
-        console.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
+        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
       }
     },
   });

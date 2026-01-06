@@ -1,4 +1,3 @@
-import * as React from "react";
 import { createFileRoute, Outlet, Link, Navigate } from "@tanstack/react-router";
 import { Shield, Terminal, Info } from "lucide-react";
 import { useSessionUser } from "../../hooks/use-session-user.ts";

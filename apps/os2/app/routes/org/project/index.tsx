@@ -1,4 +1,4 @@
-import * as React from "react";
+import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -18,29 +18,33 @@ import {
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/")({
-  component: InstanceMachinesPage,
+export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug/_/$projectSlug/")({
+  component: ProjectMachinesPage,
 });
 
-function InstanceMachinesPage() {
-  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/" });
+function ProjectMachinesPage() {
+  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug/_/$projectSlug/" });
   const queryClient = useQueryClient();
-  const [createDialogOpen, setCreateDialogOpen] = React.useState(false);
-  const [newMachineName, setNewMachineName] = React.useState("");
-  const [showArchived, setShowArchived] = React.useState(false);
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [newMachineName, setNewMachineName] = useState("");
+  const machineListQueryKey = trpc.machine.list.queryKey({
+    organizationSlug: params.organizationSlug,
+    instanceSlug: params.projectSlug,
+    includeArchived: false,
+  });
 
   const { data: machines, isLoading } = useQuery(
     trpc.machine.list.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.instanceSlug,
-      includeArchived: showArchived,
+      instanceSlug: params.projectSlug,
+      includeArchived: false,
     }),
   );
 
-  const { data: instance } = useQuery(
+  const { data: project } = useQuery(
     trpc.instance.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.instanceSlug,
+      instanceSlug: params.projectSlug,
     }),
   );
 
@@ -48,13 +52,13 @@ function InstanceMachinesPage() {
     mutationFn: async (name: string) => {
       return trpcClient.machine.create.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.instanceSlug,
+        instanceSlug: params.projectSlug,
         name,
         type: "daytona",
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["machine", "list"] });
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       setCreateDialogOpen(false);
       setNewMachineName("");
       toast.success("Machine created!");
@@ -68,12 +72,12 @@ function InstanceMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.archive.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.instanceSlug,
+        instanceSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["machine", "list"] });
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine archived!");
     },
     onError: (error) => {
@@ -85,12 +89,12 @@ function InstanceMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.unarchive.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.instanceSlug,
+        instanceSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["machine", "list"] });
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine restored!");
     },
     onError: (error) => {
@@ -102,12 +106,12 @@ function InstanceMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.delete.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.instanceSlug,
+        instanceSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["machine", "list"] });
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine deleted!");
     },
     onError: (error) => {
@@ -124,20 +128,8 @@ function InstanceMachinesPage() {
   return (
     <div className="p-8">
       <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">{instance?.name || "Machines"}</h1>
-          <p className="text-muted-foreground">Manage your machines</p>
-        </div>
+        <h1 className="text-2xl font-bold">{project?.name || "Machines"}</h1>
         <div className="flex items-center gap-4">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(e) => setShowArchived(e.target.checked)}
-              className="rounded"
-            />
-            Show archived
-          </label>
           <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
             <DialogTrigger asChild>
               <Button>
@@ -148,9 +140,7 @@ function InstanceMachinesPage() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Create Machine</DialogTitle>
-                <DialogDescription>
-                  Create a new machine in this instance.
-                </DialogDescription>
+                <DialogDescription>Create a new machine in this project.</DialogDescription>
               </DialogHeader>
               <div className="py-4">
                 <Input

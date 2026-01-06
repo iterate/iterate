@@ -1,37 +1,17 @@
 import { MailIcon } from "lucide-react";
-import { useCallback, useEffect } from "react";
 import { useSearch } from "@tanstack/react-router";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "./ui/button.tsx";
-import { Spinner } from "./ui/spinner.tsx";
 
 export function LoginProviders() {
-  const { redirectUrl, autoSignin } = useSearch({ from: "/login" });
+  const { redirectUrl } = useSearch({ from: "/login" });
 
   const handleGoogleSignIn = async () => {
-    try {
-      console.log("🚀 Attempting Google sign-in...");
-
-      await authClient.signIn.social({
-        provider: "google",
-        callbackURL: redirectUrl,
-      });
-    } catch (error) {
-      console.error("❌ Google sign-in error:", error);
-    }
+    await authClient.signIn.social({
+      provider: "google",
+      callbackURL: redirectUrl,
+    });
   };
-
-  const handleSlackSignIn = useCallback(async () => {
-    try {
-      console.log("🚀 Attempting Slack sign-in...");
-      await authClient.signIn.social({
-        provider: "slack",
-        callbackURL: redirectUrl,
-      });
-    } catch (error) {
-      console.error("❌ Slack sign-in error:", error);
-    }
-  }, [redirectUrl]);
 
   const handleEmailAuth = async () => {
     const email = prompt("Enter your email");
@@ -45,20 +25,6 @@ export function LoginProviders() {
     await authClient.signIn.emailOtp({ email, otp });
     window.location.href = "/";
   };
-
-  useEffect(() => {
-    if (autoSignin === "slack") {
-      handleSlackSignIn();
-    }
-  }, [autoSignin, handleSlackSignIn]);
-
-  if (autoSignin === "slack") {
-    return (
-      <div className="flex items-center justify-center gap-2">
-        <Spinner /> <span className="font-medium">Redirecting to Slack...</span>
-      </div>
-    );
-  }
 
   return (
     <div className="w-full space-y-4">
@@ -87,15 +53,6 @@ export function LoginProviders() {
           />
         </svg>
         Continue with Google
-      </Button>
-      <Button
-        onClick={handleSlackSignIn}
-        variant="outline"
-        size="lg"
-        className="w-full h-14 text-base font-semibold shadow-sm hover:shadow-md transition-shadow"
-      >
-        <img src="/slack.svg" alt="Slack" className="mr-3 h-6 w-6" />
-        Continue with Slack
       </Button>
       {import.meta.env.VITE_ENABLE_EMAIL_OTP_SIGNIN && (
         <Button onClick={handleEmailAuth} variant="outline" className="w-full h-12">

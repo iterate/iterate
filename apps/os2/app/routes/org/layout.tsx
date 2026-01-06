@@ -1,8 +1,8 @@
-import * as React from "react";
 import { createFileRoute, Outlet, Navigate, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.ts";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { useOrganizationWebSocket } from "../../hooks/use-websocket.ts";
 import { Sidebar } from "../../components/sidebar.tsx";
 
 export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug")({
@@ -28,6 +28,8 @@ function OrgLayout() {
     }),
   );
 
+  useOrganizationWebSocket(currentOrg?.id ?? "");
+
   if (orgsPending || orgPending || !user) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -45,10 +47,15 @@ function OrgLayout() {
     return <Navigate to="/" />;
   }
 
+  const organizationsWithProjects = (organizations || []).map((organization) => ({
+    ...organization,
+    projects: organization.instances || [],
+  }));
+
   return (
     <div className="flex h-screen">
       <Sidebar
-        organizations={organizations || []}
+        organizations={organizationsWithProjects}
         currentOrg={currentOrg}
         user={{
           name: user.name,

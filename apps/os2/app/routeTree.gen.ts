@@ -15,6 +15,7 @@ import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as indexRouteImport } from './routes/index.tsx'
+import { Route as userSettingsRouteImport } from './routes/user/settings.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
 import { Route as orgLayoutRouteImport } from './routes/org/layout.tsx'
 import { Route as adminIndexRouteImport } from './routes/admin/index.tsx'
@@ -23,9 +24,9 @@ import { Route as adminTrpcToolsRouteImport } from './routes/admin/trpc-tools.ts
 import { Route as adminSessionInfoRouteImport } from './routes/admin/session-info.tsx'
 import { Route as orgTeamRouteImport } from './routes/org/team.tsx'
 import { Route as orgSettingsRouteImport } from './routes/org/settings.tsx'
-import { Route as orgConnectorsRouteImport } from './routes/org/connectors.tsx'
-import { Route as orgInstanceLayoutRouteImport } from './routes/org/instance/layout.tsx'
-import { Route as orgInstanceIndexRouteImport } from './routes/org/instance/index.tsx'
+import { Route as orgProjectLayoutRouteImport } from './routes/org/project/layout.tsx'
+import { Route as orgProjectIndexRouteImport } from './routes/org/project/index.tsx'
+import { Route as orgProjectConnectorsRouteImport } from './routes/org/project/connectors.tsx'
 
 const AuthRequiredDotlayoutRouteImport = createFileRoute(
   '/_auth-required.layout/_',
@@ -55,6 +56,11 @@ const newOrganizationRoute = newOrganizationRouteImport.update({
 const indexRoute = indexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => authRequiredDotlayoutRoute,
+} as any)
+const userSettingsRoute = userSettingsRouteImport.update({
+  id: '/user/settings',
+  path: '/user/settings',
   getParentRoute: () => authRequiredDotlayoutRoute,
 } as any)
 const adminLayoutRoute = adminLayoutRouteImport.update({
@@ -102,20 +108,20 @@ const orgSettingsRoute = orgSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => orgLayoutRoute,
 } as any)
-const orgConnectorsRoute = orgConnectorsRouteImport.update({
-  id: '/connectors',
-  path: '/connectors',
-  getParentRoute: () => orgLayoutRoute,
-} as any)
-const orgInstanceLayoutRoute = orgInstanceLayoutRouteImport.update({
-  id: '/$instanceSlug',
-  path: '/$instanceSlug',
+const orgProjectLayoutRoute = orgProjectLayoutRouteImport.update({
+  id: '/$projectSlug',
+  path: '/$projectSlug',
   getParentRoute: () => AuthRequiredDotlayoutOrganizationSlugRoute,
 } as any)
-const orgInstanceIndexRoute = orgInstanceIndexRouteImport.update({
+const orgProjectIndexRoute = orgProjectIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => orgInstanceLayoutRoute,
+  getParentRoute: () => orgProjectLayoutRoute,
+} as any)
+const orgProjectConnectorsRoute = orgProjectConnectorsRouteImport.update({
+  id: '/connectors',
+  path: '/connectors',
+  getParentRoute: () => orgProjectLayoutRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
@@ -124,28 +130,30 @@ export interface FileRoutesByFullPath {
   '/new-organization': typeof newOrganizationRoute
   '/$organizationSlug': typeof AuthRequiredDotlayoutOrganizationSlugRouteWithChildren
   '/admin': typeof adminLayoutRouteWithChildren
-  '/$organizationSlug/connectors': typeof orgConnectorsRoute
+  '/user/settings': typeof userSettingsRoute
   '/$organizationSlug/settings': typeof orgSettingsRoute
   '/$organizationSlug/team': typeof orgTeamRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationSlug/': typeof orgIndexRoute
   '/admin/': typeof adminIndexRoute
-  '/$organizationSlug/$instanceSlug': typeof orgInstanceLayoutRouteWithChildren
-  '/$organizationSlug/$instanceSlug/': typeof orgInstanceIndexRoute
+  '/$organizationSlug/$projectSlug': typeof orgProjectLayoutRouteWithChildren
+  '/$organizationSlug/$projectSlug/connectors': typeof orgProjectConnectorsRoute
+  '/$organizationSlug/$projectSlug/': typeof orgProjectIndexRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof loginRoute
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
-  '/$organizationSlug/connectors': typeof orgConnectorsRoute
+  '/user/settings': typeof userSettingsRoute
   '/$organizationSlug/settings': typeof orgSettingsRoute
   '/$organizationSlug/team': typeof orgTeamRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/$organizationSlug': typeof AuthRequiredDotlayoutOrganizationSlugRouteWithChildren
   '/admin': typeof adminIndexRoute
-  '/$organizationSlug/$instanceSlug': typeof orgInstanceIndexRoute
+  '/$organizationSlug/$projectSlug/connectors': typeof orgProjectConnectorsRoute
+  '/$organizationSlug/$projectSlug': typeof orgProjectIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -156,7 +164,7 @@ export interface FileRoutesById {
   '/_auth-required.layout/_': typeof AuthRequiredDotlayoutRouteWithChildren
   '/_auth-required.layout/_/$organizationSlug': typeof orgLayoutRouteWithChildren
   '/_auth-required.layout/_/admin': typeof adminLayoutRouteWithChildren
-  '/_auth-required.layout/_/$organizationSlug/connectors': typeof orgConnectorsRoute
+  '/_auth-required.layout/user/settings': typeof userSettingsRoute
   '/_auth-required.layout/_/$organizationSlug/settings': typeof orgSettingsRoute
   '/_auth-required.layout/_/$organizationSlug/team': typeof orgTeamRoute
   '/_auth-required.layout/_/admin/session-info': typeof adminSessionInfoRoute
@@ -164,8 +172,9 @@ export interface FileRoutesById {
   '/_auth-required.layout/_/$organizationSlug/': typeof orgIndexRoute
   '/_auth-required.layout/_/admin/': typeof adminIndexRoute
   '/_auth-required.layout/_/$organizationSlug/_': typeof AuthRequiredDotlayoutOrganizationSlugRouteWithChildren
-  '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug': typeof orgInstanceLayoutRouteWithChildren
-  '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/': typeof orgInstanceIndexRoute
+  '/_auth-required.layout/_/$organizationSlug/_/$projectSlug': typeof orgProjectLayoutRouteWithChildren
+  '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/connectors': typeof orgProjectConnectorsRoute
+  '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/': typeof orgProjectIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -175,28 +184,30 @@ export interface FileRouteTypes {
     | '/new-organization'
     | '/$organizationSlug'
     | '/admin'
-    | '/$organizationSlug/connectors'
+    | '/user/settings'
     | '/$organizationSlug/settings'
     | '/$organizationSlug/team'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/$organizationSlug/'
     | '/admin/'
-    | '/$organizationSlug/$instanceSlug'
-    | '/$organizationSlug/$instanceSlug/'
+    | '/$organizationSlug/$projectSlug'
+    | '/$organizationSlug/$projectSlug/connectors'
+    | '/$organizationSlug/$projectSlug/'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
     | '/'
     | '/new-organization'
-    | '/$organizationSlug/connectors'
+    | '/user/settings'
     | '/$organizationSlug/settings'
     | '/$organizationSlug/team'
     | '/admin/session-info'
     | '/admin/trpc-tools'
     | '/$organizationSlug'
     | '/admin'
-    | '/$organizationSlug/$instanceSlug'
+    | '/$organizationSlug/$projectSlug/connectors'
+    | '/$organizationSlug/$projectSlug'
   id:
     | '__root__'
     | '/_auth-required.layout'
@@ -206,7 +217,7 @@ export interface FileRouteTypes {
     | '/_auth-required.layout/_'
     | '/_auth-required.layout/_/$organizationSlug'
     | '/_auth-required.layout/_/admin'
-    | '/_auth-required.layout/_/$organizationSlug/connectors'
+    | '/_auth-required.layout/user/settings'
     | '/_auth-required.layout/_/$organizationSlug/settings'
     | '/_auth-required.layout/_/$organizationSlug/team'
     | '/_auth-required.layout/_/admin/session-info'
@@ -214,8 +225,9 @@ export interface FileRouteTypes {
     | '/_auth-required.layout/_/$organizationSlug/'
     | '/_auth-required.layout/_/admin/'
     | '/_auth-required.layout/_/$organizationSlug/_'
-    | '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug'
-    | '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/'
+    | '/_auth-required.layout/_/$organizationSlug/_/$projectSlug'
+    | '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/connectors'
+    | '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -258,6 +270,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof indexRouteImport
+      parentRoute: typeof authRequiredDotlayoutRoute
+    }
+    '/_auth-required.layout/user/settings': {
+      id: '/_auth-required.layout/user/settings'
+      path: '/user/settings'
+      fullPath: '/user/settings'
+      preLoaderRoute: typeof userSettingsRouteImport
       parentRoute: typeof authRequiredDotlayoutRoute
     }
     '/_auth-required.layout/_/admin': {
@@ -323,48 +342,50 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgSettingsRouteImport
       parentRoute: typeof orgLayoutRoute
     }
-    '/_auth-required.layout/_/$organizationSlug/connectors': {
-      id: '/_auth-required.layout/_/$organizationSlug/connectors'
-      path: '/connectors'
-      fullPath: '/$organizationSlug/connectors'
-      preLoaderRoute: typeof orgConnectorsRouteImport
-      parentRoute: typeof orgLayoutRoute
-    }
-    '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug': {
-      id: '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug'
-      path: '/$instanceSlug'
-      fullPath: '/$organizationSlug/$instanceSlug'
-      preLoaderRoute: typeof orgInstanceLayoutRouteImport
+    '/_auth-required.layout/_/$organizationSlug/_/$projectSlug': {
+      id: '/_auth-required.layout/_/$organizationSlug/_/$projectSlug'
+      path: '/$projectSlug'
+      fullPath: '/$organizationSlug/$projectSlug'
+      preLoaderRoute: typeof orgProjectLayoutRouteImport
       parentRoute: typeof AuthRequiredDotlayoutOrganizationSlugRoute
     }
-    '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/': {
-      id: '/_auth-required.layout/_/$organizationSlug/_/$instanceSlug/'
+    '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/': {
+      id: '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/'
       path: '/'
-      fullPath: '/$organizationSlug/$instanceSlug/'
-      preLoaderRoute: typeof orgInstanceIndexRouteImport
-      parentRoute: typeof orgInstanceLayoutRoute
+      fullPath: '/$organizationSlug/$projectSlug/'
+      preLoaderRoute: typeof orgProjectIndexRouteImport
+      parentRoute: typeof orgProjectLayoutRoute
+    }
+    '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/connectors': {
+      id: '/_auth-required.layout/_/$organizationSlug/_/$projectSlug/connectors'
+      path: '/connectors'
+      fullPath: '/$organizationSlug/$projectSlug/connectors'
+      preLoaderRoute: typeof orgProjectConnectorsRouteImport
+      parentRoute: typeof orgProjectLayoutRoute
     }
   }
 }
 
-interface orgInstanceLayoutRouteChildren {
-  orgInstanceIndexRoute: typeof orgInstanceIndexRoute
+interface orgProjectLayoutRouteChildren {
+  orgProjectConnectorsRoute: typeof orgProjectConnectorsRoute
+  orgProjectIndexRoute: typeof orgProjectIndexRoute
 }
 
-const orgInstanceLayoutRouteChildren: orgInstanceLayoutRouteChildren = {
-  orgInstanceIndexRoute: orgInstanceIndexRoute,
+const orgProjectLayoutRouteChildren: orgProjectLayoutRouteChildren = {
+  orgProjectConnectorsRoute: orgProjectConnectorsRoute,
+  orgProjectIndexRoute: orgProjectIndexRoute,
 }
 
-const orgInstanceLayoutRouteWithChildren =
-  orgInstanceLayoutRoute._addFileChildren(orgInstanceLayoutRouteChildren)
+const orgProjectLayoutRouteWithChildren =
+  orgProjectLayoutRoute._addFileChildren(orgProjectLayoutRouteChildren)
 
 interface AuthRequiredDotlayoutOrganizationSlugRouteChildren {
-  orgInstanceLayoutRoute: typeof orgInstanceLayoutRouteWithChildren
+  orgProjectLayoutRoute: typeof orgProjectLayoutRouteWithChildren
 }
 
 const AuthRequiredDotlayoutOrganizationSlugRouteChildren: AuthRequiredDotlayoutOrganizationSlugRouteChildren =
   {
-    orgInstanceLayoutRoute: orgInstanceLayoutRouteWithChildren,
+    orgProjectLayoutRoute: orgProjectLayoutRouteWithChildren,
   }
 
 const AuthRequiredDotlayoutOrganizationSlugRouteWithChildren =
@@ -373,7 +394,6 @@ const AuthRequiredDotlayoutOrganizationSlugRouteWithChildren =
   )
 
 interface orgLayoutRouteChildren {
-  orgConnectorsRoute: typeof orgConnectorsRoute
   orgSettingsRoute: typeof orgSettingsRoute
   orgTeamRoute: typeof orgTeamRoute
   orgIndexRoute: typeof orgIndexRoute
@@ -381,7 +401,6 @@ interface orgLayoutRouteChildren {
 }
 
 const orgLayoutRouteChildren: orgLayoutRouteChildren = {
-  orgConnectorsRoute: orgConnectorsRoute,
   orgSettingsRoute: orgSettingsRoute,
   orgTeamRoute: orgTeamRoute,
   orgIndexRoute: orgIndexRoute,
@@ -428,12 +447,14 @@ interface authRequiredDotlayoutRouteChildren {
   indexRoute: typeof indexRoute
   newOrganizationRoute: typeof newOrganizationRoute
   AuthRequiredDotlayoutRoute: typeof AuthRequiredDotlayoutRouteWithChildren
+  userSettingsRoute: typeof userSettingsRoute
 }
 
 const authRequiredDotlayoutRouteChildren: authRequiredDotlayoutRouteChildren = {
   indexRoute: indexRoute,
   newOrganizationRoute: newOrganizationRoute,
   AuthRequiredDotlayoutRoute: AuthRequiredDotlayoutRouteWithChildren,
+  userSettingsRoute: userSettingsRoute,
 }
 
 const authRequiredDotlayoutRouteWithChildren =

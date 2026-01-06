@@ -17,20 +17,23 @@ export const routes = rootRoute("root.tsx", [
     // New organization
     route("/new-organization", "new-organization.tsx"),
 
+    // User settings
+    route("/user/settings", "user/settings.tsx"),
+
     // Organization routes
     layout("/$organizationSlug", "org/layout.tsx", [
-      // Org index redirects to first instance
+      // Org index redirects to first project
       index("org/index.tsx"),
 
       // Org settings
       route("/settings", "org/settings.tsx"),
       route("/team", "org/team.tsx"),
-      route("/connectors", "org/connectors.tsx"),
 
-      // Instance routes
-      layout("/$instanceSlug", "org/instance/layout.tsx", [
-        // Instance index shows machines
-        index("org/instance/index.tsx"),
+      // Project routes
+      layout("/$projectSlug", "org/project/layout.tsx", [
+        // Project index shows machines
+        index("org/project/index.tsx"),
+        route("/connectors", "org/project/connectors.tsx"),
       ]),
     ]),
 

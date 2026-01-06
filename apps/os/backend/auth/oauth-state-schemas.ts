@@ -30,8 +30,6 @@ export const MCPOAuthState = BaseOAuthState.extend({
   serverId: z.string(),
 });
 
-export const SlackDirectLoginState = BaseOAuthState.extend({});
-
 export const SlackBotLinkState = BaseOAuthState.extend({
   estateId: z.string(),
   link: z.object({
@@ -58,7 +56,6 @@ export const GoogleOAuthState = BaseOAuthState.extend({
 
 export type BaseOAuthState = z.infer<typeof BaseOAuthState>;
 export type MCPOAuthState = z.infer<typeof MCPOAuthState>;
-export type SlackDirectLoginState = z.infer<typeof SlackDirectLoginState>;
 export type SlackBotLinkState = z.infer<typeof SlackBotLinkState>;
 export type SlackBotOAuthState = z.infer<typeof SlackBotOAuthState>;
 export type GoogleOAuthState = z.infer<typeof GoogleOAuthState>;

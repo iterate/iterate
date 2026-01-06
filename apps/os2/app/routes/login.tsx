@@ -1,4 +1,3 @@
-import * as React from "react";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { LoginCard } from "../components/auth-components.tsx";
 import { useSessionUser } from "../hooks/use-session-user.ts";

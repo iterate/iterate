@@ -1,4 +1,3 @@
-import * as React from "react";
 import { createFileRoute, Outlet, Navigate } from "@tanstack/react-router";
 import { useSessionUser } from "../hooks/use-session-user.ts";
 

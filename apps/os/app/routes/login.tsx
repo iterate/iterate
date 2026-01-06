@@ -13,7 +13,6 @@ export const Route = createFileRoute("/login")({
   component: LoginComponent,
   validateSearch: z.object({
     redirectUrl: z.string().catch("/"),
-    autoSignin: z.string().optional(),
   }),
   beforeLoad: ({ search }) =>
     redirectIfAuthenticated({ data: { redirectUrl: search.redirectUrl } }),

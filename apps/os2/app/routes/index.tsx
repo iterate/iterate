@@ -1,4 +1,3 @@
-import * as React from "react";
 import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../lib/trpc.ts";
@@ -8,7 +7,6 @@ export const Route = createFileRoute("/_auth-required.layout/")({
 });
 
 function IndexPage() {
-
   const { data: organizations, isLoading } = useQuery(
     trpc.user.myOrganizations.queryOptions(),
   );

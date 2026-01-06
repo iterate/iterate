@@ -1,4 +1,3 @@
-import * as React from "react";
 import { Link, useParams } from "@tanstack/react-router";
 import {
   Building2,
@@ -26,7 +25,7 @@ interface SidebarProps {
     id: string;
     name: string;
     slug: string;
-    instances: Array<{
+    projects: Array<{
       id: string;
       name: string;
       slug: string;
@@ -37,7 +36,7 @@ interface SidebarProps {
     name: string;
     slug: string;
   };
-  currentInstance?: {
+  currentProject?: {
     id: string;
     name: string;
     slug: string;
@@ -49,13 +48,13 @@ interface SidebarProps {
   };
 }
 
-export function Sidebar({ organizations, currentOrg, currentInstance, user }: SidebarProps) {
+export function Sidebar({ organizations, currentOrg, currentProject, user }: SidebarProps) {
   const params = useParams({ strict: false });
-  const instanceSlug = params.instanceSlug as string | undefined;
+  const projectSlug = params.projectSlug as string | undefined;
 
   const org = currentOrg || organizations[0];
-  const instances = organizations.find((o) => o.slug === org?.slug)?.instances || [];
-  const instance = currentInstance || instances[0];
+  const projects = organizations.find((o) => o.slug === org?.slug)?.projects || [];
+  const project = currentProject || projects[0];
 
   return (
     <div className="flex h-full w-64 flex-col border-r bg-muted/10">
@@ -90,7 +89,7 @@ export function Sidebar({ organizations, currentOrg, currentInstance, user }: Si
         </DropdownMenu>
       </div>
 
-      {/* Instance Selector */}
+      {/* Project Selector */}
       {org && (
         <div className="p-4 border-b">
           <DropdownMenu>
@@ -98,19 +97,19 @@ export function Sidebar({ organizations, currentOrg, currentInstance, user }: Si
               <Button variant="ghost" className="w-full justify-between">
                 <div className="flex items-center gap-2">
                   <Box className="h-4 w-4" />
-                  <span className="truncate">{instance?.name || "Select Instance"}</span>
+                  <span className="truncate">{project?.name || "Select Project"}</span>
                 </div>
                 <ChevronDown className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent className="w-56">
-              {instances.map((inst) => (
-                <DropdownMenuItem key={inst.id} asChild>
+              {projects.map((proj) => (
+                <DropdownMenuItem key={proj.id} asChild>
                   <Link
-                    to="/$organizationSlug/$instanceSlug"
-                    params={{ organizationSlug: org.slug, instanceSlug: inst.slug }}
+                    to="/$organizationSlug/$projectSlug"
+                    params={{ organizationSlug: org.slug, projectSlug: proj.slug }}
                   >
-                    {inst.name}
+                    {proj.name}
                   </Link>
                 </DropdownMenuItem>
               ))}
@@ -121,17 +120,29 @@ export function Sidebar({ organizations, currentOrg, currentInstance, user }: Si
 
       {/* Navigation */}
       <nav className="flex-1 p-4 space-y-1">
-        {org && instance && (
+        {org && project && (
           <Link
-            to="/$organizationSlug/$instanceSlug"
-            params={{ organizationSlug: org.slug, instanceSlug: instance.slug }}
+            to="/$organizationSlug/$projectSlug"
+            params={{ organizationSlug: org.slug, projectSlug: project.slug }}
             className={cn(
               "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
-              instanceSlug === instance.slug && "bg-accent",
+              projectSlug === project.slug && "bg-accent",
             )}
           >
             <Box className="h-4 w-4" />
             Machines
+          </Link>
+        )}
+        {org && project && (
+          <Link
+            to="/$organizationSlug/$projectSlug/connectors"
+            params={{ organizationSlug: org.slug, projectSlug: project.slug }}
+            className={cn(
+              "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
+            )}
+          >
+            <Plug className="h-4 w-4" />
+            Connectors
           </Link>
         )}
         {org && (
@@ -155,16 +166,6 @@ export function Sidebar({ organizations, currentOrg, currentInstance, user }: Si
             >
               <Users className="h-4 w-4" />
               Team
-            </Link>
-            <Link
-              to="/$organizationSlug/connectors"
-              params={{ organizationSlug: org.slug }}
-              className={cn(
-                "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
-              )}
-            >
-              <Plug className="h-4 w-4" />
-              Connectors
             </Link>
           </>
         )}
@@ -191,6 +192,13 @@ export function Sidebar({ organizations, currentOrg, currentInstance, user }: Si
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent className="w-56">
+            <DropdownMenuItem asChild>
+              <Link to="/user/settings">
+                <Settings className="h-4 w-4 mr-2" />
+                User settings
+              </Link>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => {
                 signOut().then(() => {

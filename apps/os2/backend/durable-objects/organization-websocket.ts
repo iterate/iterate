@@ -1,10 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
-import { z } from "zod";
+import { z } from "zod/v4";
 import { APIError } from "better-auth/api";
 import type { CloudflareEnv } from "../../env.ts";
 import { getDb } from "../db/client.ts";
 import { getAuth, type AuthSession } from "../auth/auth.ts";
 import { getUserInstanceAccess } from "../trpc/trpc.ts";
+import { logger } from "../tag-logger.ts";
 
 // Event schemas for WebSocket communication
 export const InvalidateInfo = z.discriminatedUnion("type", [
@@ -69,7 +70,7 @@ export class OrganizationWebSocket extends DurableObject {
       try {
         ws.send(message);
       } catch (error) {
-        console.error(`Failed to send to WebSocket:`, error);
+        logger.error("Failed to send to WebSocket:", error);
         ws.close();
       }
     }
@@ -94,7 +95,7 @@ export class OrganizationWebSocket extends DurableObject {
           return new Response(error.message, { status: error.statusCode });
         }
       }
-      console.error("Error getting session:", error);
+      logger.error("Error getting session:", error);
       return new Response("Unauthorized", { status: 401 });
     }
 
@@ -157,7 +158,7 @@ export class OrganizationWebSocket extends DurableObject {
         }),
       );
     } catch (error) {
-      console.error("Error handling message:", error);
+      logger.error("Error handling message:", error);
       ws.send(
         JSON.stringify({
           type: "ERROR",
@@ -190,7 +191,7 @@ export class OrganizationWebSocket extends DurableObject {
           ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session:`, error);
+          logger.error("Failed to send to session:", error);
           errorCount++;
           ws.close();
         }
@@ -208,7 +209,7 @@ export class OrganizationWebSocket extends DurableObject {
         },
       );
     } catch (error) {
-      console.error("Error handling invalidate:", error);
+      logger.error("Error handling invalidate:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },
@@ -229,7 +230,7 @@ export class OrganizationWebSocket extends DurableObject {
           ws.send(message);
           successCount++;
         } catch (error) {
-          console.error(`Failed to send to session:`, error);
+          logger.error("Failed to send to session:", error);
           errorCount++;
           ws.close();
         }
@@ -247,7 +248,7 @@ export class OrganizationWebSocket extends DurableObject {
         },
       );
     } catch (error) {
-      console.error("Error handling broadcast:", error);
+      logger.error("Error handling broadcast:", error);
       return new Response(JSON.stringify({ error: "Internal server error" }), {
         status: 500,
         headers: { "Content-Type": "application/json" },

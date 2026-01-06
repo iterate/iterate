@@ -113,7 +113,7 @@ function generateSlug(name: string): string
 **Complexity: Medium | ~6 files**
 
 ### Objective
-Better Auth with Google/Slack OAuth, service auth, impersonation.
+Better Auth with Google OAuth (Gmail) login, Slack bot installation, service auth, and admin impersonation. In dev mode and tests, provide a Dev mode login that allows logging in as any email address (create user if missing).
 
 ### Files to Create
 ```
@@ -128,9 +128,15 @@ apps/os2/
 
 ### auth.ts Configuration
 - **Plugins**: `admin()` (impersonation), `integrationsPlugin()`, `serviceAuthPlugin()`
-- **Providers**: Google (keep Gmail/Calendar scopes), Slack (user auth)
+- **Providers**: Google OAuth only for user login (keep Gmail/Calendar scopes); Slack is only for project connections (bot installation)
 - **Session**: Cookie cache enabled
 - **NO**: dynamicClientInfo, email OTP, Stripe plugin
+
+### Auth UI Requirements
+- Login page shows only Google OAuth for sign-in
+- In dev mode and tests, add a "Dev mode login" button that opens a modal to enter an email address
+- Dev mode login should log in as that user (create if missing)
+- Platform admins (`user.role === "admin"`) must have a user impersonation UI entry accessible from the sidebar user menu
 
 ### integrations.ts (Simplified)
 - **KEEP**: `linkSlackBot`, `callbackSlackBot` (bot installation)
@@ -139,7 +145,7 @@ apps/os2/
 
 ### Testing Criteria
 - Google OAuth login works
-- Slack OAuth login works
+- Dev mode login works in dev/test
 - Slack bot installation OAuth works
 - Service auth token creates session
 - Admin impersonation works
@@ -273,14 +279,15 @@ React frontend with TanStack Router, shadcn/ui, empty states flow.
 
 ### Route Structure (using slugs in URLs)
 ```
-/login                              # Public - Slack + Google buttons
+/login                              # Public - Google OAuth + Dev mode login (dev/test only)
+/user/settings                      # User settings (Gmail connection)
 /                                   # Redirect to first org
 /new-organization                   # Create org form
 /:organizationSlug/                 # Org layout
   /                                 # Redirect to first instance or empty state
   /settings                         # Org name edit
   /team                             # Members (no external section)
-  /connectors                       # Slack + Google only
+  /connectors                       # Slack only (project connection)
   /:instanceSlug/                   # Instance layout
     /                               # Machines list with CRUD
 /admin/                             # Admin only
@@ -296,6 +303,7 @@ apps/os2/app/
   routes/
     root.tsx
     login.tsx
+    user-settings.tsx
     auth-required.layout.tsx
     index.tsx
     new-organization.tsx
@@ -346,7 +354,7 @@ apps/os2/app/
 - **REMOVE**: External members, Slack Connect, channel discovery
 
 ### Connectors Page
-- **SHOW**: Slack (bot installation), Google (OAuth)
+- **SHOW**: Slack (bot installation)
 - **REMOVE**: GitHub, MCP
 
 ### Testing Criteria
