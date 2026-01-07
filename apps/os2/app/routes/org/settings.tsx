@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -22,7 +22,6 @@ function OrgSettingsPage() {
   const routeParams = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/settings",
   });
-  const queryClient = useQueryClient();
 
   const { data: org } = useSuspenseQuery(
     trpc.organization.bySlug.queryOptions({
@@ -38,12 +37,6 @@ function OrgSettingsPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.bySlug.queryKey({
-          organizationSlug: routeParams.organizationSlug,
-        }),
-      });
-      queryClient.invalidateQueries({ queryKey: trpc.user.myOrganizations.queryKey() });
       toast.success("Organization updated!");
     },
     onError: (error) => {

@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -23,7 +23,6 @@ function NewProjectPage() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
   });
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [name, setName] = useState("");
 
   const createProject = useMutation({
@@ -34,9 +33,6 @@ function NewProjectPage() {
       });
     },
     onSuccess: (project) => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
-      });
       toast.success("Project created");
       navigate({
         to: "/orgs/$organizationSlug/projects/$projectSlug",

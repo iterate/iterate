@@ -1,11 +1,9 @@
-import { chromium, type Page, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { test, expect, type Page } from "@playwright/test";
 
-const BASE_URL = process.env.VITE_PUBLIC_URL || "http://localhost:5173";
 const TEST_OTP = "424242";
 
-async function login(page: Page, email: string) {
-  await page.goto(`${BASE_URL}/login`);
+async function login(page: Page, email: string, baseURL: string) {
+  await page.goto(`${baseURL}/login`);
   await page.waitForSelector('input[type="email"]');
   await page.fill('input[type="email"]', email);
   await page.click('button:has-text("Continue with Email")');
@@ -51,44 +49,23 @@ async function ensureProject(page: Page) {
   await page.waitForURL((url) => !url.pathname.includes("/projects/new"), { timeout: 30000 });
 }
 
-async function goToMachinesPage(page: Page) {
+async function goToMachinesPage(page: Page, baseURL: string) {
   const url = new URL(page.url());
   if (url.pathname.endsWith("/machines")) {
     return;
   }
   const basePath = url.pathname.replace(/\/$/, "");
-  await page.goto(`${BASE_URL}${basePath}/machines`);
+  await page.goto(`${baseURL}${basePath}/machines`);
   await page.waitForURL((nextUrl) => nextUrl.pathname.endsWith("/machines"));
 }
 
-describe("machine list sync", () => {
-  let browser: Browser;
-  let context: BrowserContext;
-  let page: Page;
-
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-  });
-
-  beforeEach(async () => {
-    context = await browser.newContext();
-    page = await context.newPage();
-  });
-
-  afterEach(async () => {
-    await context?.close();
-  });
-
-  test("shows new machine without reload", async () => {
+test.describe("machine list sync", () => {
+  test("shows new machine without reload", async ({ page, baseURL }) => {
     const testEmail = `machine-sync-${Date.now()}+test@example.com`;
-    await login(page, testEmail);
+    await login(page, testEmail, baseURL!);
     await ensureOrganization(page);
     await ensureProject(page);
-    await goToMachinesPage(page);
+    await goToMachinesPage(page, baseURL!);
 
     await page.waitForSelector('button:has-text("New Machine")');
 

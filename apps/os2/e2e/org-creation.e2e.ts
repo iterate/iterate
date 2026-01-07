@@ -1,32 +1,9 @@
-import { chromium, type Page, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { test, expect } from "@playwright/test";
 
-const BASE_URL = process.env.VITE_PUBLIC_URL || "http://localhost:5173";
 const TEST_OTP = "424242";
 
-describe("organization creation flow", () => {
-  let browser: Browser;
-  let context: BrowserContext;
-  let page: Page;
-
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-  });
-
-  beforeEach(async () => {
-    context = await browser.newContext();
-    page = await context.newPage();
-  });
-
-  afterEach(async () => {
-    await context?.close();
-  });
-
-  test("should log in and create an organization", async () => {
+test.describe("organization creation flow", () => {
+  test("should log in and create an organization", async ({ page, baseURL }) => {
     const testEmail = `test-e2e-${Date.now()}+test@example.com`;
     const timings: Record<string, number> = {};
     const time = (label: string) => {
@@ -35,7 +12,7 @@ describe("organization creation flow", () => {
 
     time("start");
 
-    await page.goto(`${BASE_URL}/login`);
+    await page.goto(`${baseURL}/login`);
     await page.waitForSelector('input[type="email"]');
     time("login-page-loaded");
 
@@ -101,7 +78,7 @@ describe("organization creation flow", () => {
     }
   });
 
-  test("should measure request timing for org creation", async () => {
+  test("should measure request timing for org creation", async ({ page, baseURL }) => {
     const testEmail = `timing-test-${Date.now()}+test@example.com`;
     const requestTimings: { url: string; duration: number; method: string }[] = [];
 
@@ -114,14 +91,14 @@ describe("organization creation flow", () => {
         url.includes("/new-organization")
       ) {
         requestTimings.push({
-          url: url.replace(BASE_URL, ""),
+          url: url.replace(baseURL!, ""),
           method: request.method(),
           duration: timing.responseEnd - timing.requestStart,
         });
       }
     });
 
-    await page.goto(`${BASE_URL}/login`);
+    await page.goto(`${baseURL}/login`);
     await page.waitForSelector('input[type="email"]');
     await page.fill('input[type="email"]', testEmail);
     await page.click('button:has-text("Continue with Email")');

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -28,14 +28,8 @@ function ProjectMachinesPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
   });
-  const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");
-  const machineListQueryKey = trpc.machine.list.queryKey({
-    organizationSlug: params.organizationSlug,
-    projectSlug: params.projectSlug,
-    includeArchived: false,
-  });
 
   const { data: machines } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
@@ -62,7 +56,6 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       setCreateDialogOpen(false);
       setNewMachineName("");
       toast.success("Machine created!");
@@ -81,7 +74,6 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine archived!");
     },
     onError: (error) => {
@@ -98,7 +90,6 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine restored!");
     },
     onError: (error) => {
@@ -115,7 +106,6 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine deleted!");
     },
     onError: (error) => {

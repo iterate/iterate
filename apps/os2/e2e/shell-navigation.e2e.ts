@@ -1,11 +1,9 @@
-import { chromium, type Page, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { test, expect, type Page } from "@playwright/test";
 
-const BASE_URL = process.env.VITE_PUBLIC_URL || "http://localhost:5173";
 const TEST_OTP = "424242";
 
-async function login(page: Page, email: string) {
-  await page.goto(`${BASE_URL}/login`);
+async function login(page: Page, email: string, baseURL: string) {
+  await page.goto(`${baseURL}/login`);
   await page.waitForSelector('input[type="email"]');
   await page.fill('input[type="email"]', email);
   await page.click('button:has-text("Continue with Email")');
@@ -60,55 +58,34 @@ function getOrganizationSlug(pathname: string) {
   return orgIndex >= 0 ? parts[orgIndex + 1] : "";
 }
 
-describe("shell navigation", () => {
-  let browser: Browser;
-  let context: BrowserContext;
-  let page: Page;
-
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-  });
-
-  beforeEach(async () => {
-    context = await browser.newContext();
-    page = await context.newPage();
-  });
-
-  afterEach(async () => {
-    await context?.close();
-  });
-
-  test("connectors and team pages render", async () => {
+test.describe("shell navigation", () => {
+  test("connectors and team pages render", async ({ page, baseURL }) => {
     const testEmail = `nav-${Date.now()}+test@example.com`;
-    await login(page, testEmail);
+    await login(page, testEmail, baseURL!);
     await ensureOrganization(page);
     await ensureProject(page);
 
     const basePath = getProjectBasePath(page);
 
-    await page.goto(`${BASE_URL}${basePath}/connectors`);
+    await page.goto(`${baseURL}${basePath}/connectors`);
     await page.waitForSelector('text="Project connections"');
     await page.waitForSelector('text="Your connections"');
     expect(await page.isVisible('text="Project connections"')).toBe(true);
     expect(await page.isVisible('text="Your connections"')).toBe(true);
 
     const orgSlug = getOrganizationSlug(basePath);
-    await page.goto(`${BASE_URL}/orgs/${orgSlug}/team`);
+    await page.goto(`${baseURL}/orgs/${orgSlug}/team`);
     await page.waitForSelector('input[id="member-email"]');
     expect(await page.isVisible('input[id="member-email"]')).toBe(true);
   });
 
-  test("user settings page is reachable", async () => {
+  test("user settings page is reachable", async ({ page, baseURL }) => {
     const testEmail = `settings-${Date.now()}+test@example.com`;
-    await login(page, testEmail);
+    await login(page, testEmail, baseURL!);
     await ensureOrganization(page);
     await ensureProject(page);
 
-    await page.goto(`${BASE_URL}/user/settings`);
+    await page.goto(`${baseURL}/user/settings`);
     await page.waitForSelector('input[id="user-name"]');
     expect(await page.isVisible('input[id="user-name"]')).toBe(true);
   });

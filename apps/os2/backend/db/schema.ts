@@ -182,7 +182,7 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   }),
   events: many(event),
   machines: many(machine),
-  repo: one(repo),
+  projectRepo: one(projectRepo),
   envVars: many(projectEnvVar),
   accessTokens: many(projectAccessToken),
   connections: many(projectConnection),
@@ -320,9 +320,9 @@ export const eventRelations = relations(event, ({ one }) => ({
 }));
 // #endregion ========== Events ==========
 
-// #region ========== Repo (simplified iterateConfigSource) ==========
-export const repo = pgTable(
-  "repo",
+// #region ========== Project Repo (simplified iterateConfigSource) ==========
+export const projectRepo = pgTable(
+  "project_repo",
   (t) => ({
     id: iterateId("repo"),
     projectId: t.text().notNull().unique().references(() => project.id, { onDelete: "cascade" }),
@@ -334,10 +334,10 @@ export const repo = pgTable(
   }),
 );
 
-export const repoRelations = relations(repo, ({ one }) => ({
+export const projectRepoRelations = relations(projectRepo, ({ one }) => ({
   project: one(project, {
-    fields: [repo.projectId],
+    fields: [projectRepo.projectId],
     references: [project.id],
   }),
 }));
-// #endregion ========== Repo ==========
+// #endregion ========== Project Repo ==========

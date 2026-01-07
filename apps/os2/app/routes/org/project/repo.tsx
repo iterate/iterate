@@ -37,7 +37,7 @@ function ProjectRepoPage() {
     }),
   );
 
-  const repo = project?.repo;
+  const repo = project?.projectRepo;
 
   return (
     <div className="p-8">

@@ -1,6 +1,6 @@
 import { useState, type FormEvent, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
@@ -31,7 +31,6 @@ function UserSettingsRoute() {
 }
 
 function UserSettingsPage() {
-  const queryClient = useQueryClient();
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   const updateUser = useMutation({
@@ -39,7 +38,6 @@ function UserSettingsPage() {
       return trpcClient.user.updateSettings.mutate({ name });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.user.me.queryKey() });
       toast.success("Settings updated");
     },
     onError: (error) => {

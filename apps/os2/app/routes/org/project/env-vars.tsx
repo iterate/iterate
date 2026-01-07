@@ -1,6 +1,6 @@
 import { useState, Suspense, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -49,7 +49,6 @@ function ProjectEnvVarsPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
   });
-  const queryClient = useQueryClient();
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
 
@@ -70,12 +69,6 @@ function ProjectEnvVarsPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.envVar.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       setKey("");
       setValue("");
       toast.success("Environment variable saved!");
@@ -94,12 +87,6 @@ function ProjectEnvVarsPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.envVar.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       toast.success("Environment variable deleted!");
     },
     onError: (error) => {

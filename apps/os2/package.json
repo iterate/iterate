@@ -9,8 +9,9 @@
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "vitest",
-    "test:e2e": "doppler run -- vitest run --config vitest.e2e.config.ts",
+    "test:e2e": "doppler run -- playwright test",
     "typecheck": "tsc -b",
+    "db:reset": "psql postgres://postgres:postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS os2' -c 'CREATE DATABASE os2' && pnpm db:migrate",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio"

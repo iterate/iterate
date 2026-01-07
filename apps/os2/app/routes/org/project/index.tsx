@@ -1,6 +1,6 @@
 import { useState, Suspense, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { KeyRound, Copy, CheckCheck } from "lucide-react";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -49,7 +49,6 @@ function ProjectAccessTokensPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
   });
-  const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -70,12 +69,6 @@ function ProjectAccessTokensPage() {
       });
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.accessToken.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       setName("");
       setNewToken(data.token);
       toast.success("Access token created!");
@@ -94,12 +87,6 @@ function ProjectAccessTokensPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.accessToken.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       toast.success("Access token revoked!");
     },
     onError: (error) => {

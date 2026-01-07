@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User } from "lucide-react";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
@@ -35,7 +35,6 @@ export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizatio
 
 function OrgTeamPage() {
   const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug/team" });
-  const queryClient = useQueryClient();
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 
@@ -60,11 +59,6 @@ function OrgTeamPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       toast.success("Role updated!");
     },
     onError: (error) => {
@@ -80,11 +74,6 @@ function OrgTeamPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       setEmail("");
       toast.success("Member added!");
     },
@@ -101,11 +90,6 @@ function OrgTeamPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       toast.success("Member removed!");
     },
     onError: (error) => {
