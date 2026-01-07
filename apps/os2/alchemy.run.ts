@@ -182,7 +182,7 @@ async function deployWorker() {
       command: "pnpm build",
     },
     dev: {
-      command: "pnpm dev",
+      command: "vite",
     },
   });
 
