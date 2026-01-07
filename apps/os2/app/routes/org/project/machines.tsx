@@ -167,6 +167,8 @@ function ProjectMachinesPage() {
       {machines.length > 0 ? (
         <MachineTable
           machines={machines}
+          organizationSlug={params.organizationSlug}
+          projectSlug={params.projectSlug}
           onArchive={(id) => archiveMachine.mutate(id)}
           onUnarchive={(id) => unarchiveMachine.mutate(id)}
           onDelete={(id) => deleteMachine.mutate(id)}
