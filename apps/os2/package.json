@@ -6,7 +6,7 @@
     "build": "doppler run -- vite build",
     "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${USER}}\"",
     "dev:dashboard": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
-    "dev:daemon": "doppler run -- vite dev",
+    "dev:daemon": "(cd daemon && doppler run -- vite dev)",
     "dev": "pnpm /dev:/",
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",

@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [
     react(),
     devServer({
-      entry: "src/index.ts",
+      entry: "./index.ts",
       exclude: [
         // Only let Hono handle /agents, /platform, /edge - exclude everything else
         /^\/(?!agents|platform|edge).*/,
