@@ -4,6 +4,8 @@ import type { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "./routeTree.gen";
 import { makeQueryClient, TRPCProvider } from "./lib/trpc.tsx";
 
+/* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
+
 export type TanstackRouterContext = {
   queryClient: QueryClient;
 };

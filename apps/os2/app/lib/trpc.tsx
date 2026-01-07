@@ -10,6 +10,8 @@ import { createContext } from "../../backend/trpc/context.ts";
 import type { Variables } from "../../backend/worker.ts";
 import type { CloudflareEnv } from "../../env.ts";
 
+/* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
+
 const defaultQueryClientConfig: QueryClientConfig = {
   defaultOptions: {
     queries: {
