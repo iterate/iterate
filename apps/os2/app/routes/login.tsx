@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate, useHydrated } from "@tanstack/react-router";
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "../components/ui/button.tsx";
@@ -21,8 +22,19 @@ function LoginPage() {
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [loading, setLoading] = useState(false);
+
+  const sendOtpMutation = useMutation({
+    mutationFn: (email: string) =>
+      authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" }),
+  });
+
+  const verifyOtpMutation = useMutation({
+    mutationFn: ({ email, otp }: { email: string; otp: string }) =>
+      authClient.signIn.emailOtp({ email, otp }),
+    onSuccess: () => {
+      navigate({ to: "/" });
+    },
+  });
 
   const handleGoogleLogin = async () => {
     await authClient.signIn.social({
@@ -36,24 +48,6 @@ function LoginPage() {
       provider: "slack",
       callbackURL: "/",
     });
-  };
-
-  const handleSendOtp = async () => {
-    if (!email) return;
-    setLoading(true);
-    await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
-    setOtpSent(true);
-    setLoading(false);
-  };
-
-  const handleVerifyOtp = async () => {
-    if (!email || !otp) return;
-    setLoading(true);
-    const result = await authClient.signIn.emailOtp({ email, otp });
-    if (result) {
-      navigate({ to: "/" });
-    }
-    setLoading(false);
   };
 
   return (
@@ -91,7 +85,7 @@ function LoginPage() {
                 Continue with Email
               </Button>
             </>
-          ) : !otpSent ? (
+          ) : !sendOtpMutation.isSuccess ? (
             <>
               <div className="space-y-2">
                 <label htmlFor="email" className="text-sm font-medium">
@@ -105,8 +99,12 @@ function LoginPage() {
                   placeholder="you@example.com"
                 />
               </div>
-              <Button onClick={handleSendOtp} className="w-full" disabled={loading || !email}>
-                {loading ? "Sending..." : "Send OTP"}
+              <Button
+                onClick={() => sendOtpMutation.mutate(email)}
+                className="w-full"
+                disabled={sendOtpMutation.isPending || !email}
+              >
+                {sendOtpMutation.isPending ? "Sending..." : "Send OTP"}
               </Button>
               <Button onClick={() => setShowEmailForm(false)} className="w-full" variant="ghost">
                 Back
@@ -126,12 +124,16 @@ function LoginPage() {
                   placeholder="123456"
                 />
               </div>
-              <Button onClick={handleVerifyOtp} className="w-full" disabled={loading || !otp}>
-                {loading ? "Verifying..." : "Verify OTP"}
+              <Button
+                onClick={() => verifyOtpMutation.mutate({ email, otp })}
+                className="w-full"
+                disabled={verifyOtpMutation.isPending || !otp}
+              >
+                {verifyOtpMutation.isPending ? "Verifying..." : "Verify OTP"}
               </Button>
               <Button
                 onClick={() => {
-                  setOtpSent(false);
+                  sendOtpMutation.reset();
                   setOtp("");
                 }}
                 className="w-full"

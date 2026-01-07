@@ -1,3 +1,4 @@
+import { randomInt } from "crypto";
 import { betterAuth } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
@@ -41,9 +42,15 @@ export const getAuth = (db: DB) => {
           if (o.email.endsWith("+test@nustom.com")) {
             return "424242";
           }
-          return Math.floor(100000 + Math.random() * 900000).toString();
+          return randomInt(100000, 999999).toString();
         },
         async sendVerificationOTP(data) {
+          if (
+            data.email.endsWith("nustom.com") &&
+            data.email.replaceAll(/\W/g, "").includes("slowotp")
+          ) {
+            await new Promise((resolve) => setTimeout(resolve, 10_000));
+          }
           logger.info("OTP for", data.email, "is", data.otp);
         },
       }),
