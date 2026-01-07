@@ -615,18 +615,33 @@ importers:
 
   apps/os2:
     dependencies:
+      '@hono/node-server':
+        specifier: ^1.19.6
+        version: 1.19.6(hono@4.10.7)
+      '@hono/vite-dev-server':
+        specifier: ^0.24.0
+        version: 0.24.0(hono@4.10.7)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       '@hono/zod-validator':
         specifier: ^0.7.5
         version: 0.7.5(hono@4.10.7)(zod@4.1.12)
       '@hookform/resolvers':
         specifier: ^5.2.2
         version: 5.2.2(react-hook-form@7.67.0(react@19.2.0))
+      '@mariozechner/pi-ai':
+        specifier: ^0.37.3
+        version: 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-coding-agent':
+        specifier: ^0.37.3
+        version: 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       '@neondatabase/serverless':
         specifier: ^1.0.2
         version: 1.0.2
       '@react-hookz/web':
         specifier: ^25.2.0
         version: 25.2.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@sinclair/typebox':
+        specifier: ^0.34.47
+        version: 0.34.47
       '@slack/types':
         specifier: ^2.19.0
         version: 2.19.0
@@ -753,6 +768,9 @@ importers:
       vaul:
         specifier: ^1.1.2
         version: 1.1.2(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      yaml:
+        specifier: ^2.8.2
+        version: 2.8.2
       zod:
         specifier: 4.1.12
         version: 4.1.12
@@ -1628,8 +1646,13 @@ packages:
   '@emnapi/core@1.6.0':
     resolution: {integrity: sha512-zq/ay+9fNIJJtJiZxdTnXS20PllcYMX3OE23ESc4HK/bdYu3cOWYVhsOhVnXALfU/uqJIxn5NBPd9z4v+SfoSg==}
 
+<<<<<<< Updated upstream
   '@emnapi/runtime@1.6.0':
     resolution: {integrity: sha512-obtUmAHTMjll499P+D9A3axeJFlhdjOWdKUNs/U6QIGT7V5RjcUW1xToAzjvmgTSQhDbYn/NwfTRoJcQ2rNBxA==}
+=======
+  '@emnapi/runtime@1.8.1':
+    resolution: {integrity: sha512-mehfKSMWjjNol8659Z8KxEMrdSJDDot5SXMq00dM8BN4o+CLNXQ0xH2V7EchNHV4RmbZLmmPdEaXZc5H2FXmDg==}
+>>>>>>> Stashed changes
 
   '@emnapi/wasi-threads@1.1.0':
     resolution: {integrity: sha512-WI0DdZ8xFSbgMjR1sFsKABJ/C5OnRrjT06JXbZKexJGrDuPTzZdDYfFlsgcCXCyf+suG5QU2e/y1Wo2V/OapLQ==}
@@ -2376,6 +2399,35 @@ packages:
     peerDependencies:
       hono: ^4
 
+<<<<<<< Updated upstream
+=======
+  '@hono/vite-dev-server@0.19.1':
+    resolution: {integrity: sha512-hh+0u3IxHErEyj4YwHk/U+2f+qAHEQZ9EIQtadG9jeHfxEXH6r/ZecjnpyEkQbDK7JtgEEoVAq/JGOkd3Dvqww==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: '*'
+      miniflare: '*'
+      wrangler: '*'
+    peerDependenciesMeta:
+      miniflare:
+        optional: true
+      wrangler:
+        optional: true
+
+  '@hono/vite-dev-server@0.24.0':
+    resolution: {integrity: sha512-yV+DHE9suDPPvZW/o4VhY2KFl0vrIPvt0zDlj22V6wkTsEKy7TGpAd4tw0swOhN3Zfb7mXch7QAGEtO9c6qrMQ==}
+    engines: {node: '>=18.14.1'}
+    peerDependencies:
+      hono: '*'
+      miniflare: '*'
+      wrangler: '*'
+    peerDependenciesMeta:
+      miniflare:
+        optional: true
+      wrangler:
+        optional: true
+
+>>>>>>> Stashed changes
   '@hono/zod-validator@0.7.5':
     resolution: {integrity: sha512-n4l4hutkfYU07PzRUHBOVzUEn38VSfrh+UVE5d0w4lyfWDOEhzxIupqo5iakRiJL44c3vTuFJBvcmUl8b9agIA==}
     peerDependencies:
@@ -2716,6 +2768,45 @@ packages:
   '@marijn/find-cluster-break@1.0.2':
     resolution: {integrity: sha512-l0h88YhZFyKdXIFNfSWpyjStDjGHwZ/U7iobcK1cQQD8sejsONdQtTVU+1wVN1PBw40PiiHB1vA5S7VTfQiP9g==}
 
+<<<<<<< Updated upstream
+=======
+  '@mariozechner/pi-agent-core@0.36.0':
+    resolution: {integrity: sha512-86BI1/j/MLxQHSWRXVLz8+NuSmDvLQebNb40+lFDI9XI9YBh8+r5fkYgU43u4j2TvANZ7iW6SFFnhWhzy8y6dg==}
+    engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-agent-core@0.37.3':
+    resolution: {integrity: sha512-P209454OzN/VxtvhAQTbgmoHg9uaSPxmO9dp5Xx0O/PehZK75gbq3HRtvwwv7Ykd72rYla7Czx+zeFsAhpgskw==}
+    engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-ai@0.36.0':
+    resolution: {integrity: sha512-xkzTgvdMzAZ/L/TgMH8z9Zi+aH0EWc54l5ygiafwvCgDk7xvfbylQG6pa9yn5zEn9T4NF9byJNk+nMHnycZvMQ==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-ai@0.37.3':
+    resolution: {integrity: sha512-KK00ZK9uS+1L/jjbdj/mO8J+3GeIW1/eBbb1zPLzwDlQuPGjjxFzpButH9Gb54IFLMIdPDIfwPbyDhS+FT8WGw==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-coding-agent@0.36.0':
+    resolution: {integrity: sha512-lKdpuGE0yVs/96GnDhrPLEEFhRteHRtnkfX04KIBpcsEXXg2vyAlpxtjtZ9nlhYqLLIY7qJRkeyjbhcFFfbAAA==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-coding-agent@0.37.3':
+    resolution: {integrity: sha512-tucS/xeeN294Ld2LTjn55rYPgVqTawtCKi2JTIxn/W0ysh3p4Z97f3oe9d8LdmN5AJ/1+zGnzCLMu5OgToIWNg==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.36.0':
+    resolution: {integrity: sha512-4n+nmTd36q0AVCbqWmjtTHTjIEwlGayKKhc+4QbpN9U3Z9jyQQa8Za1P2OHRmi6Jeu+ISuf4VBDvgmgCaxPZYg==}
+    engines: {node: '>=20.0.0'}
+
+  '@mariozechner/pi-tui@0.37.3':
+    resolution: {integrity: sha512-5mWYcxAyeiTm7uupMwlAQwQN6VKTRVDSZhBj0XmltjQ08gq9OMvQYeeQGfojeOBSfCAzcm/KoEUbzuUrjB/MSA==}
+    engines: {node: '>=20.0.0'}
+
+>>>>>>> Stashed changes
   '@microsoft/fetch-event-source@2.0.1':
     resolution: {integrity: sha512-W6CLUJ2eBMw3Rec70qrsEW0jOm/3twwJv21mrmj2yORiaVmVYGS4sSS5yUwvQc1ZlDLYGPnClVWmUUMagKNsfA==}
 
@@ -10424,6 +10515,21 @@ snapshots:
 
   '@alloc/quick-lru@5.2.0': {}
 
+<<<<<<< Updated upstream
+=======
+  '@anthropic-ai/sdk@0.71.2(zod@4.1.12)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 4.1.12
+
+  '@anthropic-ai/sdk@0.71.2(zod@4.1.13)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 4.1.13
+
+>>>>>>> Stashed changes
   '@apidevtools/json-schema-ref-parser@11.9.3':
     dependencies:
       '@jsdevtools/ono': 7.1.3
@@ -11291,7 +11397,11 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
+<<<<<<< Updated upstream
   '@emnapi/runtime@1.6.0':
+=======
+  '@emnapi/runtime@1.8.1':
+>>>>>>> Stashed changes
     dependencies:
       tslib: 2.8.1
     optional: true
@@ -11851,6 +11961,31 @@ snapshots:
     dependencies:
       hono: 4.10.7
 
+<<<<<<< Updated upstream
+=======
+  '@hono/node-server@1.19.6(hono@4.11.3)':
+    dependencies:
+      hono: 4.11.3
+
+  '@hono/vite-dev-server@0.19.1(hono@4.11.3)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@hono/node-server': 1.19.6(hono@4.11.3)
+      hono: 4.11.3
+      minimatch: 9.0.5
+    optionalDependencies:
+      miniflare: 4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      wrangler: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+  '@hono/vite-dev-server@0.24.0(hono@4.10.7)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@hono/node-server': 1.19.6(hono@4.10.7)
+      hono: 4.10.7
+      minimatch: 9.0.5
+    optionalDependencies:
+      miniflare: 4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      wrangler: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+>>>>>>> Stashed changes
   '@hono/zod-validator@0.7.5(hono@4.10.7)(zod@4.1.12)':
     dependencies:
       hono: 4.10.7
@@ -11945,7 +12080,7 @@ snapshots:
 
   '@img/sharp-wasm32@0.33.5':
     dependencies:
-      '@emnapi/runtime': 1.6.0
+      '@emnapi/runtime': 1.8.1
     optional: true
 
   '@img/sharp-win32-ia32@0.33.5':
@@ -12144,7 +12279,7 @@ snapshots:
   '@libsql/isomorphic-ws@0.1.5(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
     dependencies:
       '@types/ws': 8.18.1
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -12176,6 +12311,135 @@ snapshots:
 
   '@marijn/find-cluster-break@1.0.2': {}
 
+<<<<<<< Updated upstream
+=======
+  '@mariozechner/pi-agent-core@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.36.0
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-agent-core@0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-tui': 0.37.3
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.71.2(zod@4.1.13)
+      '@google/genai': 1.34.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.47
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chalk: 5.6.2
+      openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      partial-json: 0.1.7
+      zod-to-json-schema: 3.25.0(zod@4.1.13)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.71.2(zod@4.1.12)
+      '@google/genai': 1.34.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.47
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chalk: 5.6.2
+      openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      partial-json: 0.1.7
+      zod-to-json-schema: 3.25.0(zod@4.1.12)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@crosscopy/clipboard': 0.2.8
+      '@mariozechner/pi-agent-core': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-ai': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.36.0
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.2
+      file-type: 21.3.0
+      glob: 11.1.0
+      jiti: 2.6.1
+      marked: 15.0.12
+      sharp: 0.34.5
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
+    dependencies:
+      '@crosscopy/clipboard': 0.2.8
+      '@mariozechner/pi-agent-core': 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-ai': 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+      '@mariozechner/pi-tui': 0.37.3
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.2
+      file-type: 21.3.0
+      glob: 11.1.0
+      jiti: 2.6.1
+      marked: 15.0.12
+      minimatch: 10.1.1
+      proper-lockfile: 4.1.2
+      sharp: 0.34.5
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-tui@0.36.0':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.4.0
+      marked: 15.0.12
+      mime-types: 3.0.1
+
+  '@mariozechner/pi-tui@0.37.3':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.4.0
+      marked: 15.0.12
+      mime-types: 3.0.1
+
+>>>>>>> Stashed changes
   '@microsoft/fetch-event-source@2.0.1': {}
 
   '@mjackson/node-fetch-server@0.2.0': {}
@@ -12230,7 +12494,7 @@ snapshots:
   '@napi-rs/wasm-runtime@1.0.7':
     dependencies:
       '@emnapi/core': 1.6.0
-      '@emnapi/runtime': 1.6.0
+      '@emnapi/runtime': 1.8.1
       '@tybys/wasm-util': 0.10.1
     optional: true
 
@@ -18572,6 +18836,19 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
+<<<<<<< Updated upstream
+=======
+  openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
+    optionalDependencies:
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      zod: 4.1.12
+
+  openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13):
+    optionalDependencies:
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      zod: 4.1.13
+
+>>>>>>> Stashed changes
   openai@6.3.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
     optionalDependencies:
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
