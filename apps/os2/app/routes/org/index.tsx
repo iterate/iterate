@@ -33,6 +33,9 @@ function OrganizationIndexPage() {
         queryClient.invalidateQueries({
           queryKey: trpc.project.list.queryKey({ organizationSlug }),
         });
+        queryClient.invalidateQueries({
+          queryKey: trpc.user.organizationsWithProjects.queryKey(),
+        });
         navigate({
           to: "/$organizationSlug/$projectSlug",
           params: { organizationSlug, projectSlug: project.slug },

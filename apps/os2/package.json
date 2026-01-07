@@ -7,7 +7,7 @@
     "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${USER}}\"",
     "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
     "preview": "pnpm run build && vite preview",
-    "test": "vitest",
+    "test": "echo 'use test:e2e instead' && exit 1",
     "test:e2e": "playwright test",
     "typecheck": "tsc -b",
     "db:migrate": "drizzle-kit migrate",
