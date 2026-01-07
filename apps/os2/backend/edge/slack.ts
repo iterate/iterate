@@ -1,8 +1,7 @@
 import { Hono } from "hono";
-import { and, eq } from "drizzle-orm";
 import type { CloudflareEnv } from "../../env.ts";
 import type { Variables } from "../worker.ts";
-import { event, projectConnection } from "../db/schema.ts";
+import * as schema from "../db/schema.ts";
 import { logger } from "../tag-logger.ts";
 
 export const slackEdgeApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -30,24 +29,20 @@ slackEdgeApp.post("/", async (c) => {
   }
 
   const db = c.var.db;
-  const connection = teamId
-    ? await db.query.projectConnection.findFirst({
-        where: and(
-          eq(projectConnection.provider, "slack"),
-          eq(projectConnection.externalId, teamId),
-        ),
-      })
-    : null;
 
-  if (teamId && !connection) {
-    logger.warn(`No project connection found for Slack team ${teamId}`);
+  // TODO: Implement projectConnection lookup once the table is added
+  // For now, we store events without a projectId
+  const projectId = null;
+
+  if (teamId) {
+    logger.warn(`Project connection lookup not yet implemented for Slack team ${teamId}`);
   }
 
   try {
-    await db.insert(event).values({
+    await db.insert(schema.event).values({
       type: getSlackEventType(typedPayload),
       payload: typedPayload,
-      instanceId: connection?.projectId ?? null,
+      projectId,
     });
   } catch (error) {
     logger.error("Failed to store Slack event", error);

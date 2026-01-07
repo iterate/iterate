@@ -54,9 +54,10 @@ export const userRelations = relations(user, ({ many }) => ({
   session: many(session),
   account: many(account),
   organizationUserMembership: many(organizationUserMembership),
+  projectConnections: many(projectConnection),
 }));
 
-export const session = pgTable("session", (t) => ({
+export const session = pgTable("better_auth_session", (t) => ({
   id: iterateId("ses"),
   expiresAt: t.timestamp().notNull(),
   token: t.text().notNull().unique(),
@@ -78,7 +79,7 @@ export const sessionRelations = relations(session, ({ one }) => ({
   }),
 }));
 
-export const account = pgTable("account", (t) => ({
+export const account = pgTable("better_auth_account", (t) => ({
   id: iterateId("acc"),
   accountId: t.text().notNull(),
   providerId: t.text().notNull(), // google, slack, slack-bot
@@ -96,15 +97,14 @@ export const account = pgTable("account", (t) => ({
   ...withTimestamps,
 }));
 
-export const accountRelations = relations(account, ({ one, many }) => ({
+export const accountRelations = relations(account, ({ one }) => ({
   user: one(user, {
     fields: [account.userId],
     references: [user.id],
   }),
-  instanceAccountPermissions: many(instanceAccountPermission),
 }));
 
-export const verification = pgTable("verification", (t) => ({
+export const verification = pgTable("better_auth_verification", (t) => ({
   id: iterateId("ver"),
   identifier: t.text().notNull(),
   value: t.text().notNull(),
@@ -113,7 +113,7 @@ export const verification = pgTable("verification", (t) => ({
 }));
 // #endregion ========== Better Auth Schema ==========
 
-// #region ========== Organization & Instance ==========
+// #region ========== Organization & Project ==========
 export const organization = pgTable("organization", (t) => ({
   id: iterateId("org"),
   name: t.text().notNull(),
@@ -122,7 +122,7 @@ export const organization = pgTable("organization", (t) => ({
 }));
 
 export const organizationRelations = relations(organization, ({ many }) => ({
-  instances: many(instance),
+  projects: many(project),
   members: many(organizationUserMembership),
 }));
 
@@ -161,9 +161,9 @@ export const organizationUserMembershipRelations = relations(
   }),
 );
 
-// Instance (renamed from estate)
-export const instance = pgTable("instance", (t) => ({
-  id: iterateId("inst"),
+// Project (renamed from instance/estate)
+export const project = pgTable("project", (t) => ({
+  id: iterateId("prj"),
   name: t.text().notNull(),
   slug: t.text().notNull(), // URL-safe slug (unique within org)
   organizationId: t
@@ -175,59 +175,105 @@ export const instance = pgTable("instance", (t) => ({
   uniqueIndex().on(t.organizationId, t.slug),
 ]);
 
-export const instanceRelations = relations(instance, ({ one, many }) => ({
+export const projectRelations = relations(project, ({ one, many }) => ({
   organization: one(organization, {
-    fields: [instance.organizationId],
+    fields: [project.organizationId],
     references: [organization.id],
   }),
-  instanceAccountPermissions: many(instanceAccountPermission),
   events: many(event),
   machines: many(machine),
-  repos: many(repo),
+  repo: one(repo),
+  envVars: many(projectEnvVar),
+  accessTokens: many(projectAccessToken),
+  connections: many(projectConnection),
 }));
 
-// Instance Account Permission (renamed from estate_accounts_permissions)
-export const instanceAccountPermission = pgTable(
-  "instance_account_permission",
+// Encrypted environment variables for a project
+export const projectEnvVar = pgTable(
+  "project_env_var",
   (t) => ({
-    id: iterateId("iap"),
-    instanceId: t
-      .text()
-      .notNull()
-      .references(() => instance.id, { onDelete: "cascade" }),
-    accountId: t
-      .text()
-      .notNull()
-      .references(() => account.id, { onDelete: "cascade" }),
+    id: iterateId("env"),
+    projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
+    key: t.text().notNull(),
+    encryptedValue: t.text().notNull(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.instanceId, t.accountId)],
+  (t) => [
+    uniqueIndex().on(t.projectId, t.key),
+    index().on(t.projectId),
+  ],
 );
 
-export const instanceAccountPermissionRelations = relations(
-  instanceAccountPermission,
-  ({ one }) => ({
-    instance: one(instance, {
-      fields: [instanceAccountPermission.instanceId],
-      references: [instance.id],
-    }),
-    account: one(account, {
-      fields: [instanceAccountPermission.accountId],
-      references: [account.id],
-    }),
+export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
+  project: one(project, {
+    fields: [projectEnvVar.projectId],
+    references: [project.id],
   }),
+}));
+
+// API access tokens for a project
+export const projectAccessToken = pgTable(
+  "project_access_token",
+  (t) => ({
+    id: iterateId("pat"),
+    projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
+    name: t.text().notNull(),
+    tokenHash: t.text().notNull(),
+    lastUsedAt: t.timestamp(),
+    revokedAt: t.timestamp(),
+    ...withTimestamps,
+  }),
+  (t) => [index().on(t.projectId)],
 );
-// #endregion ========== Organization & Instance ==========
+
+export const projectAccessTokenRelations = relations(projectAccessToken, ({ one }) => ({
+  project: one(project, {
+    fields: [projectAccessToken.projectId],
+    references: [project.id],
+  }),
+}));
+
+// OAuth connections (project-scoped like Slack, or user-scoped like Gmail)
+export const projectConnection = pgTable(
+  "project_connection",
+  (t) => ({
+    id: iterateId("conn"),
+    projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
+    provider: t.text().notNull(),
+    externalId: t.text().notNull(),
+    scope: t.text({ enum: ["project", "user"] }).notNull(),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+    providerData: t.jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    scopes: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [
+    uniqueIndex().on(t.provider, t.externalId),
+    index().on(t.projectId),
+  ],
+);
+
+export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({
+  project: one(project, {
+    fields: [projectConnection.projectId],
+    references: [project.id],
+  }),
+  user: one(user, {
+    fields: [projectConnection.userId],
+    references: [user.id],
+  }),
+}));
+// #endregion ========== Organization & Project ==========
 
 // #region ========== Machine ==========
 export const machine = pgTable(
   "machine",
   (t) => ({
     id: iterateId("mach"),
-    instanceId: t
+    projectId: t
       .text()
       .notNull()
-      .references(() => instance.id, { onDelete: "cascade" }),
+      .references(() => project.id, { onDelete: "cascade" }),
     name: t.text().notNull(),
     type: t.text({ enum: [...MachineType] }).notNull().default("daytona"),
     state: t.text({ enum: [...MachineState] }).notNull().default("started"),
@@ -235,15 +281,15 @@ export const machine = pgTable(
     ...withTimestamps,
   }),
   (t) => [
-    index().on(t.instanceId),
+    index().on(t.projectId),
     index().on(t.state),
   ],
 );
 
 export const machineRelations = relations(machine, ({ one }) => ({
-  instance: one(instance, {
-    fields: [machine.instanceId],
-    references: [instance.id],
+  project: one(project, {
+    fields: [machine.projectId],
+    references: [project.id],
   }),
 }));
 // #endregion ========== Machine ==========
@@ -255,22 +301,21 @@ export const event = pgTable(
     id: iterateId("evt"),
     type: t.text().notNull(), // e.g., "slack.message", "slack.reaction_added"
     payload: t.jsonb().$type<SlackEvent | Record<string, unknown>>().notNull(),
-    instanceId: t
+    projectId: t
       .text()
-      .notNull()
-      .references(() => instance.id, { onDelete: "cascade" }),
+      .references(() => project.id, { onDelete: "cascade" }),
     ...withTimestamps,
   }),
   (t) => [
-    index().on(t.instanceId),
+    index().on(t.projectId),
     index().on(t.type),
   ],
 );
 
 export const eventRelations = relations(event, ({ one }) => ({
-  instance: one(instance, {
-    fields: [event.instanceId],
-    references: [instance.id],
+  project: one(project, {
+    fields: [event.projectId],
+    references: [project.id],
   }),
 }));
 // #endregion ========== Events ==========
@@ -280,24 +325,19 @@ export const repo = pgTable(
   "repo",
   (t) => ({
     id: iterateId("repo"),
-    instanceId: t
-      .text()
-      .notNull()
-      .references(() => instance.id, { onDelete: "cascade" }),
-    provider: t.text({ enum: ["github"] }).notNull(),
-    accountId: t.text().notNull(),
-    repoId: t.integer().notNull(),
-    branch: t.text().notNull(),
-    deactivatedAt: t.timestamp(),
+    projectId: t.text().notNull().unique().references(() => project.id, { onDelete: "cascade" }),
+    provider: t.text().notNull(),
+    owner: t.text().notNull(),
+    name: t.text().notNull(),
+    defaultBranch: t.text().notNull().default("main"),
     ...withTimestamps,
   }),
-  (t) => [index().on(t.instanceId)],
 );
 
 export const repoRelations = relations(repo, ({ one }) => ({
-  instance: one(instance, {
-    fields: [repo.instanceId],
-    references: [instance.id],
+  project: one(project, {
+    fields: [repo.projectId],
+    references: [project.id],
   }),
 }));
 // #endregion ========== Repo ==========

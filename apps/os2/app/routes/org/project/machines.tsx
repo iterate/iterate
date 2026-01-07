@@ -3,7 +3,7 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
-import { trpc, trpcClient } from "../../../lib/trpc.ts";
+import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
@@ -33,22 +33,22 @@ function ProjectMachinesPage() {
   const [newMachineName, setNewMachineName] = useState("");
   const machineListQueryKey = trpc.machine.list.queryKey({
     organizationSlug: params.organizationSlug,
-    instanceSlug: params.projectSlug,
+    projectSlug: params.projectSlug,
     includeArchived: false,
   });
 
   const { data: machines } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.projectSlug,
+      projectSlug: params.projectSlug,
       includeArchived: false,
     }),
   );
 
   const { data: project } = useSuspenseQuery(
-    trpc.instance.bySlug.queryOptions({
+    trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.projectSlug,
+      projectSlug: params.projectSlug,
     }),
   );
 
@@ -56,7 +56,7 @@ function ProjectMachinesPage() {
     mutationFn: async (name: string) => {
       return trpcClient.machine.create.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
         name,
         type: "daytona",
       });
@@ -76,7 +76,7 @@ function ProjectMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.archive.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
         machineId,
       });
     },
@@ -93,7 +93,7 @@ function ProjectMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.unarchive.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
         machineId,
       });
     },
@@ -110,7 +110,7 @@ function ProjectMachinesPage() {
     mutationFn: async (machineId: string) => {
       return trpcClient.machine.delete.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
         machineId,
       });
     },

@@ -2,10 +2,8 @@ import { initTRPC, TRPCError } from "@trpc/server";
 import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
-import { organizationUserMembership, organization, instance } from "../db/schema.ts";
+import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
 import type { DB } from "../db/client.ts";
-import { invalidateOrganizationQueries } from "../utils/websocket-utils.ts";
-import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -65,49 +63,19 @@ const t = initTRPC.context<Context>().create({
 export const router = t.router;
 export const publicProcedure = t.procedure;
 
-// Type for authenticated context
-type AuthenticatedContext = Context & {
-  user: NonNullable<Context["user"]>;
-  session: NonNullable<Context["session"]>;
-};
-
-export const autoInvalidateMiddleware = t.middleware(async ({ ctx, next, type }) => {
-  const authCtx = ctx as AuthenticatedContext;
-  const result = await next({ ctx: authCtx });
-
-  if (type === "mutation" && result.ok && ctx.user) {
-    const organizationId = (authCtx as AuthenticatedContext & { organization?: { id: string } })
-      .organization?.id;
-    if (organizationId) {
-      await invalidateOrganizationQueries(ctx.env, organizationId, {
-        type: "INVALIDATE",
-        invalidateInfo: {
-          type: "ALL",
-        },
-      }).catch((error) => {
-        logger.error("Failed to invalidate queries:", error);
-      });
-    }
-  }
-
-  return result;
-});
-
 /** Protected procedure that requires authentication */
-export const protectedProcedure = publicProcedure
-  .use(({ ctx, next }) => {
-    if (!ctx.session || !ctx.user) {
-      throw new TRPCError({ code: "UNAUTHORIZED" });
-    }
-    return next({
-      ctx: {
-        ...ctx,
-        session: ctx.session,
-        user: ctx.user,
-      },
-    });
-  })
-  .use(autoInvalidateMiddleware);
+export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
+  if (!ctx.session || !ctx.user) {
+    throw new TRPCError({ code: "UNAUTHORIZED" });
+  }
+  return next({
+    ctx: {
+      ...ctx,
+      session: ctx.session as NonNullable<typeof ctx.session>,
+      user: ctx.user as NonNullable<typeof ctx.user>,
+    },
+  });
+});
 
 // Helper function to get user's organizations
 export async function getUserOrganizations(db: DB, userId: string) {
@@ -142,28 +110,28 @@ export async function getUserOrganizationAccess(
   return { hasAccess: true, organization: membership.organization, membership };
 }
 
-// Helper to check instance access
-export async function getUserInstanceAccess(db: DB, userId: string, instanceId: string) {
-  const inst = await db.query.instance.findFirst({
-    where: eq(instance.id, instanceId),
+// Helper to check project access
+export async function getUserProjectAccess(db: DB, userId: string, projectId: string) {
+  const proj = await db.query.project.findFirst({
+    where: eq(projectTable.id, projectId),
     with: {
       organization: true,
     },
   });
 
-  if (!inst) {
-    return { hasAccess: false, instance: null };
+  if (!proj) {
+    return { hasAccess: false, project: null };
   }
 
   const { hasAccess, membership } = await getUserOrganizationAccess(
     db,
     userId,
-    inst.organizationId,
+    proj.organizationId,
   );
 
   return {
     hasAccess,
-    instance: hasAccess ? inst : null,
+    project: hasAccess ? proj : null,
     membership,
   };
 }
@@ -226,32 +194,35 @@ export const orgAdminProcedure = orgProtectedProcedure.use(async ({ ctx, next, p
   return next({ ctx });
 });
 
-// Instance protected procedure that requires authentication and instance access
+// Project protected procedure that requires authentication and project access
 // Uses slug instead of ID
-export const instanceProtectedProcedure = orgProtectedProcedure
-  .input(z.object({ instanceSlug: z.string() }))
+export const projectProtectedProcedure = orgProtectedProcedure
+  .input(z.object({ projectSlug: z.string() }))
   .use(async ({ ctx, input, next }) => {
-    const inst = await ctx.db.query.instance.findFirst({
+    const proj = await ctx.db.query.project.findFirst({
       where: and(
-        eq(instance.organizationId, ctx.organization.id),
-        eq(instance.slug, input.instanceSlug),
+        eq(projectTable.organizationId, ctx.organization.id),
+        eq(projectTable.slug, input.projectSlug),
       ),
       with: {
-        repos: true,
+        repo: true,
+        envVars: true,
+        accessTokens: true,
+        connections: true,
       },
     });
 
-    if (!inst) {
+    if (!proj) {
       throw new TRPCError({
         code: "NOT_FOUND",
-        message: `Instance with slug ${input.instanceSlug} not found in organization`,
+        message: `Project with slug ${input.projectSlug} not found in organization`,
       });
     }
 
     return next({
       ctx: {
         ...ctx,
-        instance: inst,
+        project: proj,
       },
     });
   });

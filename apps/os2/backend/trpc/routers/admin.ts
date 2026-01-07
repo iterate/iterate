@@ -85,7 +85,7 @@ export const adminRouter = router({
         offset,
         orderBy: (o, { desc }) => [desc(o.createdAt)],
         with: {
-          instances: true,
+          projects: true,
           members: {
             with: {
               user: true,
@@ -98,7 +98,7 @@ export const adminRouter = router({
         id: o.id,
         name: o.name,
         slug: o.slug,
-        instanceCount: o.instances.length,
+        projectCount: o.projects.length,
         memberCount: o.members.length,
         createdAt: o.createdAt,
       }));
@@ -113,11 +113,14 @@ export const adminRouter = router({
         name: ctx.user.name,
         role: ctx.user.role,
       },
-      session: {
-        // Only return non-sensitive session info
-        expiresAt: ctx.session.expiresAt,
-        impersonatedBy: ctx.session.impersonatedBy,
-      },
+      session: ctx.session
+        ? {
+            expiresAt: ctx.session.session.expiresAt,
+            ipAddress: ctx.session.session.ipAddress,
+            userAgent: ctx.session.session.userAgent,
+            impersonatedBy: ctx.session.session.impersonatedBy,
+          }
+        : null,
     };
   }),
 });

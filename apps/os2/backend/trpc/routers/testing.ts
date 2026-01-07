@@ -1,12 +1,14 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { router, publicProcedure, protectedProcedure } from "../trpc.ts";
-import { user, organization, instance, organizationUserMembership } from "../../db/schema.ts";
+import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
+import { isNonProd } from "../../../env.ts";
 
 /**
  * Testing router - provides helpers for test setup
- * These endpoints require service auth token in production
+ * These endpoints are only available in non-production environments
  */
 export const testingRouter = router({
   // Health check
@@ -24,7 +26,12 @@ export const testingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // In production, this would require service auth
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
       const [newUser] = await ctx.db
         .insert(user)
         .values({
@@ -45,15 +52,21 @@ export const testingRouter = router({
       return newUser;
     }),
 
-  // Create test organization with instance
+  // Create test organization with project
   createTestOrganization: protectedProcedure
     .input(
       z.object({
         name: z.string(),
-        instanceName: z.string().optional(),
+        projectName: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
       const orgSlug = generateSlug(input.name);
 
       const [newOrg] = await ctx.db
@@ -74,19 +87,19 @@ export const testingRouter = router({
         role: "owner",
       });
 
-      const instSlug = generateSlug(input.instanceName || "default");
-      const [newInstance] = await ctx.db
-        .insert(instance)
+      const projSlug = generateSlug(input.projectName || "default");
+      const [newProject] = await ctx.db
+        .insert(project)
         .values({
-          name: input.instanceName || "Default Instance",
-          slug: instSlug,
+          name: input.projectName || "Default Project",
+          slug: projSlug,
           organizationId: newOrg.id,
         })
         .returning();
 
       return {
         organization: newOrg,
-        instance: newInstance,
+        project: newProject,
       };
     }),
 
@@ -99,6 +112,12 @@ export const testingRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!isNonProd) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Testing endpoints are not available in production",
+        });
+      }
       const results: string[] = [];
 
       if (input.email) {

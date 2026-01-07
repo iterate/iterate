@@ -1,24 +1,24 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, instanceProtectedProcedure } from "../trpc.ts";
+import { router, projectProtectedProcedure } from "../trpc.ts";
 import { machine, MachineType } from "../../db/schema.ts";
 
 export const machineRouter = router({
-  // List machines in instance
-  list: instanceProtectedProcedure
+  // List machines in project
+  list: projectProtectedProcedure
     .input(
       z.object({
-        includeArchived: z.boolean().default(false),
-      }).optional(),
+        includeArchived: z.boolean().default(false).optional(),
+      }),
     )
     .query(async ({ ctx, input }) => {
-      const includeArchived = input?.includeArchived ?? false;
+      const includeArchived = input.includeArchived ?? false;
 
       const machines = await ctx.db.query.machine.findMany({
         where: includeArchived
-          ? eq(machine.instanceId, ctx.instance.id)
-          : and(eq(machine.instanceId, ctx.instance.id), eq(machine.state, "started")),
+          ? eq(machine.projectId, ctx.project.id)
+          : and(eq(machine.projectId, ctx.project.id), eq(machine.state, "started")),
         orderBy: (m, { desc }) => [desc(m.createdAt)],
       });
 
@@ -26,7 +26,7 @@ export const machineRouter = router({
     }),
 
   // Get machine by ID
-  byId: instanceProtectedProcedure
+  byId: projectProtectedProcedure
     .input(
       z.object({
         machineId: z.string(),
@@ -36,7 +36,7 @@ export const machineRouter = router({
       const m = await ctx.db.query.machine.findFirst({
         where: and(
           eq(machine.id, input.machineId),
-          eq(machine.instanceId, ctx.instance.id),
+          eq(machine.projectId, ctx.project.id),
         ),
       });
 
@@ -51,12 +51,12 @@ export const machineRouter = router({
     }),
 
   // Create a new machine
-  create: instanceProtectedProcedure
+  create: projectProtectedProcedure
     .input(
       z.object({
         name: z.string().min(1).max(100),
         type: z.enum(MachineType).default("daytona"),
-        metadata: z.record(z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -65,7 +65,7 @@ export const machineRouter = router({
         .values({
           name: input.name,
           type: input.type,
-          instanceId: ctx.instance.id,
+          projectId: ctx.project.id,
           state: "started",
           metadata: input.metadata ?? {},
         })
@@ -82,7 +82,7 @@ export const machineRouter = router({
     }),
 
   // Archive a machine
-  archive: instanceProtectedProcedure
+  archive: projectProtectedProcedure
     .input(
       z.object({
         machineId: z.string(),
@@ -95,7 +95,7 @@ export const machineRouter = router({
         .where(
           and(
             eq(machine.id, input.machineId),
-            eq(machine.instanceId, ctx.instance.id),
+            eq(machine.projectId, ctx.project.id),
           ),
         )
         .returning();
@@ -111,7 +111,7 @@ export const machineRouter = router({
     }),
 
   // Unarchive a machine (restore)
-  unarchive: instanceProtectedProcedure
+  unarchive: projectProtectedProcedure
     .input(
       z.object({
         machineId: z.string(),
@@ -124,7 +124,7 @@ export const machineRouter = router({
         .where(
           and(
             eq(machine.id, input.machineId),
-            eq(machine.instanceId, ctx.instance.id),
+            eq(machine.projectId, ctx.project.id),
           ),
         )
         .returning();
@@ -140,7 +140,7 @@ export const machineRouter = router({
     }),
 
   // Delete a machine permanently
-  delete: instanceProtectedProcedure
+  delete: projectProtectedProcedure
     .input(
       z.object({
         machineId: z.string(),
@@ -152,7 +152,7 @@ export const machineRouter = router({
         .where(
           and(
             eq(machine.id, input.machineId),
-            eq(machine.instanceId, ctx.instance.id),
+            eq(machine.projectId, ctx.project.id),
           ),
         )
         .returning();
@@ -168,12 +168,12 @@ export const machineRouter = router({
     }),
 
   // Update machine settings
-  update: instanceProtectedProcedure
+  update: projectProtectedProcedure
     .input(
       z.object({
         machineId: z.string(),
         name: z.string().min(1).max(100).optional(),
-        metadata: z.record(z.unknown()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -186,7 +186,7 @@ export const machineRouter = router({
         .where(
           and(
             eq(machine.id, input.machineId),
-            eq(machine.instanceId, ctx.instance.id),
+            eq(machine.projectId, ctx.project.id),
           ),
         )
         .returning();

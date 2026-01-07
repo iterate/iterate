@@ -6,7 +6,7 @@ export type Context = {
   env: CloudflareEnv;
   db: Variables["db"];
   session: Variables["session"];
-  user: Variables["session"]["user"] | null;
+  user: NonNullable<Variables["session"]>["user"] | null;
 };
 
 export function createContext(

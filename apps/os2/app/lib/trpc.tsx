@@ -52,4 +52,7 @@ export function TRPCProvider({
 }
 
 export const trpcClient = makeTrpcClient();
-export const trpc = createTRPCOptionsProxy<AppRouter>({ client: trpcClient });
+export const trpc = createTRPCOptionsProxy<AppRouter>({
+  client: trpcClient,
+  queryClient: makeQueryClient(),
+});

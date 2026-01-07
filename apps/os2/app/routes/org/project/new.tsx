@@ -2,7 +2,7 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.ts";
+import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -28,14 +28,14 @@ function NewProjectPage() {
 
   const createProject = useMutation({
     mutationFn: async (projectName: string) => {
-      return trpcClient.instance.create.mutate({
+      return trpcClient.project.create.mutate({
         organizationSlug: params.organizationSlug,
         name: projectName,
       });
     },
     onSuccess: (project) => {
       queryClient.invalidateQueries({
-        queryKey: trpc.instance.list.queryKey({ organizationSlug: params.organizationSlug }),
+        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
       });
       toast.success("Project created");
       navigate({

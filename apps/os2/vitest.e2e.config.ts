@@ -9,5 +9,6 @@ export default defineConfig({
     watch: false,
     fileParallelism: false,
     reporters: ["verbose"],
+    globalSetup: ["./e2e/global-setup.ts"],
   },
 });

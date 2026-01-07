@@ -13,7 +13,6 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
-import { OrganizationWebSocket } from "./durable-objects/organization-websocket.ts";
 import { logger } from "./tag-logger.ts";
 
 export type Variables = {
@@ -44,7 +43,9 @@ app.use(
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const sessionResult: any = await auth.api.getSession({ headers: c.req.raw.headers });
+  const session: AuthSession =
+    sessionResult && "data" in sessionResult ? sessionResult.data : sessionResult;
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
@@ -98,23 +99,6 @@ app.all("/api/trpc/*", (c) => {
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 
-// WebSocket endpoint for organization connections
-app.get("/api/ws/:organizationId", async (c) => {
-  const organizationId = c.req.param("organizationId");
-  const id = c.env.ORGANIZATION_WEBSOCKET.idFromName(organizationId);
-  const stub = c.env.ORGANIZATION_WEBSOCKET.get(id);
-  const url = new URL(c.req.url);
-  url.searchParams.set("organizationId", organizationId);
-
-  return stub.fetch(
-    new Request(url.toString(), {
-      method: c.req.method,
-      headers: c.req.raw.headers,
-      body: c.req.raw.body,
-    }),
-  );
-});
-
 export type RequestContext = {
   cloudflare: {
     env: CloudflareEnv;
@@ -151,4 +135,3 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { OrganizationWebSocket };

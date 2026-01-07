@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { trpc } from "../../../lib/trpc.ts";
+import { trpc } from "../../../lib/trpc.tsx";
 
 export const Route = createFileRoute(
   "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
@@ -13,20 +13,12 @@ function ProjectLayout() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
   });
 
-  const { data: project } = useSuspenseQuery(
-    trpc.instance.bySlug.queryOptions({
+  useSuspenseQuery(
+    trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.projectSlug,
+      projectSlug: params.projectSlug,
     }),
   );
-
-  if (!project) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Project not found</div>
-      </div>
-    );
-  }
 
   return <Outlet />;
 }

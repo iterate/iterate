@@ -1,6 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import type { DB } from "./client.ts";
-import { organization, organizationUserMembership, instance, machine } from "./schema.ts";
+import { organization, organizationUserMembership, project, machine } from "./schema.ts";
 
 /**
  * Get user's organizations where they are not external
@@ -15,15 +15,15 @@ export async function getUserOrganizations(db: DB, userId: string) {
 }
 
 /**
- * Get user's organizations with instances
+ * Get user's organizations with projects
  */
-export async function getUserOrganizationsWithInstances(db: DB, userId: string) {
+export async function getUserOrganizationsWithProjects(db: DB, userId: string) {
   return db.query.organizationUserMembership.findMany({
     where: eq(organizationUserMembership.userId, userId),
     with: {
       organization: {
         with: {
-          instances: true,
+          projects: true,
         },
       },
     },
@@ -37,28 +37,28 @@ export async function getOrganizationBySlug(db: DB, slug: string) {
   return db.query.organization.findFirst({
     where: eq(organization.slug, slug),
     with: {
-      instances: true,
+      projects: true,
     },
   });
 }
 
 /**
- * Get instance by slug within an organization
+ * Get project by slug within an organization
  */
-export async function getInstanceBySlug(db: DB, organizationId: string, slug: string) {
-  return db.query.instance.findFirst({
-    where: and(eq(instance.organizationId, organizationId), eq(instance.slug, slug)),
+export async function getProjectBySlug(db: DB, organizationId: string, slug: string) {
+  return db.query.project.findFirst({
+    where: and(eq(project.organizationId, organizationId), eq(project.slug, slug)),
   });
 }
 
 /**
- * Get machines for an instance
+ * Get machines for a project
  */
-export async function getInstanceMachines(db: DB, instanceId: string, includeArchived = false) {
+export async function getProjectMachines(db: DB, projectId: string, includeArchived = false) {
   return db.query.machine.findMany({
     where: includeArchived
-      ? eq(machine.instanceId, instanceId)
-      : and(eq(machine.instanceId, instanceId), eq(machine.state, "started")),
+      ? eq(machine.projectId, projectId)
+      : and(eq(machine.projectId, projectId), eq(machine.state, "started")),
     orderBy: (machine, { desc }) => [desc(machine.createdAt)],
   });
 }
@@ -85,25 +85,25 @@ export async function checkOrganizationAccess(db: DB, userId: string, organizati
 }
 
 /**
- * Check if user has access to instance
+ * Check if user has access to project
  */
-export async function checkInstanceAccess(db: DB, userId: string, instanceId: string) {
-  const inst = await db.query.instance.findFirst({
-    where: eq(instance.id, instanceId),
+export async function checkProjectAccess(db: DB, userId: string, projectId: string) {
+  const proj = await db.query.project.findFirst({
+    where: eq(project.id, projectId),
     with: {
       organization: true,
     },
   });
 
-  if (!inst) {
-    return { hasAccess: false, instance: null };
+  if (!proj) {
+    return { hasAccess: false, project: null };
   }
 
-  const { hasAccess, membership } = await checkOrganizationAccess(db, userId, inst.organizationId);
+  const { hasAccess, membership } = await checkOrganizationAccess(db, userId, proj.organizationId);
 
   return {
     hasAccess,
-    instance: hasAccess ? inst : null,
+    project: hasAccess ? proj : null,
     membership,
   };
 }

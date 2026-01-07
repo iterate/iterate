@@ -5,7 +5,6 @@ import { router, protectedProcedure, orgProtectedProcedure, orgAdminProcedure } 
 import {
   organization,
   organizationUserMembership,
-  instance,
   UserRole,
   user,
 } from "../../db/schema.ts";
@@ -44,14 +43,6 @@ export const organizationRouter = router({
         role: "owner",
       });
 
-      // Create default instance
-      const instanceSlug = generateSlug("default");
-      await ctx.db.insert(instance).values({
-        name: "Default Instance",
-        slug: instanceSlug,
-        organizationId: newOrg.id,
-      });
-
       return newOrg;
     }),
 
@@ -63,12 +54,12 @@ export const organizationRouter = router({
     };
   }),
 
-  // Get organization with instances
-  withInstances: orgProtectedProcedure.query(async ({ ctx }) => {
+  // Get organization with projects
+  withProjects: orgProtectedProcedure.query(async ({ ctx }) => {
     const org = await ctx.db.query.organization.findFirst({
       where: eq(organization.id, ctx.organization.id),
       with: {
-        instances: true,
+        projects: true,
       },
     });
 

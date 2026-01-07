@@ -1,8 +1,8 @@
-import { useState, type FormEvent, Suspense } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.ts";
+import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
   Field,
@@ -15,22 +15,8 @@ import { Input } from "../../components/ui/input.tsx";
 export const Route = createFileRoute(
   "/_auth-required.layout/_/orgs/$organizationSlug/settings",
 )({
-  component: OrgSettingsRoute,
+  component: OrgSettingsPage,
 });
-
-function OrgSettingsRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <div className="text-muted-foreground">Loading...</div>
-        </div>
-      }
-    >
-      <OrgSettingsPage />
-    </Suspense>
-  );
-}
 
 function OrgSettingsPage() {
   const routeParams = useParams({
@@ -64,14 +50,6 @@ function OrgSettingsPage() {
       toast.error("Failed to update organization: " + error.message);
     },
   });
-
-  if (!org) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Organization not found</div>
-      </div>
-    );
-  }
 
   return (
     <OrgSettingsForm

@@ -18,8 +18,8 @@ slackApp.post("/webhook", async (c) => {
   // Verify Slack signature
   const isValid = await verifySlackSignature(
     c.env.SLACK_SIGNING_SECRET,
-    c.req.header("x-slack-signature"),
-    c.req.header("x-slack-request-timestamp"),
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
     body,
   );
 
@@ -56,26 +56,23 @@ slackApp.post("/webhook", async (c) => {
     return c.text("ok");
   }
 
-  // Find the instance associated with this Slack team
-  // For now, we'll save the event without an instance ID and log a warning
-  // In a full implementation, we'd look up the instance via instanceAccountPermission
+  // Find the project associated with this Slack team
   const db = c.var.db;
 
-  // Try to find an instance linked to this Slack team
-  // This is a simplified lookup - in production you'd have a proper mapping
-  const instanceAccount = await db.query.instanceAccountPermission.findFirst({
-    with: {
-      account: true,
-      instance: true,
-    },
-    where: (iap, { eq }) => eq(iap.accountId, teamId), // This is a simplified lookup
+  // Try to find a project linked to this Slack team
+  const connection = await db.query.projectConnection.findFirst({
+    where: (pc, { eq, and }) =>
+      and(
+        eq(pc.provider, "slack"),
+        eq(pc.externalId, teamId)
+      ),
   });
 
-  const instanceId = instanceAccount?.instanceId;
+  const projectId = connection?.projectId;
 
-  if (!instanceId) {
+  if (!projectId) {
     // Log but don't fail - the webhook might be from a workspace not yet linked
-    console.warn(`No instance found for Slack team ${teamId}`);
+    console.warn(`No project found for Slack team ${teamId}`);
     return c.text("ok");
   }
 
@@ -86,7 +83,7 @@ slackApp.post("/webhook", async (c) => {
     await db.insert(schema.event).values({
       type: eventType,
       payload: payload as Record<string, unknown>,
-      instanceId,
+      projectId,
     });
   } catch (error) {
     console.error("Failed to save Slack event:", error);
@@ -106,8 +103,8 @@ slackApp.post("/interactive", async (c) => {
   // Verify Slack signature
   const isValid = await verifySlackSignature(
     c.env.SLACK_SIGNING_SECRET,
-    c.req.header("x-slack-signature"),
-    c.req.header("x-slack-request-timestamp"),
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
     body,
   );
 
@@ -145,8 +142,8 @@ slackApp.post("/commands", async (c) => {
   // Verify Slack signature
   const isValid = await verifySlackSignature(
     c.env.SLACK_SIGNING_SECRET,
-    c.req.header("x-slack-signature"),
-    c.req.header("x-slack-request-timestamp"),
+    c.req.header("x-slack-signature") ?? null,
+    c.req.header("x-slack-request-timestamp") ?? null,
     body,
   );
 

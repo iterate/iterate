@@ -1,5 +1,5 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { trpc } from "../lib/trpc.ts";
+import { trpc } from "../lib/trpc.tsx";
 
 export const Route = createFileRoute("/_auth-required.layout/")({
   beforeLoad: async ({ context }) => {
@@ -12,11 +12,11 @@ export const Route = createFileRoute("/_auth-required.layout/")({
     }
 
     const orgWithProjects = organizations.find(
-      (organization) => (organization.instances || []).length > 0,
+      (organization) => (organization.projects || []).length > 0,
     );
 
     if (orgWithProjects) {
-      const firstProject = orgWithProjects.instances?.[0];
+      const firstProject = orgWithProjects.projects?.[0];
       if (firstProject) {
         throw redirect({
           to: "/orgs/$organizationSlug/projects/$projectSlug",

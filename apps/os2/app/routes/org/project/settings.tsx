@@ -1,8 +1,8 @@
-import { useState, type FormEvent, Suspense } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.ts";
+import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -15,22 +15,8 @@ import { Input } from "../../../components/ui/input.tsx";
 export const Route = createFileRoute(
   "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
 )({
-  component: ProjectSettingsRoute,
+  component: ProjectSettingsPage,
 });
-
-function ProjectSettingsRoute() {
-  return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <div className="text-muted-foreground">Loading...</div>
-        </div>
-      }
-    >
-      <ProjectSettingsPage />
-    </Suspense>
-  );
-}
 
 function ProjectSettingsPage() {
   const params = useParams({
@@ -40,9 +26,9 @@ function ProjectSettingsPage() {
   const queryClient = useQueryClient();
 
   const { data: project } = useSuspenseQuery(
-    trpc.instance.bySlug.queryOptions({
+    trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.projectSlug,
+      projectSlug: params.projectSlug,
     }),
   );
 
@@ -50,20 +36,20 @@ function ProjectSettingsPage() {
 
   const updateProject = useMutation({
     mutationFn: async (nextName: string) => {
-      return trpcClient.instance.update.mutate({
+      return trpcClient.project.update.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
         name: nextName,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: trpc.instance.list.queryKey({ organizationSlug: params.organizationSlug }),
+        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
       });
       queryClient.invalidateQueries({
-        queryKey: trpc.instance.bySlug.queryKey({
+        queryKey: trpc.project.bySlug.queryKey({
           organizationSlug: params.organizationSlug,
-          instanceSlug: params.projectSlug,
+          projectSlug: params.projectSlug,
         }),
       });
       toast.success("Project updated");
@@ -75,14 +61,14 @@ function ProjectSettingsPage() {
 
   const deleteProject = useMutation({
     mutationFn: async () => {
-      return trpcClient.instance.delete.mutate({
+      return trpcClient.project.delete.mutate({
         organizationSlug: params.organizationSlug,
-        instanceSlug: params.projectSlug,
+        projectSlug: params.projectSlug,
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({
-        queryKey: trpc.instance.list.queryKey({ organizationSlug: params.organizationSlug }),
+        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
       });
       toast.success("Project deleted");
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: params.organizationSlug } });

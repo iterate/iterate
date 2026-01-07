@@ -1,6 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Mail, MessageSquare } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "../../../components/ui/button.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 
@@ -11,18 +10,13 @@ export const Route = createFileRoute(
 });
 
 function ProjectConnectorsPage() {
-  const handleSlackConnect = () => {
-    toast("Slack connections are coming soon.");
-  };
-
-  const handleGoogleConnect = () => {
-    toast("Gmail connections are coming soon.");
-  };
-
   return (
     <div className="p-8 max-w-4xl space-y-8">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">Connectors</h1>
+        <p className="text-sm text-muted-foreground">
+          OAuth connections will be implemented using Arctic.
+        </p>
       </div>
 
       <section className="space-y-4">
@@ -39,12 +33,12 @@ function ProjectConnectorsPage() {
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">Slack</span>
-                  <Badge variant="outline">Not connected</Badge>
+                  <Badge variant="outline">Not available</Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">Workspace notifications and commands.</p>
               </div>
             </div>
-            <Button onClick={handleSlackConnect}>Connect Slack</Button>
+            <Button disabled>Connect Slack</Button>
           </div>
         </div>
       </section>
@@ -63,12 +57,12 @@ function ProjectConnectorsPage() {
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">Gmail</span>
-                  <Badge variant="outline">Not connected</Badge>
+                  <Badge variant="outline">Not available</Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">Gmail and Calendar access for your account.</p>
               </div>
             </div>
-            <Button onClick={handleGoogleConnect}>Connect Gmail</Button>
+            <Button disabled>Connect Gmail</Button>
           </div>
         </div>
       </section>

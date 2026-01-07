@@ -4,7 +4,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "../../../components/empty-state.tsx";
-import { trpc } from "../../../lib/trpc.ts";
+import { trpc } from "../../../lib/trpc.tsx";
 
 export const Route = createFileRoute(
   "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
@@ -31,13 +31,13 @@ function ProjectRepoPage() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
   });
   const { data: project } = useSuspenseQuery(
-    trpc.instance.bySlug.queryOptions({
+    trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
-      instanceSlug: params.projectSlug,
+      projectSlug: params.projectSlug,
     }),
   );
 
-  const repo = project?.repos?.[0];
+  const repo = project?.repo;
 
   return (
     <div className="p-8">
@@ -45,14 +45,14 @@ function ProjectRepoPage() {
       <div className="mt-6">
         {repo ? (
           <div className="space-y-2">
+            <div className="text-sm text-muted-foreground">Name</div>
+            <div className="text-sm font-medium">{repo.name}</div>
             <div className="text-sm text-muted-foreground">Provider</div>
             <div className="text-sm font-medium capitalize">{repo.provider}</div>
-            <div className="text-sm text-muted-foreground">Account</div>
-            <div className="text-sm font-medium">{repo.accountId}</div>
-            <div className="text-sm text-muted-foreground">Repository ID</div>
-            <div className="text-sm font-medium">{repo.repoId}</div>
-            <div className="text-sm text-muted-foreground">Branch</div>
-            <div className="text-sm font-medium">{repo.branch}</div>
+            <div className="text-sm text-muted-foreground">Owner</div>
+            <div className="text-sm font-medium">{repo.owner}</div>
+            <div className="text-sm text-muted-foreground">Default Branch</div>
+            <div className="text-sm font-medium">{repo.defaultBranch}</div>
           </div>
         ) : (
           <EmptyState

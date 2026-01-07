@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Users, Building2 } from "lucide-react";
-import { trpc } from "../../lib/trpc.ts";
+import { trpc } from "../../lib/trpc.tsx";
 
 export const Route = createFileRoute("/_auth-required.layout/_/admin/")({
   component: AdminDashboardPage,
@@ -63,7 +63,7 @@ function AdminDashboardPage() {
                   <div className="text-sm text-muted-foreground">{org.slug}</div>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {org.memberCount} members, {org.instanceCount} projects
+                  {org.memberCount} members, {org.projectCount} projects
                 </div>
               </div>
             ))}

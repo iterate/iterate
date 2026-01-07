@@ -18,7 +18,12 @@ export const getAuth = (db: DB) => {
     trustedOrigins: [env.VITE_PUBLIC_URL],
     database: drizzleAdapter(db, {
       provider: "pg",
-      schema,
+      schema: {
+        user: schema.user,
+        session: schema.session,
+        account: schema.account,
+        verification: schema.verification,
+      },
     }),
     plugins: [
       admin(),
@@ -78,5 +83,32 @@ export const getAuth = (db: DB) => {
 };
 
 export type Auth = ReturnType<typeof getAuth>;
-export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;
+export type AuthSession =
+  | {
+      user: {
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        email: string;
+        emailVerified: boolean;
+        name: string;
+        image?: string | null;
+        role?: string | null;
+        banned?: boolean | null;
+        banReason?: string | null;
+        banExpires?: Date | null;
+      };
+      session: {
+        id: string;
+        createdAt: Date;
+        updatedAt: Date;
+        userId: string;
+        expiresAt: Date;
+        token: string;
+        ipAddress?: string | null;
+        userAgent?: string | null;
+        impersonatedBy?: string | null;
+      };
+    }
+  | null;
 export type AuthUser = NonNullable<AuthSession>["user"];

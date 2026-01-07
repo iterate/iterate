@@ -16,7 +16,7 @@ export const userRouter = router({
       with: {
         organization: {
           with: {
-            instances: true,
+            projects: true,
           },
         },
       },

@@ -2,7 +2,7 @@ import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
 import type { QueryClient } from "@tanstack/react-query";
 import { routeTree } from "./routeTree.gen";
-import { makeQueryClient, TRPCProvider } from "./lib/trpc.ts";
+import { makeQueryClient, TRPCProvider } from "./lib/trpc.tsx";
 
 export type TanstackRouterContext = {
   queryClient: QueryClient;

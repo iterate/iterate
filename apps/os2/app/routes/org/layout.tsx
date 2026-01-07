@@ -1,6 +1,6 @@
 import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { trpc } from "../../lib/trpc.ts";
+import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useOrganizationWebSocket } from "../../hooks/use-websocket.ts";
 import { AppSidebar } from "../../components/app-sidebar.tsx";
@@ -9,7 +9,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/
 export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
-      trpc.organization.withInstances.queryOptions({
+      trpc.organization.withProjects.queryOptions({
         organizationSlug: params.organizationSlug,
       }),
     );
@@ -26,31 +26,48 @@ function OrgLayout() {
   const allParams = useParams({ strict: false });
   const { user } = useSessionUser();
 
+  if (!user) {
+    throw new Error("User not found - should not happen in auth-required layout");
+  }
+
   const { data: organizations } = useSuspenseQuery(
     trpc.user.myOrganizations.queryOptions(),
   );
 
   const { data: currentOrg } = useSuspenseQuery(
-    trpc.organization.withInstances.queryOptions({
+    trpc.organization.withProjects.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
   );
 
-  useOrganizationWebSocket(currentOrg?.id ?? "");
-
-  if (!currentOrg) {
+  if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
 
+  useOrganizationWebSocket(currentOrg.id);
+
   const organizationsWithProjects = (organizations || []).map((organization) => ({
-    ...organization,
-    projects: organization.instances || [],
+    id: organization.id,
+    name: organization.name,
+    slug: organization.slug,
+    projects: (organization.projects || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+    })),
   }));
-  const currentOrgWithProjects =
-    organizationsWithProjects.find((organization) => organization.id === currentOrg.id) ?? {
-      ...currentOrg,
-      projects: currentOrg.instances || [],
-    };
+
+  const currentOrgWithProjects = {
+    id: currentOrg.id,
+    name: currentOrg.name,
+    slug: currentOrg.slug,
+    projects: (currentOrg.projects || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      slug: p.slug,
+    })),
+  };
+
   const currentProject =
     currentOrgWithProjects.projects.find((project) => project.slug === allParams.projectSlug) ??
     currentOrgWithProjects.projects[0];
@@ -66,7 +83,7 @@ function OrgLayout() {
             name: user.name,
             email: user.email,
             image: user.image,
-            role: user.role,
+            role: user.role ?? undefined,
           }}
         />
         <SidebarInset>

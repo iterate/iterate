@@ -1,10 +1,11 @@
 import "../styles.css";
 import { Suspense, type ReactNode } from "react";
-import { Outlet, createRootRoute, HeadContent, Scripts } from "@tanstack/react-router";
+import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanstack/react-router";
 import { Toaster } from "sonner";
 import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
+import type { TanstackRouterContext } from "../router.tsx";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<TanstackRouterContext>()({
   head: () => ({
     meta: [
       { charSet: "utf-8" },

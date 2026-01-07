@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import alchemy, { type Scope } from "alchemy";
-import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
+import { TanStackStart, WorkerLoader } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
@@ -68,6 +68,7 @@ const Env = z.object({
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
+  ENCRYPTION_SECRET: Required,
   ITERATE_USER: Optional,
 } satisfies Record<string, typeof Required | typeof Optional>);
 
@@ -168,18 +169,6 @@ async function setupDatabase() {
   throw new Error(`Unsupported environment: ${app.stage}`);
 }
 
-async function setupDurableObjects() {
-  const ORGANIZATION_WEBSOCKET = DurableObjectNamespace<
-    import("./backend/worker.ts").OrganizationWebSocket
-  >("organization-websocket", {
-    className: "OrganizationWebSocket",
-    sqlite: true,
-  });
-
-  return {
-    ORGANIZATION_WEBSOCKET,
-  };
-}
 
 const subdomain = `os2-${app.stage}`
   .replace(/^os2-prd$/, "os2")
@@ -191,7 +180,6 @@ async function deployWorker() {
   const worker = await TanStackStart("os2", {
     bindings: {
       ...(await setupDatabase()),
-      ...(await setupDurableObjects()),
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),

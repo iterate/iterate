@@ -25,7 +25,7 @@ export function LoginCard() {
       });
     } catch (err) {
       console.error("Google sign in failed:", err);
-    } finally {
+      toast.error("Failed to sign in with Google");
       setIsLoading(false);
     }
   };
