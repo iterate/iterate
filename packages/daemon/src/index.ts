@@ -6,7 +6,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
-import type { Agent, Message, SlackWebhook } from "./types.ts";
+import type { Agent, Message, SlackWebhook, ControlEvent } from "./types.ts";
+import { isControlEvent } from "./types.ts";
 import { createPiSession, disposePiSession, promptPiSession, setAppendMessage, type PiStreamMessage } from "./pi/index.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -141,7 +142,13 @@ async function appendMessage(
   source: string,
   metadata: Record<string, unknown> = {}
 ): Promise<Message> {
+  const isNew = !agents.get(agentId);
   const agent = agents.get(agentId) ?? (await createAgent(agentId));
+  
+  // If agent was implicitly created, register it so the UI knows about it
+  if (isNew && !agentId.startsWith("__")) {
+    await onStreamCreated(agentId, agent.contentType);
+  }
 
   const message: Message = {
     offset: String(agent.nextOffset++),
@@ -167,7 +174,38 @@ async function appendMessage(
     }
   }
 
+  // After-hook: process control events
+  if (isControlEvent(content)) {
+    processControlEvent(agent, content).catch((error) => {
+      console.error(`[Control] Failed to process control event for ${agentId}:`, error);
+      appendMessage(agentId, { type: "error", message: error instanceof Error ? error.message : String(error) }, "system");
+    });
+  }
+
   return message;
+}
+
+async function processControlEvent(agent: Agent, event: ControlEvent): Promise<void> {
+  console.log(`[Control] Processing control event for ${agent.id}:`, event.action);
+
+  switch (event.action) {
+    case "prompt": {
+      // Lazily create Pi session if needed
+      if (!agent.piSession && !agent.id.startsWith("__")) {
+        agent.piSession = await createPiSession(agent.id);
+        console.log(`[Control] Lazily created Pi session for agent: ${agent.id}`);
+      }
+
+      if (agent.piSession) {
+        await promptPiSession(agent.piSession, event.payload.text);
+      } else {
+        console.warn(`[Control] No Pi session available for agent: ${agent.id}`);
+      }
+      break;
+    }
+    default:
+      console.warn(`[Control] Unknown control action: ${(event as ControlEvent).action}`);
+  }
 }
 
 function getMessagesFromOffset(agentId: string, offset: string): Message[] {

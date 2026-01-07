@@ -6,6 +6,18 @@ export interface Message {
   metadata: Record<string, unknown>;
 }
 
+// Control events that trigger actions after being appended to the stream
+export type ControlEvent =
+  | { type: "iterate:control"; action: "prompt"; payload: { text: string } };
+
+export function isControlEvent(content: unknown): content is ControlEvent {
+  return (
+    typeof content === "object" &&
+    content !== null &&
+    (content as Record<string, unknown>).type === "iterate:control"
+  );
+}
+
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
 export interface Agent {

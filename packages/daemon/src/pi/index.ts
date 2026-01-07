@@ -116,10 +116,12 @@ function subscribeToEvents(streamId: string, session: AgentSession): void {
 export async function promptPiSession(session: AgentSession, text: string): Promise<void> {
   console.log(`[Pi] Sending prompt: "${text.substring(0, 50)}..."`);
   try {
-    await session.prompt(text);
+    await session.prompt(text, {
+      streamingBehavior: "steer"
+    });
     console.log(`[Pi] Prompt completed successfully`);
   } catch (error) {
-    console.error(`[Pi] Prompt failed:`, error);
+    console.error(`[Pi] Prompt failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
 }
