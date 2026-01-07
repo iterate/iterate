@@ -173,12 +173,12 @@ CREATE TABLE project_env_var (
 );
 CREATE INDEX idx_project_env_var_project ON project_env_var(project_id);
 
--- API access tokens for a project
+-- API access tokens for a project (tokens are one-way hashed, not recoverable)
 CREATE TABLE project_access_token (
     id TEXT PRIMARY KEY,                           -- prefix: pat_
     project_id TEXT NOT NULL REFERENCES project(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    token_hash TEXT NOT NULL,                      -- hashed token for verification
+    token_hash TEXT NOT NULL,                      -- SHA-256 hash; raw token shown once at creation
     last_used_at TIMESTAMPTZ,
     revoked_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -227,6 +227,7 @@ CREATE INDEX idx_event_created ON event(created_at);
 4. **Events are project-scoped**: Events are stored in a single table with `project_id` for partitioning; nullable for unrecognized webhooks.
 5. **Provider lookup via external_id**: Webhook receivers map provider identifiers (e.g., Slack team ID) to `project_id` via indexed `(provider, external_id)`.
 6. **Provider extensibility**: OAuth providers and scopes should be structured so adding new providers or adjusting scopes is straightforward.
+7. **Access tokens are hashed, not encrypted**: Project access tokens are stored as one-way SHA-256 hashes. The raw token is shown to the user exactly once at creation time and cannot be recovered from the database. Verification is done by hashing the provided token and comparing to the stored hash.
 
 ---
 
@@ -463,4 +464,4 @@ All org/project endpoints validate membership via slug lookup, not just ID.
 
 ## Summary
 
-This shell provides authentication, organizations/teams, projects, machines, env vars, access tokens, and connection infrastructure. Projects are the core domain object and map one-to-one with repos (dummy repo entries for now). OAuth integrations are modeled as connections, scoped either to projects or to users, with Slack as a project-wide connection and Gmail per user. Sign-in uses email OTP and Google OAuth, with non-prod OTP shortcuts as noted. Events are stored per project to support future event bus workflows. Any org member can create projects. Members are added by email (must already exist in system). Keep everything minimal—this is a functioning skeleton.
+This shell provides authentication, organizations/teams, projects, machines, env vars, access tokens, and connection infrastructure. Projects are the core domain object and map one-to-one with repos (dummy repo entries for now). OAuth integrations are modeled as connections, scoped either to projects or to users, with Slack as a project-wide connection and Gmail per user. Sign-in uses email OTP and Google OAuth, with non-prod OTP shortcuts as noted. Events are stored per project to support future event bus workflows. Access tokens are one-way hashed (SHA-256) so they cannot be recovered from the database; the raw token is shown once at creation time. Any org member can create projects. Members are added by email (must already exist in system). Keep everything minimal—this is a functioning skeleton.
