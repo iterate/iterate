@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { router, protectedProcedure, orgProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
 import { organization, organizationUserMembership, UserRole } from "../../db/schema.ts";
-import { generateSlugFromEmail } from "../../utils/slug.ts";
+import { generateOrgSlug } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
   create: protectedProcedure
@@ -13,7 +13,7 @@ export const organizationRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const slug = input.slug || generateSlugFromEmail(ctx.user.email);
+      const slug = input.slug || generateOrgSlug(input.name);
 
       const [org] = await ctx.db
         .insert(organization)

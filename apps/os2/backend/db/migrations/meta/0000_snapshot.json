@@ -1,5 +1,5 @@
 {
-  "id": "bcdef5ff-aa75-416c-a210-f6514f62a5be",
+  "id": "d9f8cece-8c36-4c9f-8557-cfc371e83026",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "version": "7",
   "dialect": "postgresql",
@@ -217,12 +217,6 @@
           "primaryKey": true,
           "notNull": true
         },
-        "name": {
-          "name": "name",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
         "type": {
           "name": "type",
           "type": "text",
@@ -239,6 +233,12 @@
         },
         "project_id": {
           "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_by": {
+          "name": "created_by",
           "type": "text",
           "primaryKey": false,
           "notNull": true
@@ -295,6 +295,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "machine_created_by_index": {
+          "name": "machine_created_by_index",
+          "columns": [
+            {
+              "expression": "created_by",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -304,6 +319,19 @@
           "tableTo": "project",
           "columnsFrom": [
             "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
+        "machine_created_by_user_id_fk": {
+          "name": "machine_created_by_user_id_fk",
+          "tableFrom": "machine",
+          "tableTo": "user",
+          "columnsFrom": [
+            "created_by"
           ],
           "columnsTo": [
             "id"

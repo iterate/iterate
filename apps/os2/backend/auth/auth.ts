@@ -1,10 +1,11 @@
 import { betterAuth } from "better-auth";
-import { admin } from "better-auth/plugins";
+import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env } from "../../env.ts";
+import { logger } from "../tag-logger.ts";
 import { integrationsPlugin, SLACK_USER_AUTH_SCOPES } from "./integrations.ts";
 import { serviceAuthPlugin } from "./service-auth.ts";
 
@@ -33,7 +34,22 @@ export const getAuth = (db: DB) => {
         allowDifferentEmails: true,
       },
     },
-    plugins: [admin(), integrationsPlugin(), serviceAuthPlugin()],
+    plugins: [
+      admin(),
+      emailOTP({
+        generateOTP: (o) => {
+          if (o.email.endsWith("+test@nustom.com")) {
+            return "424242";
+          }
+          return Math.floor(100000 + Math.random() * 900000).toString();
+        },
+        async sendVerificationOTP(data) {
+          logger.info("OTP for", data.email, "is", data.otp);
+        },
+      }),
+      integrationsPlugin(),
+      serviceAuthPlugin(),
+    ],
     socialProviders: {
       google: {
         scope: [

@@ -14,7 +14,6 @@ export const machineRouter = router({
   create: projectProtectedProcedure
     .input(
       z.object({
-        name: z.string().min(1),
         type: z.enum(MachineType).default("daytona"),
       }),
     )
@@ -22,9 +21,9 @@ export const machineRouter = router({
       const [created] = await ctx.db
         .insert(machine)
         .values({
-          name: input.name,
           type: input.type,
           projectId: ctx.project.id,
+          createdBy: ctx.user.id,
         })
         .returning();
 

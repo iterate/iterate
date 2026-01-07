@@ -194,7 +194,6 @@ export const machine = pgTable(
   "machine",
   (t) => ({
     id: iterateId("mach"),
-    name: t.text().notNull(),
     type: t
       .text({ enum: [...MachineType] })
       .notNull()
@@ -207,15 +206,20 @@ export const machine = pgTable(
       .text()
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
+    createdBy: t.text().references(() => user.id, { onDelete: "set null" }),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
-  (t) => [index().on(t.projectId), index().on(t.state)],
+  (t) => [index().on(t.projectId), index().on(t.state), index().on(t.createdBy)],
 );
 export const machineRelations = relations(machine, ({ one }) => ({
   project: one(project, {
     fields: [machine.projectId],
     references: [project.id],
+  }),
+  createdByUser: one(user, {
+    fields: [machine.createdBy],
+    references: [user.id],
   }),
 }));
 

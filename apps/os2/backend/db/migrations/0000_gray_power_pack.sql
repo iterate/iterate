@@ -25,10 +25,10 @@ CREATE TABLE "event" (
 --> statement-breakpoint
 CREATE TABLE "machine" (
 	"id" text PRIMARY KEY NOT NULL,
-	"name" text NOT NULL,
 	"type" text DEFAULT 'daytona' NOT NULL,
 	"state" text DEFAULT 'started' NOT NULL,
 	"project_id" text NOT NULL,
+	"created_by" text NOT NULL,
 	"metadata" jsonb DEFAULT '{}'::jsonb NOT NULL,
 	"created_at" timestamp DEFAULT now() NOT NULL,
 	"updated_at" timestamp DEFAULT now() NOT NULL
@@ -121,6 +121,7 @@ CREATE TABLE "verification" (
 ALTER TABLE "account" ADD CONSTRAINT "account_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "event" ADD CONSTRAINT "event_project_id_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."project"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "machine" ADD CONSTRAINT "machine_project_id_project_id_fk" FOREIGN KEY ("project_id") REFERENCES "public"."project"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "machine" ADD CONSTRAINT "machine_created_by_user_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "organization_user_membership" ADD CONSTRAINT "organization_user_membership_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "organization_user_membership" ADD CONSTRAINT "organization_user_membership_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "project" ADD CONSTRAINT "project_organization_id_organization_id_fk" FOREIGN KEY ("organization_id") REFERENCES "public"."organization"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -133,6 +134,7 @@ CREATE INDEX "event_project_id_index" ON "event" USING btree ("project_id");--> 
 CREATE INDEX "event_type_index" ON "event" USING btree ("type");--> statement-breakpoint
 CREATE INDEX "machine_project_id_index" ON "machine" USING btree ("project_id");--> statement-breakpoint
 CREATE INDEX "machine_state_index" ON "machine" USING btree ("state");--> statement-breakpoint
+CREATE INDEX "machine_created_by_index" ON "machine" USING btree ("created_by");--> statement-breakpoint
 CREATE UNIQUE INDEX "organization_user_membership_user_id_organization_id_index" ON "organization_user_membership" USING btree ("user_id","organization_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "project_account_permission_project_id_account_id_index" ON "project_account_permission" USING btree ("project_id","account_id");--> statement-breakpoint
 CREATE INDEX "repo_project_id_index" ON "repo" USING btree ("project_id");
