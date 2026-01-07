@@ -1,13 +1,12 @@
-import { useSession } from "../lib/auth-client.ts";
+import { useSuspenseQuery } from "@tanstack/react-query";
+import { sessionQueryOptions } from "../lib/session-query.ts";
 
 export function useSessionUser() {
-  const { data: session, isPending, error } = useSession();
+  const { data: session } = useSuspenseQuery(sessionQueryOptions());
 
   return {
     user: session?.user ?? null,
     session: session?.session ?? null,
-    isLoading: isPending,
-    error,
     isAuthenticated: !!session?.user,
   };
 }

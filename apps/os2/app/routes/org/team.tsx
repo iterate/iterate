@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User } from "lucide-react";
 import { trpc, trpcClient } from "../../lib/trpc.ts";
@@ -39,13 +39,13 @@ function OrgTeamPage() {
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 
-  const { data: members, isLoading } = useQuery(
+  const { data: members } = useSuspenseQuery(
     trpc.organization.members.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
   );
 
-  const { data: org } = useQuery(
+  const { data: org } = useSuspenseQuery(
     trpc.organization.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
@@ -112,14 +112,6 @@ function OrgTeamPage() {
       toast.error("Failed to remove member: " + error.message);
     },
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
 
   const currentUserRole = org?.role;
   const canManageMembers = currentUserRole === "owner" || currentUserRole === "admin";

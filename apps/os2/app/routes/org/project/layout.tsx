@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../../lib/trpc.ts";
 
 export const Route = createFileRoute(
@@ -13,20 +13,12 @@ function ProjectLayout() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
   });
 
-  const { data: project, isLoading } = useQuery(
+  const { data: project } = useSuspenseQuery(
     trpc.instance.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
       instanceSlug: params.projectSlug,
     }),
   );
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
 
   if (!project) {
     return (

@@ -1,26 +1,18 @@
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { LoginCard } from "../components/auth-components.tsx";
-import { useSessionUser } from "../hooks/use-session-user.ts";
+import { sessionQueryOptions } from "../lib/session-query.ts";
 
 export const Route = createFileRoute("/login")({
+  beforeLoad: async ({ context }) => {
+    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
+    if (session?.user) {
+      throw redirect({ to: "/" });
+    }
+  },
   component: LoginPage,
 });
 
 function LoginPage() {
-  const { isAuthenticated, isLoading } = useSessionUser();
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (isAuthenticated) {
-    return <Navigate to="/" />;
-  }
-
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/50">
       <LoginCard />

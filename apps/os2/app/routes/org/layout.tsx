@@ -1,5 +1,5 @@
-import { createFileRoute, Outlet, Navigate, useParams } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.ts";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useOrganizationWebSocket } from "../../hooks/use-websocket.ts";
@@ -7,6 +7,17 @@ import { AppSidebar } from "../../components/app-sidebar.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
 export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug")({
+  beforeLoad: async ({ context, params }) => {
+    const currentOrg = await context.queryClient.ensureQueryData(
+      trpc.organization.withInstances.queryOptions({
+        organizationSlug: params.organizationSlug,
+      }),
+    );
+
+    if (!currentOrg) {
+      throw redirect({ to: "/" });
+    }
+  },
   component: OrgLayout,
 });
 
@@ -15,16 +26,11 @@ function OrgLayout() {
   const allParams = useParams({ strict: false });
   const { user } = useSessionUser();
 
-  const { data: organizations, isPending: orgsPending } = useQuery(
+  const { data: organizations } = useSuspenseQuery(
     trpc.user.myOrganizations.queryOptions(),
   );
 
-  const {
-    data: currentOrg,
-    isPending: orgPending,
-    isError,
-    error,
-  } = useQuery(
+  const { data: currentOrg } = useSuspenseQuery(
     trpc.organization.withInstances.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
@@ -32,21 +38,8 @@ function OrgLayout() {
 
   useOrganizationWebSocket(currentOrg?.id ?? "");
 
-  if (orgsPending || orgPending || !user) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (isError) {
-    console.error("Failed to load organization:", error);
-    return <Navigate to="/" />;
-  }
-
   if (!currentOrg) {
-    return <Navigate to="/" />;
+    throw redirect({ to: "/" });
   }
 
   const organizationsWithProjects = (organizations || []).map((organization) => ({

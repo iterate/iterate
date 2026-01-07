@@ -35,7 +35,7 @@ app.use(
       return c.env.ALLOWED_DOMAINS.split(",").includes(domain) ? origin : null;
     },
     credentials: true,
-    allowMethods: ["*"],
+    allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     maxAge: 600,
   }),
   secureHeaders(),

@@ -6,7 +6,7 @@ import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
-import z from "zod";
+import { z } from "zod/v4";
 import dedent from "dedent";
 
 const stateStore = (scope: Scope) =>

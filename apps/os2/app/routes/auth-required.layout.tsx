@@ -1,24 +1,19 @@
-import { createFileRoute, Outlet, Navigate } from "@tanstack/react-router";
-import { useSessionUser } from "../hooks/use-session-user.ts";
+import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
+import { sessionQueryOptions } from "../lib/session-query.ts";
 
 export const Route = createFileRoute("/_auth-required.layout")({
+  beforeLoad: async ({ context }) => {
+    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
+
+    if (!session?.user) {
+      throw redirect({ to: "/login" });
+    }
+
+    return { session };
+  },
   component: AuthRequiredLayout,
 });
 
 function AuthRequiredLayout() {
-  const { isAuthenticated, isLoading } = useSessionUser();
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <Navigate to="/login" />;
-  }
-
   return <Outlet />;
 }

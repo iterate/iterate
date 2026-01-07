@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { Users, Building2 } from "lucide-react";
 import { trpc } from "../../lib/trpc.ts";
 
@@ -8,11 +8,11 @@ export const Route = createFileRoute("/_auth-required.layout/_/admin/")({
 });
 
 function AdminDashboardPage() {
-  const { data: users } = useQuery(
+  const { data: users } = useSuspenseQuery(
     trpc.admin.listUsers.queryOptions({ limit: 10 }),
   );
 
-  const { data: organizations } = useQuery(
+  const { data: organizations } = useSuspenseQuery(
     trpc.admin.listOrganizations.queryOptions({ limit: 10 }),
   );
 

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.ts";
 
 export const Route = createFileRoute("/_auth-required.layout/_/admin/session-info")({
@@ -7,17 +7,9 @@ export const Route = createFileRoute("/_auth-required.layout/_/admin/session-inf
 });
 
 function SessionInfoPage() {
-  const { data: sessionInfo, isLoading } = useQuery(
+  const { data: sessionInfo } = useSuspenseQuery(
     trpc.admin.sessionInfo.queryOptions(),
   );
-
-  if (isLoading) {
-    return (
-      <div className="p-8">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
 
   return (
     <div className="p-8 space-y-6">

@@ -5,8 +5,7 @@ import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd } from "../../env.ts";
-import { integrationsPlugin } from "./integrations.ts";
-import { serviceAuthPlugin } from "./service-auth.ts";
+import { logger } from "../tag-logger.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
@@ -23,8 +22,6 @@ export const getAuth = (db: DB) => {
     }),
     plugins: [
       admin(),
-      integrationsPlugin(),
-      serviceAuthPlugin(),
       emailOTP({
         otpLength: 6,
         expiresIn: 300,
@@ -36,10 +33,12 @@ export const getAuth = (db: DB) => {
         },
         sendVerificationOTP: async ({ email, otp }) => {
           if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
-            console.log(`[DEV] Skipping email for test address: ${email}. Use OTP: ${TEST_OTP_CODE}`);
+            logger.info(
+              `[DEV] Skipping email for test address: ${email}. Use OTP: ${TEST_OTP_CODE}`,
+            );
             return;
           }
-          console.log(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
+          logger.info(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
           // TODO: Implement actual email sending (e.g., Resend, SendGrid, etc.)
         },
       }),

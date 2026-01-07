@@ -1,28 +1,19 @@
-import { createFileRoute, Outlet, Link, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Outlet, Link, redirect } from "@tanstack/react-router";
 import { Shield, Terminal, Info } from "lucide-react";
-import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { cn } from "../../lib/cn.ts";
+import { sessionQueryOptions } from "../../lib/session-query.ts";
 
 export const Route = createFileRoute("/_auth-required.layout/_/admin")({
+  beforeLoad: async ({ context }) => {
+    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
+    if (session?.user?.role !== "admin") {
+      throw redirect({ to: "/" });
+    }
+  },
   component: AdminLayout,
 });
 
 function AdminLayout() {
-  const { user, isLoading } = useSessionUser();
-
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
-
-  // Only admins can access this layout
-  if (user?.role !== "admin") {
-    return <Navigate to="/" />;
-  }
-
   return (
     <div className="flex h-screen">
       {/* Admin Sidebar */}

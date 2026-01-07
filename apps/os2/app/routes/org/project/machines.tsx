@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { trpc, trpcClient } from "../../../lib/trpc.ts";
@@ -37,7 +37,7 @@ function ProjectMachinesPage() {
     includeArchived: false,
   });
 
-  const { data: machines, isLoading } = useQuery(
+  const { data: machines } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
       organizationSlug: params.organizationSlug,
       instanceSlug: params.projectSlug,
@@ -45,7 +45,7 @@ function ProjectMachinesPage() {
     }),
   );
 
-  const { data: project } = useQuery(
+  const { data: project } = useSuspenseQuery(
     trpc.instance.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
       instanceSlug: params.projectSlug,
@@ -174,11 +174,7 @@ function ProjectMachinesPage() {
         </div>
       </div>
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-8">
-          <div className="text-muted-foreground">Loading...</div>
-        </div>
-      ) : machines && machines.length > 0 ? (
+      {machines.length > 0 ? (
         <MachineTable
           machines={machines}
           onArchive={(id) => archiveMachine.mutate(id)}
