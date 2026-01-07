@@ -20,6 +20,7 @@ export default defineConfig({
     },
   },
   server: {
+    port: 5174,
     allowedHosts: [".dev.iterate.com"],
     cors: false,
   },
