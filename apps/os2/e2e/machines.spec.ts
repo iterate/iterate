@@ -8,13 +8,20 @@ test("can login, create org, create project, create machines, and archive one", 
 
   await page.goto("/login");
 
-  await new Promise((resolve) => setTimeout(resolve, 1000)); // Continue with email button is clickable too early
-
   // Click "Continue with Email" to show the email form
   await page.getByRole("button", { name: "Continue with Email" }).click();
 
   // Fill in email and send OTP
-  await page.getByLabel("Email").fill(email);
+  await page
+    .getByLabel("Email")
+    .fill(email)
+    .catch(async (err) => {
+      console.error(
+        `Couldn't fill email: ${err}. Maybe "Continue with Email" needs clicking again? This is a crappy UI race condition if so`,
+      );
+      await page.getByRole("button", { name: "Continue with Email" }).click();
+      await page.getByLabel("Email").fill(email);
+    });
   await page.getByRole("button", { name: "Send OTP" }).click();
 
   // Wait for OTP form and fill it in (test emails use 424242)
