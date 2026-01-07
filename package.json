@@ -9,6 +9,7 @@
     "format:check": "prettier --check .",
     "iterate": "pnpm run --silent os iterate",
     "os": "cd apps/os && pnpm",
+    "os2": "cd apps/os2 && pnpm",
     "e2e": "WORKER_URL='http://localhost:5173' doppler run -- pnpm os e2e",
     "eval": "doppler run -- pnpm os eval",
     "eval:light": "doppler run -- env -u BRAINTRUST_API_KEY pnpm os eval",
@@ -34,7 +35,8 @@
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
     "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
-    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm db:migrate",
+    "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate",
+    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate",
     "postinstall": "is-ci || pnpm /postinstall:/"
   },
   "devDependencies": {
