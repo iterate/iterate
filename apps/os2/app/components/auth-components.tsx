@@ -1,4 +1,4 @@
-import { useState, useRef, type FormEvent } from "react";
+import { useState, useRef, useSyncExternalStore, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -6,16 +6,27 @@ import { Button } from "./ui/button.tsx";
 import { Input } from "./ui/input.tsx";
 import { InputOTP } from "./ui/input-otp.tsx";
 
+function useHydrated() {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+}
+
 type LoginStep = "email" | "otp";
 
 export function LoginCard() {
   const navigate = useNavigate();
+  const isHydrated = useHydrated();
   const [isLoading, setIsLoading] = useState(false);
   const [step, setStep] = useState<LoginStep>("email");
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement>(null);
+
+  const isDisabled = !isHydrated || isLoading;
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
@@ -111,9 +122,9 @@ export function LoginCard() {
           </p>
         </div>
         <form onSubmit={handleOTPSubmit} className="space-y-4">
-          <InputOTP value={otp} onChange={handleOtpChange} disabled={isLoading} autoFocus />
+          <InputOTP value={otp} onChange={handleOtpChange} disabled={isDisabled} autoFocus />
           {error && <p className="text-sm text-destructive text-center">{error}</p>}
-          <Button type="submit" className="w-full" disabled={isLoading || otp.length !== 6}>
+          <Button type="submit" className="w-full" disabled={isDisabled || otp.length !== 6}>
             {isLoading ? "Verifying..." : "Verify"}
           </Button>
           <div className="flex items-center justify-between text-sm">
@@ -121,7 +132,7 @@ export function LoginCard() {
               type="button"
               onClick={handleBack}
               className="text-muted-foreground hover:text-foreground"
-              disabled={isLoading}
+              disabled={isDisabled}
             >
               ← Back
             </button>
@@ -129,7 +140,7 @@ export function LoginCard() {
               type="button"
               onClick={handleResendOTP}
               className="text-muted-foreground hover:text-foreground"
-              disabled={isLoading}
+              disabled={isDisabled}
             >
               Resend code
             </button>
@@ -147,7 +158,7 @@ export function LoginCard() {
           type="email"
           placeholder="you@example.com"
           defaultValue={email}
-          disabled={isLoading}
+          disabled={isDisabled}
           required
           data-testid="email-input"
         />
@@ -155,7 +166,7 @@ export function LoginCard() {
         <Button
           type="submit"
           className="w-full"
-          disabled={isLoading}
+          disabled={isDisabled}
           data-testid="email-submit-button"
         >
           {isLoading ? "Sending code..." : "Continue with Email"}
@@ -175,7 +186,7 @@ export function LoginCard() {
         variant="outline"
         className="w-full"
         onClick={handleGoogleSignIn}
-        disabled={isLoading}
+        disabled={isDisabled}
       >
         <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24">
           <path
