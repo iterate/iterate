@@ -2,25 +2,25 @@ import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpcClient } from "../../../lib/trpc.tsx";
-import { Button } from "../../../components/ui/button.tsx";
+import { trpcClient } from "../../lib/trpc.tsx";
+import { Button } from "../../components/ui/button.tsx";
 import {
   Field,
   FieldGroup,
   FieldLabel,
   FieldSet,
-} from "../../../components/ui/field.tsx";
-import { Input } from "../../../components/ui/input.tsx";
+} from "../../components/ui/field.tsx";
+import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/projects/new",
+  "/_auth.layout/orgs/$organizationSlug/new-project",
 )({
   component: NewProjectPage,
 });
 
 function NewProjectPage() {
   const params = useParams({
-    from: "/_auth.layout/orgs/$organizationSlug/projects/new",
+    from: "/_auth.layout/orgs/$organizationSlug/new-project",
   });
   const navigate = useNavigate();
   const [name, setName] = useState("");

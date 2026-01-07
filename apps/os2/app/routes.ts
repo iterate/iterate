@@ -22,13 +22,13 @@ export const routes = rootRoute("root.tsx", [
 
     // Organization routes
     route("/orgs/$organizationSlug", "org/layout.tsx", [
-      // Org index redirects to first project
+      // Org dashboard
       index("org/index.tsx"),
 
       // Org settings
       route("/settings", "org/settings.tsx"),
       route("/team", "org/team.tsx"),
-      route("/projects/new", "org/project/new.tsx"),
+      route("/new-project", "org/new-project.tsx"),
 
       // Project routes
       route("/projects/$projectSlug", "org/project/layout.tsx", [

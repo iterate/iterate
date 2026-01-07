@@ -3,7 +3,7 @@ import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
-import { invalidateQueriesForUser } from "../utils/query-invalidation.ts";
+import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
@@ -180,16 +180,19 @@ export const adminProcedure = protectedProcedure.use(async ({ ctx, next, path })
   return next({ ctx });
 });
 
-/** Middleware that invalidates all queries for the user's organizations after mutation */
+/** Middleware that broadcasts query invalidation to all connected clients after mutation */
 const withQueryInvalidation = t.middleware(async ({ ctx, next }) => {
   const result = await next();
-  if (result.ok && ctx.user) {
-    invalidateQueriesForUser(ctx.db, ctx.env, ctx.user.id).catch((error) => {
-      logger.error("Failed to invalidate queries:", error);
+  if (result.ok) {
+    broadcastInvalidation(ctx.env).catch((error) => {
+      logger.error("Failed to broadcast invalidation:", error);
     });
   }
   return result;
 });
+
+/** Public mutation procedure - invalidates queries after successful mutation (for testing) */
+export const publicMutation = publicProcedure.use(withQueryInvalidation);
 
 /** Protected mutation procedure - invalidates queries after successful mutation */
 export const protectedMutation = protectedProcedure.use(withQueryInvalidation);

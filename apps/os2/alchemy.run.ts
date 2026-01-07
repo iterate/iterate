@@ -179,12 +179,13 @@ const subdomain = `os2-${app.stage}`
 const domains = [`${subdomain}.iterate.com`];
 
 async function deployWorker() {
-  const TANSTACK_QUERY_INVALIDATOR = DurableObjectNamespace<
-    import("./backend/worker.ts").TanstackQueryInvalidator
-  >("tanstack-query-invalidator", {
-    className: "TanstackQueryInvalidator",
-    sqlite: true,
-  });
+  const REALTIME_PUSHER = DurableObjectNamespace<import("./backend/worker.ts").RealtimePusher>(
+    "realtime-pusher",
+    {
+      className: "RealtimePusher",
+      sqlite: true,
+    },
+  );
 
   const worker = await TanStackStart("os2", {
     bindings: {
@@ -192,7 +193,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
-      TANSTACK_QUERY_INVALIDATOR,
+      REALTIME_PUSHER,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
     assets: {

@@ -13,7 +13,7 @@ import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { logger } from "./tag-logger.ts";
-import { TanstackQueryInvalidator } from "./durable-objects/tanstack-query-invalidator.ts";
+import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 
 export type Variables = {
   auth: Auth;
@@ -86,14 +86,10 @@ app.all("/api/trpc/*", (c) => {
 // Mount the Slack integration app
 app.route("/api/integrations/slack", slackApp);
 
-// WebSocket endpoint for query invalidation
-app.get("/api/ws/invalidate", (c) => {
-  const organizationId = c.req.query("organizationId");
-  if (!organizationId) {
-    return c.json({ error: "Missing organizationId" }, 400);
-  }
-  const id = c.env.TANSTACK_QUERY_INVALIDATOR.idFromName(organizationId);
-  const stub = c.env.TANSTACK_QUERY_INVALIDATOR.get(id);
+// WebSocket endpoint for realtime push (query invalidation)
+app.get("/api/ws/realtime", (c) => {
+  const id = c.env.REALTIME_PUSHER.idFromName("global");
+  const stub = c.env.REALTIME_PUSHER.get(id);
   return stub.fetch(c.req.raw);
 });
 
@@ -133,5 +129,5 @@ export default class extends WorkerEntrypoint {
   }
 }
 
-export { TanstackQueryInvalidator };
+export { RealtimePusher };
 

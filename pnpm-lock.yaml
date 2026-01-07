@@ -375,7 +375,7 @@ importers:
         version: 5.0.5
       openai:
         specifier: 6.3.0
-        version: 6.3.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
+        version: 6.3.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       p-queue:
         specifier: 9.0.0
         version: 9.0.0
@@ -544,7 +544,7 @@ importers:
         version: 4.0.15(vitest@4.0.15)
       autoevals:
         specifier: 0.0.131
-        version: 0.0.131(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+        version: 0.0.131(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))
       drizzle-kit:
         specifier: ^0.31.7
         version: 0.31.7
@@ -823,6 +823,9 @@ importers:
       wrangler:
         specifier: ^4.51.0
         version: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws:
+        specifier: ^8.19.0
+        version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
   estates/garple:
     dependencies:
@@ -10208,6 +10211,18 @@ packages:
       utf-8-validate:
         optional: true
 
+  ws@8.19.0:
+    resolution: {integrity: sha512-blAT2mjOEIi0ZzruJfIhb3nps74PRWTCz1IjglWEEpQl5XS/UNama6u2/rjFkDDouqr4L67ry+1aGIALViWjDg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
+
   wsl-utils@0.1.0:
     resolution: {integrity: sha512-h3Fbisa2nKGPxCpm89Hk33lBLsnaGBvctQopaBSOW/uIs6FTe1ATyAnKFJrzVs9vpGdsTe73WF3V4lIsk4Gacw==}
     engines: {node: '>=18'}
@@ -14313,7 +14328,7 @@ snapshots:
 
   '@tanstack/devtools-event-bus@0.3.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)':
     dependencies:
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -15074,7 +15089,7 @@ snapshots:
       sirv: 3.0.2
       tinyrainbow: 3.0.3
       vitest: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@24.10.1)(@vitest/ui@4.0.15)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
     transitivePeerDependencies:
       - bufferutil
       - msw
@@ -15304,7 +15319,7 @@ snapshots:
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
       wrangler: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       yaml: 2.8.2
     optionalDependencies:
       '@cloudflare/vite-plugin': 1.15.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))(workerd@1.20251125.0)(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -15346,7 +15361,7 @@ snapshots:
       signal-exit: 4.1.0
       unenv: 2.0.0-rc.21
       wrangler: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       yaml: 2.8.2
     optionalDependencies:
       '@cloudflare/vite-plugin': 1.15.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))(workerd@1.20251125.0)(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
@@ -15470,7 +15485,7 @@ snapshots:
 
   atomic-sleep@1.0.0: {}
 
-  autoevals@0.0.131(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
+  autoevals@0.0.131(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)):
     dependencies:
       ajv: 8.17.1
       compute-cosine-similarity: 1.1.0
@@ -15478,7 +15493,7 @@ snapshots:
       js-yaml: 4.1.1
       linear-sum-assignment: 1.0.7
       mustache: 4.2.0
-      openai: 4.104.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)
+      openai: 4.104.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76)
       zod: 3.25.76
       zod-to-json-schema: 3.25.0(zod@3.25.76)
     transitivePeerDependencies:
@@ -18538,7 +18553,7 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
-  openai@4.104.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76):
+  openai@4.104.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@3.25.76):
     dependencies:
       '@types/node': 18.19.130
       '@types/node-fetch': 2.6.13
@@ -18548,14 +18563,14 @@ snapshots:
       formdata-node: 4.4.1
       node-fetch: 2.7.0
     optionalDependencies:
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod: 3.25.76
     transitivePeerDependencies:
       - encoding
 
-  openai@6.3.0(ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
+  openai@6.3.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
     optionalDependencies:
-      ws: 8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod: 4.1.12
 
   openapi-types@12.1.3: {}
@@ -21000,6 +21015,11 @@ snapshots:
       utf-8-validate: 5.0.10
 
   ws@8.18.3(bufferutil@4.0.9)(utf-8-validate@5.0.10):
+    optionalDependencies:
+      bufferutil: 4.0.9
+      utf-8-validate: 5.0.10
+
+  ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10):
     optionalDependencies:
       bufferutil: 4.0.9
       utf-8-validate: 5.0.10

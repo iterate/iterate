@@ -1,10 +1,22 @@
-import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
+import { createFileRoute, Link, Outlet, redirect, useLocation, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
+import { Box, Plus, Settings, Users } from "lucide-react";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
-import { AppSidebar } from "../../components/app-sidebar.tsx";
-import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
+import { SidebarShell } from "../../components/sidebar-shell.tsx";
+import { OrgProjectSwitcher } from "../../components/org-project-switcher.tsx";
+import {
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarTrigger,
+} from "../../components/ui/sidebar.tsx";
 
 export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
@@ -23,16 +35,14 @@ export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug")({
 
 function OrgLayout() {
   const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug" });
-  const allParams = useParams({ strict: false });
+  const location = useLocation();
   const { user } = useSessionUser();
 
   if (!user) {
     throw new Error("User not found - should not happen in auth-required layout");
   }
 
-  const { data: organizations } = useSuspenseQuery(
-    trpc.user.myOrganizations.queryOptions(),
-  );
+  const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
 
   const { data: currentOrg } = useSuspenseQuery(
     trpc.organization.withProjects.queryOptions({
@@ -46,6 +56,12 @@ function OrgLayout() {
 
   useQueryInvalidation(currentOrg.id);
 
+  const isProjectRoute = location.pathname.includes("/projects/");
+
+  if (isProjectRoute) {
+    return <Outlet />;
+  }
+
   const organizationsWithProjects = (organizations || []).map((organization) => ({
     id: organization.id,
     name: organization.name,
@@ -57,10 +73,11 @@ function OrgLayout() {
     })),
   }));
 
+  const orgSlug = currentOrg.slug;
   const currentOrgWithProjects = {
     id: currentOrg.id,
     name: currentOrg.name,
-    slug: currentOrg.slug,
+    slug: orgSlug,
     projects: (currentOrg.projects || []).map((p) => ({
       id: p.id,
       name: p.name,
@@ -68,24 +85,96 @@ function OrgLayout() {
     })),
   };
 
-  const currentProject =
-    currentOrgWithProjects.projects.find((project) => project.slug === allParams.projectSlug) ??
-    currentOrgWithProjects.projects[0];
+  const isSettingsActive = location.pathname === `/orgs/${orgSlug}/settings`;
+  const isTeamActive = location.pathname === `/orgs/${orgSlug}/team`;
 
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
-        <AppSidebar
-          organizations={organizationsWithProjects}
-          currentOrg={currentOrgWithProjects}
-          currentProject={currentProject}
+        <SidebarShell
+          header={
+            <OrgProjectSwitcher
+              organizations={organizationsWithProjects}
+              currentOrg={currentOrgWithProjects}
+            />
+          }
           user={{
             name: user.name,
             email: user.email,
             image: user.image,
             role: user.role ?? undefined,
           }}
-        />
+        >
+          <SidebarGroup>
+            <SidebarGroupLabel>Organization</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isSettingsActive}>
+                    <Link
+                      to="/orgs/$organizationSlug/settings"
+                      params={{ organizationSlug: orgSlug }}
+                    >
+                      <Settings className="h-4 w-4" />
+                      <span>Settings</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isTeamActive}>
+                    <Link
+                      to="/orgs/$organizationSlug/team"
+                      params={{ organizationSlug: orgSlug }}
+                    >
+                      <Users className="h-4 w-4" />
+                      <span>Team</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>Projects</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {currentOrgWithProjects.projects.map((project) => {
+                  const isProjectActive = location.pathname.startsWith(
+                    `/orgs/${orgSlug}/projects/${project.slug}`,
+                  );
+                  return (
+                    <SidebarMenuItem key={project.id}>
+                      <SidebarMenuButton asChild isActive={isProjectActive}>
+                        <Link
+                          to="/orgs/$organizationSlug/projects/$projectSlug"
+                          params={{
+                            organizationSlug: orgSlug,
+                            projectSlug: project.slug,
+                          }}
+                        >
+                          <Box className="h-4 w-4" />
+                          <span>{project.name}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <Link
+                      to="/orgs/$organizationSlug/new-project"
+                      params={{ organizationSlug: orgSlug }}
+                    >
+                      <Plus className="h-4 w-4" />
+                      <span>Add project</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarShell>
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
             <SidebarTrigger />

@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, protectedProcedure } from "../trpc.ts";
+import { router, publicProcedure, publicMutation, protectedProcedure } from "../trpc.ts";
 import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
@@ -14,6 +14,17 @@ export const testingRouter = router({
   // Health check
   health: publicProcedure.query(() => {
     return { status: "ok", timestamp: new Date().toISOString() };
+  }),
+
+  // Trigger query invalidation broadcast (for e2e tests)
+  triggerInvalidation: publicMutation.mutation(async () => {
+    if (!isNonProd) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Testing endpoints are not available in production",
+      });
+    }
+    return { triggered: true, timestamp: new Date().toISOString() };
   }),
 
   // Create test user (for e2e tests)

@@ -29,7 +29,7 @@ const getHomeRedirect = createServerFn({ method: "GET" })
     }
 
     throw redirect({
-      to: "/orgs/$organizationSlug/projects/new",
+      to: "/orgs/$organizationSlug/new-project",
       params: { organizationSlug: organizations[0].slug },
     });
   });

@@ -22,7 +22,7 @@ import { Route as adminSessionInfoRouteImport } from './routes/admin/session-inf
 import { Route as orgIndexRouteImport } from './routes/org/index.tsx'
 import { Route as orgTeamRouteImport } from './routes/org/team.tsx'
 import { Route as orgSettingsRouteImport } from './routes/org/settings.tsx'
-import { Route as orgProjectNewRouteImport } from './routes/org/project/new.tsx'
+import { Route as orgNewProjectRouteImport } from './routes/org/new-project.tsx'
 import { Route as orgProjectLayoutRouteImport } from './routes/org/project/layout.tsx'
 import { Route as orgProjectIndexRouteImport } from './routes/org/project/index.tsx'
 import { Route as orgProjectSettingsRouteImport } from './routes/org/project/settings.tsx'
@@ -96,9 +96,9 @@ const orgSettingsRoute = orgSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => orgLayoutRoute,
 } as any)
-const orgProjectNewRoute = orgProjectNewRouteImport.update({
-  id: '/projects/new',
-  path: '/projects/new',
+const orgNewProjectRoute = orgNewProjectRouteImport.update({
+  id: '/new-project',
+  path: '/new-project',
   getParentRoute: () => orgLayoutRoute,
 } as any)
 const orgProjectLayoutRoute = orgProjectLayoutRouteImport.update({
@@ -152,11 +152,11 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
   '/user/settings': typeof userSettingsRoute
   '/admin/': typeof adminIndexRoute
+  '/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
   '/orgs/$organizationSlug/settings': typeof orgSettingsRoute
   '/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/orgs/$organizationSlug/': typeof orgIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
-  '/orgs/$organizationSlug/projects/new': typeof orgProjectNewRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -173,10 +173,10 @@ export interface FileRoutesByTo {
   '/admin/trpc-tools': typeof adminTrpcToolsRoute
   '/user/settings': typeof userSettingsRoute
   '/admin': typeof adminIndexRoute
+  '/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
   '/orgs/$organizationSlug/settings': typeof orgSettingsRoute
   '/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/orgs/$organizationSlug': typeof orgIndexRoute
-  '/orgs/$organizationSlug/projects/new': typeof orgProjectNewRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -197,11 +197,11 @@ export interface FileRoutesById {
   '/_auth.layout/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
   '/_auth.layout/user/settings': typeof userSettingsRoute
   '/_auth.layout/admin/': typeof adminIndexRoute
+  '/_auth.layout/orgs/$organizationSlug/new-project': typeof orgNewProjectRoute
   '/_auth.layout/orgs/$organizationSlug/settings': typeof orgSettingsRoute
   '/_auth.layout/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/_auth.layout/orgs/$organizationSlug/': typeof orgIndexRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
-  '/_auth.layout/orgs/$organizationSlug/projects/new': typeof orgProjectNewRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -222,11 +222,11 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug'
     | '/user/settings'
     | '/admin/'
+    | '/orgs/$organizationSlug/new-project'
     | '/orgs/$organizationSlug/settings'
     | '/orgs/$organizationSlug/team'
     | '/orgs/$organizationSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug'
-    | '/orgs/$organizationSlug/projects/new'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -243,10 +243,10 @@ export interface FileRouteTypes {
     | '/admin/trpc-tools'
     | '/user/settings'
     | '/admin'
+    | '/orgs/$organizationSlug/new-project'
     | '/orgs/$organizationSlug/settings'
     | '/orgs/$organizationSlug/team'
     | '/orgs/$organizationSlug'
-    | '/orgs/$organizationSlug/projects/new'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -266,11 +266,11 @@ export interface FileRouteTypes {
     | '/_auth.layout/orgs/$organizationSlug'
     | '/_auth.layout/user/settings'
     | '/_auth.layout/admin/'
+    | '/_auth.layout/orgs/$organizationSlug/new-project'
     | '/_auth.layout/orgs/$organizationSlug/settings'
     | '/_auth.layout/orgs/$organizationSlug/team'
     | '/_auth.layout/orgs/$organizationSlug/'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug'
-    | '/_auth.layout/orgs/$organizationSlug/projects/new'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -378,11 +378,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgSettingsRouteImport
       parentRoute: typeof orgLayoutRoute
     }
-    '/_auth.layout/orgs/$organizationSlug/projects/new': {
-      id: '/_auth.layout/orgs/$organizationSlug/projects/new'
-      path: '/projects/new'
-      fullPath: '/orgs/$organizationSlug/projects/new'
-      preLoaderRoute: typeof orgProjectNewRouteImport
+    '/_auth.layout/orgs/$organizationSlug/new-project': {
+      id: '/_auth.layout/orgs/$organizationSlug/new-project'
+      path: '/new-project'
+      fullPath: '/orgs/$organizationSlug/new-project'
+      preLoaderRoute: typeof orgNewProjectRouteImport
       parentRoute: typeof orgLayoutRoute
     }
     '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug': {
@@ -484,19 +484,19 @@ const orgProjectLayoutRouteWithChildren =
   orgProjectLayoutRoute._addFileChildren(orgProjectLayoutRouteChildren)
 
 interface orgLayoutRouteChildren {
+  orgNewProjectRoute: typeof orgNewProjectRoute
   orgSettingsRoute: typeof orgSettingsRoute
   orgTeamRoute: typeof orgTeamRoute
   orgIndexRoute: typeof orgIndexRoute
   orgProjectLayoutRoute: typeof orgProjectLayoutRouteWithChildren
-  orgProjectNewRoute: typeof orgProjectNewRoute
 }
 
 const orgLayoutRouteChildren: orgLayoutRouteChildren = {
+  orgNewProjectRoute: orgNewProjectRoute,
   orgSettingsRoute: orgSettingsRoute,
   orgTeamRoute: orgTeamRoute,
   orgIndexRoute: orgIndexRoute,
   orgProjectLayoutRoute: orgProjectLayoutRouteWithChildren,
-  orgProjectNewRoute: orgProjectNewRoute,
 }
 
 const orgLayoutRouteWithChildren = orgLayoutRoute._addFileChildren(

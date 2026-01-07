@@ -5,6 +5,7 @@ import { PostHogProvider as _PostHogProvider } from "posthog-js/react";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
+import { useRealtimePusher } from "../hooks/use-realtime-pusher.ts";
 import type { TanstackRouterContext } from "../router.tsx";
 
 const PostHogProvider =
@@ -26,6 +27,8 @@ export const Route = createRootRouteWithContext<TanstackRouterContext>()({
 });
 
 function RootComponent() {
+  useRealtimePusher();
+
   return (
     <RootDocument>
       <AppErrorBoundary>

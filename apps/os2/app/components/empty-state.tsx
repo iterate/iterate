@@ -1,15 +1,11 @@
-import * as React from "react";
+import type { ReactNode } from "react";
 import { cn } from "../lib/cn.ts";
-import { Button } from "./ui/button.tsx";
 
 interface EmptyStateProps {
-  icon?: React.ReactNode;
+  icon?: ReactNode;
   title: string;
   description?: string;
-  action?: {
-    label: string;
-    onClick: () => void;
-  };
+  action?: ReactNode;
   className?: string;
 }
 
@@ -24,11 +20,7 @@ export function EmptyState({ icon, title, description, action, className }: Empt
       {icon && <div className="mb-4 text-muted-foreground">{icon}</div>}
       <h3 className="text-lg font-semibold">{title}</h3>
       {description && <p className="mt-2 text-sm text-muted-foreground max-w-sm">{description}</p>}
-      {action && (
-        <Button onClick={action.onClick} className="mt-4">
-          {action.label}
-        </Button>
-      )}
+      {action && <div className="mt-4">{action}</div>}
     </div>
   );
 }

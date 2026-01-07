@@ -3,6 +3,7 @@ import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import { toast } from "sonner";
+import { Button } from "../../../components/ui/button.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 
@@ -59,10 +60,9 @@ function ProjectRepoPage() {
             icon={<GitBranch className="h-12 w-12" />}
             title="No repo connected"
             description="Connect a repository to sync code and branches."
-            action={{
-              label: "Connect repo",
-              onClick: () => toast("Repo linking is coming soon."),
-            }}
+            action={
+              <Button onClick={() => toast("Repo linking is coming soon.")}>Connect repo</Button>
+            }
           />
         )}
       </div>
