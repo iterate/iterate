@@ -18,7 +18,7 @@ import {
 // Store (in-memory + YAML persistence)
 // ─────────────────────────────────────────────────────────────────────────────
 
-const STORAGE_DIR = path.join(process.cwd(), ".iterate");
+const STORAGE_DIR = new URL("./.iterate", import.meta.url).pathname;
 const agents = new Map<string, Agent>();
 
 interface StreamData {

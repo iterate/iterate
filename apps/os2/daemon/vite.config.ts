@@ -1,3 +1,4 @@
+// todo: consider deleting this/consolidating into apps/os2/vite.config.ts
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import devServer from "@hono/vite-dev-server";

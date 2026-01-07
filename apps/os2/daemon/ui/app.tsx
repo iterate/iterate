@@ -11,7 +11,7 @@ window.addEventListener("unhandledrejection", (e) => {
 import { createRoot } from "react-dom/client";
 import { useState, useReducer, useEffect, useRef, useCallback } from "react";
 
-const API_URL = window.location.origin;
+const API_URL = window.location.origin + "/daemon";
 
 import {
   messagesReducer,
@@ -45,16 +45,15 @@ interface RegistryEvent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parseAgentFromPath(): string | null {
-  // Redirect / to /ui
-  if (window.location.pathname === "/" || window.location.pathname === "") {
-    window.history.replaceState({}, "", "/ui");
+  if (window.location.pathname === "/daemon" || window.location.pathname === "/daemon/") {
+    window.history.replaceState({}, "", "/daemon/ui");
   }
-  const match = window.location.pathname.match(/^\/ui\/agents\/(.+)$/);
+  const match = window.location.pathname.match(/^\/daemon\/ui\/agents\/(.+)$/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
 function navigateToAgent(agentId: string | null) {
-  const newPath = agentId ? `/ui/agents/${encodeURIComponent(agentId)}` : "/ui";
+  const newPath = agentId ? `/daemon/ui/agents/${encodeURIComponent(agentId)}` : "/daemon/ui";
   if (window.location.pathname !== newPath) {
     window.history.pushState({}, "", newPath);
   }
