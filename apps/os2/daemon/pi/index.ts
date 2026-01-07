@@ -17,7 +17,12 @@ import {
 import { createCustomTools } from "./custom-tools.ts";
 
 // appendMessage is injected to avoid circular dependency with index.ts
-type AppendMessageFn = (agentId: string, content: unknown, source: string, metadata?: Record<string, unknown>) => Promise<{ offset: string }>;
+type AppendMessageFn = (
+  agentId: string,
+  content: unknown,
+  source: string,
+  metadata?: Record<string, unknown>,
+) => Promise<{ offset: string }>;
 let appendMessageFn: AppendMessageFn | null = null;
 
 export function setAppendMessage(fn: AppendMessageFn): void {
@@ -59,8 +64,9 @@ function getModelRegistry(): ModelRegistry {
 }
 
 export async function createPiSession(streamId: string): Promise<AgentSession> {
-  if (!appendMessageFn) throw new Error("appendMessage not initialized - call setAppendMessage first");
-  
+  if (!appendMessageFn)
+    throw new Error("appendMessage not initialized - call setAppendMessage first");
+
   const customTools = createCustomTools(streamId, appendMessageFn);
   const cwd = process.cwd();
 
@@ -71,9 +77,13 @@ export async function createPiSession(streamId: string): Promise<AgentSession> {
 
   const registry = getModelRegistry();
   const availableModels = registry.getAvailable();
-  console.log(`[Pi] Available models: ${availableModels.map(m => `${m.provider}/${m.id}`).join(", ")}`);
+  console.log(
+    `[Pi] Available models: ${availableModels.map((m) => `${m.provider}/${m.id}`).join(", ")}`,
+  );
   const apiKey = await registry.getApiKey(model);
-  console.log(`[Pi] API key for ${model.id}: ${apiKey ? `${apiKey.substring(0, 10)}...` : "NOT FOUND"}`);
+  console.log(
+    `[Pi] API key for ${model.id}: ${apiKey ? `${apiKey.substring(0, 10)}...` : "NOT FOUND"}`,
+  );
 
   const { session } = await createAgentSession({
     cwd,
@@ -105,9 +115,13 @@ function subscribeToEvents(streamId: string, session: AgentSession): void {
       await appendMessageFn(
         streamId,
         event satisfies PiStreamMessage,
-        event.type === "message_start" || event.type === "message_end" || event.type === "message_update"
-          ? ((event as any).message?.role === "user" ? "user" : "assistant")
-          : "system"
+        event.type === "message_start" ||
+          event.type === "message_end" ||
+          event.type === "message_update"
+          ? (event as any).message?.role === "user"
+            ? "user"
+            : "assistant"
+          : "system",
       );
     }
   });

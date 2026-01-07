@@ -6,12 +6,20 @@
 import { Type, type Static } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 
-type AppendMessageFn = (agentId: string, content: unknown, source: string, metadata?: Record<string, unknown>) => Promise<{ offset: string }>;
+type AppendMessageFn = (
+  agentId: string,
+  content: unknown,
+  source: string,
+  metadata?: Record<string, unknown>,
+) => Promise<{ offset: string }>;
 
 /**
  * Create custom tools that are injected with harness context.
  */
-export function createCustomTools(agentId: string, appendMessage: AppendMessageFn): ToolDefinition[] {
+export function createCustomTools(
+  agentId: string,
+  appendMessage: AppendMessageFn,
+): ToolDefinition[] {
   return [
     createGetAgentNameTool(agentId),
     createMessageAgentTool(agentId, appendMessage),
@@ -32,7 +40,10 @@ function createGetAgentNameTool(agentId: string): ToolDefinition {
   };
 }
 
-function createMessageAgentTool(currentAgentId: string, appendMessage: AppendMessageFn): ToolDefinition {
+function createMessageAgentTool(
+  currentAgentId: string,
+  appendMessage: AppendMessageFn,
+): ToolDefinition {
   const MessageAgentParams = Type.Object({
     agentName: Type.String({ description: "The target agent ID to send the message to" }),
     message: Type.String({ description: "The message content to send" }),
@@ -46,12 +57,16 @@ function createMessageAgentTool(currentAgentId: string, appendMessage: AppendMes
     execute: async (_toolCallId: string, params: Static<typeof MessageAgentParams>) => {
       const { agentName, message } = params;
       try {
-        await appendMessage(agentName, {
-          type: "agent_message",
-          from: currentAgentId,
-          text: message,
-          timestamp: new Date().toISOString(),
-        }, "agent");
+        await appendMessage(
+          agentName,
+          {
+            type: "agent_message",
+            from: currentAgentId,
+            text: message,
+            timestamp: new Date().toISOString(),
+          },
+          "agent",
+        );
 
         return {
           content: [{ type: "text", text: `Message sent to agent "${agentName}".` }],
@@ -59,7 +74,12 @@ function createMessageAgentTool(currentAgentId: string, appendMessage: AppendMes
         };
       } catch (error) {
         return {
-          content: [{ type: "text", text: `Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}` }],
+          content: [
+            {
+              type: "text",
+              text: `Failed to send message: ${error instanceof Error ? error.message : "Unknown error"}`,
+            },
+          ],
           details: { error: String(error) },
         };
       }
