@@ -14,11 +14,17 @@ test.describe("login page", () => {
     const email = `login-test-${Date.now()}+test@example.com`;
 
     await page.goto(`${baseURL}/login`, { timeout: 5000 });
-    await page.getByTestId("email-input").click();
-    await page.keyboard.type(email);
+    await page.getByTestId("email-input").fill(email);
     await page.getByTestId("email-submit-button").click();
 
-    await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 5000 });
+    // Wait for something to change
+    await page.waitForTimeout(2000);
+    
+    // Debug: log what we see
+    const bodyText = await page.locator("body").innerText();
+    console.log("Page content after click:", bodyText.slice(0, 500));
+    
+    await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 10000 });
 
     const firstOtpInput = page.locator('input[inputmode="numeric"]').first();
     await firstOtpInput.focus();

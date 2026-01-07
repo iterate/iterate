@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ChangeEvent } from "react";
+import { useState, useRef, type FormEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -15,10 +15,7 @@ export function LoginCard() {
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
-
-  const handleEmailChange = (e: ChangeEvent<HTMLInputElement>) => {
-    setEmail(e.target.value);
-  };
+  const emailInputRef = useRef<HTMLInputElement>(null);
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
@@ -36,12 +33,14 @@ export function LoginCard() {
 
   const handleEmailSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!email.trim()) return;
+    const emailValue = emailInputRef.current?.value.trim() ?? "";
+    if (!emailValue) return;
 
+    setEmail(emailValue);
     setIsLoading(true);
     setError(null);
     try {
-      await authClient.emailOtp.sendVerificationOtp({ email, type: "sign-in" });
+      await authClient.emailOtp.sendVerificationOtp({ email: emailValue, type: "sign-in" });
       setStep("otp");
       toast.success("Code sent to your email");
     } catch (err) {
@@ -144,10 +143,10 @@ export function LoginCard() {
     <div className="w-full max-w-md space-y-6">
       <form onSubmit={handleEmailSubmit} className="space-y-3">
         <Input
+          ref={emailInputRef}
           type="email"
           placeholder="you@example.com"
-          value={email}
-          onChange={handleEmailChange}
+          defaultValue={email}
           disabled={isLoading}
           required
           data-testid="email-input"
@@ -156,7 +155,7 @@ export function LoginCard() {
         <Button
           type="submit"
           className="w-full"
-          disabled={isLoading || !email.trim()}
+          disabled={isLoading}
           data-testid="email-submit-button"
         >
           {isLoading ? "Sending code..." : "Continue with Email"}

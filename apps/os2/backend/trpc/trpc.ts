@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
 import { invalidateQueriesForUser } from "../utils/query-invalidation.ts";
+import { logger } from "../tag-logger.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -183,7 +184,9 @@ export const adminProcedure = protectedProcedure.use(async ({ ctx, next, path })
 const withQueryInvalidation = t.middleware(async ({ ctx, next }) => {
   const result = await next();
   if (result.ok && ctx.user) {
-    invalidateQueriesForUser(ctx.db, ctx.env, ctx.user.id).catch(() => {});
+    invalidateQueriesForUser(ctx.db, ctx.env, ctx.user.id).catch((error) => {
+      logger.error("Failed to invalidate queries:", error);
+    });
   }
   return result;
 });

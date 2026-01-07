@@ -4,18 +4,18 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
-import { env, isNonProd } from "../../env.ts";
+import { env, isNonProd, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
-export const getAuth = (db: DB) => {
+function createAuth(db: DB, envParam: CloudflareEnv) {
   return betterAuth({
-    baseURL: env.VITE_PUBLIC_URL,
+    baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
-    secret: env.BETTER_AUTH_SECRET,
-    trustedOrigins: [env.VITE_PUBLIC_URL],
+    secret: envParam.BETTER_AUTH_SECRET,
+    trustedOrigins: [envParam.VITE_PUBLIC_URL],
     database: drizzleAdapter(db, {
       provider: "pg",
       schema: {
@@ -55,8 +55,8 @@ export const getAuth = (db: DB) => {
           "https://www.googleapis.com/auth/userinfo.profile",
           "openid",
         ],
-        clientId: env.GOOGLE_CLIENT_ID,
-        clientSecret: env.GOOGLE_CLIENT_SECRET,
+        clientId: envParam.GOOGLE_CLIENT_ID,
+        clientSecret: envParam.GOOGLE_CLIENT_SECRET,
       },
     },
     session: {
@@ -80,7 +80,11 @@ export const getAuth = (db: DB) => {
       },
     },
   });
-};
+}
+
+export const getAuth = (db: DB) => createAuth(db, env);
+
+export const getAuthWithEnv = (db: DB, envParam: CloudflareEnv) => createAuth(db, envParam);
 
 export type Auth = ReturnType<typeof getAuth>;
 export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;
