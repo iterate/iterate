@@ -31,6 +31,7 @@ import { Route as orgProjectMachinesRouteImport } from './routes/org/project/mac
 import { Route as orgProjectEnvVarsRouteImport } from './routes/org/project/env-vars.tsx'
 import { Route as orgProjectConnectorsRouteImport } from './routes/org/project/connectors.tsx'
 import { Route as orgProjectAgentsRouteImport } from './routes/org/project/agents.tsx'
+import { Route as orgProjectAccessTokensRouteImport } from './routes/org/project/access-tokens.tsx'
 
 const loginRoute = loginRouteImport.update({
   id: '/login',
@@ -141,6 +142,11 @@ const orgProjectAgentsRoute = orgProjectAgentsRouteImport.update({
   path: '/agents',
   getParentRoute: () => orgProjectLayoutRoute,
 } as any)
+const orgProjectAccessTokensRoute = orgProjectAccessTokensRouteImport.update({
+  id: '/access-tokens',
+  path: '/access-tokens',
+  getParentRoute: () => orgProjectLayoutRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/login': typeof loginRoute
@@ -157,6 +163,7 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/orgs/$organizationSlug/': typeof orgIndexRoute
   '/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
+  '/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -177,6 +184,7 @@ export interface FileRoutesByTo {
   '/orgs/$organizationSlug/settings': typeof orgSettingsRoute
   '/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/orgs/$organizationSlug': typeof orgIndexRoute
+  '/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
   '/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -202,6 +210,7 @@ export interface FileRoutesById {
   '/_auth.layout/orgs/$organizationSlug/team': typeof orgTeamRoute
   '/_auth.layout/orgs/$organizationSlug/': typeof orgIndexRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug': typeof orgProjectLayoutRouteWithChildren
+  '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens': typeof orgProjectAccessTokensRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/agents': typeof orgProjectAgentsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors': typeof orgProjectConnectorsRoute
   '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars': typeof orgProjectEnvVarsRoute
@@ -227,6 +236,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/team'
     | '/orgs/$organizationSlug/'
     | '/orgs/$organizationSlug/projects/$projectSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -247,6 +257,7 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/settings'
     | '/orgs/$organizationSlug/team'
     | '/orgs/$organizationSlug'
+    | '/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
     | '/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -271,6 +282,7 @@ export interface FileRouteTypes {
     | '/_auth.layout/orgs/$organizationSlug/team'
     | '/_auth.layout/orgs/$organizationSlug/'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug'
+    | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/agents'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors'
     | '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/env-vars'
@@ -441,6 +453,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof orgProjectAgentsRouteImport
       parentRoute: typeof orgProjectLayoutRoute
     }
+    '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens': {
+      id: '/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
+      path: '/access-tokens'
+      fullPath: '/orgs/$organizationSlug/projects/$projectSlug/access-tokens'
+      preLoaderRoute: typeof orgProjectAccessTokensRouteImport
+      parentRoute: typeof orgProjectLayoutRoute
+    }
   }
 }
 
@@ -461,6 +480,7 @@ const adminLayoutRouteWithChildren = adminLayoutRoute._addFileChildren(
 )
 
 interface orgProjectLayoutRouteChildren {
+  orgProjectAccessTokensRoute: typeof orgProjectAccessTokensRoute
   orgProjectAgentsRoute: typeof orgProjectAgentsRoute
   orgProjectConnectorsRoute: typeof orgProjectConnectorsRoute
   orgProjectEnvVarsRoute: typeof orgProjectEnvVarsRoute
@@ -471,6 +491,7 @@ interface orgProjectLayoutRouteChildren {
 }
 
 const orgProjectLayoutRouteChildren: orgProjectLayoutRouteChildren = {
+  orgProjectAccessTokensRoute: orgProjectAccessTokensRoute,
   orgProjectAgentsRoute: orgProjectAgentsRoute,
   orgProjectConnectorsRoute: orgProjectConnectorsRoute,
   orgProjectEnvVarsRoute: orgProjectEnvVarsRoute,

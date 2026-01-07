@@ -32,8 +32,8 @@ export const routes = rootRoute("root.tsx", [
 
       // Project routes
       route("/projects/$projectSlug", "org/project/layout.tsx", [
-        // Project index shows access tokens
         index("org/project/index.tsx"),
+        route("/access-tokens", "org/project/access-tokens.tsx"),
         route("/machines", "org/project/machines.tsx"),
         route("/repo", "org/project/repo.tsx"),
         route("/connectors", "org/project/connectors.tsx"),

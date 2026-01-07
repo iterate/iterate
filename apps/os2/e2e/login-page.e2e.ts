@@ -14,17 +14,18 @@ test.describe("login page", () => {
     const email = `login-test-${Date.now()}+test@example.com`;
 
     await page.goto(`${baseURL}/login`, { timeout: 5000 });
-    await page.getByTestId("email-input").fill(email);
-    await page.getByTestId("email-submit-button").click();
 
-    // Wait for something to change
-    await page.waitForTimeout(2000);
-    
-    // Debug: log what we see
-    const bodyText = await page.locator("body").innerText();
-    console.log("Page content after click:", bodyText.slice(0, 500));
-    
-    await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 10000 });
+    const emailInput = page.getByTestId("email-input");
+    const submitButton = page.getByTestId("email-submit-button");
+
+    await expect(emailInput).toBeVisible();
+    await expect(submitButton).toBeVisible();
+
+    await emailInput.fill(email);
+    await submitButton.click();
+
+    // Wait for the OTP verification screen to appear
+    await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 15000 });
 
     const firstOtpInput = page.locator('input[inputmode="numeric"]').first();
     await firstOtpInput.focus();

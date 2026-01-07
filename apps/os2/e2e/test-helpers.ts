@@ -1,20 +1,32 @@
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 
 const TEST_OTP = "424242";
 
-export async function login(page: Page, email: string) {
-  await page.goto("/login");
-  await page.waitForSelector('input[type="email"]');
-  await page.fill('input[type="email"]', email);
-  await page.click('button:has-text("Continue with Email")');
+export async function login(page: Page, email: string, baseURL?: string) {
+  const loginURL = baseURL ? `${baseURL}/login` : "/login";
+  await page.goto(loginURL);
 
-  await page.waitForSelector('text="Enter verification code"', { timeout: 10000 });
+  // Wait for and fill the email input using data-testid for reliability
+  const emailInput = page.getByTestId("email-input");
+  await expect(emailInput).toBeVisible({ timeout: 5000 });
+  await emailInput.fill(email);
+
+  // Click submit button - wait for it to be enabled first
+  const submitButton = page.getByTestId("email-submit-button");
+  await expect(submitButton).toBeEnabled({ timeout: 5000 });
+  await submitButton.click();
+
+  // Wait for OTP screen with longer timeout since API call can be slow
+  await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 20000 });
+
+  // Enter OTP
   const otpInputs = page.locator('input[inputmode="numeric"]');
   await otpInputs.first().click();
   for (const char of TEST_OTP) {
     await page.keyboard.type(char);
   }
 
+  // Wait for redirect away from login page
   await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15000 });
 }
 

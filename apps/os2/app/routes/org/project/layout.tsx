@@ -1,10 +1,11 @@
 import { createFileRoute, Link, Outlet, redirect, useLocation, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, GitBranch, Home, Plug, Server, Settings, SlidersHorizontal, User, Users } from "lucide-react";
+import { Bot, GitBranch, Home, KeyRound, Plug, Server, Settings, SlidersHorizontal } from "lucide-react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { SidebarShell } from "../../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../../components/org-project-switcher.tsx";
+import { OrgSidebarNav } from "../../../components/org-sidebar-nav.tsx";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -42,7 +43,7 @@ function ProjectLayout() {
     }),
   );
 
-  useSuspenseQuery(
+  const { data: currentProject } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
       organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
@@ -68,23 +69,26 @@ function ProjectLayout() {
     slug: orgSlug,
   };
 
+  const projects = (currentOrg.projects || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+  }));
+
   const projectBasePath = `/orgs/${params.organizationSlug}/projects/${params.projectSlug}`;
 
   const isHomeActive =
     location.pathname === projectBasePath || location.pathname === `${projectBasePath}/`;
 
   const navItems = [
+    { href: `${projectBasePath}/connectors`, label: "Connectors", icon: Plug },
+    { href: `${projectBasePath}/agents`, label: "Agents", icon: Bot },
     { href: `${projectBasePath}/machines`, label: "Machines", icon: Server },
     { href: `${projectBasePath}/repo`, label: "Repo", icon: GitBranch },
-    { href: `${projectBasePath}/connectors`, label: "Connectors", icon: Plug },
+    { href: `${projectBasePath}/access-tokens`, label: "Access tokens", icon: KeyRound },
     { href: `${projectBasePath}/env-vars`, label: "Env vars", icon: SlidersHorizontal },
     { href: `${projectBasePath}/settings`, label: "Settings", icon: Settings },
-    { href: `${projectBasePath}/agents`, label: "Agents", icon: Bot },
   ];
-
-  const isOrgSettingsActive = location.pathname === `/orgs/${orgSlug}/settings`;
-  const isTeamActive = location.pathname === `/orgs/${orgSlug}/team`;
-  const isUserSettingsActive = location.pathname === "/user/settings";
 
   return (
     <SidebarProvider defaultOpen={true}>
@@ -99,6 +103,10 @@ function ProjectLayout() {
           }}
         >
           <SidebarGroup>
+            <SidebarGroupLabel className="flex flex-col items-start">
+              <span>Project:</span>
+              <span className="font-medium text-foreground">{currentProject?.name}</span>
+            </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
@@ -126,51 +134,7 @@ function ProjectLayout() {
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <SidebarGroup>
-            <SidebarGroupLabel>Organization</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isOrgSettingsActive}>
-                    <Link
-                      to="/orgs/$organizationSlug/settings"
-                      params={{ organizationSlug: orgSlug }}
-                    >
-                      <Settings className="h-4 w-4" />
-                      <span>Settings</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isTeamActive}>
-                    <Link
-                      to="/orgs/$organizationSlug/team"
-                      params={{ organizationSlug: orgSlug }}
-                    >
-                      <Users className="h-4 w-4" />
-                      <span>Team</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-
-          <SidebarGroup>
-            <SidebarGroupLabel>User</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                <SidebarMenuItem>
-                  <SidebarMenuButton asChild isActive={isUserSettingsActive}>
-                    <Link to="/user/settings">
-                      <User className="h-4 w-4" />
-                      <span>Settings</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <OrgSidebarNav orgSlug={orgSlug} orgName={currentOrg.name} projects={projects} />
         </SidebarShell>
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
