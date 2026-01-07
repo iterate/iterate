@@ -1,5 +1,5 @@
-import { Link, useLocation } from "@tanstack/react-router";
-import { Building2, ChevronDown, Plus } from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { ChevronsUpDown, Plus } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -9,95 +9,66 @@ import {
 } from "./ui/dropdown-menu.tsx";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
 
-interface Project {
-  id: string;
-  name: string;
-  slug: string;
-}
-
 interface Organization {
   id: string;
   name: string;
   slug: string;
-  projects: Project[];
+  role?: string;
 }
 
-interface OrgProjectSwitcherProps {
+interface OrgSwitcherProps {
   organizations: Organization[];
   currentOrg: Organization;
-  currentProject?: Project;
 }
 
-export function OrgProjectSwitcher({
-  organizations,
-  currentOrg,
-  currentProject,
-}: OrgProjectSwitcherProps) {
-  const location = useLocation();
-
+export function OrgSwitcher({ organizations, currentOrg }: OrgSwitcherProps) {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <SidebarMenuButton size="lg">
-              <div className="flex min-w-0 flex-col gap-0.5">
-                <div className="flex items-center gap-2">
-                  <Building2 className="h-4 w-4 shrink-0" />
-                  <span className="truncate font-medium">{currentOrg.name}</span>
-                </div>
-                {currentProject && (
-                  <span className="truncate pl-6 text-xs text-muted-foreground">
-                    {currentProject.name}
-                  </span>
-                )}
+            <SidebarMenuButton
+              size="lg"
+              className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+            >
+              <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-black">
+                <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
               </div>
-              <ChevronDown className="ml-auto h-4 w-4 shrink-0" />
+              <div className="grid flex-1 text-left text-sm leading-tight">
+                <span className="truncate font-semibold">iterate</span>
+                <span className="truncate text-xs">{currentOrg.name}</span>
+              </div>
+              <ChevronsUpDown className="ml-auto" />
             </SidebarMenuButton>
           </DropdownMenuTrigger>
-          <DropdownMenuContent className="w-64" align="start">
-            {organizations.map((org) => {
-              const isCurrentOrg = org.id === currentOrg.id;
-              return (
-                <div key={org.id}>
-                  <DropdownMenuItem asChild className={isCurrentOrg ? "font-medium" : ""}>
-                    <Link
-                      to="/orgs/$organizationSlug"
-                      params={{ organizationSlug: org.slug }}
-                    >
-                      <Building2 className="mr-2 h-4 w-4" />
-                      {org.name}
-                    </Link>
-                  </DropdownMenuItem>
-                  {org.projects.map((project) => {
-                    const isActiveProject =
-                      isCurrentOrg &&
-                      currentProject?.id === project.id &&
-                      location.pathname.includes(`/projects/${project.slug}`);
-                    return (
-                      <DropdownMenuItem
-                        key={project.id}
-                        asChild
-                        className={isActiveProject ? "bg-accent" : ""}
-                      >
-                        <Link
-                          to="/orgs/$organizationSlug/projects/$projectSlug"
-                          params={{ organizationSlug: org.slug, projectSlug: project.slug }}
-                          className="pl-8"
-                        >
-                          {project.name}
-                        </Link>
-                      </DropdownMenuItem>
-                    );
-                  })}
-                </div>
-              );
-            })}
+          <DropdownMenuContent
+            className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+            align="start"
+            side="bottom"
+            sideOffset={4}
+          >
+            {organizations.map((org) => (
+              <DropdownMenuItem key={org.id} asChild className="gap-2 p-2">
+                <Link to="/orgs/$organizationSlug" params={{ organizationSlug: org.slug }}>
+                  <div className="flex size-6 items-center justify-center rounded-sm border">
+                    <span className="text-xs font-semibold">{org.name.charAt(0).toUpperCase()}</span>
+                  </div>
+                  <div className="flex flex-col">
+                    <span className="font-medium">{org.name}</span>
+                    <span className="text-xs text-muted-foreground capitalize">
+                      {org.role || "Member"}
+                    </span>
+                  </div>
+                </Link>
+              </DropdownMenuItem>
+            ))}
             <DropdownMenuSeparator />
-            <DropdownMenuItem asChild>
+            <DropdownMenuItem asChild className="gap-2 p-2">
               <Link to="/new-organization">
-                <Plus className="mr-2 h-4 w-4" />
-                New organization
+                <div className="flex size-6 items-center justify-center rounded-md border border-dashed">
+                  <Plus className="size-4" />
+                </div>
+                <div className="font-medium text-muted-foreground">Add organization</div>
               </Link>
             </DropdownMenuItem>
           </DropdownMenuContent>

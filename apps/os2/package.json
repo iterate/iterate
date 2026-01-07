@@ -11,7 +11,7 @@
     "test": "vitest",
     "test:e2e": "doppler run -- playwright test",
     "typecheck": "tsc -b",
-    "db:reset": "psql postgres://postgres:postgres@localhost:5432/postgres -c 'DROP DATABASE IF EXISTS os2' -c 'CREATE DATABASE os2' && pnpm db:migrate",
+    "db:reset": "doppler run -- tsx -e \"import postgres from 'postgres'; const sql = postgres('postgres://postgres:postgres@localhost:5432/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os2'); await sql.unsafe('CREATE DATABASE os2'); await sql.end()\" && pnpm db:migrate",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio"

@@ -1,7 +1,8 @@
 import { type ReactNode } from "react";
 import { ClientOnly, Link } from "@tanstack/react-router";
-import { Box, ChevronDown, LogOut, Settings } from "lucide-react";
+import { Box, ChevronsUpDown, LogOut, Settings } from "lucide-react";
 import { signOut } from "../lib/auth-client.ts";
+import { Avatar, AvatarFallback, AvatarImage } from "./ui/avatar.tsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -34,6 +35,15 @@ interface SidebarShellProps {
 }
 
 export function SidebarShell({ header, children, user }: SidebarShellProps) {
+  const getInitials = (name: string) => {
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
+  };
+
   return (
     <Sidebar>
       <SidebarHeader>{header}</SidebarHeader>
@@ -46,26 +56,31 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
           <SidebarMenuItem>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <SidebarMenuButton size="lg">
-                  {user.image ? (
-                    <img src={user.image} alt={user.name} className="h-7 w-7 rounded-full" />
-                  ) : (
-                    <div className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-xs">
-                      {user.name[0]}
-                    </div>
-                  )}
-                  <div className="grid min-w-0 text-left text-sm leading-tight">
+                <SidebarMenuButton
+                  size="lg"
+                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
+                >
+                  <Avatar className="h-8 w-8 rounded-lg">
+                    <AvatarImage src={user.image ?? undefined} alt={user.name} />
+                    <AvatarFallback className="rounded-lg">{getInitials(user.name)}</AvatarFallback>
+                  </Avatar>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-medium">{user.name}</span>
-                    <span className="truncate text-xs text-muted-foreground">{user.email}</span>
+                    <span className="truncate text-xs">{user.email}</span>
                   </div>
-                  <ChevronDown className="ml-auto h-4 w-4" />
+                  <ChevronsUpDown className="ml-auto size-4" />
                 </SidebarMenuButton>
               </DropdownMenuTrigger>
-              <DropdownMenuContent className="w-56" side="right" align="end">
+              <DropdownMenuContent
+                className="w-(--radix-dropdown-menu-trigger-width) min-w-56 rounded-lg"
+                side="right"
+                align="end"
+                sideOffset={4}
+              >
                 <DropdownMenuItem asChild>
                   <Link to="/user/settings">
                     <Settings className="mr-2 h-4 w-4" />
-                    User settings
+                    User Settings
                   </Link>
                 </DropdownMenuItem>
                 {user.role === "admin" && (
@@ -85,7 +100,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
                   }}
                 >
                   <LogOut className="mr-2 h-4 w-4" />
-                  Sign out
+                  Log out
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

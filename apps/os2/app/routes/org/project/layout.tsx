@@ -1,13 +1,14 @@
 import { createFileRoute, Link, Outlet, redirect, useLocation, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, GitBranch, KeyRound, Plug, Server, Settings, SlidersHorizontal } from "lucide-react";
+import { Bot, GitBranch, Home, Plug, Server, Settings, SlidersHorizontal, User, Users } from "lucide-react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { SidebarShell } from "../../../components/sidebar-shell.tsx";
-import { OrgProjectSwitcher } from "../../../components/org-project-switcher.tsx";
+import { OrgSwitcher } from "../../../components/org-project-switcher.tsx";
 import {
   SidebarGroup,
   SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarInset,
   SidebarMenu,
   SidebarMenuButton,
@@ -52,40 +53,27 @@ function ProjectLayout() {
     throw redirect({ to: "/" });
   }
 
-  const orgId = currentOrg.id;
-  const orgName = currentOrg.name;
   const orgSlug = currentOrg.slug;
 
-  const organizationsWithProjects = (organizations || []).map((organization) => ({
+  const orgsList = (organizations || []).map((organization) => ({
     id: organization.id,
     name: organization.name,
     slug: organization.slug,
-    projects: (organization.projects || []).map((p) => ({
-      id: p.id,
-      name: p.name,
-      slug: p.slug,
-    })),
+    role: organization.role,
   }));
 
-  const currentOrgWithProjects = {
-    id: orgId,
-    name: orgName,
+  const currentOrgData = {
+    id: currentOrg.id,
+    name: currentOrg.name,
     slug: orgSlug,
-    projects: (currentOrg.projects || []).map((p) => ({
-      id: p.id,
-      name: p.name,
-      slug: p.slug,
-    })),
   };
-
-  const currentProject = currentOrgWithProjects.projects.find(
-    (p) => p.slug === params.projectSlug,
-  );
 
   const projectBasePath = `/orgs/${params.organizationSlug}/projects/${params.projectSlug}`;
 
+  const isHomeActive =
+    location.pathname === projectBasePath || location.pathname === `${projectBasePath}/`;
+
   const navItems = [
-    { href: projectBasePath, label: "Access tokens", icon: KeyRound, exact: true },
     { href: `${projectBasePath}/machines`, label: "Machines", icon: Server },
     { href: `${projectBasePath}/repo`, label: "Repo", icon: GitBranch },
     { href: `${projectBasePath}/connectors`, label: "Connectors", icon: Plug },
@@ -94,17 +82,15 @@ function ProjectLayout() {
     { href: `${projectBasePath}/agents`, label: "Agents", icon: Bot },
   ];
 
+  const isOrgSettingsActive = location.pathname === `/orgs/${orgSlug}/settings`;
+  const isTeamActive = location.pathname === `/orgs/${orgSlug}/team`;
+  const isUserSettingsActive = location.pathname === "/user/settings";
+
   return (
     <SidebarProvider defaultOpen={true}>
       <div className="flex min-h-screen w-full">
         <SidebarShell
-          header={
-            <OrgProjectSwitcher
-              organizations={organizationsWithProjects}
-              currentOrg={currentOrgWithProjects}
-              currentProject={currentProject}
-            />
-          }
+          header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
           user={{
             name: user.name,
             email: user.email,
@@ -115,10 +101,16 @@ function ProjectLayout() {
           <SidebarGroup>
             <SidebarGroupContent>
               <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isHomeActive}>
+                    <Link to={projectBasePath}>
+                      <Home className="h-4 w-4" />
+                      <span>Home</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
                 {navItems.map((item) => {
-                  const isActive = item.exact
-                    ? location.pathname === item.href || location.pathname === `${item.href}/`
-                    : location.pathname.startsWith(item.href);
+                  const isActive = location.pathname.startsWith(item.href);
                   return (
                     <SidebarMenuItem key={item.href}>
                       <SidebarMenuButton asChild isActive={isActive}>
@@ -130,6 +122,52 @@ function ProjectLayout() {
                     </SidebarMenuItem>
                   );
                 })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>Organization</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isOrgSettingsActive}>
+                    <Link
+                      to="/orgs/$organizationSlug/settings"
+                      params={{ organizationSlug: orgSlug }}
+                    >
+                      <Settings className="h-4 w-4" />
+                      <span>Settings</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isTeamActive}>
+                    <Link
+                      to="/orgs/$organizationSlug/team"
+                      params={{ organizationSlug: orgSlug }}
+                    >
+                      <Users className="h-4 w-4" />
+                      <span>Team</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+
+          <SidebarGroup>
+            <SidebarGroupLabel>User</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild isActive={isUserSettingsActive}>
+                    <Link to="/user/settings">
+                      <User className="h-4 w-4" />
+                      <span>Settings</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>

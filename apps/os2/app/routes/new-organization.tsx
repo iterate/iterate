@@ -54,7 +54,7 @@ function NewOrganizationPage() {
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
+    <div className="flex min-h-screen items-center justify-center bg-muted/50">
       <div className="w-full max-w-md space-y-6">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">Create organization</h1>

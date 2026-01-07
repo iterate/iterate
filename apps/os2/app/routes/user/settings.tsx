@@ -18,15 +18,13 @@ export const Route = createFileRoute("/_auth.layout/user/settings")({
 
 function UserSettingsRoute() {
   return (
-    <Suspense
-      fallback={
-        <div className="flex h-full items-center justify-center">
-          <div className="text-muted-foreground">Loading...</div>
-        </div>
-      }
-    >
-      <UserSettingsPage />
-    </Suspense>
+    <div className="flex min-h-screen items-center justify-center bg-muted/50">
+      <Suspense
+        fallback={<div className="text-muted-foreground">Loading...</div>}
+      >
+        <UserSettingsPage />
+      </Suspense>
+    </div>
   );
 }
 
@@ -46,11 +44,7 @@ function UserSettingsPage() {
   });
 
   if (!user) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">User not found</div>
-      </div>
-    );
+    return <div className="text-muted-foreground">User not found</div>;
   }
 
   return (
@@ -84,8 +78,8 @@ function UserSettingsForm({ user, isSaving, onSubmit }: UserSettingsFormProps) {
   };
 
   return (
-    <div className="p-8 max-w-2xl space-y-6">
-      <h1 className="text-2xl font-bold">User settings</h1>
+    <div className="w-full max-w-md space-y-6">
+      <h1 className="text-2xl font-semibold">User settings</h1>
       <form onSubmit={handleSubmit}>
         <FieldGroup>
           <FieldSet>
