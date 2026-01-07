@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, useHydrated } from "@tanstack/react-router";
 import { useState } from "react";
 import { authClient } from "../lib/auth-client.ts";
 import { Button } from "../components/ui/button.tsx";
@@ -10,7 +10,6 @@ import {
   CardTitle,
 } from "../components/ui/card.tsx";
 import { Input } from "../components/ui/input.tsx";
-import { useHydrated } from "../lib/use-hydrated.ts";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,

@@ -12,7 +12,7 @@ export default defineConfig({
     baseURL: "http://localhost:5173",
     trace: "on-first-retry",
     actionTimeout: 3000,
-    headless: false,
+    // headless: false,
   },
   webServer: {
     command: "pnpm dev",
