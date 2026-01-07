@@ -4,7 +4,6 @@ import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
-import { typeid } from "typeid-js";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
@@ -44,9 +43,7 @@ app.use(
 app.use("*", async (c, next) => {
   const db = getDb();
   const auth = getAuth(db);
-  const sessionResult: any = await auth.api.getSession({ headers: c.req.raw.headers });
-  const session: AuthSession =
-    sessionResult && "data" in sessionResult ? sessionResult.data : sessionResult;
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
@@ -55,17 +52,6 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-app.use("*", async (c, next) => {
-  const requestTags = {
-    userId: c.var.session?.user?.id || undefined,
-    path: c.req.path,
-    httpMethod: c.req.method,
-    url: c.req.url,
-    traceId: typeid("req").toString(),
-  };
-  logger.info("Request:", requestTags);
-  return next();
-});
 
 app.onError((err, c) => {
   logger.error(

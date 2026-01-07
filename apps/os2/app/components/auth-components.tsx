@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -15,6 +15,17 @@ export function LoginCard() {
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+
+  const handleEmailChange = (e: ChangeEvent<HTMLInputElement>) => {
+    setEmail(e.target.value);
+  };
+
+  const handleEmailInput = () => {
+    if (emailInputRef.current) {
+      setEmail(emailInputRef.current.value);
+    }
+  };
 
   const handleGoogleSignIn = async () => {
     setIsLoading(true);
@@ -140,15 +151,23 @@ export function LoginCard() {
     <div className="w-full max-w-md space-y-6">
       <form onSubmit={handleEmailSubmit} className="space-y-3">
         <Input
+          ref={emailInputRef}
           type="email"
           placeholder="you@example.com"
           value={email}
-          onChange={(e) => setEmail(e.target.value)}
+          onChange={handleEmailChange}
+          onInput={handleEmailInput}
           disabled={isLoading}
           required
+          data-testid="email-input"
         />
         {error && <p className="text-sm text-destructive">{error}</p>}
-        <Button type="submit" className="w-full" disabled={isLoading || !email.trim()}>
+        <Button
+          type="submit"
+          className="w-full"
+          disabled={isLoading || !email.trim()}
+          data-testid="email-submit-button"
+        >
           {isLoading ? "Sending code..." : "Continue with Email"}
         </Button>
       </form>

@@ -83,32 +83,5 @@ export const getAuth = (db: DB) => {
 };
 
 export type Auth = ReturnType<typeof getAuth>;
-export type AuthSession =
-  | {
-      user: {
-        id: string;
-        createdAt: Date;
-        updatedAt: Date;
-        email: string;
-        emailVerified: boolean;
-        name: string;
-        image?: string | null;
-        role?: string | null;
-        banned?: boolean | null;
-        banReason?: string | null;
-        banExpires?: Date | null;
-      };
-      session: {
-        id: string;
-        createdAt: Date;
-        updatedAt: Date;
-        userId: string;
-        expiresAt: Date;
-        token: string;
-        ipAddress?: string | null;
-        userAgent?: string | null;
-        impersonatedBy?: string | null;
-      };
-    }
-  | null;
+export type AuthSession = Awaited<ReturnType<Auth["api"]["getSession"]>>;
 export type AuthUser = NonNullable<AuthSession>["user"];
