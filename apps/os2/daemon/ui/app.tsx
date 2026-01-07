@@ -1,14 +1,17 @@
 // Suppress transient network errors from SSE reconnection during navigation
+
+/* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
+
 window.addEventListener("unhandledrejection", (e) => {
   if (e.reason instanceof TypeError && e.reason.message === "network error") {
-    e.preventDefault()
+    e.preventDefault();
   }
-})
+});
 
-import { createRoot } from "react-dom/client"
-import { useState, useReducer, useEffect, useRef, useCallback } from "react"
+import { createRoot } from "react-dom/client";
+import { useState, useReducer, useEffect, useRef, useCallback } from "react";
 
-const API_URL = window.location.origin
+const API_URL = window.location.origin;
 
 import {
   messagesReducer,
@@ -18,23 +21,23 @@ import {
   type MessageFeedItem,
   type EventFeedItem,
   type ContentBlock,
-} from "./messages-reducer"
+} from "./messages-reducer.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface AgentInfo {
-  path: string
-  contentType: string
-  createdAt: string
+  path: string;
+  contentType: string;
+  createdAt: string;
 }
 
 interface RegistryEvent {
-  type: string
-  key: string
-  value?: AgentInfo
-  headers?: { operation: string }
+  type: string;
+  key: string;
+  value?: AgentInfo;
+  headers?: { operation: string };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -44,34 +47,34 @@ interface RegistryEvent {
 function parseAgentFromPath(): string | null {
   // Redirect / to /ui
   if (window.location.pathname === "/" || window.location.pathname === "") {
-    window.history.replaceState({}, "", "/ui")
+    window.history.replaceState({}, "", "/ui");
   }
-  const match = window.location.pathname.match(/^\/ui\/agents\/(.+)$/)
-  return match ? decodeURIComponent(match[1]) : null
+  const match = window.location.pathname.match(/^\/ui\/agents\/(.+)$/);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 function navigateToAgent(agentId: string | null) {
-  const newPath = agentId ? `/ui/agents/${encodeURIComponent(agentId)}` : "/ui"
+  const newPath = agentId ? `/ui/agents/${encodeURIComponent(agentId)}` : "/ui";
   if (window.location.pathname !== newPath) {
-    window.history.pushState({}, "", newPath)
+    window.history.pushState({}, "", newPath);
   }
 }
 
 function useRouter(): [string | null, (id: string | null) => void] {
-  const [agentId, setAgentId] = useState(parseAgentFromPath)
+  const [agentId, setAgentId] = useState(parseAgentFromPath);
 
   useEffect(() => {
-    const onPopState = () => setAgentId(parseAgentFromPath())
-    window.addEventListener("popstate", onPopState)
-    return () => window.removeEventListener("popstate", onPopState)
-  }, [])
+    const onPopState = () => setAgentId(parseAgentFromPath());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
 
   const navigate = useCallback((id: string | null) => {
-    navigateToAgent(id)
-    setAgentId(id)
-  }, [])
+    navigateToAgent(id);
+    setAgentId(id);
+  }, []);
 
-  return [agentId, navigate]
+  return [agentId, navigate];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -82,15 +85,15 @@ async function createAgent(name: string): Promise<boolean> {
   const res = await fetch(`${API_URL}/agents/${encodeURIComponent(name)}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-  })
-  return res.ok
+  });
+  return res.ok;
 }
 
 async function deleteAgent(name: string): Promise<boolean> {
   const res = await fetch(`${API_URL}/agents/${encodeURIComponent(name)}`, {
     method: "DELETE",
-  })
-  return res.ok || res.status === 204
+  });
+  return res.ok || res.status === 204;
 }
 
 async function sendMessage(agentPath: string, text: string): Promise<boolean> {
@@ -98,8 +101,8 @@ async function sendMessage(agentPath: string, text: string): Promise<boolean> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ type: "message", message: text }),
-  })
-  return res.ok
+  });
+  return res.ok;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -108,14 +111,12 @@ async function sendMessage(agentPath: string, text: string): Promise<boolean> {
 
 function registryReducer(state: AgentInfo[], event: RegistryEvent): AgentInfo[] {
   if (event.headers?.operation === "insert" && event.value) {
-    return state.some((a) => a.path === event.value!.path)
-      ? state
-      : [...state, event.value]
+    return state.some((a) => a.path === event.value!.path) ? state : [...state, event.value];
   }
   if (event.headers?.operation === "delete") {
-    return state.filter((a) => a.path !== event.key)
+    return state.filter((a) => a.path !== event.key);
   }
-  return state
+  return state;
 }
 
 // messagesReducer is imported from ./messages-reducer
@@ -127,46 +128,46 @@ function registryReducer(state: AgentInfo[], event: RegistryEvent): AgentInfo[] 
 function useStreamReducer<T, E>(
   streamUrl: string | null,
   reducer: (state: T, event: E) => T,
-  initialState: T
+  initialState: T,
 ): T {
-  const [state, dispatch] = useReducer(reducer, initialState)
-  const offsetRef = useRef("-1")
+  const [state, dispatch] = useReducer(reducer, initialState);
+  const offsetRef = useRef("-1");
 
   useEffect(() => {
-    if (!streamUrl) return
+    if (!streamUrl) return;
 
-    const url = new URL(streamUrl)
-    url.searchParams.set("offset", offsetRef.current)
-    url.searchParams.set("live", "sse")
+    const url = new URL(streamUrl);
+    url.searchParams.set("offset", offsetRef.current);
+    url.searchParams.set("live", "sse");
 
-    const es = new EventSource(url.toString())
+    const es = new EventSource(url.toString());
 
     es.addEventListener("control", (evt) => {
       try {
-        const ctrl = JSON.parse(evt.data)
-        if (ctrl.streamNextOffset) offsetRef.current = ctrl.streamNextOffset
+        const ctrl = JSON.parse(evt.data);
+        if (ctrl.streamNextOffset) offsetRef.current = ctrl.streamNextOffset;
       } catch {}
-    })
+    });
 
     // Handle data events from the SSE stream (backend uses "data" event name)
     es.addEventListener("data", (evt) => {
       try {
-        const data = JSON.parse(evt.data)
+        const data = JSON.parse(evt.data);
         // Backend wraps content in an array: [message.content]
         if (Array.isArray(data)) {
           for (const item of data) {
-            dispatch(item)
+            dispatch(item);
           }
         } else {
-          dispatch(data)
+          dispatch(data);
         }
       } catch {}
-    })
+    });
 
-    return () => es.close()
-  }, [streamUrl])
+    return () => es.close();
+  }, [streamUrl]);
 
-  return state
+  return state;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -180,26 +181,26 @@ function Sidebar({
   onDelete,
   onCreate,
 }: {
-  agents: AgentInfo[]
-  selectedAgent: string | null
-  onSelect: (id: string) => void
-  onDelete: (id: string) => void
-  onCreate: (name: string) => void
+  agents: AgentInfo[];
+  selectedAgent: string | null;
+  onSelect: (id: string) => void;
+  onDelete: (id: string) => void;
+  onCreate: (name: string) => void;
 }) {
-  const [name, setName] = useState("")
-  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
 
   const handleCreate = async () => {
-    const trimmed = name.trim()
-    if (!trimmed || creating) return
-    setCreating(true)
-    const ok = await createAgent(trimmed)
-    setCreating(false)
+    const trimmed = name.trim();
+    if (!trimmed || creating) return;
+    setCreating(true);
+    const ok = await createAgent(trimmed);
+    setCreating(false);
     if (ok) {
-      setName("")
-      onCreate(trimmed)
+      setName("");
+      onCreate(trimmed);
     }
-  }
+  };
 
   return (
     <aside className="w-72 bg-zinc-900 border-r border-zinc-800 flex flex-col">
@@ -210,11 +211,11 @@ function Sidebar({
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault()
-            handleCreate()
-          }
-        }}
+            if (e.key === "Enter") {
+              e.preventDefault();
+              handleCreate();
+            }
+          }}
           placeholder="New agent name..."
           disabled={creating}
           className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all disabled:opacity-50"
@@ -226,49 +227,54 @@ function Sidebar({
           <p className="text-zinc-500 text-sm text-center py-6">No agents yet</p>
         ) : (
           <ul className="space-y-1">
-            {[...agents].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).map((a) => (
-              <li key={a.path}>
-                <button
-                  onClick={() => onSelect(a.path)}
-                  className={`group w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition-colors ${
-                    selectedAgent === a.path
-                      ? "bg-indigo-600 text-white"
-                      : "text-zinc-300 hover:bg-zinc-800"
-                  }`}
-                >
-                  <span className="truncate">{a.path}</span>
-                  <span
-                    role="button"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onDelete(a.path)
-                    }}
-                    className={`opacity-0 group-hover:opacity-100 ml-2 px-1.5 rounded transition-opacity ${
+            {[...agents]
+              .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+              .map((a) => (
+                <li key={a.path}>
+                  <button
+                    onClick={() => onSelect(a.path)}
+                    className={`group w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition-colors ${
                       selectedAgent === a.path
-                        ? "text-indigo-200 hover:text-white"
-                        : "text-zinc-500 hover:text-red-400"
+                        ? "bg-indigo-600 text-white"
+                        : "text-zinc-300 hover:bg-zinc-800"
                     }`}
                   >
-                    ×
-                  </span>
-                </button>
-              </li>
-            ))}
+                    <span className="truncate">{a.path}</span>
+                    <span
+                      role="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onDelete(a.path);
+                      }}
+                      className={`opacity-0 group-hover:opacity-100 ml-2 px-1.5 rounded transition-opacity ${
+                        selectedAgent === a.path
+                          ? "text-indigo-200 hover:text-white"
+                          : "text-zinc-500 hover:text-red-400"
+                      }`}
+                    >
+                      ×
+                    </span>
+                  </button>
+                </li>
+              ))}
           </ul>
         )}
       </nav>
     </aside>
-  )
+  );
 }
 
 function getMessageText(content: ContentBlock[]): string {
-  return content.filter((b) => b.type === "text").map((b) => b.text).join("")
+  return content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("");
 }
 
 function MessageBubble({ msg, isStreaming }: { msg: MessageFeedItem; isStreaming?: boolean }) {
-  const isUser = msg.role === "user"
-  const text = getMessageText(msg.content)
-  const timeStr = new Date(msg.timestamp).toLocaleTimeString()
+  const isUser = msg.role === "user";
+  const text = getMessageText(msg.content);
+  const timeStr = new Date(msg.timestamp).toLocaleTimeString();
 
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -277,27 +283,31 @@ function MessageBubble({ msg, isStreaming }: { msg: MessageFeedItem; isStreaming
           isUser
             ? "bg-indigo-600 text-white"
             : isStreaming
-            ? "bg-zinc-800 border border-indigo-500"
-            : "bg-zinc-800 text-zinc-100"
+              ? "bg-zinc-800 border border-indigo-500"
+              : "bg-zinc-800 text-zinc-100"
         }`}
       >
-        <div className={`text-xs mb-1 flex items-center gap-2 ${isUser ? "text-indigo-200" : "text-zinc-500"}`}>
+        <div
+          className={`text-xs mb-1 flex items-center gap-2 ${isUser ? "text-indigo-200" : "text-zinc-500"}`}
+        >
           <span>{isUser ? "You" : "Assistant"}</span>
           <span className={isUser ? "text-indigo-300/60" : "text-zinc-600"}>·</span>
           <span className={isUser ? "text-indigo-300/60" : "text-zinc-600"}>{timeStr}</span>
           {isStreaming && <span className="ml-1 animate-pulse">●</span>}
         </div>
         <div className="whitespace-pre-wrap break-words text-sm leading-relaxed">
-          {text || <span className="text-zinc-500 italic">{isStreaming ? "Thinking..." : "Empty"}</span>}
+          {text || (
+            <span className="text-zinc-500 italic">{isStreaming ? "Thinking..." : "Empty"}</span>
+          )}
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function EventLine({ event }: { event: EventFeedItem }) {
-  const [expanded, setExpanded] = useState(false)
-  const timeStr = new Date(event.timestamp).toLocaleTimeString()
+  const [expanded, setExpanded] = useState(false);
+  const timeStr = new Date(event.timestamp).toLocaleTimeString();
 
   return (
     <div className="flex flex-col">
@@ -316,54 +326,55 @@ function EventLine({ event }: { event: EventFeedItem }) {
         </pre>
       )}
     </div>
-  )
+  );
 }
 
 function FeedItemRenderer({ item, isStreaming }: { item: FeedItem; isStreaming?: boolean }) {
   if (item.kind === "message") {
-    return <MessageBubble msg={item} isStreaming={isStreaming} />
+    return <MessageBubble msg={item} isStreaming={isStreaming} />;
   }
-  return <EventLine event={item} />
+  return <EventLine event={item} />;
 }
 
 function AgentChat({ agentPath }: { agentPath: string }) {
-  const [input, setInput] = useState("")
-  const [sending, setSending] = useState(false)
-  const [showRaw, setShowRaw] = useState(false)
-  const endRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [showRaw, setShowRaw] = useState(false);
+  const endRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  const { feed, isStreaming, streamingMessage, rawEvents } = useStreamReducer<MessagesState, unknown>(
-    `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
-    messagesReducer,
-    createInitialState()
-  )
+  const { feed, isStreaming, streamingMessage, rawEvents } = useStreamReducer<
+    MessagesState,
+    unknown
+  >(`${API_URL}/agents/${encodeURIComponent(agentPath)}`, messagesReducer, createInitialState());
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [feed, streamingMessage])
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [feed, streamingMessage]);
 
   // Focus input when navigating to agent
   useEffect(() => {
-    inputRef.current?.focus()
-  }, [])
+    inputRef.current?.focus();
+  }, []);
 
   const handleSend = async () => {
-    const text = input.trim()
-    if (!text || sending) return
-    setSending(true)
-    setInput("")
-    await sendMessage(agentPath, text)
-    setSending(false)
-    inputRef.current?.focus()
-  }
+    const text = input.trim();
+    if (!text || sending) return;
+    setSending(true);
+    setInput("");
+    await sendMessage(agentPath, text);
+    setSending(false);
+    inputRef.current?.focus();
+  };
 
   return (
     <div className="flex flex-col h-full">
       <header className="px-6 py-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-900/50 backdrop-blur-sm">
         <h2 className="text-lg font-medium text-zinc-100">{agentPath}</h2>
         <div className="flex items-center gap-3">
-          {isStreaming && <span className="text-xs text-indigo-400 animate-pulse">● Streaming</span>}
+          {isStreaming && (
+            <span className="text-xs text-indigo-400 animate-pulse">● Streaming</span>
+          )}
           <button
             onClick={() => setShowRaw(!showRaw)}
             className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
@@ -381,7 +392,10 @@ function AgentChat({ agentPath }: { agentPath: string }) {
             <p className="text-zinc-500 text-center py-8">No events yet</p>
           ) : (
             rawEvents.map((evt, i) => (
-              <pre key={i} className="text-xs bg-zinc-800 p-3 rounded-lg overflow-x-auto font-mono text-zinc-300">
+              <pre
+                key={i}
+                className="text-xs bg-zinc-800 p-3 rounded-lg overflow-x-auto font-mono text-zinc-300"
+              >
                 {JSON.stringify(evt, null, 2)}
               </pre>
             ))
@@ -424,7 +438,7 @@ function AgentChat({ agentPath }: { agentPath: string }) {
         </div>
       </footer>
     </div>
-  )
+  );
 }
 
 function EmptyState() {
@@ -434,7 +448,7 @@ function EmptyState() {
       <p className="text-lg">Select or create an agent to begin</p>
       <p className="text-sm mt-1 text-zinc-600">Use the sidebar to get started</p>
     </div>
-  )
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -442,44 +456,44 @@ function EmptyState() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function App() {
-  const [selectedAgent, setSelectedAgent] = useRouter()
-  const [agentReady, setAgentReady] = useState(false)
+  const [selectedAgent, setSelectedAgent] = useRouter();
+  const [agentReady, setAgentReady] = useState(false);
   const agents = useStreamReducer<AgentInfo[], RegistryEvent>(
     `${API_URL}/agents/__registry__`,
     registryReducer,
-    []
-  )
+    [],
+  );
 
   // Auto-create agent if navigating to non-existent one
   // Wait for agent to exist before rendering AgentChat to avoid SSE race condition
   useEffect(() => {
     if (!selectedAgent) {
-      setAgentReady(false)
-      return
+      setAgentReady(false);
+      return;
     }
-    const exists = agents.some((a) => a.path === selectedAgent)
+    const exists = agents.some((a) => a.path === selectedAgent);
     if (exists) {
-      setAgentReady(true)
+      setAgentReady(true);
     } else if (agents.length > 0) {
       // Registry is loaded but agent doesn't exist - create it first
-      setAgentReady(false)
+      setAgentReady(false);
       createAgent(selectedAgent).then(() => {
         // Agent is now created, wait for registry update
         // The next render cycle will set agentReady to true when registry updates
-      })
+      });
     }
-  }, [selectedAgent, agents])
+  }, [selectedAgent, agents]);
 
   const handleDelete = async (path: string) => {
-    if (!confirm(`Delete agent "${path}"?`)) return
-    const ok = await deleteAgent(path)
+    if (!confirm(`Delete agent "${path}"?`)) return;
+    const ok = await deleteAgent(path);
     if (ok && selectedAgent === path) {
-      setSelectedAgent(null)
+      setSelectedAgent(null);
     }
-  }
+  };
 
   // Only render AgentChat once the agent exists in the registry
-  const shouldShowChat = selectedAgent && agentReady
+  const shouldShowChat = selectedAgent && agentReady;
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
@@ -491,16 +505,20 @@ function App() {
         onCreate={setSelectedAgent}
       />
       <main className="flex-1 bg-zinc-900">
-        {shouldShowChat ? <AgentChat key={selectedAgent} agentPath={selectedAgent} /> : selectedAgent ? (
+        {shouldShowChat ? (
+          <AgentChat key={selectedAgent} agentPath={selectedAgent} />
+        ) : selectedAgent ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <div className="animate-pulse text-2xl">⏳</div>
             <p className="mt-2">Creating agent...</p>
           </div>
-        ) : <EmptyState />}
+        ) : (
+          <EmptyState />
+        )}
       </main>
     </div>
-  )
+  );
 }
 
 // Mount
-createRoot(document.getElementById("root")!).render(<App />)
+createRoot(document.getElementById("root")!).render(<App />);

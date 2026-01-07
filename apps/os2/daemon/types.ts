@@ -1,3 +1,5 @@
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
+
 export interface Message {
   offset: string;
   content: unknown;
@@ -5,8 +7,6 @@ export interface Message {
   source: string;
   metadata: Record<string, unknown>;
 }
-
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 
 export interface Agent {
   id: string;
