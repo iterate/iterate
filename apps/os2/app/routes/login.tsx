@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "../components/ui/card.tsx";
 import { Input } from "../components/ui/input.tsx";
+import { useHydrated } from "../lib/use-hydrated.ts";
 
 export const Route = createFileRoute("/login")({
   component: LoginPage,
@@ -17,6 +18,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
+  const hydrated = useHydrated();
   const [showEmailForm, setShowEmailForm] = useState(false);
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
@@ -65,13 +67,28 @@ function LoginPage() {
         <CardContent className="space-y-4">
           {!showEmailForm ? (
             <>
-              <Button onClick={handleGoogleLogin} className="w-full" variant="outline">
+              <Button
+                onClick={handleGoogleLogin}
+                className="w-full"
+                variant="outline"
+                disabled={!hydrated}
+              >
                 Continue with Google
               </Button>
-              <Button onClick={handleSlackLogin} className="w-full" variant="outline">
+              <Button
+                onClick={handleSlackLogin}
+                className="w-full"
+                variant="outline"
+                disabled={!hydrated}
+              >
                 Continue with Slack
               </Button>
-              <Button onClick={() => setShowEmailForm(true)} className="w-full" variant="outline">
+              <Button
+                onClick={() => setShowEmailForm(true)}
+                className="w-full"
+                variant="outline"
+                disabled={!hydrated}
+              >
                 Continue with Email
               </Button>
             </>
