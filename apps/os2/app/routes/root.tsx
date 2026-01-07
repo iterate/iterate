@@ -2,6 +2,7 @@ import "../styles.css";
 import { Suspense, type PropsWithChildren, type ReactNode } from "react";
 import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanstack/react-router";
 import { PostHogProvider as _PostHogProvider } from "posthog-js/react";
+import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
 import type { TanstackRouterContext } from "../router.tsx";
@@ -49,15 +50,24 @@ function RootDocument({ children }: { children: ReactNode }) {
         <HeadContent />
       </head>
       <body className="min-h-screen bg-background font-sans antialiased">
-        <PostHogProvider
-          apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}
-          options={{
-            api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
-          }}
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="system"
+          enableSystem
+          enableColorScheme
+          storageKey="theme"
+          disableTransitionOnChange
         >
-          {children}
-        </PostHogProvider>
-        <Toaster />
+          <PostHogProvider
+            apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}
+            options={{
+              api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
+            }}
+          >
+            {children}
+          </PostHogProvider>
+          <Toaster />
+        </ThemeProvider>
         <Scripts />
       </body>
     </html>

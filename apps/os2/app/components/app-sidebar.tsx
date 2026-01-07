@@ -1,4 +1,4 @@
-import { Link, useLocation } from "@tanstack/react-router";
+import { ClientOnly, Link, useLocation } from "@tanstack/react-router";
 import {
   Building2,
   Settings,
@@ -37,6 +37,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "./ui/sidebar.tsx";
+import { ThemeSwitcher } from "./theme-switcher.tsx";
 
 interface SidebarProps {
   organizations: Array<{
@@ -313,6 +314,9 @@ export function AppSidebar({ organizations, currentOrg, currentProject, user }: 
       </SidebarContent>
 
       <SidebarFooter>
+        <ClientOnly>
+          <ThemeSwitcher />
+        </ClientOnly>
         <SidebarMenu>
           <SidebarMenuItem>
             <DropdownMenu>
