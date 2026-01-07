@@ -31,3 +31,8 @@ CLAUDE.md
 # ad-hoc ignored files/paths
 *ignoreme*
 evalite-export
+
+# Playwright test artifacts
+test-results/
+playwright-report/
+.last-run.json
