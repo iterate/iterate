@@ -1,16 +1,10 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { sessionQueryOptions } from "../lib/session-query.ts";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { authenticatedServerFn } from "../lib/auth-middleware.ts";
+
+const assertAuthenticated = authenticatedServerFn.handler(() => {});
 
 export const Route = createFileRoute("/_auth-required.layout")({
-  beforeLoad: async ({ context }) => {
-    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
-
-    if (!session?.user) {
-      throw redirect({ to: "/login" });
-    }
-
-    return { session };
-  },
+  beforeLoad: () => assertAuthenticated(),
   component: AuthRequiredLayout,
 });
 

@@ -1,15 +1,15 @@
-import { createFileRoute, Outlet, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, Outlet, Link, notFound } from "@tanstack/react-router";
 import { Shield, Terminal, Info } from "lucide-react";
 import { cn } from "../../lib/cn.ts";
-import { sessionQueryOptions } from "../../lib/session-query.ts";
+import { authenticatedServerFn } from "../../lib/auth-middleware.ts";
+
+const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
+  const session = context.variables.session;
+  if (session?.user.role !== "admin") throw notFound();
+});
 
 export const Route = createFileRoute("/_auth-required.layout/_/admin")({
-  beforeLoad: async ({ context }) => {
-    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
-    if (session?.user?.role !== "admin") {
-      throw redirect({ to: "/" });
-    }
-  },
+  beforeLoad: () => assertIsAdmin(),
   component: AdminLayout,
 });
 

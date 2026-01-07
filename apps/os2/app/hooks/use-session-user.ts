@@ -1,12 +1,11 @@
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { sessionQueryOptions } from "../lib/session-query.ts";
+import { trpc } from "../lib/trpc.tsx";
 
 export function useSessionUser() {
-  const { data: session } = useSuspenseQuery(sessionQueryOptions());
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   return {
-    user: session?.user ?? null,
-    session: session?.session ?? null,
-    isAuthenticated: !!session?.user,
+    user,
+    isAuthenticated: !!user,
   };
 }
