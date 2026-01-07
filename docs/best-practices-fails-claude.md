@@ -30,11 +30,13 @@ These issues **violate the codebase's own documented rules** (CLAUDE.md/vibe-rul
 ### 1. ⚠️ Using `useQuery` Instead of `useSuspenseQuery`
 
 **Rule Violation:** `vibe-rules/rules/trpc-and-tanstack-query-usage.md` explicitly states:
+
 > "Prefer the useSuspenseQuery hook when making trpc queries. We want to use <Suspense> and <ErrorBoundary> in sensible places."
 
 **Current State:** All 16+ route components use `useQuery()` with manual loading states instead of `useSuspenseQuery()`.
 
 **Files Affected:**
+
 - `apps/os2/app/routes/index.tsx`
 - `apps/os2/app/routes/org/layout.tsx`
 - `apps/os2/app/routes/org/index.tsx`
@@ -48,6 +50,7 @@ These issues **violate the codebase's own documented rules** (CLAUDE.md/vibe-rul
 - And more...
 
 **Example of Current Anti-Pattern:**
+
 ```tsx
 // apps/os2/app/routes/org/layout.tsx
 const { data: organizations, isPending: orgsPending } = useQuery(
@@ -64,19 +67,20 @@ if (orgsPending || orgPending || !user) {
 ```
 
 **Should Be:**
+
 ```tsx
-const { data: organizations } = useSuspenseQuery(
-  trpc.user.myOrganizations.queryOptions(),
-);
+const { data: organizations } = useSuspenseQuery(trpc.user.myOrganizations.queryOptions());
 // No loading check needed - Suspense boundary handles it
 ```
 
 ### 2. ⚠️ Zod Import Path Discrepancy
 
 **Rule Violation:** `CLAUDE.md` states:
+
 > "Use import { z } from 'zod/v4' to import v4 of zod (the latest version), do not use import ... from 'zod' without the /v4"
 
 **Current State:** All files import from `"zod"` directly:
+
 ```typescript
 // apps/os2/backend/trpc/trpc.ts:1
 import { prettifyError, z, ZodError } from "zod";
@@ -104,17 +108,16 @@ import { z } from "zod";
 **Current Pattern:** Data fetching happens in component render via `useQuery()`.
 
 **Recommended Pattern:**
+
 ```typescript
 export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug")({
   loader: async ({ params, context }) => {
     const [organizations, currentOrg] = await Promise.all([
-      context.queryClient.ensureQueryData(
-        trpc.user.myOrganizations.queryOptions()
-      ),
+      context.queryClient.ensureQueryData(trpc.user.myOrganizations.queryOptions()),
       context.queryClient.ensureQueryData(
         trpc.organization.withInstances.queryOptions({
           organizationSlug: params.organizationSlug,
-        })
+        }),
       ),
     ]);
     return { organizations, currentOrg };
@@ -129,6 +132,7 @@ function OrgLayout() {
 ```
 
 **Benefits:**
+
 - Enables SSR data fetching
 - Enables prefetching on hover/intent
 - Eliminates loading waterfalls
@@ -139,6 +143,7 @@ function OrgLayout() {
 **Best Practice:** Use `beforeLoad` for auth checks - prevents rendering unauthorized routes.
 
 **Current Pattern:**
+
 ```tsx
 // apps/os2/app/routes/auth-required.layout.tsx
 function AuthRequiredLayout() {
@@ -149,7 +154,7 @@ function AuthRequiredLayout() {
   }
 
   if (!isAuthenticated) {
-    return <Navigate to="/login" />;  // ❌ Renders component first
+    return <Navigate to="/login" />; // ❌ Renders component first
   }
 
   return <Outlet />;
@@ -157,12 +162,13 @@ function AuthRequiredLayout() {
 ```
 
 **Recommended Pattern:**
+
 ```typescript
 export const Route = createFileRoute("/_auth-required.layout")({
   beforeLoad: async ({ context }) => {
     const session = await context.queryClient.ensureQueryData(sessionQueryOptions);
     if (!session?.user) {
-      throw redirect({ to: "/login" });  // ✅ Redirects before render
+      throw redirect({ to: "/login" }); // ✅ Redirects before render
     }
     return { session };
   },
@@ -175,6 +181,7 @@ export const Route = createFileRoute("/_auth-required.layout")({
 **Best Practice:** Use `throw redirect()` from loaders/beforeLoad for better performance.
 
 **Files Using `<Navigate>`:**
+
 - `apps/os2/app/routes/index.tsx`
 - `apps/os2/app/routes/org/layout.tsx`
 - `apps/os2/app/routes/auth-required.layout.tsx`
@@ -183,6 +190,7 @@ export const Route = createFileRoute("/_auth-required.layout")({
 #### 4. QueryClient Not Passed to Router Context
 
 **Current State:**
+
 ```typescript
 // apps/os2/app/router.tsx
 export function getRouter() {
@@ -197,11 +205,12 @@ export function getRouter() {
 ```
 
 **Recommended:**
+
 ```typescript
 export function getRouter(queryClient: QueryClient) {
   const router = createRouter({
     routeTree,
-    context: { queryClient },  // ✅ Enables loaders to use QueryClient
+    context: { queryClient }, // ✅ Enables loaders to use QueryClient
     scrollRestoration: true,
     search: { strict: false },
   });
@@ -224,17 +233,18 @@ export function getRouter(queryClient: QueryClient) {
 **Current State:** Zero `<Suspense>` components in the app. No `wrapInSuspense: true` on routes.
 
 **Recommended:**
+
 ```tsx
 // apps/os2/app/routes/root.tsx
 export const Route = createRootRoute({
   component: RootComponent,
-  wrapInSuspense: true,  // ✅ Add this
+  wrapInSuspense: true, // ✅ Add this
 });
 
 // Or in layout components
 <Suspense fallback={<LoadingSpinner />}>
   <Outlet />
-</Suspense>
+</Suspense>;
 ```
 
 #### 2. No Error Boundaries
@@ -244,6 +254,7 @@ export const Route = createRootRoute({
 **Current State:** No ErrorBoundary components anywhere. Manual error handling or errors ignored.
 
 **Recommended:**
+
 ```tsx
 // apps/os2/app/routes/root.tsx
 <QueryClientProvider client={queryClient}>
@@ -258,12 +269,14 @@ export const Route = createRootRoute({
 **Issue:** QueryClient created at module scope is problematic for SSR.
 
 **Current:**
+
 ```typescript
 // apps/os2/app/routes/root.tsx
 const queryClient = new QueryClient({...});  // ❌ Module-level singleton
 ```
 
 **Recommended:**
+
 ```typescript
 let browserQueryClient: QueryClient | undefined = undefined;
 
@@ -281,6 +294,7 @@ function getQueryClient() {
 #### 4. Missing QueryClient Configuration
 
 **Current:**
+
 ```typescript
 defaultOptions: {
   queries: {
@@ -291,6 +305,7 @@ defaultOptions: {
 ```
 
 **Recommended additions:**
+
 ```typescript
 defaultOptions: {
   queries: {
@@ -312,6 +327,7 @@ defaultOptions: {
 **Issue:** Some files use hardcoded strings instead of tRPC query keys.
 
 **Current:**
+
 ```typescript
 // apps/os2/app/routes/org/settings.tsx
 queryClient.invalidateQueries({ queryKey: ["organization"] });
@@ -319,9 +335,10 @@ queryClient.invalidateQueries({ queryKey: ["user", "myOrganizations"] });
 ```
 
 **Recommended:**
+
 ```typescript
 queryClient.invalidateQueries({
-  queryKey: trpc.organization.bySlug.queryKey({ organizationSlug })
+  queryKey: trpc.organization.bySlug.queryKey({ organizationSlug }),
 });
 ```
 
@@ -338,22 +355,24 @@ queryClient.invalidateQueries({
 **Issue:** Large GET requests can exceed URL limits.
 
 **Current:**
+
 ```typescript
 // apps/os2/app/lib/trpc.ts
 httpBatchLink({
   url: "/api/trpc",
   transformer: superjson,
   // ❌ Missing maxURLLength
-})
+});
 ```
 
 **Recommended:**
+
 ```typescript
 httpBatchLink({
   url: "/api/trpc",
   transformer: superjson,
-  maxURLLength: 2083,  // Auto-switch to POST when URLs exceed limit
-})
+  maxURLLength: 2083, // Auto-switch to POST when URLs exceed limit
+});
 ```
 
 #### 2. Consider Using `createTRPCContext` Pattern
@@ -373,6 +392,7 @@ httpBatchLink({
 #### 1. Not Using React 19 Features
 
 **Missing Features:**
+
 - No `<Suspense>` boundaries (critical for React 19)
 - No Error boundaries
 - No `useTransition` for non-urgent updates
@@ -382,6 +402,7 @@ httpBatchLink({
 #### 2. Manual Loading States Everywhere
 
 **Anti-Pattern:**
+
 ```tsx
 if (isLoading) {
   return <div>Loading...</div>;
@@ -399,7 +420,7 @@ React 19 is designed around Suspense for async operations. Manual loading states
 #### 4. Legacy Import Pattern (Acceptable)
 
 ```tsx
-import * as React from "react";  // Still valid in React 19
+import * as React from "react"; // Still valid in React 19
 ```
 
 This is still needed for `React.forwardRef`, `React.memo`, `React.createContext`.
@@ -440,12 +461,13 @@ Monitor connection usage under load. The per-request `new Pool()` pattern works 
 // apps/os2/backend/worker.ts
 app.use("*", async (c, next) => {
   const db = getDb();
-  const auth = getAuth(db);  // ❌ New instance per request
+  const auth = getAuth(db); // ❌ New instance per request
   // ...
 });
 ```
 
 **Potential Problems:**
+
 - Performance overhead from plugin initialization
 - Memory churn in serverless environment
 
@@ -456,6 +478,7 @@ app.use("*", async (c, next) => {
 **Issue:** Auth endpoints vulnerable to brute force attacks.
 
 **Recommendation:** Implement rate limiting using Cloudflare Workers KV or Durable Objects for:
+
 - Login attempts (per IP, per email)
 - OTP generation/verification
 - Password reset requests
@@ -463,12 +486,13 @@ app.use("*", async (c, next) => {
 #### 3. Email OTP Not Actually Sending
 
 **Issue:**
+
 ```typescript
 // apps/os2/backend/auth/auth.ts
 sendVerificationOTP: async ({ email, otp }) => {
   console.log(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
   // TODO: Implement actual email sending
-}
+};
 ```
 
 **Recommendation:** Implement actual email sending (Resend, SendGrid, AWS SES).
@@ -478,6 +502,7 @@ sendVerificationOTP: async ({ email, otp }) => {
 **Issue:** No explicit configuration for cookie security (sameSite, secure, httpOnly).
 
 **Recommendation:** Explicitly configure:
+
 ```typescript
 session: {
   cookie: {
@@ -536,6 +561,7 @@ Update `vibe-rules/rules/typescript.md` to clarify that `import { z } from "zod/
 **Rule Violation:** CLAUDE.md states backend should use `logger` from `tag-logger.ts`, not `console`.
 
 **Current:**
+
 ```typescript
 // apps/os2/backend/worker.ts:64
 console.log("Request:", requestTags);
@@ -560,6 +586,7 @@ This is acceptable for serverless but monitor for performance issues under high 
 **Issue:** Disabling mangling increases bundle size by ~10-15%.
 
 **Current:**
+
 ```typescript
 build: {
   minify: "terser",
@@ -570,6 +597,7 @@ build: {
 ```
 
 **Recommended:**
+
 ```typescript
 build: {
   sourcemap: true,  // Keep sourcemaps for debugging
@@ -589,40 +617,40 @@ build: {
 
 ### 🔴 Critical (Fix Immediately)
 
-| # | Issue | Impact | Effort |
-|---|-------|--------|--------|
-| 1 | Convert `useQuery` → `useSuspenseQuery` | Violates own rules, poor UX | Medium (2-3 hours) |
-| 2 | Add Suspense boundaries | Required for React 19 patterns | Low (1 hour) |
-| 3 | Add Error boundaries | No graceful error handling | Low (1 hour) |
-| 4 | Move auth checks to `beforeLoad` | Unnecessary renders | Medium (1-2 hours) |
+| #   | Issue                                   | Impact                         | Effort             |
+| --- | --------------------------------------- | ------------------------------ | ------------------ |
+| 1   | Convert `useQuery` → `useSuspenseQuery` | Violates own rules, poor UX    | Medium (2-3 hours) |
+| 2   | Add Suspense boundaries                 | Required for React 19 patterns | Low (1 hour)       |
+| 3   | Add Error boundaries                    | No graceful error handling     | Low (1 hour)       |
+| 4   | Move auth checks to `beforeLoad`        | Unnecessary renders            | Medium (1-2 hours) |
 
 ### 🟡 High Priority (Fix Soon)
 
-| # | Issue | Impact | Effort |
-|---|-------|--------|--------|
-| 5 | Add route loaders for data fetching | No SSR/prefetching | High (4-6 hours) |
-| 6 | Fix QueryClient singleton for SSR | SSR hydration issues | Low (30 min) |
-| 7 | Add `maxURLLength` to httpBatchLink | Large requests fail | Very Low (5 min) |
-| 8 | Replace `<Navigate>` with `throw redirect()` | Performance | Low (1 hour) |
-| 9 | Implement rate limiting for auth | Security vulnerability | Medium (2-3 hours) |
-| 10 | Enable terser mangling | 10-15% larger bundles | Very Low (5 min) |
+| #   | Issue                                        | Impact                 | Effort             |
+| --- | -------------------------------------------- | ---------------------- | ------------------ |
+| 5   | Add route loaders for data fetching          | No SSR/prefetching     | High (4-6 hours)   |
+| 6   | Fix QueryClient singleton for SSR            | SSR hydration issues   | Low (30 min)       |
+| 7   | Add `maxURLLength` to httpBatchLink          | Large requests fail    | Very Low (5 min)   |
+| 8   | Replace `<Navigate>` with `throw redirect()` | Performance            | Low (1 hour)       |
+| 9   | Implement rate limiting for auth             | Security vulnerability | Medium (2-3 hours) |
+| 10  | Enable terser mangling                       | 10-15% larger bundles  | Very Low (5 min)   |
 
 ### 🟢 Medium Priority (Backlog)
 
-| # | Issue | Impact | Effort |
-|---|-------|--------|--------|
-| 11 | Fix hardcoded query key invalidations | Stale data possible | Low (1 hour) |
-| 12 | Pass QueryClient to router context | Loaders can't prefetch | Low (30 min) |
-| 13 | Implement actual email OTP sending | Feature incomplete | Medium (2-3 hours) |
-| 14 | Add cookie security config | Security best practice | Low (30 min) |
-| 15 | Replace console.log with logger | Violates own rules | Low (30 min) |
+| #   | Issue                                 | Impact                 | Effort             |
+| --- | ------------------------------------- | ---------------------- | ------------------ |
+| 11  | Fix hardcoded query key invalidations | Stale data possible    | Low (1 hour)       |
+| 12  | Pass QueryClient to router context    | Loaders can't prefetch | Low (30 min)       |
+| 13  | Implement actual email OTP sending    | Feature incomplete     | Medium (2-3 hours) |
+| 14  | Add cookie security config            | Security best practice | Low (30 min)       |
+| 15  | Replace console.log with logger       | Violates own rules     | Low (30 min)       |
 
 ### 📝 Documentation Updates
 
-| # | Issue | Location |
-|---|-------|----------|
-| 16 | Update Zod import rule | `vibe-rules/rules/typescript.md` |
-| 17 | Document auth instance pattern | `apps/os2/backend/auth/auth.ts` |
+| #   | Issue                          | Location                         |
+| --- | ------------------------------ | -------------------------------- |
+| 16  | Update Zod import rule         | `vibe-rules/rules/typescript.md` |
+| 17  | Document auth instance pattern | `apps/os2/backend/auth/auth.ts`  |
 
 ---
 
@@ -653,4 +681,4 @@ Total Estimated Effort: 15-25 hours
 
 ---
 
-*This analysis was generated by thoroughly researching current documentation (2025-2026) for all major technologies used in the codebase.*
+_This analysis was generated by thoroughly researching current documentation (2025-2026) for all major technologies used in the codebase._

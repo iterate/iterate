@@ -4,11 +4,11 @@ import { Suspense } from "react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
-export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/",
-)({
-  component: ProjectHomeRoute,
-});
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/")(
+  {
+    component: ProjectHomeRoute,
+  },
+);
 
 function ProjectHomeRoute() {
   return (

@@ -50,8 +50,7 @@ test.describe("organization creation flow", () => {
       time("create-clicked");
 
       await page.waitForURL(
-        (url) =>
-          !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
+        (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
         { timeout: 30000 },
       );
       time("org-created");
@@ -123,8 +122,7 @@ test.describe("organization creation flow", () => {
       await page.click('button:has-text("Create organization")');
 
       await page.waitForURL(
-        (url) =>
-          !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
+        (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
         { timeout: 30000 },
       );
       const createEnd = performance.now();

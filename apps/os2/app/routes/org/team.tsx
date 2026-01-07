@@ -21,12 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/team")({
@@ -51,7 +46,13 @@ function OrgTeamPage() {
   );
 
   const updateRole = useMutation({
-    mutationFn: async ({ userId, role }: { userId: string; role: "member" | "admin" | "owner" }) => {
+    mutationFn: async ({
+      userId,
+      role,
+    }: {
+      userId: string;
+      role: "member" | "admin" | "owner";
+    }) => {
       return trpcClient.organization.updateMemberRole.mutate({
         organizationSlug: params.organizationSlug,
         userId,
@@ -192,7 +193,9 @@ function OrgTeamPage() {
                       <DropdownMenuContent align="end">
                         {member.role !== "member" && (
                           <DropdownMenuItem
-                            onClick={() => updateRole.mutate({ userId: member.userId, role: "member" })}
+                            onClick={() =>
+                              updateRole.mutate({ userId: member.userId, role: "member" })
+                            }
                           >
                             <User className="h-4 w-4 mr-2" />
                             Make Member
@@ -200,7 +203,9 @@ function OrgTeamPage() {
                         )}
                         {member.role !== "admin" && (
                           <DropdownMenuItem
-                            onClick={() => updateRole.mutate({ userId: member.userId, role: "admin" })}
+                            onClick={() =>
+                              updateRole.mutate({ userId: member.userId, role: "admin" })
+                            }
                           >
                             <Shield className="h-4 w-4 mr-2" />
                             Make Admin
@@ -208,7 +213,9 @@ function OrgTeamPage() {
                         )}
                         {currentUserRole === "owner" && member.role !== "owner" && (
                           <DropdownMenuItem
-                            onClick={() => updateRole.mutate({ userId: member.userId, role: "owner" })}
+                            onClick={() =>
+                              updateRole.mutate({ userId: member.userId, role: "owner" })
+                            }
                           >
                             <ShieldCheck className="h-4 w-4 mr-2" />
                             Make Owner

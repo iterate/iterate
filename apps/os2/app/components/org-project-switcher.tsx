@@ -51,7 +51,9 @@ export function OrgSwitcher({ organizations, currentOrg }: OrgSwitcherProps) {
               <DropdownMenuItem key={org.id} asChild className="gap-2 p-2">
                 <Link to="/orgs/$organizationSlug/settings" params={{ organizationSlug: org.slug }}>
                   <div className="flex size-6 items-center justify-center rounded-sm border">
-                    <span className="text-xs font-semibold">{org.name.charAt(0).toUpperCase()}</span>
+                    <span className="text-xs font-semibold">
+                      {org.name.charAt(0).toUpperCase()}
+                    </span>
                   </div>
                   <div className="flex flex-col">
                     <span className="font-medium">{org.name}</span>

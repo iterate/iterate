@@ -6,15 +6,15 @@ This document contrasts and compares the authentication implementations between 
 
 Both apps use the same versions of critical auth-related packages:
 
-| Package | Version |
-|---------|---------|
-| `better-auth` | `1.4.3` |
-| `@tanstack/react-start` | `^1.139.12` |
+| Package                  | Version     |
+| ------------------------ | ----------- |
+| `better-auth`            | `1.4.3`     |
+| `@tanstack/react-start`  | `^1.139.12` |
 | `@tanstack/react-router` | `^1.139.12` |
-| `@trpc/client` | `^11.7.2` |
-| `@trpc/server` | `^11.7.2` |
-| `hono` | `^4.10.7` |
-| `drizzle-orm` | `^0.44.7` |
+| `@trpc/client`           | `^11.7.2`   |
+| `@trpc/server`           | `^11.7.2`   |
+| `hono`                   | `^4.10.7`   |
+| `drizzle-orm`            | `^0.44.7`   |
 
 ## Architecture Overview
 
@@ -61,6 +61,7 @@ export const Route = createFileRoute("/_auth-required.layout")({
 ```
 
 When Tanstack Start runs `beforeLoad` during SSR:
+
 1. The code runs on the Worker
 2. `authClient.getSession()` makes a new HTTP request to `/api/auth/get-session`
 3. This request doesn't include the user's browser cookies
@@ -84,6 +85,7 @@ The server function has access to `context.variables.session`, which was populat
 ### Backend Auth Configuration
 
 #### os: `backend/auth/auth.ts`
+
 - Full-featured with multiple plugins
 - Stripe integration (`@better-auth/stripe`)
 - Custom integrations plugin for Slack/Google OAuth flows
@@ -93,6 +95,7 @@ The server function has access to `context.variables.session`, which was populat
 - Complex OTP generation for test emails
 
 #### os2: `backend/auth/auth.ts`
+
 - Stripped down to essentials
 - Only `admin()` and `emailOTP()` plugins
 - Simple test OTP handling (emails matching `+.*test@` get `424242`)
@@ -103,6 +106,7 @@ The server function has access to `context.variables.session`, which was populat
 ### Frontend Auth Client
 
 #### os: `app/lib/auth-client.ts`
+
 ```typescript
 export const authClient = createAuthClient({
   baseURL: import.meta.env.VITE_PUBLIC_URL || "http://localhost:5173",
@@ -112,6 +116,7 @@ export const authClient = createAuthClient({
 ```
 
 #### os2: `app/lib/auth-client.ts`
+
 ```typescript
 const getBaseURL = () => {
   if (typeof window !== "undefined") {
@@ -129,6 +134,7 @@ export const { signIn, signOut, useSession } = authClient;
 ```
 
 **Key differences:**
+
 - os2 dynamically computes baseURL (uses `window.location.origin` in browser)
 - os2 doesn't set `fetchOptions: { throw: true }` (errors handled differently)
 - os2 re-exports common functions for convenience
@@ -172,6 +178,7 @@ export const authenticatedServerFn = createServerFn({ method: "POST" }).middlewa
 ### Worker Session Handling
 
 #### os: `backend/worker.ts`
+
 ```typescript
 app.use("*", async (c, next) => {
   const db = getDb();
@@ -187,6 +194,7 @@ app.use("*", async (c, next) => {
 ```
 
 #### os2: `backend/worker.ts`
+
 ```typescript
 app.use("*", async (c, next) => {
   const db = getDb();
@@ -230,6 +238,7 @@ export const Route = createFileRoute("/login")({
 ### useSessionUser Hook
 
 #### os: Uses tRPC
+
 ```typescript
 export function useSessionUser() {
   const trpc = useTRPC();
@@ -238,13 +247,13 @@ export function useSessionUser() {
       staleTime: 1000 * 60 * 10,
     }),
   );
-  if (!userQuery.data)
-    throw new Error(`User data not found...`);
+  if (!userQuery.data) throw new Error(`User data not found...`);
   return userQuery.data;
 }
 ```
 
 #### os2: Uses tRPC (simplified)
+
 ```typescript
 export function useSessionUser() {
   const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
@@ -259,15 +268,15 @@ Both fetch user data via tRPC's `user.me` procedure, not via the better-auth cli
 
 ## What os2 Omits
 
-| Feature | In os | In os2 | Reason |
-|---------|-------|--------|--------|
-| Stripe integration | Yes | No | Not needed for MVP |
-| Custom integrations plugin | Yes | No | Simplified auth flow |
-| Service auth plugin | Yes | No | No internal API auth needed |
-| Account linking | Yes | No | Single provider is sufficient |
-| User additional fields | Yes | No | Simpler user model |
-| Complex test OTP logic | Yes | No | Simple `+test@` pattern works |
-| `fetchOptions: { throw: true }` | Yes | No | Different error handling |
+| Feature                         | In os | In os2 | Reason                        |
+| ------------------------------- | ----- | ------ | ----------------------------- |
+| Stripe integration              | Yes   | No     | Not needed for MVP            |
+| Custom integrations plugin      | Yes   | No     | Simplified auth flow          |
+| Service auth plugin             | Yes   | No     | No internal API auth needed   |
+| Account linking                 | Yes   | No     | Single provider is sufficient |
+| User additional fields          | Yes   | No     | Simpler user model            |
+| Complex test OTP logic          | Yes   | No     | Simple `+test@` pattern works |
+| `fetchOptions: { throw: true }` | Yes   | No     | Different error handling      |
 
 ## Common Gotchas
 
@@ -277,7 +286,7 @@ Both fetch user data via tRPC's `user.me` procedure, not via the better-auth cli
 // ❌ WRONG
 beforeLoad: async () => {
   const session = await authClient.getSession();
-}
+};
 
 // ✅ CORRECT
 const checkAuth = authenticatedServerFn.handler(() => {});
@@ -315,7 +324,7 @@ app.all("*", (c) => {
   return tanstackStartServerEntry.fetch(c.req.raw, {
     context: {
       cloudflare: { env: c.env, ctx: c.executionCtx },
-      variables: c.var,  // ← session is here
+      variables: c.var, // ← session is here
     },
   });
 });
@@ -338,6 +347,7 @@ export function createContext(c: HonoContext<{ Variables: Variables }>) {
 ## Testing Auth Locally
 
 Both apps support test emails:
+
 - **os**: Emails like `bob+123456@nustom.com` use `123456` as OTP
 - **os2**: Emails matching `+.*test@` (e.g., `foo+test@example.com`) use `424242` as OTP
 

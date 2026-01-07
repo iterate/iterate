@@ -87,7 +87,7 @@ Expected simplification: fewer test-only routes and less logic to maintain.
   - /orgs/:orgSlug/projects/new
   - /orgs/:orgSlug/projects/:projectSlug/{machines, repo, connectors, env-vars, settings}
   - /orgs/:orgSlug/team, /orgs/:orgSlug/settings
-  - /admin/*
+  - /admin/\*
 
 ## Suggested order of operations (smallest disruption)
 

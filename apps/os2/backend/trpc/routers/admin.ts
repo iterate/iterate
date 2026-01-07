@@ -43,10 +43,12 @@ export const adminRouter = router({
   // List all users (admin only)
   listUsers: adminProcedure
     .input(
-      z.object({
-        limit: z.number().min(1).max(100).default(50),
-        offset: z.number().min(0).default(0),
-      }).optional(),
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
     )
     .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 50;
@@ -71,10 +73,12 @@ export const adminRouter = router({
   // List all organizations (admin only)
   listOrganizations: adminProcedure
     .input(
-      z.object({
-        limit: z.number().min(1).max(100).default(50),
-        offset: z.number().min(0).default(0),
-      }).optional(),
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
     )
     .query(async ({ ctx, input }) => {
       const limit = input?.limit ?? 50;

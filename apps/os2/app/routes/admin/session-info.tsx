@@ -7,9 +7,7 @@ export const Route = createFileRoute("/_auth.layout/admin/session-info")({
 });
 
 function SessionInfoPage() {
-  const { data: sessionInfo } = useSuspenseQuery(
-    trpc.admin.sessionInfo.queryOptions(),
-  );
+  const { data: sessionInfo } = useSuspenseQuery(trpc.admin.sessionInfo.queryOptions());
 
   return (
     <div className="p-8 space-y-6">
@@ -34,7 +32,9 @@ function SessionInfoPage() {
           <div className="text-sm font-medium">Impersonation active</div>
           <p className="text-sm text-muted-foreground">
             Impersonated by{" "}
-            <code className="bg-muted px-1 py-0.5 rounded">{sessionInfo.session.impersonatedBy}</code>
+            <code className="bg-muted px-1 py-0.5 rounded">
+              {sessionInfo.session.impersonatedBy}
+            </code>
           </p>
         </div>
       )}

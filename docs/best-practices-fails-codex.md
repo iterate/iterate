@@ -3,6 +3,7 @@
 Date: January 6, 2026
 
 ## Scope
+
 Reviewed the major technologies used in `apps/os2` and compared current usage against the latest official guidance:
 
 - TanStack Start / TanStack Router
@@ -13,6 +14,7 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 - Better Auth (email OTP)
 
 ## Sources (official docs)
+
 - TanStack Router external data loading: https://tanstack.com/router/latest/docs/framework/react/guide/external-data-loading
 - TanStack Router + TanStack Query integration (SSR): https://tanstack.com/router/latest/docs/framework/react/guide/external-data-loading#tanstack-query-integration
 - TanStack Query SSR guide: https://tanstack.com/query/latest/docs/framework/react/guides/ssr
@@ -23,6 +25,7 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 ## Best-practice mismatches found
 
 ### 1) SSR QueryClient is created at module scope (shared across requests)
+
 **Best practice:** TanStack Query SSR docs explicitly warn against creating a QueryClient at module scope in SSR; create a fresh QueryClient per request (or per request lifecycle) to avoid shared cache/state across users.
 
 **Where:** `apps/os2/app/routes/root.tsx:8` creates a module-level QueryClient.
@@ -34,9 +37,11 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 ---
 
 ### 2) TanStack Router data loading best practices not applied (no loaders + no SSR Query integration)
+
 **Best practice:** TanStack Router recommends using route `loader`/`beforeLoad` for external data loading to avoid waterfalls, enable preloading, and ensure SSR-ready data. It also provides a dedicated TanStack Query SSR integration to handle server/client dehydration.
 
 **Where:**
+
 - Routes use `useQuery(...)` inside components without any `loader`/`beforeLoad` (examples: `apps/os2/app/routes/user/settings.tsx`, `apps/os2/app/routes/org/team.tsx`, `apps/os2/app/routes/org/project/index.tsx`).
 - `@tanstack/react-router-ssr-query` is a dependency but not used anywhere in `apps/os2`.
 
@@ -47,6 +52,7 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 ---
 
 ### 3) Hono CORS + Vite integration: Vite CORS not disabled
+
 **Best practice:** Hono docs note that Vite's built-in CORS should be disabled when using Hono's CORS middleware to avoid conflicts.
 
 **Where:** `apps/os2/vite.config.ts` does not set `server.cors: false`, but `apps/os2/backend/worker.ts` uses Hono's `cors(...)` middleware.
@@ -57,7 +63,8 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 
 ---
 
-### 4) Hono CORS allowMethods uses "*" (non-standard)
+### 4) Hono CORS allowMethods uses "\*" (non-standard)
+
 **Best practice:** Hono docs show `allowMethods` as a list of explicit HTTP methods; `Access-Control-Allow-Methods` does not accept `*` in standard CORS.
 
 **Where:** `apps/os2/backend/worker.ts:37` sets `allowMethods: ["*"]`.
@@ -69,9 +76,11 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 ---
 
 ### 5) Multi-step DB writes not wrapped in transactions
+
 **Best practice:** Drizzle recommends using transactions when multiple statements must succeed or fail together.
 
 **Where:**
+
 - `apps/os2/backend/trpc/routers/organization.ts:22-52` performs three dependent inserts (organization, membership, default instance) without a transaction.
 - `apps/os2/backend/trpc/routers/instance.ts:73-86` checks count then deletes outside a transaction (race window can violate "last instance" constraint).
 
@@ -82,6 +91,7 @@ Reviewed the major technologies used in `apps/os2` and compared current usage ag
 ---
 
 ### 6) Better Auth email OTP sending does not follow serverless guidance
+
 **Best practice:** Better Auth docs recommend not awaiting email sending and using `waitUntil` on serverless platforms for OTP delivery.
 
 **Where:** `apps/os2/backend/auth/auth.ts:37-43` logs and returns without using `waitUntil` (and the real email send is still TODO).

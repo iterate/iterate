@@ -4,17 +4,10 @@ import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/new-project",
-)({
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/new-project")({
   component: NewProjectPage,
 });
 
@@ -68,10 +61,7 @@ function NewProjectPage() {
             </Field>
           </FieldSet>
           <Field orientation="horizontal">
-            <Button
-              type="submit"
-              disabled={!name.trim() || createProject.isPending}
-            >
+            <Button type="submit" disabled={!name.trim() || createProject.isPending}>
               {createProject.isPending ? "Creating..." : "Create project"}
             </Button>
           </Field>

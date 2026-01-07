@@ -8,9 +8,7 @@ export const Route = createFileRoute("/_auth.layout/admin/")({
 });
 
 function AdminDashboardPage() {
-  const { data: users } = useSuspenseQuery(
-    trpc.admin.listUsers.queryOptions({ limit: 10 }),
-  );
+  const { data: users } = useSuspenseQuery(trpc.admin.listUsers.queryOptions({ limit: 10 }));
 
   const { data: organizations } = useSuspenseQuery(
     trpc.admin.listOrganizations.queryOptions({ limit: 10 }),

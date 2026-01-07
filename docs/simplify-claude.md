@@ -27,15 +27,16 @@ The os2 app is ~6,500 lines of TypeScript. While this is ~6% of the original os 
 
 The spec defines "Project" as the primary domain entity (one-to-one with repo). The code uses "Instance" everywhere.
 
-| Current | Spec |
-|---------|------|
-| `instance` table | `project` table |
-| `inst_` ID prefix | `prj_` ID prefix |
+| Current                   | Spec                     |
+| ------------------------- | ------------------------ |
+| `instance` table          | `project` table          |
+| `inst_` ID prefix         | `prj_` ID prefix         |
 | `instanceId` foreign keys | `projectId` foreign keys |
-| `instanceRouter` | `projectRouter` |
-| `instanceSlug` param | `projectSlug` param |
+| `instanceRouter`          | `projectRouter`          |
+| `instanceSlug` param      | `projectSlug` param      |
 
 **Files to change:**
+
 - `backend/db/schema.ts` (lines 165-187)
 - `backend/trpc/routers/instance.ts` (rename file)
 - `backend/trpc/trpc.ts` (instanceProtectedProcedure → projectProtectedProcedure)
@@ -49,11 +50,11 @@ The spec defines "Project" as the primary domain entity (one-to-one with repo). 
 
 The spec requires these tables which are completely missing:
 
-| Table | Prefix | Purpose |
-|-------|--------|---------|
-| `project_env_var` | `env_` | Encrypted environment variables |
-| `project_access_token` | `pat_` | API access tokens with hashing |
-| `project_connection` | `conn_` | OAuth integrations (Slack/Gmail) |
+| Table                  | Prefix  | Purpose                          |
+| ---------------------- | ------- | -------------------------------- |
+| `project_env_var`      | `env_`  | Encrypted environment variables  |
+| `project_access_token` | `pat_`  | API access tokens with hashing   |
+| `project_connection`   | `conn_` | OAuth integrations (Slack/Gmail) |
 
 The current `instanceAccountPermission` table should be replaced by `project_connection`.
 
@@ -61,18 +62,28 @@ The current `instanceAccountPermission` table should be replaced by `project_con
 
 ```typescript
 // project_env_var
-export const projectEnvVar = pgTable("project_env_var", (t) => ({
-  id: iterateId("env"),
-  projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
-  key: t.text().notNull(),
-  encryptedValue: t.text().notNull(),
-  ...withTimestamps,
-}), (t) => [uniqueIndex().on(t.projectId, t.key)]);
+export const projectEnvVar = pgTable(
+  "project_env_var",
+  (t) => ({
+    id: iterateId("env"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    key: t.text().notNull(),
+    encryptedValue: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.projectId, t.key)],
+);
 
 // project_access_token
 export const projectAccessToken = pgTable("project_access_token", (t) => ({
   id: iterateId("pat"),
-  projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
+  projectId: t
+    .text()
+    .notNull()
+    .references(() => project.id, { onDelete: "cascade" }),
   name: t.text().notNull(),
   tokenHash: t.text().notNull(),
   lastUsedAt: t.timestamp(),
@@ -81,17 +92,24 @@ export const projectAccessToken = pgTable("project_access_token", (t) => ({
 }));
 
 // project_connection
-export const projectConnection = pgTable("project_connection", (t) => ({
-  id: iterateId("conn"),
-  projectId: t.text().notNull().references(() => project.id, { onDelete: "cascade" }),
-  provider: t.text().notNull(),  // 'slack' | 'google'
-  externalId: t.text().notNull(), // Slack team ID, Google account ID
-  scope: t.text({ enum: ["project", "user"] }).notNull(),
-  userId: t.text().references(() => user.id, { onDelete: "cascade" }),
-  providerData: t.jsonb().$type<Record<string, unknown>>().notNull().default({}),
-  scopes: t.text(),
-  ...withTimestamps,
-}), (t) => [uniqueIndex().on(t.provider, t.externalId)]);
+export const projectConnection = pgTable(
+  "project_connection",
+  (t) => ({
+    id: iterateId("conn"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    provider: t.text().notNull(), // 'slack' | 'google'
+    externalId: t.text().notNull(), // Slack team ID, Google account ID
+    scope: t.text({ enum: ["project", "user"] }).notNull(),
+    userId: t.text().references(() => user.id, { onDelete: "cascade" }),
+    providerData: t.jsonb().$type<Record<string, unknown>>().notNull().default({}),
+    scopes: t.text(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.provider, t.externalId)],
+);
 ```
 
 ### 1.3 Fix Repo Table Structure
@@ -101,12 +119,12 @@ export const projectConnection = pgTable("project_connection", (t) => ({
 
 Current repo table diverges from spec:
 
-| Current | Spec Required |
-|---------|---------------|
-| `accountId` | `owner` (repo owner/org name) |
-| `repoId` integer | `name` (repo name) |
-| `branch` | `defaultBranch` |
-| `deactivatedAt` | Not needed |
+| Current          | Spec Required                 |
+| ---------------- | ----------------------------- |
+| `accountId`      | `owner` (repo owner/org name) |
+| `repoId` integer | `name` (repo name)            |
+| `branch`         | `defaultBranch`               |
+| `deactivatedAt`  | Not needed                    |
 
 **Fix:** Rewrite to match spec (lines 140-150).
 
@@ -116,23 +134,25 @@ Current repo table diverges from spec:
 **Effort:** Low
 
 Current issues:
+
 - References `instanceId` not `projectId`
 - Foreign key is NOT NULL (spec allows NULL for unrecognized webhooks)
 - Includes `updatedAt` (spec only has `createdAt`)
 
 **Fix:**
+
 ```typescript
-export const event = pgTable("event", (t) => ({
-  id: iterateId("evt"),
-  projectId: t.text().references(() => project.id, { onDelete: "cascade" }),  // Nullable!
-  type: t.text().notNull(),
-  payload: t.jsonb().$type<Record<string, unknown>>().notNull(),
-  createdAt: timestamp().defaultNow().notNull(),
-}), (t) => [
-  index().on(t.projectId),
-  index().on(t.type),
-  index().on(t.createdAt),
-]);
+export const event = pgTable(
+  "event",
+  (t) => ({
+    id: iterateId("evt"),
+    projectId: t.text().references(() => project.id, { onDelete: "cascade" }), // Nullable!
+    type: t.text().notNull(),
+    payload: t.jsonb().$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp().defaultNow().notNull(),
+  }),
+  (t) => [index().on(t.projectId), index().on(t.type), index().on(t.createdAt)],
+);
 ```
 
 ---
@@ -156,6 +176,7 @@ export const event = pgTable("event", (t) => ({
 **Issue:** Implements Slack as a login mechanism (creates users/orgs on first Slack login). Spec says login is email OTP + Google OAuth only.
 
 **Action:** Delete:
+
 - `linkSlackBot` endpoint (lines 57-131)
 - `callbackSlackBot` endpoint (lines 186-395)
 - `SLACK_BOT_SCOPES`, `SLACK_USER_AUTH_SCOPES` constants (lines 17-51)
@@ -166,6 +187,7 @@ export const event = pgTable("event", (t) => ({
 **Lines:** ~60 lines
 
 Delete these never-called functions:
+
 - `getUserOrganizations()` (lines 99-115)
 - `getUserOrganizationAccess()` (lines 117-135)
 - `getUserInstanceAccess()` (lines 137-156)
@@ -204,6 +226,7 @@ Arbitrary constraint not in spec. Let users delete projects if they want.
 The spec explicitly excludes real-time collaboration (line 34). The WebSocket DO is fully implemented but the frontend has zero usage.
 
 **Files to delete:**
+
 - `backend/durable-objects/organization-websocket.ts` (258 lines)
 - Remove DO bindings from wrangler config
 - Remove WebSocket route from `worker.ts` (lines 98-112)
@@ -218,6 +241,7 @@ The spec explicitly excludes real-time collaboration (line 34). The WebSocket DO
 **Lines saved:** ~120 lines
 
 **Remove:**
+
 - Signature verification function and call
 - `/interactive` POST handler (lines 103-137)
 - `/commands` POST handler (lines 142-169)
@@ -230,6 +254,7 @@ The spec explicitly excludes real-time collaboration (line 34). The WebSocket DO
 **Lines:** ~110 lines
 
 The `linkGoogle` and `callbackGoogle` endpoints exist but:
+
 - Frontend never calls them (connectors page has console.log stubs)
 - Spec separates Google login (auth layer) from Gmail integration (project connection)
 
@@ -275,7 +300,7 @@ The connectors page (`/org/project/connectors.tsx`) has non-functional buttons:
 
 ```typescript
 const handleSlackConnect = () => {
-  console.log("Connect Slack");  // Does nothing
+  console.log("Connect Slack"); // Does nothing
 };
 ```
 
@@ -284,17 +309,21 @@ const handleSlackConnect = () => {
 ### 5.2 Extract Reusable Patterns
 
 **Loading state** (repeated 3+ times):
+
 ```tsx
 if (isLoading) {
-  return <div className="flex items-center justify-center py-8">
-    <div className="text-muted-foreground">Loading...</div>
-  </div>;
+  return (
+    <div className="flex items-center justify-center py-8">
+      <div className="text-muted-foreground">Loading...</div>
+    </div>
+  );
 }
 ```
 
 Create `<LoadingState />` component.
 
 **Mutation toast pattern** (repeated in all forms):
+
 ```tsx
 onSuccess: () => {
   queryClient.invalidateQueries(...);
@@ -328,6 +357,7 @@ Uses hardcoded `green-500`, `yellow-500` instead of theme tokens. Update to use 
 **File:** `backend/worker.ts`
 
 Uses `console.log` but repo rules require `logger` from tag-logger.ts. Either:
+
 - Create `backend/tag-logger.ts` for os2
 - Import shared logging utility
 
@@ -341,18 +371,19 @@ The conditional import of `cloudflare:workers` handles test environments but lac
 
 ## Summary: Estimated Impact
 
-| Category | Lines Removed | Complexity Reduction |
-|----------|---------------|---------------------|
-| Dead code (helpers, stubs) | ~200 | Medium |
-| Service auth + Slack bot login | ~300 | High (security) |
-| WebSocket DO | ~330 | High (ops complexity) |
-| Slack verification + stubs | ~120 | Medium |
-| Google integration endpoints | ~110 | Medium |
-| Admin impersonation stubs | ~35 | Low |
-| Frontend stub routes | ~50 | Low |
-| **Total** | **~1,145** | **Significant** |
+| Category                       | Lines Removed | Complexity Reduction  |
+| ------------------------------ | ------------- | --------------------- |
+| Dead code (helpers, stubs)     | ~200          | Medium                |
+| Service auth + Slack bot login | ~300          | High (security)       |
+| WebSocket DO                   | ~330          | High (ops complexity) |
+| Slack verification + stubs     | ~120          | Medium                |
+| Google integration endpoints   | ~110          | Medium                |
+| Admin impersonation stubs      | ~35           | Low                   |
+| Frontend stub routes           | ~50           | Low                   |
+| **Total**                      | **~1,145**    | **Significant**       |
 
 **Additional schema work:**
+
 - Add 3 missing tables (~80 lines)
 - Rename instance → project (migration + refactor)
 - Fix repo/event tables (~30 lines changed)
@@ -362,24 +393,28 @@ The conditional import of `cloudflare:workers` handles test environments but lac
 ## Implementation Order
 
 ### Phase 1: Safety & Dead Code (Day 1)
+
 1. Delete `service-auth.ts`
 2. Delete Slack bot OAuth flow from integrations.ts
 3. Delete unused tRPC helpers
 4. Gate testing router behind NODE_ENV
 
 ### Phase 2: Schema Alignment (Day 1-2)
+
 1. Rename instance → project
 2. Add missing tables (env vars, tokens, connections)
 3. Fix repo table structure
 4. Fix event table (nullable projectId)
 
 ### Phase 3: Premature Features (Day 2)
+
 1. Delete WebSocket Durable Object
 2. Simplify Slack integration
 3. Remove Google integration endpoints
 4. Remove stub admin endpoints
 
 ### Phase 4: Polish (Day 3)
+
 1. Frontend loading/mutation patterns
 2. Badge color fixes
 3. Logging standardization

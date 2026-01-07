@@ -5,6 +5,7 @@ Goal: keep `apps/os2` minimal and spec‑aligned while adopting modern TanStack/
 ## Decisions & reasoning (consolidated from the four research docs)
 
 ### Adopt now
+
 1. **Suspense‑first data fetching**
    - Reason: repo rules require `useSuspenseQuery`; simplifies UI and removes manual loading spinners.
    - Action: convert remaining `useQuery` usages in routes/layouts; add Suspense boundaries and ErrorBoundary at the root.
@@ -46,6 +47,7 @@ Goal: keep `apps/os2` minimal and spec‑aligned while adopting modern TanStack/
     - Action: update e2e flows to match new routes + auto‑submit OTP; add one navigation test and keep machine sync test.
 
 ### Defer (documented as follow‑ups)
+
 1. **Full rename of `instance` → `project` in schema + API**
    - Reason: requires DB migrations and widespread rename; likely a dedicated migration task. UI already uses “project”.
    - Follow‑up: do a migration pass to rename tables/columns/routers once DB migration plan is approved.
@@ -92,6 +94,7 @@ Goal: keep `apps/os2` minimal and spec‑aligned while adopting modern TanStack/
 ---
 
 ## Success criteria
+
 - OS2 uses Suspense‑first fetching with minimal loading boilerplate.
 - Auth redirects happen before render.
 - CORS and tRPC client configuration match best practice.

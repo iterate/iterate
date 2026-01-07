@@ -171,7 +171,6 @@ async function setupDatabase() {
   throw new Error(`Unsupported environment: ${app.stage}`);
 }
 
-
 const subdomain = `os2-${app.stage}`
   .replace(/^os2-prd$/, "os2")
   .replace(/^os2-stg$/, "os2-staging");

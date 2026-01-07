@@ -2,12 +2,7 @@ import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, protectedMutation, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
-import {
-  organization,
-  organizationUserMembership,
-  UserRole,
-  user,
-} from "../../db/schema.ts";
+import { organization, organizationUserMembership, UserRole, user } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 
 export const organizationRouter = router({

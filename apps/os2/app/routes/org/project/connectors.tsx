@@ -35,7 +35,9 @@ function ProjectConnectorsPage() {
                   <span className="text-sm font-medium">Slack</span>
                   <Badge variant="outline">Not available</Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">Workspace notifications and commands.</p>
+                <p className="text-sm text-muted-foreground">
+                  Workspace notifications and commands.
+                </p>
               </div>
             </div>
             <Button disabled>Connect Slack</Button>
@@ -59,7 +61,9 @@ function ProjectConnectorsPage() {
                   <span className="text-sm font-medium">Gmail</span>
                   <Badge variant="outline">Not available</Badge>
                 </div>
-                <p className="text-sm text-muted-foreground">Gmail and Calendar access for your account.</p>
+                <p className="text-sm text-muted-foreground">
+                  Gmail and Calendar access for your account.
+                </p>
               </div>
             </div>
             <Button disabled>Connect Gmail</Button>

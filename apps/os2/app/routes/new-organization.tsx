@@ -3,12 +3,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../components/ui/field.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { trpcClient, trpc } from "../lib/trpc.tsx";
 
@@ -34,10 +29,10 @@ function NewOrganizationPage() {
       return trpcClient.organization.create.mutate({ name });
     },
     onSuccess: (org) => {
-      queryClient.setQueryData<Organization[]>(
-        trpc.user.myOrganizations.queryKey(),
-        (old) => [...(old || []), { ...org, role: "owner", instances: [] }],
-      );
+      queryClient.setQueryData<Organization[]>(trpc.user.myOrganizations.queryKey(), (old) => [
+        ...(old || []),
+        { ...org, role: "owner", instances: [] },
+      ]);
       toast.success("Organization created!");
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },

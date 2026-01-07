@@ -4,12 +4,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../../components/ui/field.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
@@ -58,7 +53,10 @@ function ProjectSettingsPage() {
     },
     onSuccess: () => {
       toast.success("Project deleted");
-      navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: params.organizationSlug } });
+      navigate({
+        to: "/orgs/$organizationSlug",
+        params: { organizationSlug: params.organizationSlug },
+      });
     },
     onError: (error) => {
       toast.error("Failed to delete project: " + error.message);
@@ -103,7 +101,10 @@ function ProjectSettingsPage() {
             </Field>
           </FieldSet>
           <Field orientation="horizontal">
-            <Button type="submit" disabled={!name.trim() || name === project.name || updateProject.isPending}>
+            <Button
+              type="submit"
+              disabled={!name.trim() || name === project.name || updateProject.isPending}
+            >
               {updateProject.isPending ? "Saving..." : "Save"}
             </Button>
           </Field>
@@ -112,7 +113,9 @@ function ProjectSettingsPage() {
 
       <div className="space-y-3">
         <div className="text-sm font-medium">Repository</div>
-        <Button variant="outline" onClick={() => toast("Repo management is coming soon.")}>Connect repo</Button>
+        <Button variant="outline" onClick={() => toast("Repo management is coming soon.")}>
+          Connect repo
+        </Button>
       </div>
 
       <div className="space-y-3">

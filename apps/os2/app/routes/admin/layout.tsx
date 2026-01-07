@@ -27,27 +27,21 @@ function AdminLayout() {
         <nav className="p-4 space-y-1">
           <Link
             to="/admin"
-            className={cn(
-              "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
-            )}
+            className={cn("flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent")}
           >
             <Shield className="h-4 w-4" />
             Dashboard
           </Link>
           <Link
             to="/admin/trpc-tools"
-            className={cn(
-              "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
-            )}
+            className={cn("flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent")}
           >
             <Terminal className="h-4 w-4" />
             tRPC Tools
           </Link>
           <Link
             to="/admin/session-info"
-            className={cn(
-              "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
-            )}
+            className={cn("flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent")}
           >
             <Info className="h-4 w-4" />
             Session Info

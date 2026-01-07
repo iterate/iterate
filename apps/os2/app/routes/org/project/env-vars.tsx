@@ -157,7 +157,9 @@ function ProjectEnvVarsPage() {
             {envVars.map((envVar) => (
               <TableRow key={envVar.id}>
                 <TableCell className="font-mono">{envVar.key}</TableCell>
-                <TableCell className="font-mono text-muted-foreground">{envVar.maskedValue}</TableCell>
+                <TableCell className="font-mono text-muted-foreground">
+                  {envVar.maskedValue}
+                </TableCell>
                 <TableCell className="text-muted-foreground">
                   {new Date(envVar.updatedAt).toLocaleDateString()}
                 </TableCell>

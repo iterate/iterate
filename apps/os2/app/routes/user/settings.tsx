@@ -4,12 +4,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth.layout/user/settings")({
@@ -19,9 +14,7 @@ export const Route = createFileRoute("/_auth.layout/user/settings")({
 function UserSettingsRoute() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/50">
-      <Suspense
-        fallback={<div className="text-muted-foreground">Loading...</div>}
-      >
+      <Suspense fallback={<div className="text-muted-foreground">Loading...</div>}>
         <UserSettingsPage />
       </Suspense>
     </div>

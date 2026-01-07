@@ -4,17 +4,10 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/settings",
-)({
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/settings")({
   component: OrgSettingsPage,
 });
 

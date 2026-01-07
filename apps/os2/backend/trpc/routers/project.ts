@@ -1,7 +1,13 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProtectedProcedure, projectProtectedProcedure, orgAdminMutation, projectProtectedMutation } from "../trpc.ts";
+import {
+  router,
+  orgProtectedProcedure,
+  projectProtectedProcedure,
+  orgAdminMutation,
+  projectProtectedMutation,
+} from "../trpc.ts";
 import { project } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 

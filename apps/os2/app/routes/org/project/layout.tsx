@@ -1,6 +1,22 @@
-import { createFileRoute, Link, Outlet, redirect, useLocation, useParams } from "@tanstack/react-router";
+import {
+  createFileRoute,
+  Link,
+  Outlet,
+  redirect,
+  useLocation,
+  useParams,
+} from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { Bot, GitBranch, Home, KeyRound, Plug, Server, Settings, SlidersHorizontal } from "lucide-react";
+import {
+  Bot,
+  GitBranch,
+  Home,
+  KeyRound,
+  Plug,
+  Server,
+  Settings,
+  SlidersHorizontal,
+} from "lucide-react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
 import { SidebarShell } from "../../../components/sidebar-shell.tsx";
@@ -18,9 +34,7 @@ import {
   SidebarTrigger,
 } from "../../../components/ui/sidebar.tsx";
 
-export const Route = createFileRoute(
-  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
-)({
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/projects/$projectSlug")({
   component: ProjectLayout,
 });
 

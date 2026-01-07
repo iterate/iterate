@@ -81,7 +81,10 @@ export function OrgSidebarNav({ orgSlug, orgName, projects }: OrgSidebarNavProps
             })}
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
-                <Link to="/orgs/$organizationSlug/new-project" params={{ organizationSlug: orgSlug }}>
+                <Link
+                  to="/orgs/$organizationSlug/new-project"
+                  params={{ organizationSlug: orgSlug }}
+                >
                   <Plus className="h-4 w-4" />
                   <span>Add project</span>
                 </Link>

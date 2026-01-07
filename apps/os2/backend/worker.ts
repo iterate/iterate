@@ -52,12 +52,8 @@ app.use("*", async (c, next) => {
   return next();
 });
 
-
 app.onError((err, c) => {
-  logger.error(
-    `${err instanceof Error ? err.message : String(err)} (hono unhandled error)`,
-    err,
-  );
+  logger.error(`${err instanceof Error ? err.message : String(err)} (hono unhandled error)`, err);
   return c.json({ error: "Internal Server Error" }, 500);
 });
 
@@ -130,4 +126,3 @@ export default class extends WorkerEntrypoint {
 }
 
 export { RealtimePusher };
-

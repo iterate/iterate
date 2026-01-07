@@ -176,11 +176,7 @@ function ProjectMachinesPage() {
           icon={<Server className="h-12 w-12" />}
           title="No machines yet"
           description="Create your first machine to get started."
-          action={
-            <Button onClick={() => setCreateDialogOpen(true)}>
-              Create Machine
-            </Button>
-          }
+          action={<Button onClick={() => setCreateDialogOpen(true)}>Create Machine</Button>}
         />
       )}
     </div>

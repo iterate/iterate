@@ -132,10 +132,7 @@ export const testingRouter = router({
       const results: string[] = [];
 
       if (input.email) {
-        const deleted = await ctx.db
-          .delete(user)
-          .where(eq(user.email, input.email))
-          .returning();
+        const deleted = await ctx.db.delete(user).where(eq(user.email, input.email)).returning();
         results.push(`Deleted ${deleted.length} users`);
       }
 

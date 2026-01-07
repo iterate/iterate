@@ -6,12 +6,7 @@ import { toast } from "sonner";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
-import {
-  Field,
-  FieldGroup,
-  FieldLabel,
-  FieldSet,
-} from "../../../components/ui/field.tsx";
+import { Field, FieldGroup, FieldLabel, FieldSet } from "../../../components/ui/field.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
   Table,
@@ -22,7 +17,13 @@ import {
   TableRow,
 } from "../../../components/ui/table.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card.tsx";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "../../../components/ui/card.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
@@ -124,16 +125,13 @@ function ProjectAccessTokensPage() {
           <CardHeader>
             <CardTitle className="text-amber-900">Save your token</CardTitle>
             <CardDescription className="text-amber-800">
-              This token will only be shown once. Make sure to copy it now as you won't be able to see it again.
+              This token will only be shown once. Make sure to copy it now as you won't be able to
+              see it again.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex gap-2">
-              <Input
-                value={newToken}
-                readOnly
-                className="font-mono text-sm bg-white"
-              />
+              <Input value={newToken} readOnly className="font-mono text-sm bg-white" />
               <Button onClick={handleCopyToken} variant="outline">
                 {copied ? <CheckCheck className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
               </Button>

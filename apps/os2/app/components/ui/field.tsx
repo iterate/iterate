@@ -207,11 +207,7 @@ export function FieldError({
   }
 
   return (
-    <div
-      data-slot="field-error"
-      className={cn("text-destructive text-sm", className)}
-      {...props}
-    >
+    <div data-slot="field-error" className={cn("text-destructive text-sm", className)} {...props}>
       {content}
     </div>
   );

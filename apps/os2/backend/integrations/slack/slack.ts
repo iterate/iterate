@@ -47,7 +47,8 @@ slackApp.post("/webhook", async (c) => {
   }
 
   // Get team ID from payload
-  const teamId = (p.team_id as string) ||
+  const teamId =
+    (p.team_id as string) ||
     ((p.team as Record<string, unknown>)?.id as string) ||
     ((p.event as Record<string, unknown>)?.team as string);
 
@@ -61,11 +62,7 @@ slackApp.post("/webhook", async (c) => {
 
   // Try to find a project linked to this Slack team
   const connection = await db.query.projectConnection.findFirst({
-    where: (pc, { eq, and }) =>
-      and(
-        eq(pc.provider, "slack"),
-        eq(pc.externalId, teamId)
-      ),
+    where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamId)),
   });
 
   const projectId = connection?.projectId;

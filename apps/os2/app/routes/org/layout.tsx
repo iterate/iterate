@@ -6,11 +6,7 @@ import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
-import {
-  SidebarInset,
-  SidebarProvider,
-  SidebarTrigger,
-} from "../../components/ui/sidebar.tsx";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
 export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {

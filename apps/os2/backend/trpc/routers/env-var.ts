@@ -24,9 +24,14 @@ export const envVarRouter = router({
   set: projectProtectedMutation
     .input(
       z.object({
-        key: z.string().min(1).max(255).regex(/^[A-Z_][A-Z0-9_]*$/, {
-          message: "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
-        }),
+        key: z
+          .string()
+          .min(1)
+          .max(255)
+          .regex(/^[A-Z_][A-Z0-9_]*$/, {
+            message:
+              "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
+          }),
         value: z.string(),
       }),
     )

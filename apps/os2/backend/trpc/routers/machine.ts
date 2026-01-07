@@ -34,10 +34,7 @@ export const machineRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const m = await ctx.db.query.machine.findFirst({
-        where: and(
-          eq(machine.id, input.machineId),
-          eq(machine.projectId, ctx.project.id),
-        ),
+        where: and(eq(machine.id, input.machineId), eq(machine.projectId, ctx.project.id)),
       });
 
       if (!m) {
@@ -92,12 +89,7 @@ export const machineRouter = router({
       const [updated] = await ctx.db
         .update(machine)
         .set({ state: "archived" })
-        .where(
-          and(
-            eq(machine.id, input.machineId),
-            eq(machine.projectId, ctx.project.id),
-          ),
-        )
+        .where(and(eq(machine.id, input.machineId), eq(machine.projectId, ctx.project.id)))
         .returning();
 
       if (!updated) {
@@ -121,12 +113,7 @@ export const machineRouter = router({
       const [updated] = await ctx.db
         .update(machine)
         .set({ state: "started" })
-        .where(
-          and(
-            eq(machine.id, input.machineId),
-            eq(machine.projectId, ctx.project.id),
-          ),
-        )
+        .where(and(eq(machine.id, input.machineId), eq(machine.projectId, ctx.project.id)))
         .returning();
 
       if (!updated) {
@@ -149,12 +136,7 @@ export const machineRouter = router({
     .mutation(async ({ ctx, input }) => {
       const result = await ctx.db
         .delete(machine)
-        .where(
-          and(
-            eq(machine.id, input.machineId),
-            eq(machine.projectId, ctx.project.id),
-          ),
-        )
+        .where(and(eq(machine.id, input.machineId), eq(machine.projectId, ctx.project.id)))
         .returning();
 
       if (result.length === 0) {
@@ -183,12 +165,7 @@ export const machineRouter = router({
           ...(input.name && { name: input.name }),
           ...(input.metadata && { metadata: input.metadata }),
         })
-        .where(
-          and(
-            eq(machine.id, input.machineId),
-            eq(machine.projectId, ctx.project.id),
-          ),
-        )
+        .where(and(eq(machine.id, input.machineId), eq(machine.projectId, ctx.project.id)))
         .returning();
 
       if (!updated) {
