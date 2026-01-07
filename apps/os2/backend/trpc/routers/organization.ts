@@ -1,4 +1,4 @@
-import { z } from "zod";
+import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, orgProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
@@ -7,6 +7,7 @@ import {
   organizationUserMembership,
   instance,
   UserRole,
+  user,
 } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 
@@ -118,6 +119,62 @@ export const organizationRouter = router({
       createdAt: m.createdAt,
     }));
   }),
+
+  addMember: orgAdminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        role: z.enum(UserRole).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existingUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email),
+      });
+
+      if (!existingUser) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "User not found",
+        });
+      }
+
+      const existingMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(organizationUserMembership.organizationId, ctx.organization.id),
+          eq(organizationUserMembership.userId, existingUser.id),
+        ),
+      });
+
+      if (existingMembership) {
+        return existingMembership;
+      }
+
+      if (input.role === "owner" && ctx.membership?.role !== "owner") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Only owners can add other owners",
+        });
+      }
+
+      const [membership] = await ctx.db
+        .insert(organizationUserMembership)
+        .values({
+          organizationId: ctx.organization.id,
+          userId: existingUser.id,
+          role: input.role ?? "member",
+        })
+        .returning();
+
+      if (!membership) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: "Failed to add member",
+        });
+      }
+
+      return membership;
+    }),
 
   // Update member role
   updateMemberRole: orgAdminProcedure

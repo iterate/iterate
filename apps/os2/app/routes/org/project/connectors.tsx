@@ -1,21 +1,22 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { Mail, MessageSquare } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "../../../components/ui/button.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/$organizationSlug/_/$projectSlug/connectors",
+  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/connectors",
 )({
   component: ProjectConnectorsPage,
 });
 
 function ProjectConnectorsPage() {
   const handleSlackConnect = () => {
-    console.log("Connect Slack");
+    toast("Slack connections are coming soon.");
   };
 
   const handleGoogleConnect = () => {
-    console.log("Connect Google");
+    toast("Gmail connections are coming soon.");
   };
 
   return (

@@ -1,49 +1,69 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, Suspense } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug/settings")({
-  component: OrgSettingsPage,
+export const Route = createFileRoute(
+  "/_auth-required.layout/_/orgs/$organizationSlug/settings",
+)({
+  component: OrgSettingsRoute,
 });
 
+function OrgSettingsRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <div className="text-muted-foreground">Loading...</div>
+        </div>
+      }
+    >
+      <OrgSettingsPage />
+    </Suspense>
+  );
+}
+
 function OrgSettingsPage() {
-  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug/settings" });
+  const routeParams = useParams({
+    from: "/_auth-required.layout/_/orgs/$organizationSlug/settings",
+  });
   const queryClient = useQueryClient();
 
-  const { data: org, isLoading } = useQuery(
+  const { data: org } = useSuspenseQuery(
     trpc.organization.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
+      organizationSlug: routeParams.organizationSlug,
     }),
   );
 
   const updateOrg = useMutation({
     mutationFn: async (name: string) => {
       return trpcClient.organization.update.mutate({
-        organizationSlug: params.organizationSlug,
+        organizationSlug: routeParams.organizationSlug,
         name,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["organization"] });
-      queryClient.invalidateQueries({ queryKey: ["user", "myOrganizations"] });
+      queryClient.invalidateQueries({
+        queryKey: trpc.organization.bySlug.queryKey({
+          organizationSlug: routeParams.organizationSlug,
+        }),
+      });
+      queryClient.invalidateQueries({ queryKey: trpc.user.myOrganizations.queryKey() });
       toast.success("Organization updated!");
     },
     onError: (error) => {
       toast.error("Failed to update organization: " + error.message);
     },
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
 
   if (!org) {
     return (
@@ -86,27 +106,29 @@ function OrgSettingsForm({ organization, isSaving, onSubmit }: OrgSettingsFormPr
   return (
     <div className="p-8 max-w-2xl space-y-6">
       <h1 className="text-2xl font-bold">Organization</h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="organization-name">
-            Name
-          </label>
-          <Input
-            id="organization-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            disabled={isSaving}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-muted-foreground" htmlFor="organization-slug">
-            Slug
-          </label>
-          <Input id="organization-slug" value={organization.slug} disabled />
-        </div>
-        <Button type="submit" disabled={!name.trim() || name === organization.name || isSaving}>
-          {isSaving ? "Saving..." : "Save"}
-        </Button>
+      <form onSubmit={handleSubmit}>
+        <FieldGroup>
+          <FieldSet>
+            <Field>
+              <FieldLabel htmlFor="organization-name">Name</FieldLabel>
+              <Input
+                id="organization-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                disabled={isSaving}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="organization-slug">Slug</FieldLabel>
+              <Input id="organization-slug" value={organization.slug} disabled />
+            </Field>
+          </FieldSet>
+          <Field orientation="horizontal">
+            <Button type="submit" disabled={!name.trim() || name === organization.name || isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </Button>
+          </Field>
+        </FieldGroup>
       </form>
     </div>
   );

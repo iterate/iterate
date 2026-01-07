@@ -21,19 +21,25 @@ export const routes = rootRoute("root.tsx", [
     route("/user/settings", "user/settings.tsx"),
 
     // Organization routes
-    layout("/$organizationSlug", "org/layout.tsx", [
+    layout("/orgs/$organizationSlug", "org/layout.tsx", [
       // Org index redirects to first project
       index("org/index.tsx"),
 
       // Org settings
       route("/settings", "org/settings.tsx"),
       route("/team", "org/team.tsx"),
+      route("/projects/new", "org/project/new.tsx"),
 
       // Project routes
-      layout("/$projectSlug", "org/project/layout.tsx", [
-        // Project index shows machines
+      layout("/projects/$projectSlug", "org/project/layout.tsx", [
+        // Project index shows access tokens
         index("org/project/index.tsx"),
+        route("/machines", "org/project/machines.tsx"),
+        route("/repo", "org/project/repo.tsx"),
         route("/connectors", "org/project/connectors.tsx"),
+        route("/env-vars", "org/project/env-vars.tsx"),
+        route("/settings", "org/project/settings.tsx"),
+        route("/agents", "org/project/agents.tsx"),
       ]),
     ]),
 

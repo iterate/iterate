@@ -53,9 +53,6 @@ describe("organization creation flow", () => {
     }
     time("otp-entered");
 
-    await page.click('button:has-text("Verify")');
-    time("verify-clicked");
-
     await page.waitForURL((url) => !url.pathname.includes("/login"), {
       timeout: 15000,
     });
@@ -67,12 +64,12 @@ describe("organization creation flow", () => {
     if (currentURL.includes("/new-organization")) {
       time("new-org-page-shown");
 
-      await page.waitForSelector('input[placeholder="Organization name"]');
+      await page.waitForSelector('input[id="organization-name"]');
       const orgName = `Test Org ${Date.now()}`;
-      await page.fill('input[placeholder="Organization name"]', orgName);
+      await page.fill('input[id="organization-name"]', orgName);
       time("org-name-filled");
 
-      await page.click('button:has-text("Create Organization")');
+      await page.click('button:has-text("Create organization")');
       time("create-clicked");
 
       await page.waitForURL(
@@ -135,19 +132,18 @@ describe("organization creation flow", () => {
     for (const char of TEST_OTP) {
       await page.keyboard.type(char);
     }
-    await page.click('button:has-text("Verify")');
 
     await page.waitForURL((url) => !url.pathname.includes("/login"), {
       timeout: 15000,
     });
 
     if (page.url().includes("/new-organization")) {
-      await page.waitForSelector('input[placeholder="Organization name"]');
+      await page.waitForSelector('input[id="organization-name"]');
       const orgName = `Timing Test Org ${Date.now()}`;
-      await page.fill('input[placeholder="Organization name"]', orgName);
+      await page.fill('input[id="organization-name"]', orgName);
 
       const createStart = performance.now();
-      await page.click('button:has-text("Create Organization")');
+      await page.click('button:has-text("Create organization")');
 
       await page.waitForURL(
         (url) =>

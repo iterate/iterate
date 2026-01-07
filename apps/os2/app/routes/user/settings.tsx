@@ -1,18 +1,38 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { trpc, trpcClient } from "../../lib/trpc.ts";
 import { Button } from "../../components/ui/button.tsx";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute("/_auth-required.layout/user/settings")({
-  component: UserSettingsPage,
+  component: UserSettingsRoute,
 });
+
+function UserSettingsRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <div className="text-muted-foreground">Loading...</div>
+        </div>
+      }
+    >
+      <UserSettingsPage />
+    </Suspense>
+  );
+}
 
 function UserSettingsPage() {
   const queryClient = useQueryClient();
-  const { data: user, isLoading } = useQuery(trpc.user.me.queryOptions());
+  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
 
   const updateUser = useMutation({
     mutationFn: async (name: string) => {
@@ -26,14 +46,6 @@ function UserSettingsPage() {
       toast.error("Failed to update settings: " + error.message);
     },
   });
-
-  if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted-foreground">Loading...</div>
-      </div>
-    );
-  }
 
   if (!user) {
     return (
@@ -76,27 +88,29 @@ function UserSettingsForm({ user, isSaving, onSubmit }: UserSettingsFormProps) {
   return (
     <div className="p-8 max-w-2xl space-y-6">
       <h1 className="text-2xl font-bold">User settings</h1>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="space-y-2">
-          <label className="text-sm font-medium" htmlFor="user-name">
-            Name
-          </label>
-          <Input
-            id="user-name"
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            disabled={isSaving}
-          />
-        </div>
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-muted-foreground" htmlFor="user-email">
-            Email
-          </label>
-          <Input id="user-email" value={user.email} disabled />
-        </div>
-        <Button type="submit" disabled={!name.trim() || name === user.name || isSaving}>
-          {isSaving ? "Saving..." : "Save"}
-        </Button>
+      <form onSubmit={handleSubmit}>
+        <FieldGroup>
+          <FieldSet>
+            <Field>
+              <FieldLabel htmlFor="user-name">Name</FieldLabel>
+              <Input
+                id="user-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={isSaving}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="user-email">Email</FieldLabel>
+              <Input id="user-email" value={user.email} disabled />
+            </Field>
+          </FieldSet>
+          <Field orientation="horizontal">
+            <Button type="submit" disabled={!name.trim() || name === user.name || isSaving}>
+              {isSaving ? "Saving..." : "Save"}
+            </Button>
+          </Field>
+        </FieldGroup>
       </form>
     </div>
   );

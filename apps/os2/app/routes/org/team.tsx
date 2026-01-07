@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -20,15 +21,23 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../../components/ui/field.tsx";
+import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug/team")({
+export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug/team")({
   component: OrgTeamPage,
 });
 
 function OrgTeamPage() {
-  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug/team" });
+  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug/team" });
   const queryClient = useQueryClient();
   const { user: currentUser } = useSessionUser();
+  const [email, setEmail] = useState("");
 
   const { data: members, isLoading } = useQuery(
     trpc.organization.members.queryOptions({
@@ -51,11 +60,36 @@ function OrgTeamPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["organization", "members"] });
+      queryClient.invalidateQueries({
+        queryKey: trpc.organization.members.queryKey({
+          organizationSlug: params.organizationSlug,
+        }),
+      });
       toast.success("Role updated!");
     },
     onError: (error) => {
       toast.error("Failed to update role: " + error.message);
+    },
+  });
+
+  const addMember = useMutation({
+    mutationFn: async (emailAddress: string) => {
+      return trpcClient.organization.addMember.mutate({
+        organizationSlug: params.organizationSlug,
+        email: emailAddress,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: trpc.organization.members.queryKey({
+          organizationSlug: params.organizationSlug,
+        }),
+      });
+      setEmail("");
+      toast.success("Member added!");
+    },
+    onError: (error) => {
+      toast.error("Failed to add member: " + error.message);
     },
   });
 
@@ -67,7 +101,11 @@ function OrgTeamPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["organization", "members"] });
+      queryClient.invalidateQueries({
+        queryKey: trpc.organization.members.queryKey({
+          organizationSlug: params.organizationSlug,
+        }),
+      });
       toast.success("Member removed!");
     },
     onError: (error) => {
@@ -89,6 +127,37 @@ function OrgTeamPage() {
   return (
     <div className="p-8 max-w-4xl space-y-6">
       <h1 className="text-2xl font-bold">Team</h1>
+      {canManageMembers && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (email.trim()) {
+              addMember.mutate(email.trim());
+            }
+          }}
+        >
+          <FieldGroup>
+            <FieldSet>
+              <Field>
+                <FieldLabel htmlFor="member-email">Add member by email</FieldLabel>
+                <Input
+                  id="member-email"
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  placeholder="name@company.com"
+                  disabled={addMember.isPending}
+                />
+              </Field>
+            </FieldSet>
+            <Field orientation="horizontal">
+              <Button type="submit" disabled={!email.trim() || addMember.isPending}>
+                {addMember.isPending ? "Adding..." : "Add member"}
+              </Button>
+            </Field>
+          </FieldGroup>
+        </form>
+      )}
       <Table>
         <TableHeader>
           <TableRow>

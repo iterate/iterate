@@ -48,14 +48,13 @@ export function LoginCard() {
     }
   };
 
-  const handleOTPSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (otp.length !== 6) return;
+  const submitOtp = async (value: string) => {
+    if (value.length !== 6 || isLoading) return;
 
     setIsLoading(true);
     setError(null);
     try {
-      await signIn.emailOtp({ email, otp });
+      await signIn.emailOtp({ email, otp: value });
       toast.success("Signed in successfully");
       navigate({ to: "/" });
     } catch (err) {
@@ -64,6 +63,18 @@ export function LoginCard() {
       setOtp("");
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleOTPSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    await submitOtp(otp);
+  };
+
+  const handleOtpChange = (value: string) => {
+    setOtp(value);
+    if (value.length === 6) {
+      void submitOtp(value);
     }
   };
 
@@ -97,7 +108,7 @@ export function LoginCard() {
           </p>
         </div>
         <form onSubmit={handleOTPSubmit} className="space-y-4">
-          <InputOTP value={otp} onChange={setOtp} disabled={isLoading} autoFocus />
+          <InputOTP value={otp} onChange={handleOtpChange} disabled={isLoading} autoFocus />
           {error && <p className="text-sm text-destructive text-center">{error}</p>}
           <Button type="submit" className="w-full" disabled={isLoading || otp.length !== 6}>
             {isLoading ? "Verifying..." : "Verify"}
@@ -127,9 +138,6 @@ export function LoginCard() {
 
   return (
     <div className="w-full max-w-md space-y-6">
-      <div className="text-center space-y-1">
-        <h1 className="text-2xl font-semibold">Welcome to OS2</h1>
-      </div>
       <form onSubmit={handleEmailSubmit} className="space-y-3">
         <Input
           type="email"
@@ -150,7 +158,7 @@ export function LoginCard() {
           <span className="w-full border-t" />
         </div>
         <div className="relative flex justify-center text-xs uppercase">
-          <span className="bg-background px-2 text-muted-foreground">Or continue with</span>
+          <span className="bg-background px-2 text-muted-foreground">Or</span>
         </div>
       </div>
 

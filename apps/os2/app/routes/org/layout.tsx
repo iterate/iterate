@@ -3,14 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.ts";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useOrganizationWebSocket } from "../../hooks/use-websocket.ts";
-import { Sidebar } from "../../components/sidebar.tsx";
+import { AppSidebar } from "../../components/app-sidebar.tsx";
+import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug")({
+export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug")({
   component: OrgLayout,
 });
 
 function OrgLayout() {
-  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug" });
+  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug" });
+  const allParams = useParams({ strict: false });
   const { user } = useSessionUser();
 
   const { data: organizations, isPending: orgsPending } = useQuery(
@@ -51,21 +53,38 @@ function OrgLayout() {
     ...organization,
     projects: organization.instances || [],
   }));
+  const currentOrgWithProjects =
+    organizationsWithProjects.find((organization) => organization.id === currentOrg.id) ?? {
+      ...currentOrg,
+      projects: currentOrg.instances || [],
+    };
+  const currentProject =
+    currentOrgWithProjects.projects.find((project) => project.slug === allParams.projectSlug) ??
+    currentOrgWithProjects.projects[0];
 
   return (
-    <div className="flex h-screen">
-      <Sidebar
-        organizations={organizationsWithProjects}
-        currentOrg={currentOrg}
-        user={{
-          name: user.name,
-          email: user.email,
-          image: user.image,
-        }}
-      />
-      <main className="flex-1 overflow-auto">
-        <Outlet />
-      </main>
-    </div>
+    <SidebarProvider defaultOpen={true}>
+      <div className="flex min-h-screen w-full">
+        <AppSidebar
+          organizations={organizationsWithProjects}
+          currentOrg={currentOrgWithProjects}
+          currentProject={currentProject}
+          user={{
+            name: user.name,
+            email: user.email,
+            image: user.image,
+            role: user.role,
+          }}
+        />
+        <SidebarInset>
+          <header className="flex h-16 shrink-0 items-center gap-2 border-b px-4">
+            <SidebarTrigger />
+          </header>
+          <main className="flex-1 overflow-auto">
+            <Outlet />
+          </main>
+        </SidebarInset>
+      </div>
+    </SidebarProvider>
   );
 }

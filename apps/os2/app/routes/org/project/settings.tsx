@@ -1,0 +1,153 @@
+import { useState, type FormEvent, Suspense } from "react";
+import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
+import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { trpc, trpcClient } from "../../../lib/trpc.ts";
+import { Button } from "../../../components/ui/button.tsx";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../../../components/ui/field.tsx";
+import { Input } from "../../../components/ui/input.tsx";
+
+export const Route = createFileRoute(
+  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
+)({
+  component: ProjectSettingsRoute,
+});
+
+function ProjectSettingsRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-full items-center justify-center">
+          <div className="text-muted-foreground">Loading...</div>
+        </div>
+      }
+    >
+      <ProjectSettingsPage />
+    </Suspense>
+  );
+}
+
+function ProjectSettingsPage() {
+  const params = useParams({
+    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
+  });
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+
+  const { data: project } = useSuspenseQuery(
+    trpc.instance.bySlug.queryOptions({
+      organizationSlug: params.organizationSlug,
+      instanceSlug: params.projectSlug,
+    }),
+  );
+
+  const [name, setName] = useState(project.name);
+
+  const updateProject = useMutation({
+    mutationFn: async (nextName: string) => {
+      return trpcClient.instance.update.mutate({
+        organizationSlug: params.organizationSlug,
+        instanceSlug: params.projectSlug,
+        name: nextName,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: trpc.instance.list.queryKey({ organizationSlug: params.organizationSlug }),
+      });
+      queryClient.invalidateQueries({
+        queryKey: trpc.instance.bySlug.queryKey({
+          organizationSlug: params.organizationSlug,
+          instanceSlug: params.projectSlug,
+        }),
+      });
+      toast.success("Project updated");
+    },
+    onError: (error) => {
+      toast.error("Failed to update project: " + error.message);
+    },
+  });
+
+  const deleteProject = useMutation({
+    mutationFn: async () => {
+      return trpcClient.instance.delete.mutate({
+        organizationSlug: params.organizationSlug,
+        instanceSlug: params.projectSlug,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: trpc.instance.list.queryKey({ organizationSlug: params.organizationSlug }),
+      });
+      toast.success("Project deleted");
+      navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: params.organizationSlug } });
+    },
+    onError: (error) => {
+      toast.error("Failed to delete project: " + error.message);
+    },
+  });
+
+  const handleSubmit = (event: FormEvent) => {
+    event.preventDefault();
+    if (name.trim() && name !== project.name) {
+      updateProject.mutate(name.trim());
+    }
+  };
+
+  const handleDelete = () => {
+    if (deleteProject.isPending) {
+      return;
+    }
+    const confirmed = window.confirm("Delete this project? This cannot be undone.");
+    if (confirmed) {
+      deleteProject.mutate();
+    }
+  };
+
+  return (
+    <div className="p-8 max-w-2xl space-y-8">
+      <h1 className="text-2xl font-bold">Project settings</h1>
+      <form onSubmit={handleSubmit}>
+        <FieldGroup>
+          <FieldSet>
+            <Field>
+              <FieldLabel htmlFor="project-name">Name</FieldLabel>
+              <Input
+                id="project-name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                disabled={updateProject.isPending}
+              />
+            </Field>
+            <Field>
+              <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
+              <Input id="project-slug" value={project.slug} disabled />
+            </Field>
+          </FieldSet>
+          <Field orientation="horizontal">
+            <Button type="submit" disabled={!name.trim() || name === project.name || updateProject.isPending}>
+              {updateProject.isPending ? "Saving..." : "Save"}
+            </Button>
+          </Field>
+        </FieldGroup>
+      </form>
+
+      <div className="space-y-3">
+        <div className="text-sm font-medium">Repository</div>
+        <Button variant="outline" onClick={() => toast("Repo management is coming soon.")}>Connect repo</Button>
+      </div>
+
+      <div className="space-y-3">
+        <div className="text-sm font-medium">Delete project</div>
+        <Button variant="destructive" onClick={handleDelete} disabled={deleteProject.isPending}>
+          {deleteProject.isPending ? "Deleting..." : "Delete project"}
+        </Button>
+      </div>
+    </div>
+  );
+}

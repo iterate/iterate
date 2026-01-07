@@ -2,12 +2,16 @@ import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { trpc } from "../../../lib/trpc.ts";
 
-export const Route = createFileRoute("/_auth-required.layout/_/$organizationSlug/_/$projectSlug")({
+export const Route = createFileRoute(
+  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
+)({
   component: ProjectLayout,
 });
 
 function ProjectLayout() {
-  const params = useParams({ from: "/_auth-required.layout/_/$organizationSlug/_/$projectSlug" });
+  const params = useParams({
+    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
+  });
 
   const { data: project, isLoading } = useQuery(
     trpc.instance.bySlug.queryOptions({

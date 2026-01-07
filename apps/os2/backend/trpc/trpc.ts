@@ -236,6 +236,9 @@ export const instanceProtectedProcedure = orgProtectedProcedure
         eq(instance.organizationId, ctx.organization.id),
         eq(instance.slug, input.instanceSlug),
       ),
+      with: {
+        repos: true,
+      },
     });
 
     if (!inst) {

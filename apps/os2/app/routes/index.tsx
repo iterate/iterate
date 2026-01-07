@@ -24,7 +24,29 @@ function IndexPage() {
     return <Navigate to="/new-organization" />;
   }
 
-  // Redirect to first organization
-  const firstOrg = organizations[0];
-  return <Navigate to="/$organizationSlug" params={{ organizationSlug: firstOrg.slug }} />;
+  const orgWithProjects = organizations.find(
+    (organization) => (organization.instances || []).length > 0,
+  );
+
+  if (orgWithProjects) {
+    const firstProject = orgWithProjects.instances?.[0];
+    if (firstProject) {
+      return (
+        <Navigate
+          to="/orgs/$organizationSlug/projects/$projectSlug"
+          params={{
+            organizationSlug: orgWithProjects.slug,
+            projectSlug: firstProject.slug,
+          }}
+        />
+      );
+    }
+  }
+
+  return (
+    <Navigate
+      to="/orgs/$organizationSlug/projects/new"
+      params={{ organizationSlug: organizations[0].slug }}
+    />
+  );
 }

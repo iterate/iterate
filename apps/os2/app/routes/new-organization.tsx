@@ -3,6 +3,12 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "../components/ui/button.tsx";
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldSet,
+} from "../components/ui/field.tsx";
 import { Input } from "../components/ui/input.tsx";
 import { trpcClient, trpc } from "../lib/trpc.ts";
 
@@ -33,7 +39,7 @@ function NewOrganizationPage() {
         (old) => [...(old || []), { ...org, role: "owner", instances: [] }],
       );
       toast.success("Organization created!");
-      navigate({ to: "/$organizationSlug", params: { organizationSlug: org.slug } });
+      navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: org.slug } });
     },
     onError: (error) => {
       toast.error("Failed to create organization: " + error.message);
@@ -53,20 +59,29 @@ function NewOrganizationPage() {
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold">Create organization</h1>
         </div>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <Input
-            placeholder="Organization name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            disabled={createOrg.isPending}
-          />
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={!name.trim() || createOrg.isPending}
-          >
-            {createOrg.isPending ? "Creating..." : "Create organization"}
-          </Button>
+        <form onSubmit={handleSubmit}>
+          <FieldGroup>
+            <FieldSet>
+              <Field>
+                <FieldLabel htmlFor="organization-name">Organization name</FieldLabel>
+                <Input
+                  id="organization-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={createOrg.isPending}
+                />
+              </Field>
+            </FieldSet>
+            <Field orientation="horizontal">
+              <Button
+                type="submit"
+                className="w-full"
+                disabled={!name.trim() || createOrg.isPending}
+              >
+                {createOrg.isPending ? "Creating..." : "Create organization"}
+              </Button>
+            </Field>
+          </FieldGroup>
         </form>
       </div>
     </div>

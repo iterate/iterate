@@ -17,9 +17,7 @@ async function login(page: Page, email: string) {
     await page.keyboard.type(char);
   }
 
-  await page.waitForURL((url) => !url.pathname.includes("/login"), {
-    timeout: 15000,
-  });
+  await page.waitForURL((url) => !url.pathname.includes("/login"), { timeout: 15000 });
 }
 
 async function ensureOrganization(page: Page) {
@@ -33,8 +31,7 @@ async function ensureOrganization(page: Page) {
   await page.click('button:has-text("Create organization")');
 
   await page.waitForURL(
-    (url) =>
-      !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
+    (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
     { timeout: 30000 },
   );
 }
@@ -51,17 +48,19 @@ async function ensureProject(page: Page) {
   await page.waitForURL((url) => !url.pathname.includes("/projects/new"), { timeout: 30000 });
 }
 
-async function goToMachinesPage(page: Page) {
+function getProjectBasePath(page: Page) {
   const url = new URL(page.url());
-  if (url.pathname.endsWith("/machines")) {
-    return;
-  }
   const basePath = url.pathname.replace(/\/$/, "");
-  await page.goto(`${BASE_URL}${basePath}/machines`);
-  await page.waitForURL((nextUrl) => nextUrl.pathname.endsWith("/machines"));
+  return basePath;
 }
 
-describe("machine list sync", () => {
+function getOrganizationSlug(pathname: string) {
+  const parts = pathname.split("/").filter(Boolean);
+  const orgIndex = parts.indexOf("orgs");
+  return orgIndex >= 0 ? parts[orgIndex + 1] : "";
+}
+
+describe("shell navigation", () => {
   let browser: Browser;
   let context: BrowserContext;
   let page: Page;
@@ -83,22 +82,34 @@ describe("machine list sync", () => {
     await context?.close();
   });
 
-  test("shows new machine without reload", async () => {
-    const testEmail = `machine-sync-${Date.now()}+test@example.com`;
+  test("connectors and team pages render", async () => {
+    const testEmail = `nav-${Date.now()}+test@example.com`;
     await login(page, testEmail);
     await ensureOrganization(page);
     await ensureProject(page);
-    await goToMachinesPage(page);
 
-    await page.waitForSelector('button:has-text("New Machine")');
+    const basePath = getProjectBasePath(page);
 
-    const machineName = `E2E Machine ${Date.now()}`;
-    await page.click('button:has-text("New Machine")');
-    await page.waitForSelector('input[placeholder="Machine name"]');
-    await page.fill('input[placeholder="Machine name"]', machineName);
-    await page.click('button:has-text("Create")');
+    await page.goto(`${BASE_URL}${basePath}/connectors`);
+    await page.waitForSelector('text="Project connections"');
+    await page.waitForSelector('text="Your connections"');
+    expect(await page.isVisible('text="Project connections"')).toBe(true);
+    expect(await page.isVisible('text="Your connections"')).toBe(true);
 
-    await page.waitForSelector(`text="${machineName}"`, { timeout: 10000 });
-    expect(await page.isVisible(`text="${machineName}"`)).toBe(true);
+    const orgSlug = getOrganizationSlug(basePath);
+    await page.goto(`${BASE_URL}/orgs/${orgSlug}/team`);
+    await page.waitForSelector('input[id="member-email"]');
+    expect(await page.isVisible('input[id="member-email"]')).toBe(true);
+  });
+
+  test("user settings page is reachable", async () => {
+    const testEmail = `settings-${Date.now()}+test@example.com`;
+    await login(page, testEmail);
+    await ensureOrganization(page);
+    await ensureProject(page);
+
+    await page.goto(`${BASE_URL}/user/settings`);
+    await page.waitForSelector('input[id="user-name"]');
+    expect(await page.isVisible('input[id="user-name"]')).toBe(true);
   });
 });
