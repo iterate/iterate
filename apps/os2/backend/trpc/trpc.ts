@@ -4,6 +4,7 @@ import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
 import type { Context } from "./context.ts";
+import { invalidateQueriesForUser } from "../utils/query-invalidation.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
 const looksLikeStandardSchemaFailureResult = (
@@ -177,3 +178,21 @@ export const adminProcedure = protectedProcedure.use(async ({ ctx, next, path })
   }
   return next({ ctx });
 });
+
+/** Middleware that invalidates all queries for the user's organizations after mutation */
+const withQueryInvalidation = t.middleware(async ({ ctx, next }) => {
+  const result = await next();
+  if (result.ok && ctx.user) {
+    invalidateQueriesForUser(ctx.db, ctx.env, ctx.user.id).catch(() => {});
+  }
+  return result;
+});
+
+/** Protected mutation procedure - invalidates queries after successful mutation */
+export const protectedMutation = protectedProcedure.use(withQueryInvalidation);
+
+/** Org protected mutation procedure - invalidates queries after successful mutation */
+export const orgProtectedMutation = orgProtectedProcedure.use(withQueryInvalidation);
+
+/** Project protected mutation procedure - invalidates queries after successful mutation */
+export const projectProtectedMutation = projectProtectedProcedure.use(withQueryInvalidation);

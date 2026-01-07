@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import alchemy, { type Scope } from "alchemy";
-import { TanStackStart, WorkerLoader } from "alchemy/cloudflare";
+import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
 import * as R from "remeda";
 import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
@@ -179,12 +179,20 @@ const subdomain = `os2-${app.stage}`
 const domains = [`${subdomain}.iterate.com`];
 
 async function deployWorker() {
+  const TANSTACK_QUERY_INVALIDATOR = DurableObjectNamespace<
+    import("./backend/worker.ts").TanstackQueryInvalidator
+  >("tanstack-query-invalidator", {
+    className: "TanstackQueryInvalidator",
+    sqlite: true,
+  });
+
   const worker = await TanStackStart("os2", {
     bindings: {
       ...(await setupDatabase()),
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
+      TANSTACK_QUERY_INVALIDATOR,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
     assets: {
