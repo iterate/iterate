@@ -36,11 +36,15 @@ function loadStreamFromDisk(id: string): StreamData | undefined {
 
 function saveStreamToDisk(agent: Agent): void {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
+  // Filter out message_update events to keep YAML files small
+  const filteredMessages = agent.messages.filter(
+    (m) => (m.content as Record<string, unknown>)?.type !== "message_update"
+  );
   const data: StreamData = {
     id: agent.id,
     contentType: agent.contentType,
     createdAt: agent.createdAt,
-    messages: agent.messages,
+    messages: filteredMessages,
   };
   fs.writeFileSync(getStreamPath(agent.id), YAML.stringify(data), "utf-8");
 }
