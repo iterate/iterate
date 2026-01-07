@@ -1,4 +1,4 @@
-import { useState, useRef, type FormEvent, type ChangeEvent } from "react";
+import { useState, type FormEvent, type ChangeEvent } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { authClient, signIn } from "../lib/auth-client.ts";
@@ -15,16 +15,9 @@ export function LoginCard() {
   const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const emailInputRef = useRef<HTMLInputElement>(null);
 
   const handleEmailChange = (e: ChangeEvent<HTMLInputElement>) => {
     setEmail(e.target.value);
-  };
-
-  const handleEmailInput = () => {
-    if (emailInputRef.current) {
-      setEmail(emailInputRef.current.value);
-    }
   };
 
   const handleGoogleSignIn = async () => {
@@ -151,12 +144,10 @@ export function LoginCard() {
     <div className="w-full max-w-md space-y-6">
       <form onSubmit={handleEmailSubmit} className="space-y-3">
         <Input
-          ref={emailInputRef}
           type="email"
           placeholder="you@example.com"
           value={email}
           onChange={handleEmailChange}
-          onInput={handleEmailInput}
           disabled={isLoading}
           required
           data-testid="email-input"
