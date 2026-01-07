@@ -70,6 +70,8 @@ const Env = z.object({
   VITE_APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
   ITERATE_USER: Optional,
+  VITE_POSTHOG_PUBLIC_KEY: Optional,
+  VITE_POSTHOG_PROXY_URI: Optional,
 } satisfies Record<string, typeof Required | typeof Optional>);
 
 async function setupEnvironmentVariables() {
