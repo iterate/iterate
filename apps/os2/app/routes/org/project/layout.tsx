@@ -103,9 +103,9 @@ function ProjectLayout() {
           }}
         >
           <SidebarGroup>
-            <SidebarGroupLabel className="flex flex-col items-start">
+            <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
               <span>Project:</span>
-              <span className="font-medium text-foreground">{currentProject?.name}</span>
+              <span>{currentProject?.name}</span>
             </SidebarGroupLabel>
             <SidebarGroupContent>
               <SidebarMenu>

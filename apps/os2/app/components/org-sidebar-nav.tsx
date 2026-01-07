@@ -31,9 +31,9 @@ export function OrgSidebarNav({ orgSlug, orgName, projects }: OrgSidebarNavProps
   return (
     <>
       <SidebarGroup>
-        <SidebarGroupLabel className="flex flex-col items-start">
+        <SidebarGroupLabel className="h-auto min-h-8 flex-wrap gap-x-1">
           <span>Organization:</span>
-          <span className="font-medium text-foreground">{orgName}</span>
+          <span>{orgName}</span>
         </SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
