@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { and, eq, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, projectProtectedProcedure } from "../trpc.ts";
+import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectAccessToken } from "../../db/schema.ts";
 
 export const accessTokenRouter = router({
@@ -20,7 +20,7 @@ export const accessTokenRouter = router({
     }));
   }),
 
-  create: projectProtectedProcedure
+  create: projectProtectedMutation
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -54,7 +54,7 @@ export const accessTokenRouter = router({
       };
     }),
 
-  revoke: projectProtectedProcedure
+  revoke: projectProtectedMutation
     .input(
       z.object({
         id: z.string(),

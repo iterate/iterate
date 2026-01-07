@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, projectProtectedProcedure } from "../trpc.ts";
+import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { machine, MachineType } from "../../db/schema.ts";
 
 export const machineRouter = router({
@@ -51,7 +51,7 @@ export const machineRouter = router({
     }),
 
   // Create a new machine
-  create: projectProtectedProcedure
+  create: projectProtectedMutation
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -82,7 +82,7 @@ export const machineRouter = router({
     }),
 
   // Archive a machine
-  archive: projectProtectedProcedure
+  archive: projectProtectedMutation
     .input(
       z.object({
         machineId: z.string(),
@@ -111,7 +111,7 @@ export const machineRouter = router({
     }),
 
   // Unarchive a machine (restore)
-  unarchive: projectProtectedProcedure
+  unarchive: projectProtectedMutation
     .input(
       z.object({
         machineId: z.string(),
@@ -140,7 +140,7 @@ export const machineRouter = router({
     }),
 
   // Delete a machine permanently
-  delete: projectProtectedProcedure
+  delete: projectProtectedMutation
     .input(
       z.object({
         machineId: z.string(),
@@ -168,7 +168,7 @@ export const machineRouter = router({
     }),
 
   // Update machine settings
-  update: projectProtectedProcedure
+  update: projectProtectedMutation
     .input(
       z.object({
         machineId: z.string(),

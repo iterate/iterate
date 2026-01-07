@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, projectProtectedProcedure } from "../trpc.ts";
+import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import { projectEnvVar } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
 
@@ -21,7 +21,7 @@ export const envVarRouter = router({
     }));
   }),
 
-  set: projectProtectedProcedure
+  set: projectProtectedMutation
     .input(
       z.object({
         key: z.string().min(1).max(255).regex(/^[A-Z_][A-Z0-9_]*$/, {
@@ -78,7 +78,7 @@ export const envVarRouter = router({
       };
     }),
 
-  delete: projectProtectedProcedure
+  delete: projectProtectedMutation
     .input(
       z.object({
         key: z.string(),

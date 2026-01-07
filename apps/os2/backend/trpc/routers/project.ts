@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, orgProtectedProcedure, projectProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
+import { router, orgProtectedProcedure, projectProtectedProcedure, orgAdminMutation, projectProtectedMutation } from "../trpc.ts";
 import { project } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 
@@ -22,7 +22,7 @@ export const projectRouter = router({
   }),
 
   // Create a new project
-  create: orgAdminProcedure
+  create: orgAdminMutation
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -51,7 +51,7 @@ export const projectRouter = router({
     }),
 
   // Update project settings
-  update: projectProtectedProcedure
+  update: projectProtectedMutation
     .input(
       z.object({
         name: z.string().min(1).max(100).optional(),
@@ -70,7 +70,7 @@ export const projectRouter = router({
     }),
 
   // Delete project
-  delete: projectProtectedProcedure.mutation(async ({ ctx }) => {
+  delete: projectProtectedMutation.mutation(async ({ ctx }) => {
     // Check if this is the last project in the organization
     const projectCount = await ctx.db.query.project.findMany({
       where: eq(project.organizationId, ctx.organization.id),

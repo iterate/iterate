@@ -1,9 +1,14 @@
 import { QueryClient, QueryClientProvider, type QueryClientConfig } from "@tanstack/react-query";
-import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import { createTRPCClient, httpBatchLink, unstable_localLink as localLink } from "@trpc/client";
 import { createTRPCOptionsProxy } from "@trpc/tanstack-react-query";
+import { createIsomorphicFn } from "@tanstack/react-start";
+import { getContext } from "hono/context-storage";
 import type { PropsWithChildren } from "react";
 import superjson from "superjson";
-import type { AppRouter } from "../../backend/trpc/root.ts";
+import { appRouter, type AppRouter } from "../../backend/trpc/root.ts";
+import { createContext } from "../../backend/trpc/context.ts";
+import type { Variables } from "../../backend/worker.ts";
+import type { CloudflareEnv } from "../../env.ts";
 
 const defaultQueryClientConfig: QueryClientConfig = {
   defaultOptions: {
@@ -25,17 +30,32 @@ export function makeQueryClient() {
   return new QueryClient(defaultQueryClientConfig);
 }
 
-export function makeTrpcClient() {
-  return createTRPCClient<AppRouter>({
-    links: [
-      httpBatchLink({
-        url: "/api/trpc",
-        transformer: superjson,
-        maxURLLength: 2083,
-      }),
-    ],
-  });
-}
+export const makeTrpcClient = createIsomorphicFn()
+  .server(() =>
+    createTRPCClient<AppRouter>({
+      links: [
+        localLink({
+          router: appRouter,
+          transformer: superjson,
+          createContext: async () => {
+            const c = getContext<{ Variables: Variables; Bindings: CloudflareEnv }>();
+            return createContext(c);
+          },
+        }),
+      ],
+    }),
+  )
+  .client(() =>
+    createTRPCClient<AppRouter>({
+      links: [
+        httpBatchLink({
+          url: `${window.location.origin}/api/trpc`,
+          transformer: superjson,
+          maxURLLength: 2083,
+        }),
+      ],
+    }),
+  );
 
 export function makeTrpc(queryClient: QueryClient, trpcClient: ReturnType<typeof makeTrpcClient>) {
   return createTRPCOptionsProxy<AppRouter>({

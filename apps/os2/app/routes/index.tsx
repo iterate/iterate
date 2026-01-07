@@ -1,11 +1,11 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { trpc } from "../lib/trpc.tsx";
+import { createServerFn } from "@tanstack/react-start";
+import { authMiddleware } from "../lib/auth-middleware.ts";
 
-export const Route = createFileRoute("/_auth.layout/")({
-  beforeLoad: async ({ context }) => {
-    const organizations = await context.queryClient.ensureQueryData(
-      trpc.user.myOrganizations.queryOptions(),
-    );
+const getHomeRedirect = createServerFn({ method: "GET" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const organizations = await context.variables.trpcCaller.user.myOrganizations();
 
     if (!organizations || organizations.length === 0) {
       throw redirect({ to: "/new-organization" });
@@ -32,7 +32,10 @@ export const Route = createFileRoute("/_auth.layout/")({
       to: "/orgs/$organizationSlug/projects/new",
       params: { organizationSlug: organizations[0].slug },
     });
-  },
+  });
+
+export const Route = createFileRoute("/_auth.layout/")({
+  beforeLoad: () => getHomeRedirect(),
   component: IndexPage,
 });
 

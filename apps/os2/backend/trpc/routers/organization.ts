@@ -1,7 +1,7 @@
 import { z } from "zod/v4";
 import { eq, and } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { router, protectedProcedure, orgProtectedProcedure, orgAdminProcedure } from "../trpc.ts";
+import { router, protectedMutation, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
 import {
   organization,
   organizationUserMembership,
@@ -12,7 +12,7 @@ import { generateSlug } from "../../utils/slug.ts";
 
 export const organizationRouter = router({
   // Create a new organization
-  create: protectedProcedure
+  create: protectedMutation
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -70,7 +70,7 @@ export const organizationRouter = router({
   }),
 
   // Update organization settings
-  update: orgAdminProcedure
+  update: orgAdminMutation
     .input(
       z.object({
         name: z.string().min(1).max(100).optional(),
@@ -111,7 +111,7 @@ export const organizationRouter = router({
     }));
   }),
 
-  addMember: orgAdminProcedure
+  addMember: orgAdminMutation
     .input(
       z.object({
         email: z.string().email(),
@@ -168,7 +168,7 @@ export const organizationRouter = router({
     }),
 
   // Update member role
-  updateMemberRole: orgAdminProcedure
+  updateMemberRole: orgAdminMutation
     .input(
       z.object({
         userId: z.string(),
@@ -207,7 +207,7 @@ export const organizationRouter = router({
     }),
 
   // Remove member from organization
-  removeMember: orgAdminProcedure
+  removeMember: orgAdminMutation
     .input(
       z.object({
         userId: z.string(),
@@ -250,7 +250,7 @@ export const organizationRouter = router({
     }),
 
   // Delete organization (owner only)
-  delete: orgAdminProcedure.mutation(async ({ ctx }) => {
+  delete: orgAdminMutation.mutation(async ({ ctx }) => {
     if (ctx.membership?.role !== "owner") {
       throw new TRPCError({
         code: "FORBIDDEN",

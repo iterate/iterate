@@ -194,5 +194,8 @@ export const protectedMutation = protectedProcedure.use(withQueryInvalidation);
 /** Org protected mutation procedure - invalidates queries after successful mutation */
 export const orgProtectedMutation = orgProtectedProcedure.use(withQueryInvalidation);
 
+/** Org admin mutation procedure - invalidates queries after successful mutation */
+export const orgAdminMutation = orgAdminProcedure.use(withQueryInvalidation);
+
 /** Project protected mutation procedure - invalidates queries after successful mutation */
 export const projectProtectedMutation = projectProtectedProcedure.use(withQueryInvalidation);
