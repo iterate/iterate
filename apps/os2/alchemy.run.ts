@@ -65,7 +65,7 @@ async function setupDatabase() {
   };
 
   if (isDevelopment) {
-    const origin = "postgres://postgres:postgres@localhost:5432/os2";
+    const origin = "postgres://postgres:postgres@localhost:5432/iterate";
     await migrate(origin);
     return {
       DATABASE_URL: origin,
