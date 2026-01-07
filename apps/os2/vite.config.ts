@@ -4,6 +4,10 @@ import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
 import viteReact from "@vitejs/plugin-react";
 import { devtools } from "@tanstack/devtools-vite";
+import cloudflareTunnel from "vite-plugin-cloudflare-tunnel";
+
+const tunnelHost = process.env.CLOUDFLARE_TUNNEL_HOST;
+
 export default defineConfig({
   resolve: {
     dedupe: ["react", "react-dom"],
@@ -23,6 +27,14 @@ export default defineConfig({
     port: 5174,
   },
   plugins: [
+    tunnelHost
+      ? cloudflareTunnel({
+          hostname: tunnelHost,
+          apiToken: process.env.CLOUDFLARE_API_TOKEN,
+          port: 5173,
+          tunnelName: `os2-${tunnelHost.split(".")[0]}`,
+        })
+      : null,
     devtools(),
     daemonPlugin(),
     {
