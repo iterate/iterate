@@ -5,6 +5,7 @@ import { GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { orpc } from "../../../lib/orpc.tsx";
+import { assertProjectParams } from "../../../lib/route-params.ts";
 
 export const Route = createFileRoute(
   "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
@@ -34,9 +35,11 @@ type Project = {
 };
 
 function ProjectRepoPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
-  });
+  const params = assertProjectParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
+    }),
+  );
   const { data: project } = useSuspenseQuery(
     orpc.project.bySlug.queryOptions({
       input: {

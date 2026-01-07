@@ -1,62 +1,41 @@
-import { os, ORPCError } from "@orpc/server";
+import { ORPCError } from "@orpc/server";
 import { z } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
-import type { Context } from "./context.ts";
+import { getAuth } from "../auth/auth.ts";
+import type { AuthSession, AuthUser } from "../auth/auth.ts";
 import { invalidateQueriesForUser } from "../utils/query-invalidation.ts";
+import { base, type Context } from "./context.ts";
 
 export { ORPCError };
 
-const o = os.$context<Context>();
+type SessionData = NonNullable<AuthSession>;
 
-export const publicProcedure = o;
+type AuthContext = Context & { session: SessionData; user: AuthUser };
 
-export const protectedProcedure = o.use(({ context, next }) => {
-  if (!context.session || !context.user) {
+type SessionResult = AuthSession | { data: AuthSession | null } | null | undefined;
+
+export const publicProcedure = base;
+
+export const authMiddleware = base.middleware(async ({ context, next }) => {
+  const auth = getAuth(context.db);
+  const sessionResult = await auth.api.getSession({ headers: context.headers });
+  const sessionData = unwrapSessionResult(sessionResult);
+
+  if (!sessionData?.session || !sessionData.user) {
     throw new ORPCError("UNAUTHORIZED");
   }
+
   return next({
     context: {
       ...context,
-      session: context.session as NonNullable<typeof context.session>,
-      user: context.user as NonNullable<typeof context.user>,
+      session: sessionData,
+      user: sessionData.user,
     },
   });
 });
 
-const orgLookupMiddleware = async (
-  context: Context & { user: NonNullable<Context["user"]> },
-  organizationSlug: string,
-  path: readonly string[],
-) => {
-  const org = await context.db.query.organization.findFirst({
-    where: eq(organization.slug, organizationSlug),
-  });
-
-  if (!org) {
-    throw new ORPCError("NOT_FOUND", {
-      message: `Organization with slug ${organizationSlug} not found`,
-    });
-  }
-
-  const membership = await context.db.query.organizationUserMembership.findFirst({
-    where: and(
-      eq(organizationUserMembership.organizationId, org.id),
-      eq(organizationUserMembership.userId, context.user.id),
-    ),
-  });
-
-  if (!membership && context.user.role !== "admin") {
-    throw new ORPCError("FORBIDDEN", {
-      message: `Access to ${path.join(".")} denied: User does not have access to organization`,
-    });
-  }
-
-  return {
-    organization: org,
-    membership: membership ?? undefined,
-  };
-};
+export const protectedProcedure = base.use(authMiddleware);
 
 export const OrgInput = z.object({ organizationSlug: z.string() });
 
@@ -135,10 +114,11 @@ export const adminProcedure = protectedProcedure.use(async ({ context, next, pat
   return next({ context });
 });
 
-const withQueryInvalidation = o.middleware(async ({ context, next }) => {
+const withQueryInvalidation = base.middleware(async ({ context, next }) => {
   const result = await next();
-  if (context.user) {
-    invalidateQueriesForUser(context.db, context.env, context.user.id).catch(() => {});
+  const userId = getUserId(context);
+  if (userId) {
+    invalidateQueriesForUser(context.db, context.env, userId).catch(() => {});
   }
   return result;
 });
@@ -146,3 +126,63 @@ const withQueryInvalidation = o.middleware(async ({ context, next }) => {
 export const protectedMutation = protectedProcedure.use(withQueryInvalidation);
 export const orgProtectedMutation = orgProtectedProcedure.use(withQueryInvalidation);
 export const projectProtectedMutation = projectProtectedProcedure.use(withQueryInvalidation);
+
+function unwrapSessionResult(sessionResult: SessionResult): AuthSession {
+  if (sessionResult && typeof sessionResult === "object" && "data" in sessionResult) {
+    return sessionResult.data ?? null;
+  }
+
+  return sessionResult ?? null;
+}
+
+async function orgLookupMiddleware(
+  context: AuthContext,
+  organizationSlug: string,
+  path: readonly string[],
+) {
+  const org = await context.db.query.organization.findFirst({
+    where: eq(organization.slug, organizationSlug),
+  });
+
+  if (!org) {
+    throw new ORPCError("NOT_FOUND", {
+      message: `Organization with slug ${organizationSlug} not found`,
+    });
+  }
+
+  const membership = await context.db.query.organizationUserMembership.findFirst({
+    where: and(
+      eq(organizationUserMembership.organizationId, org.id),
+      eq(organizationUserMembership.userId, context.user.id),
+    ),
+  });
+
+  if (!membership && context.user.role !== "admin") {
+    throw new ORPCError("FORBIDDEN", {
+      message: `Access to ${path.join(".")} denied: User does not have access to organization`,
+    });
+  }
+
+  return {
+    organization: org,
+    membership: membership ?? undefined,
+  };
+}
+
+function getUserId(context: Context): string | null {
+  if (!("user" in context)) {
+    return null;
+  }
+
+  const user = context.user;
+  if (!user || typeof user !== "object") {
+    return null;
+  }
+
+  if (!("id" in user)) {
+    return null;
+  }
+
+  const userId = user.id;
+  return typeof userId === "string" ? userId : null;
+}

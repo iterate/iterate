@@ -8,6 +8,7 @@ import {
 
 export const routes = rootRoute("root.tsx", [
   route("/login", "login.tsx"),
+  route("/api/auth/$", "api/auth/$.ts"),
 
   layout("_auth-required", "auth-required.layout.tsx", [
     index("index.tsx"),

@@ -4,6 +4,7 @@ import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { orpc, orpcClient } from "../../../lib/orpc.tsx";
+import { assertProjectParams } from "../../../lib/route-params.ts";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
@@ -48,9 +49,11 @@ function ProjectEnvVarsRoute() {
 type EnvVar = { id: string; key: string; maskedValue: string; createdAt: Date; updatedAt: Date };
 
 function ProjectEnvVarsPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
-  });
+  const params = assertProjectParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
+    }),
+  );
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
 

@@ -5,6 +5,7 @@ import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 import { AppSidebar } from "../../components/app-sidebar.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
+import { assertOrganizationParams } from "../../lib/route-params.ts";
 
 type Organization = {
   id: string;
@@ -16,9 +17,10 @@ type Organization = {
 
 export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
+    const { organizationSlug } = assertOrganizationParams(params);
     const currentOrg = await context.queryClient.ensureQueryData(
       orpc.organization.withProjects.queryOptions({
-        input: { organizationSlug: params.organizationSlug },
+        input: { organizationSlug },
       }),
     );
 
@@ -30,7 +32,9 @@ export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug")
 });
 
 function OrgLayout() {
-  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug" });
+  const params = assertOrganizationParams(
+    useParams({ from: "/_auth-required/_/orgs/$organizationSlug" }),
+  );
   const allParams = useParams({ strict: false });
   const { user } = useSessionUser();
 
@@ -76,8 +80,13 @@ function OrgLayout() {
     })),
   };
 
+  const projectSlug =
+    allParams && typeof allParams === "object" && "projectSlug" in allParams
+      ? (allParams as { projectSlug?: string }).projectSlug
+      : undefined;
+
   const currentProject =
-    currentOrgWithProjects.projects.find((project) => project.slug === allParams.projectSlug) ??
+    currentOrgWithProjects.projects.find((project) => project.slug === projectSlug) ??
     currentOrgWithProjects.projects[0];
 
   return (

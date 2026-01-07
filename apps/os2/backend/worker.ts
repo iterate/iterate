@@ -9,7 +9,6 @@ import { typeid } from "typeid-js";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
-import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./orpc/root.ts";
 import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
@@ -17,8 +16,6 @@ import { logger } from "./tag-logger.ts";
 import { TanstackQueryInvalidator } from "./durable-objects/tanstack-query-invalidator.ts";
 
 export type Variables = {
-  auth: Auth;
-  session: AuthSession;
   db: DB;
 };
 
@@ -42,19 +39,12 @@ app.use(
 
 app.use("*", async (c, next) => {
   const db = getDb();
-  const auth = getAuth(db);
-  const sessionResult: any = await auth.api.getSession({ headers: c.req.raw.headers });
-  const session: AuthSession =
-    sessionResult && "data" in sessionResult ? sessionResult.data : sessionResult;
   c.set("db", db);
-  c.set("auth", auth);
-  c.set("session", session);
   return next();
 });
 
 app.use("*", async (c, next) => {
   const requestTags = {
-    userId: c.var.session?.user?.id || undefined,
     path: c.req.path,
     httpMethod: c.req.method,
     url: c.req.url,
@@ -71,8 +61,6 @@ app.onError((err, c) => {
   );
   return c.json({ error: "Internal Server Error" }, 500);
 });
-
-app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
 const orpcHandler = new RPCHandler(appRouter, {
   interceptors: [
@@ -92,7 +80,7 @@ const orpcHandler = new RPCHandler(appRouter, {
 app.all("/api/orpc/*", async (c) => {
   const { response } = await orpcHandler.handle(c.req.raw, {
     prefix: "/api/orpc",
-    context: createContext(c),
+    context: createContext(c.req.raw, c.env, c.var.db),
   });
 
   return response ?? new Response("Not found", { status: 404 });

@@ -13,6 +13,7 @@ import { Route as loginRouteImport } from './routes/login.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as indexRouteImport } from './routes/index.tsx'
+import { Route as apiAuthSplatRouteImport } from './routes/api/auth/$.ts'
 import { Route as userSettingsRouteImport } from './routes/user/settings.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
 import { Route as adminIndexRouteImport } from './routes/admin/index.tsx'
@@ -50,6 +51,11 @@ const indexRoute = indexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => authRequiredDotlayoutRoute,
+} as any)
+const apiAuthSplatRoute = apiAuthSplatRouteImport.update({
+  id: '/api/auth/$',
+  path: '/api/auth/$',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const userSettingsRoute = userSettingsRouteImport.update({
   id: '/user/settings',
@@ -148,6 +154,7 @@ export interface FileRoutesByFullPath {
   '/new-organization': typeof newOrganizationRoute
   '/admin': typeof adminLayoutRouteWithChildren
   '/user/settings': typeof userSettingsRoute
+  '/api/auth/$': typeof apiAuthSplatRoute
   '/admin/api-tools': typeof adminApiToolsRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -170,6 +177,7 @@ export interface FileRoutesByTo {
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
   '/user/settings': typeof userSettingsRoute
+  '/api/auth/$': typeof apiAuthSplatRoute
   '/admin/api-tools': typeof adminApiToolsRoute
   '/admin/session-info': typeof adminSessionInfoRoute
   '/admin': typeof adminIndexRoute
@@ -193,6 +201,7 @@ export interface FileRoutesById {
   '/_auth-required/new-organization': typeof newOrganizationRoute
   '/_auth-required/_/admin': typeof adminLayoutRouteWithChildren
   '/_auth-required/user/settings': typeof userSettingsRoute
+  '/api/auth/$': typeof apiAuthSplatRoute
   '/_auth-required/_/admin/api-tools': typeof adminApiToolsRoute
   '/_auth-required/_/admin/session-info': typeof adminSessionInfoRoute
   '/_auth-required/_/orgs/$organizationSlug': typeof orgLayoutRouteWithChildren
@@ -218,6 +227,7 @@ export interface FileRouteTypes {
     | '/new-organization'
     | '/admin'
     | '/user/settings'
+    | '/api/auth/$'
     | '/admin/api-tools'
     | '/admin/session-info'
     | '/orgs/$organizationSlug'
@@ -240,6 +250,7 @@ export interface FileRouteTypes {
     | '/'
     | '/new-organization'
     | '/user/settings'
+    | '/api/auth/$'
     | '/admin/api-tools'
     | '/admin/session-info'
     | '/admin'
@@ -262,6 +273,7 @@ export interface FileRouteTypes {
     | '/_auth-required/new-organization'
     | '/_auth-required/_/admin'
     | '/_auth-required/user/settings'
+    | '/api/auth/$'
     | '/_auth-required/_/admin/api-tools'
     | '/_auth-required/_/admin/session-info'
     | '/_auth-required/_/orgs/$organizationSlug'
@@ -283,6 +295,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
   loginRoute: typeof loginRoute
+  apiAuthSplatRoute: typeof apiAuthSplatRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -314,6 +327,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/'
       preLoaderRoute: typeof indexRouteImport
       parentRoute: typeof authRequiredDotlayoutRoute
+    }
+    '/api/auth/$': {
+      id: '/api/auth/$'
+      path: '/api/auth/$'
+      fullPath: '/api/auth/$'
+      preLoaderRoute: typeof apiAuthSplatRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_auth-required/user/settings': {
       id: '/_auth-required/user/settings'
@@ -527,6 +547,7 @@ const authRequiredDotlayoutRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
   loginRoute: loginRoute,
+  apiAuthSplatRoute: apiAuthSplatRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

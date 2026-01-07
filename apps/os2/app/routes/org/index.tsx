@@ -1,13 +1,15 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { orpc } from "../../lib/orpc.tsx";
+import { assertOrganizationParams } from "../../lib/route-params.ts";
 
 type Project = { id: string; name: string; slug: string };
 
 export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug/")({
   beforeLoad: async ({ context, params }) => {
+    const { organizationSlug } = assertOrganizationParams(params);
     const projects = (await context.queryClient.ensureQueryData(
       orpc.project.list.queryOptions({
-        input: { organizationSlug: params.organizationSlug },
+        input: { organizationSlug },
       }),
     )) as Project[];
 
@@ -15,7 +17,7 @@ export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug/"
       throw redirect({
         to: "/orgs/$organizationSlug/projects/$projectSlug",
         params: {
-          organizationSlug: params.organizationSlug,
+          organizationSlug,
           projectSlug: projects[0].slug,
         },
       });
@@ -23,7 +25,7 @@ export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug/"
 
     throw redirect({
       to: "/orgs/$organizationSlug/projects/new",
-      params: { organizationSlug: params.organizationSlug },
+      params: { organizationSlug },
     });
   },
   component: OrgIndexPage,

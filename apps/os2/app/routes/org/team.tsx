@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { assertOrganizationParams } from "../../lib/route-params.ts";
 import {
   Field,
   FieldGroup,
@@ -43,7 +44,9 @@ type Member = {
 type Organization = { id: string; name: string; slug: string; role?: string };
 
 function OrgTeamPage() {
-  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug/team" });
+  const params = assertOrganizationParams(
+    useParams({ from: "/_auth-required/_/orgs/$organizationSlug/team" }),
+  );
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 

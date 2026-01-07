@@ -1,21 +1,19 @@
-import type { Context as HonoContext } from "hono";
+import { os } from "@orpc/server";
 import type { CloudflareEnv } from "../../env.ts";
-import type { Variables } from "../worker.ts";
+import type { DB } from "../db/client.ts";
 
 export type Context = {
+  headers: Headers;
   env: CloudflareEnv;
-  db: Variables["db"];
-  session: Variables["session"];
-  user: NonNullable<Variables["session"]>["user"] | null;
+  db: DB;
 };
 
-export function createContext(
-  c: HonoContext<{ Bindings: CloudflareEnv; Variables: Variables }>,
-): Context {
+export const base = os.$context<Context>();
+
+export function createContext(request: Request, env: CloudflareEnv, db: DB): Context {
   return {
-    env: c.env,
-    db: c.var.db,
-    session: c.var.session,
-    user: c.var.session?.user ?? null,
+    headers: request.headers,
+    env,
+    db,
   };
 }

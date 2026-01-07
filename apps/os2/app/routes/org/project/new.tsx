@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router"
 import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { orpcClient } from "../../../lib/orpc.tsx";
+import { assertOrganizationParams } from "../../../lib/route-params.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -19,9 +20,11 @@ export const Route = createFileRoute(
 });
 
 function NewProjectPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
-  });
+  const params = assertOrganizationParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/projects/new",
+    }),
+  );
   const navigate = useNavigate();
   const [name, setName] = useState("");
 

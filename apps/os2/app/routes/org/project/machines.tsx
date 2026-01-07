@@ -4,6 +4,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { orpc, orpcClient } from "../../../lib/orpc.tsx";
+import { assertProjectParams } from "../../../lib/route-params.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
@@ -27,9 +28,11 @@ export const Route = createFileRoute(
 });
 
 function ProjectMachinesPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
-  });
+  const params = assertProjectParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
+    }),
+  );
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");
 

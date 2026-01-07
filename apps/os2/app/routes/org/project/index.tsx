@@ -4,6 +4,7 @@ import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { KeyRound, Copy, CheckCheck } from "lucide-react";
 import { toast } from "sonner";
 import { orpc, orpcClient } from "../../../lib/orpc.tsx";
+import { assertProjectParams } from "../../../lib/route-params.ts";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
@@ -54,9 +55,11 @@ type AccessToken = {
 };
 
 function ProjectAccessTokensPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
-  });
+  const params = assertProjectParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/",
+    }),
+  );
   const [name, setName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);

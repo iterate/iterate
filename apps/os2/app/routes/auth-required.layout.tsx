@@ -1,17 +1,11 @@
-import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
-import { sessionQueryOptions } from "../lib/session-query.ts";
+import { createFileRoute, Outlet } from "@tanstack/react-router";
+import { authMiddleware } from "../lib/auth-middleware.ts";
 
 export const Route = createFileRoute("/_auth-required")({
-  beforeLoad: async ({ context }) => {
-    const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
-
-    if (!session?.user) {
-      throw redirect({ to: "/login" });
-    }
-
-    return { session };
-  },
   component: AuthRequiredLayout,
+  server: {
+    middleware: [authMiddleware],
+  },
 });
 
 function AuthRequiredLayout() {

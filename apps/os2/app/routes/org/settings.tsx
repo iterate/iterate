@@ -4,6 +4,7 @@ import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
+import { assertOrganizationParams } from "../../lib/route-params.ts";
 import {
   Field,
   FieldGroup,
@@ -21,9 +22,11 @@ export const Route = createFileRoute(
 type Organization = { id: string; name: string; slug: string; role?: string };
 
 function OrgSettingsPage() {
-  const routeParams = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/settings",
-  });
+  const routeParams = assertOrganizationParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/settings",
+    }),
+  );
 
   const { data: org } = useSuspenseQuery(
     orpc.organization.bySlug.queryOptions({

@@ -3,6 +3,7 @@ import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router"
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { orpc, orpcClient } from "../../../lib/orpc.tsx";
+import { assertProjectParams } from "../../../lib/route-params.ts";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -21,9 +22,11 @@ export const Route = createFileRoute(
 });
 
 function ProjectSettingsPage() {
-  const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
-  });
+  const params = assertProjectParams(
+    useParams({
+      from: "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
+    }),
+  );
   const navigate = useNavigate();
 
   const { data: project } = useSuspenseQuery(
