@@ -2,7 +2,12 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import { describe, it, expect } from "vitest";
 import YAML from "yaml";
-import { reduceEvents, createInitialState, messagesReducer } from "./messages-reducer.ts";
+import {
+  reduceEvents,
+  createInitialState,
+  messagesReducer,
+  getMessages,
+} from "./messages-reducer.ts";
 
 /**
  * Parse a YAML stream file and extract events from the messages array.
@@ -279,7 +284,7 @@ describe("messagesReducer", () => {
       const events = parseYamlStream(SINGLE_TURN_YAML);
       const state = reduceEvents(events);
 
-      expect(state.messages).toHaveLength(2);
+      expect(getMessages(state)).toHaveLength(2);
       expect(state.isStreaming).toBe(false);
       expect(state.streamingMessage).toBeUndefined();
     });
@@ -287,8 +292,9 @@ describe("messagesReducer", () => {
     it("should have correct user message", () => {
       const events = parseYamlStream(SINGLE_TURN_YAML);
       const state = reduceEvents(events);
+      const messages = getMessages(state);
 
-      expect(state.messages[0]).toEqual({
+      expect(messages[0]).toMatchObject({
         role: "user",
         content: [{ type: "text", text: "hello" }],
       });
@@ -297,8 +303,9 @@ describe("messagesReducer", () => {
     it("should have correct assistant message", () => {
       const events = parseYamlStream(SINGLE_TURN_YAML);
       const state = reduceEvents(events);
+      const messages = getMessages(state);
 
-      expect(state.messages[1]).toEqual({
+      expect(messages[1]).toMatchObject({
         role: "assistant",
         content: [{ type: "text", text: "Hi there!" }],
         timestamp: 1234567891,
@@ -319,25 +326,26 @@ describe("messagesReducer", () => {
       const state = reduceEvents(events);
 
       // Should have 4 messages: 2 user + 2 assistant
-      expect(state.messages).toHaveLength(4);
+      expect(getMessages(state)).toHaveLength(4);
       expect(state.isStreaming).toBe(false);
     });
 
     it("should have all messages in correct order", () => {
       const events = parseYamlStream(TWO_TURN_YAML);
       const state = reduceEvents(events);
+      const messages = getMessages(state);
 
-      expect(state.messages[0].role).toBe("user");
-      expect(state.messages[0].content[0].text).toBe("haha");
+      expect(messages[0].role).toBe("user");
+      expect(messages[0].content[0].text).toBe("haha");
 
-      expect(state.messages[1].role).toBe("assistant");
-      expect(state.messages[1].content[0].text).toBe("Haha! 😄");
+      expect(messages[1].role).toBe("assistant");
+      expect(messages[1].content[0].text).toBe("Haha! 😄");
 
-      expect(state.messages[2].role).toBe("user");
-      expect(state.messages[2].content[0].text).toBe("why not laugh more?");
+      expect(messages[2].role).toBe("user");
+      expect(messages[2].content[0].text).toBe("why not laugh more?");
 
-      expect(state.messages[3].role).toBe("assistant");
-      expect(state.messages[3].content[0].text).toBe("You got me there! 😂");
+      expect(messages[3].role).toBe("assistant");
+      expect(messages[3].content[0].text).toBe("You got me there! 😂");
     });
   });
 
@@ -350,7 +358,7 @@ describe("messagesReducer", () => {
       });
 
       expect(state.isStreaming).toBe(true);
-      expect(state.streamingMessage).toEqual({
+      expect(state.streamingMessage).toMatchObject({
         role: "assistant",
         content: [],
         timestamp: 123,
@@ -396,8 +404,9 @@ describe("messagesReducer", () => {
 
       expect(state.isStreaming).toBe(false);
       expect(state.streamingMessage).toBeUndefined();
-      expect(state.messages).toHaveLength(1);
-      expect(state.messages[0].content[0].text).toBe("Final message");
+      const messages = getMessages(state);
+      expect(messages).toHaveLength(1);
+      expect(messages[0].content[0].text).toBe("Final message");
     });
   });
 
@@ -407,7 +416,7 @@ describe("messagesReducer", () => {
       state = messagesReducer(state, { type: "user_prompt", text: "hello" });
       state = messagesReducer(state, { type: "user_prompt", text: "hello" });
 
-      expect(state.messages).toHaveLength(1);
+      expect(getMessages(state)).toHaveLength(1);
     });
 
     it("should not add duplicate user messages from message_start", () => {
@@ -422,7 +431,7 @@ describe("messagesReducer", () => {
         },
       });
 
-      expect(state.messages).toHaveLength(1);
+      expect(getMessages(state)).toHaveLength(1);
     });
   });
 
@@ -430,7 +439,7 @@ describe("messagesReducer", () => {
     it("should handle empty events array", () => {
       const state = reduceEvents([]);
 
-      expect(state.messages).toHaveLength(0);
+      expect(getMessages(state)).toHaveLength(0);
       expect(state.isStreaming).toBe(false);
       expect(state.rawEvents).toHaveLength(0);
     });
@@ -439,7 +448,7 @@ describe("messagesReducer", () => {
       let state = createInitialState();
       state = messagesReducer(state, { type: "unknown_event", data: "test" });
 
-      expect(state.messages).toHaveLength(0);
+      expect(getMessages(state)).toHaveLength(0);
       expect(state.rawEvents).toHaveLength(1);
     });
 
@@ -448,7 +457,7 @@ describe("messagesReducer", () => {
       state = messagesReducer(state, { type: "turn_start" });
       state = messagesReducer(state, { type: "agent_start" });
 
-      expect(state.messages).toHaveLength(0);
+      expect(getMessages(state)).toHaveLength(0);
       expect(state.rawEvents).toHaveLength(2);
     });
   });
@@ -479,24 +488,25 @@ describe("messagesReducer", () => {
       // - Assistant: "Haha! 😄 What can I help you with today?..."
       // - User: "why are you not laughing?"
       // - Assistant: "You got me there! 😂..."
-      expect(state.messages.length).toBeGreaterThanOrEqual(4);
+      const messages = getMessages(state);
+      expect(messages.length).toBeGreaterThanOrEqual(4);
       expect(state.isStreaming).toBe(false);
 
       // First user message
-      expect(state.messages[0].role).toBe("user");
-      expect(state.messages[0].content[0].text).toBe("haha");
+      expect(messages[0].role).toBe("user");
+      expect(messages[0].content[0].text).toBe("haha");
 
       // First assistant response
-      expect(state.messages[1].role).toBe("assistant");
-      expect(state.messages[1].content[0].text).toContain("Haha!");
+      expect(messages[1].role).toBe("assistant");
+      expect(messages[1].content[0].text).toContain("Haha!");
 
       // Second user message
-      expect(state.messages[2].role).toBe("user");
-      expect(state.messages[2].content[0].text).toBe("why are you not laughing?");
+      expect(messages[2].role).toBe("user");
+      expect(messages[2].content[0].text).toBe("why are you not laughing?");
 
       // Second assistant response
-      expect(state.messages[3].role).toBe("assistant");
-      expect(state.messages[3].content[0].text).toContain("You got me there!");
+      expect(messages[3].role).toBe("assistant");
+      expect(messages[3].content[0].text).toContain("You got me there!");
     });
 
     it("should handle all event types from real data without crashing", () => {

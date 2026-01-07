@@ -30,7 +30,6 @@ export type FeedItem = MessageFeedItem | EventFeedItem;
 
 export interface MessagesState {
   feed: FeedItem[];
-  messages: MessageFeedItem[];
   isStreaming: boolean;
   streamingMessage?: MessageFeedItem;
   rawEvents: unknown[];
@@ -43,7 +42,6 @@ export interface MessagesState {
 export function createInitialState(): MessagesState {
   return {
     feed: [],
-    messages: [],
     isStreaming: false,
     streamingMessage: undefined,
     rawEvents: [],
@@ -227,4 +225,8 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
 
 export function reduceEvents(events: unknown[]): MessagesState {
   return events.reduce(messagesReducer, createInitialState());
+}
+
+export function getMessages(state: MessagesState): MessageFeedItem[] {
+  return state.feed.filter((item): item is MessageFeedItem => item.kind === "message");
 }
