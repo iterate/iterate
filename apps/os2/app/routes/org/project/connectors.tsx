@@ -4,7 +4,7 @@ import { Button } from "../../../components/ui/button.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/connectors",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
 )({
   component: ProjectConnectorsPage,
 });

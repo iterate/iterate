@@ -1,6 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin/trpc-tools")({
+export const Route = createFileRoute("/_auth.layout/admin/trpc-tools")({
   component: TrpcToolsPage,
 });
 

@@ -7,7 +7,7 @@ import { EmptyState } from "../../../components/empty-state.tsx";
 import { trpc } from "../../../lib/trpc.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo",
 )({
   component: ProjectRepoRoute,
 });
@@ -28,7 +28,7 @@ function ProjectRepoRoute() {
 
 function ProjectRepoPage() {
   const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo",
   });
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({

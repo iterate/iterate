@@ -6,7 +6,7 @@ import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 import { AppSidebar } from "../../components/app-sidebar.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug")({
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
       trpc.organization.withProjects.queryOptions({
@@ -22,7 +22,7 @@ export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizatio
 });
 
 function OrgLayout() {
-  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug" });
+  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug" });
   const allParams = useParams({ strict: false });
   const { user } = useSessionUser();
 

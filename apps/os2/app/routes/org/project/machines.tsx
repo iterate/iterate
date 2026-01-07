@@ -19,14 +19,14 @@ import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines",
 )({
   component: ProjectMachinesPage,
 });
 
 function ProjectMachinesPage() {
   const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines",
   });
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");

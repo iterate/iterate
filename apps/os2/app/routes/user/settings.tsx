@@ -12,7 +12,7 @@ import {
 } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/user/settings")({
+export const Route = createFileRoute("/_auth.layout/user/settings")({
   component: UserSettingsRoute,
 });
 

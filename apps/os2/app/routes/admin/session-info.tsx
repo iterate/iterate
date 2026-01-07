@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin/session-info")({
+export const Route = createFileRoute("/_auth.layout/admin/session-info")({
   component: SessionInfoPage,
 });
 

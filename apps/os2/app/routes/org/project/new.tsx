@@ -13,14 +13,14 @@ import {
 import { Input } from "../../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
+  "/_auth.layout/orgs/$organizationSlug/projects/new",
 )({
   component: NewProjectPage,
 });
 
 function NewProjectPage() {
   const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/new",
   });
   const navigate = useNavigate();
   const [name, setName] = useState("");

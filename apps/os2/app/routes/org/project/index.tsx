@@ -26,7 +26,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/",
 )({
   component: ProjectAccessTokensRoute,
 });
@@ -47,7 +47,7 @@ function ProjectAccessTokensRoute() {
 
 function ProjectAccessTokensPage() {
   const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/",
   });
   const [name, setName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);

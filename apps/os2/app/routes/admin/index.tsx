@@ -3,7 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { Users, Building2 } from "lucide-react";
 import { trpc } from "../../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin/")({
+export const Route = createFileRoute("/_auth.layout/admin/")({
   component: AdminDashboardPage,
 });
 

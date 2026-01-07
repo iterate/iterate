@@ -3,7 +3,7 @@ import { authenticatedServerFn } from "../lib/auth-middleware.ts";
 
 const assertAuthenticated = authenticatedServerFn.handler(() => {});
 
-export const Route = createFileRoute("/_auth-required.layout")({
+export const Route = createFileRoute("/_auth.layout")({
   beforeLoad: () => assertAuthenticated(),
   component: AuthRequiredLayout,
 });

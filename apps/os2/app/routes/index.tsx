@@ -1,7 +1,7 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import { trpc } from "../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/")({
+export const Route = createFileRoute("/_auth.layout/")({
   beforeLoad: async ({ context }) => {
     const organizations = await context.queryClient.ensureQueryData(
       trpc.user.myOrganizations.queryOptions(),

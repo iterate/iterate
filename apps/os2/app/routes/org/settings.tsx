@@ -13,14 +13,14 @@ import {
 import { Input } from "../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/settings",
+  "/_auth.layout/orgs/$organizationSlug/settings",
 )({
   component: OrgSettingsPage,
 });
 
 function OrgSettingsPage() {
   const routeParams = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/settings",
+    from: "/_auth.layout/orgs/$organizationSlug/settings",
   });
 
   const { data: org } = useSuspenseQuery(

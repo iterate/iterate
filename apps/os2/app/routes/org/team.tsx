@@ -29,12 +29,12 @@ import {
 } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug/team")({
+export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/team")({
   component: OrgTeamPage,
 });
 
 function OrgTeamPage() {
-  const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug/team" });
+  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/team" });
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 

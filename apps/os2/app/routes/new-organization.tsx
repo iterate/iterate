@@ -12,7 +12,7 @@ import {
 import { Input } from "../components/ui/input.tsx";
 import { trpcClient, trpc } from "../lib/trpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/new-organization")({
+export const Route = createFileRoute("/_auth.layout/new-organization")({
   component: NewOrganizationPage,
 });
 

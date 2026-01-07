@@ -3,14 +3,14 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../../lib/trpc.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
+  "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
 )({
   component: ProjectLayout,
 });
 
 function ProjectLayout() {
   const params = useParams({
-    from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug",
   });
 
   useSuspenseQuery(

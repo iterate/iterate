@@ -8,7 +8,7 @@ const assertIsAdmin = authenticatedServerFn.handler(async ({ context }) => {
   if (session?.user.role !== "admin") throw notFound();
 });
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin")({
+export const Route = createFileRoute("/_auth.layout/admin")({
   beforeLoad: () => assertIsAdmin(),
   component: AdminLayout,
 });

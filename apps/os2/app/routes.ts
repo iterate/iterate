@@ -9,8 +9,8 @@ export const routes = rootRoute("root.tsx", [
   // Public routes
   route("/login", "login.tsx"),
 
-  // Auth required layout
-  layout("auth-required.layout.tsx", [
+  // Auth required layout (named ID creates cleaner route IDs)
+  layout("auth.layout", "auth-required.layout.tsx", [
     // Index redirects to first org
     index("index.tsx"),
 
@@ -21,7 +21,7 @@ export const routes = rootRoute("root.tsx", [
     route("/user/settings", "user/settings.tsx"),
 
     // Organization routes
-    layout("/orgs/$organizationSlug", "org/layout.tsx", [
+    route("/orgs/$organizationSlug", "org/layout.tsx", [
       // Org index redirects to first project
       index("org/index.tsx"),
 
@@ -31,7 +31,7 @@ export const routes = rootRoute("root.tsx", [
       route("/projects/new", "org/project/new.tsx"),
 
       // Project routes
-      layout("/projects/$projectSlug", "org/project/layout.tsx", [
+      route("/projects/$projectSlug", "org/project/layout.tsx", [
         // Project index shows access tokens
         index("org/project/index.tsx"),
         route("/machines", "org/project/machines.tsx"),
@@ -44,7 +44,7 @@ export const routes = rootRoute("root.tsx", [
     ]),
 
     // Admin routes
-    layout("/admin", "admin/layout.tsx", [
+    route("/admin", "admin/layout.tsx", [
       index("admin/index.tsx"),
       route("/trpc-tools", "admin/trpc-tools.tsx"),
       route("/session-info", "admin/session-info.tsx"),
