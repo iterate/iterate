@@ -292,13 +292,18 @@ app.post("/edge/slack", async (c) => {
 
 const STREAM_OFFSET_HEADER = "Stream-Next-Offset";
 
+function getStreamPathFromRequest(c: { req: { path: string } }): string {
+  const rawPath = c.req.path.replace("/agents/", "");
+  return decodeURIComponent(rawPath);
+}
+
 function getCurrentOffset(streamPath: string): string {
   const agent = getAgent(streamPath);
   return agent?.messages.length ? agent.messages[agent.messages.length - 1].offset : "0";
 }
 
 app.put("/agents/*", async (c) => {
-  const streamPath = c.req.path.replace("/agents/", "");
+  const streamPath = getStreamPathFromRequest(c);
   const contentType = c.req.header("content-type") || "application/json";
   const isNew = !getAgent(streamPath);
   await createAgent(streamPath, contentType);
@@ -314,7 +319,7 @@ app.put("/agents/*", async (c) => {
 });
 
 app.on("HEAD", "/agents/*", (c) => {
-  const streamPath = c.req.path.replace("/agents/", "");
+  const streamPath = getStreamPathFromRequest(c);
   const agent = getAgent(streamPath);
   if (!agent) return new Response("Stream not found", { status: 404 });
   return new Response(null, {
@@ -327,7 +332,7 @@ app.on("HEAD", "/agents/*", (c) => {
 });
 
 app.post("/agents/*", async (c) => {
-  const streamPath = c.req.path.replace("/agents/", "");
+  const streamPath = getStreamPathFromRequest(c);
   const contentType = c.req.header("content-type");
   if (!contentType) return c.text("Content-Type header is required", 400);
 
@@ -393,7 +398,7 @@ app.post("/agents/*", async (c) => {
 });
 
 app.get("/agents/*", (c) => {
-  const streamPath = c.req.path.replace("/agents/", "");
+  const streamPath = getStreamPathFromRequest(c);
   const offset = c.req.query("offset") ?? "-1";
   const live = c.req.query("live");
   const agent = getAgent(streamPath);
@@ -462,7 +467,7 @@ app.get("/agents/*", (c) => {
 });
 
 app.delete("/agents/*", async (c) => {
-  const streamPath = c.req.path.replace("/agents/", "");
+  const streamPath = getStreamPathFromRequest(c);
   if (!getAgent(streamPath)) return c.text("Stream not found", 404);
   deleteAgent(streamPath);
   if (!streamPath.startsWith("__")) await onStreamDeleted(streamPath);

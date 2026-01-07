@@ -276,7 +276,11 @@ function MessageBubble({ msg, isStreaming }: { msg: MessageFeedItem; isStreaming
   const timeStr = new Date(msg.timestamp).toLocaleTimeString();
 
   return (
-    <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+    <div
+      className={`flex ${isUser ? "justify-end" : "justify-start"}`}
+      data-testid="chat-message"
+      data-role={msg.role}
+    >
       <div
         className={`max-w-[75%] rounded-2xl px-4 py-3 ${
           isUser
