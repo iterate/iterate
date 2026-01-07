@@ -1,22 +1,15 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { TRPCError } from "@trpc/server";
-import { router, publicProcedure, protectedProcedure } from "../trpc.ts";
+import { ORPCError, publicProcedure, protectedProcedure } from "../orpc.ts";
 import { user, organization, project, organizationUserMembership } from "../../db/schema.ts";
 import { generateSlug } from "../../utils/slug.ts";
 import { isNonProd } from "../../../env.ts";
 
-/**
- * Testing router - provides helpers for test setup
- * These endpoints are only available in non-production environments
- */
-export const testingRouter = router({
-  // Health check
-  health: publicProcedure.query(() => {
+export const testingRouter = {
+  health: publicProcedure.handler(() => {
     return { status: "ok", timestamp: new Date().toISOString() };
   }),
 
-  // Create test user (for e2e tests)
   createTestUser: publicProcedure
     .input(
       z.object({
@@ -25,14 +18,13 @@ export const testingRouter = router({
         role: z.enum(["user", "admin"]).default("user"),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
-      const [newUser] = await ctx.db
+      const [newUser] = await context.db
         .insert(user)
         .values({
           email: input.email,
@@ -52,7 +44,6 @@ export const testingRouter = router({
       return newUser;
     }),
 
-  // Create test organization with project
   createTestOrganization: protectedProcedure
     .input(
       z.object({
@@ -60,16 +51,15 @@ export const testingRouter = router({
         projectName: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
       const orgSlug = generateSlug(input.name);
 
-      const [newOrg] = await ctx.db
+      const [newOrg] = await context.db
         .insert(organization)
         .values({
           name: input.name,
@@ -81,14 +71,14 @@ export const testingRouter = router({
         throw new Error("Failed to create organization");
       }
 
-      await ctx.db.insert(organizationUserMembership).values({
+      await context.db.insert(organizationUserMembership).values({
         organizationId: newOrg.id,
-        userId: ctx.user.id,
+        userId: context.user.id,
         role: "owner",
       });
 
       const projSlug = generateSlug(input.projectName || "default");
-      const [newProject] = await ctx.db
+      const [newProject] = await context.db
         .insert(project)
         .values({
           name: input.projectName || "Default Project",
@@ -103,7 +93,6 @@ export const testingRouter = router({
       };
     }),
 
-  // Clean up test data
   cleanupTestData: publicProcedure
     .input(
       z.object({
@@ -111,17 +100,16 @@ export const testingRouter = router({
         organizationSlug: z.string().optional(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       if (!isNonProd) {
-        throw new TRPCError({
-          code: "FORBIDDEN",
+        throw new ORPCError("FORBIDDEN", {
           message: "Testing endpoints are not available in production",
         });
       }
       const results: string[] = [];
 
       if (input.email) {
-        const deleted = await ctx.db
+        const deleted = await context.db
           .delete(user)
           .where(eq(user.email, input.email))
           .returning();
@@ -129,7 +117,7 @@ export const testingRouter = router({
       }
 
       if (input.organizationSlug) {
-        const deleted = await ctx.db
+        const deleted = await context.db
           .delete(organization)
           .where(eq(organization.slug, input.organizationSlug))
           .returning();
@@ -138,4 +126,4 @@ export const testingRouter = router({
 
       return { results };
     }),
-});
+};

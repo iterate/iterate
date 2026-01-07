@@ -1,32 +1,9 @@
-import { chromium, type Page, type Browser, type BrowserContext } from "playwright";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { test, expect } from "@playwright/test";
 
-const BASE_URL = process.env.VITE_PUBLIC_URL || "http://localhost:5173";
 const TEST_OTP = "424242";
 
-describe("organization creation flow", () => {
-  let browser: Browser;
-  let context: BrowserContext;
-  let page: Page;
-
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-  });
-
-  beforeEach(async () => {
-    context = await browser.newContext();
-    page = await context.newPage();
-  });
-
-  afterEach(async () => {
-    await context?.close();
-  });
-
-  test("should log in and create an organization", async () => {
+test.describe("organization creation flow", () => {
+  test("should log in and create an organization", async ({ page }) => {
     const testEmail = `test-e2e-${Date.now()}+test@example.com`;
     const timings: Record<string, number> = {};
     const time = (label: string) => {
@@ -35,7 +12,7 @@ describe("organization creation flow", () => {
 
     time("start");
 
-    await page.goto(`${BASE_URL}/login`);
+    await page.goto("/login");
     await page.waitForSelector('input[type="email"]');
     time("login-page-loaded");
 
@@ -59,7 +36,6 @@ describe("organization creation flow", () => {
     time("logged-in");
 
     const currentURL = page.url();
-    console.log("URL after login:", currentURL);
 
     if (currentURL.includes("/new-organization")) {
       time("new-org-page-shown");
@@ -73,14 +49,12 @@ describe("organization creation flow", () => {
       time("create-clicked");
 
       await page.waitForURL(
-        (url) =>
-          !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
+        (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
         { timeout: 30000 },
       );
       time("org-created");
 
       const finalURL = page.url();
-      console.log("Final URL:", finalURL);
 
       expect(finalURL).not.toContain("/new-organization");
       expect(finalURL).not.toContain("/login");
@@ -90,18 +64,9 @@ describe("organization creation flow", () => {
     }
 
     time("end");
-
-    console.log("\n--- Timing Report ---");
-    let prev = timings["start"];
-    for (const [label, timestamp] of Object.entries(timings)) {
-      const delta = (timestamp - prev!).toFixed(0);
-      const total = (timestamp - timings["start"]!).toFixed(0);
-      console.log(`${label}: +${delta}ms (total: ${total}ms)`);
-      prev = timestamp;
-    }
   });
 
-  test("should measure request timing for org creation", async () => {
+  test("should measure request timing for org creation", async ({ page }) => {
     const testEmail = `timing-test-${Date.now()}+test@example.com`;
     const requestTimings: { url: string; duration: number; method: string }[] = [];
 
@@ -109,19 +74,19 @@ describe("organization creation flow", () => {
       const timing = request.timing();
       const url = request.url();
       if (
-        url.includes("/api/trpc") ||
+        url.includes("/api/orpc") ||
         url.includes("/api/auth") ||
         url.includes("/new-organization")
       ) {
         requestTimings.push({
-          url: url.replace(BASE_URL, ""),
+          url: url.replace(/http:\/\/localhost:\d+/, ""),
           method: request.method(),
           duration: timing.responseEnd - timing.requestStart,
         });
       }
     });
 
-    await page.goto(`${BASE_URL}/login`);
+    await page.goto("/login");
     await page.waitForSelector('input[type="email"]');
     await page.fill('input[type="email"]', testEmail);
     await page.click('button:has-text("Continue with Email")');
@@ -142,31 +107,12 @@ describe("organization creation flow", () => {
       const orgName = `Timing Test Org ${Date.now()}`;
       await page.fill('input[id="organization-name"]', orgName);
 
-      const createStart = performance.now();
       await page.click('button:has-text("Create organization")');
 
       await page.waitForURL(
-        (url) =>
-          !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
+        (url) => !url.pathname.includes("/new-organization") && !url.pathname.includes("/login"),
         { timeout: 30000 },
       );
-      const createEnd = performance.now();
-
-      console.log(`\nOrg creation took: ${(createEnd - createStart).toFixed(0)}ms`);
-    }
-
-    console.log("\n--- Network Request Timings ---");
-    const sorted = requestTimings.sort((a, b) => b.duration - a.duration);
-    for (const { url, method, duration } of sorted.slice(0, 10)) {
-      console.log(`${method} ${url}: ${duration.toFixed(0)}ms`);
-    }
-
-    const slowRequests = requestTimings.filter((r) => r.duration > 1000);
-    if (slowRequests.length > 0) {
-      console.warn("\n⚠️ Slow requests (>1s):");
-      for (const { url, method, duration } of slowRequests) {
-        console.warn(`  ${method} ${url}: ${duration.toFixed(0)}ms`);
-      }
     }
   });
 });

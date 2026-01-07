@@ -1,16 +1,24 @@
 import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
 import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 import { AppSidebar } from "../../components/app-sidebar.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug")({
+type Organization = {
+  id: string;
+  name: string;
+  slug: string;
+  role?: string;
+  projects?: Array<{ id: string; name: string; slug: string }>;
+};
+
+export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug")({
   beforeLoad: async ({ context, params }) => {
     const currentOrg = await context.queryClient.ensureQueryData(
-      trpc.organization.withProjects.queryOptions({
-        organizationSlug: params.organizationSlug,
+      orpc.organization.withProjects.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
       }),
     );
 
@@ -31,14 +39,14 @@ function OrgLayout() {
   }
 
   const { data: organizations } = useSuspenseQuery(
-    trpc.user.myOrganizations.queryOptions(),
-  );
+    orpc.user.myOrganizations.queryOptions(),
+  ) as { data: Organization[] };
 
   const { data: currentOrg } = useSuspenseQuery(
-    trpc.organization.withProjects.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.withProjects.queryOptions({
+      input: { organizationSlug: params.organizationSlug },
     }),
-  );
+  ) as { data: Organization };
 
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });

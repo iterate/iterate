@@ -1,9 +1,9 @@
 import { useState, Suspense, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { SlidersHorizontal, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../../lib/orpc.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
@@ -26,7 +26,7 @@ import {
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
 )({
   component: ProjectEnvVarsRoute,
 });
@@ -45,24 +45,27 @@ function ProjectEnvVarsRoute() {
   );
 }
 
+type EnvVar = { id: string; key: string; maskedValue: string; createdAt: Date; updatedAt: Date };
+
 function ProjectEnvVarsPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/env-vars",
   });
-  const queryClient = useQueryClient();
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
 
   const { data: envVars } = useSuspenseQuery(
-    trpc.envVar.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.envVar.list.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
-  );
+  ) as { data: EnvVar[] };
 
   const setEnvVar = useMutation({
     mutationFn: async (input: { key: string; value: string }) => {
-      return trpcClient.envVar.set.mutate({
+      return orpcClient.envVar.set({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: input.key,
@@ -70,12 +73,6 @@ function ProjectEnvVarsPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.envVar.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       setKey("");
       setValue("");
       toast.success("Environment variable saved!");
@@ -87,19 +84,13 @@ function ProjectEnvVarsPage() {
 
   const deleteEnvVar = useMutation({
     mutationFn: async (keyToDelete: string) => {
-      return trpcClient.envVar.delete.mutate({
+      return orpcClient.envVar.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         key: keyToDelete,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.envVar.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       toast.success("Environment variable deleted!");
     },
     onError: (error) => {

@@ -10,9 +10,9 @@ import {
   FieldSet,
 } from "../components/ui/field.tsx";
 import { Input } from "../components/ui/input.tsx";
-import { trpcClient, trpc } from "../lib/trpc.tsx";
+import { orpcClient, orpc } from "../lib/orpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/new-organization")({
+export const Route = createFileRoute("/_auth-required/new-organization")({
   component: NewOrganizationPage,
 });
 
@@ -31,11 +31,11 @@ function NewOrganizationPage() {
 
   const createOrg = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.organization.create.mutate({ name });
+      return orpcClient.organization.create({ name });
     },
     onSuccess: (org) => {
       queryClient.setQueryData<Organization[]>(
-        trpc.user.myOrganizations.queryKey(),
+        orpc.user.myOrganizations.queryKey(),
         (old) => [...(old || []), { ...org, role: "owner", instances: [] }],
       );
       toast.success("Organization created!");
@@ -69,6 +69,7 @@ function NewOrganizationPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   disabled={createOrg.isPending}
+                  autoFocus
                 />
               </Field>
             </FieldSet>

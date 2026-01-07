@@ -1,7 +1,7 @@
 import { createFileRoute, Outlet, redirect } from "@tanstack/react-router";
 import { sessionQueryOptions } from "../lib/session-query.ts";
 
-export const Route = createFileRoute("/_auth-required.layout")({
+export const Route = createFileRoute("/_auth-required")({
   beforeLoad: async ({ context }) => {
     const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
 

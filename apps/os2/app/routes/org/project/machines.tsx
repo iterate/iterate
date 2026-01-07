@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../../lib/orpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 import {
@@ -16,10 +16,12 @@ import {
   DialogTrigger,
 } from "../../../components/ui/dialog.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
-import { MachineTable } from "../../../components/machine-table.tsx";
+import { MachineTable, type Machine } from "../../../components/machine-table.tsx";
+
+type Project = { id: string; name: string; slug: string };
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
 )({
   component: ProjectMachinesPage,
 });
@@ -28,33 +30,31 @@ function ProjectMachinesPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/machines",
   });
-  const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");
-  const machineListQueryKey = trpc.machine.list.queryKey({
-    organizationSlug: params.organizationSlug,
-    projectSlug: params.projectSlug,
-    includeArchived: false,
-  });
 
   const { data: machines } = useSuspenseQuery(
-    trpc.machine.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
-      includeArchived: false,
+    orpc.machine.list.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        includeArchived: false,
+      },
     }),
-  );
+  ) as { data: Machine[] };
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
-  );
+  ) as { data: Project };
 
   const createMachine = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.machine.create.mutate({
+      return orpcClient.machine.create({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name,
@@ -62,7 +62,6 @@ function ProjectMachinesPage() {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       setCreateDialogOpen(false);
       setNewMachineName("");
       toast.success("Machine created!");
@@ -74,14 +73,13 @@ function ProjectMachinesPage() {
 
   const archiveMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.archive.mutate({
+      return orpcClient.machine.archive({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine archived!");
     },
     onError: (error) => {
@@ -91,14 +89,13 @@ function ProjectMachinesPage() {
 
   const unarchiveMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.unarchive.mutate({
+      return orpcClient.machine.unarchive({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine restored!");
     },
     onError: (error) => {
@@ -108,14 +105,13 @@ function ProjectMachinesPage() {
 
   const deleteMachine = useMutation({
     mutationFn: async (machineId: string) => {
-      return trpcClient.machine.delete.mutate({
+      return orpcClient.machine.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         machineId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
       toast.success("Machine deleted!");
     },
     onError: (error) => {

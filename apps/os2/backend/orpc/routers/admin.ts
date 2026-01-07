@@ -1,20 +1,17 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
+import { adminProcedure, protectedProcedure } from "../orpc.ts";
 import { user } from "../../db/schema.ts";
 
-export const adminRouter = router({
-  // Impersonate a user (creates a session as that user)
+export const adminRouter = {
   impersonate: adminProcedure
     .input(
       z.object({
         userId: z.string(),
       }),
     )
-    .mutation(async ({ ctx, input }) => {
-      // This would typically integrate with better-auth's admin plugin
-      // For now, return the user info that would be impersonated
-      const targetUser = await ctx.db.query.user.findFirst({
+    .handler(async ({ context, input }) => {
+      const targetUser = await context.db.query.user.findFirst({
         where: eq(user.id, input.userId),
       });
 
@@ -32,27 +29,26 @@ export const adminRouter = router({
       };
     }),
 
-  // Stop impersonating
-  stopImpersonating: protectedProcedure.mutation(async ({ ctx: _ctx }) => {
-    // This would integrate with better-auth's admin plugin
+  stopImpersonating: protectedProcedure.handler(async () => {
     return {
       message: "Stop impersonation would be handled via Better Auth admin plugin",
     };
   }),
 
-  // List all users (admin only)
   listUsers: adminProcedure
     .input(
-      z.object({
-        limit: z.number().min(1).max(100).default(50),
-        offset: z.number().min(0).default(0),
-      }).optional(),
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const users = await ctx.db.query.user.findMany({
+      const users = await context.db.query.user.findMany({
         limit,
         offset,
         orderBy: (u, { desc }) => [desc(u.createdAt)],
@@ -68,19 +64,20 @@ export const adminRouter = router({
       }));
     }),
 
-  // List all organizations (admin only)
   listOrganizations: adminProcedure
     .input(
-      z.object({
-        limit: z.number().min(1).max(100).default(50),
-        offset: z.number().min(0).default(0),
-      }).optional(),
+      z
+        .object({
+          limit: z.number().min(1).max(100).default(50),
+          offset: z.number().min(0).default(0),
+        })
+        .optional(),
     )
-    .query(async ({ ctx, input }) => {
+    .handler(async ({ context, input }) => {
       const limit = input?.limit ?? 50;
       const offset = input?.offset ?? 0;
 
-      const orgs = await ctx.db.query.organization.findMany({
+      const orgs = await context.db.query.organization.findMany({
         limit,
         offset,
         orderBy: (o, { desc }) => [desc(o.createdAt)],
@@ -104,23 +101,22 @@ export const adminRouter = router({
       }));
     }),
 
-  // Get session info for debugging
-  sessionInfo: protectedProcedure.query(async ({ ctx }) => {
+  sessionInfo: protectedProcedure.handler(async ({ context }) => {
     return {
       user: {
-        id: ctx.user.id,
-        email: ctx.user.email,
-        name: ctx.user.name,
-        role: ctx.user.role,
+        id: context.user.id,
+        email: context.user.email,
+        name: context.user.name,
+        role: context.user.role,
       },
-      session: ctx.session
+      session: context.session
         ? {
-            expiresAt: ctx.session.session.expiresAt,
-            ipAddress: ctx.session.session.ipAddress,
-            userAgent: ctx.session.session.userAgent,
-            impersonatedBy: ctx.session.session.impersonatedBy,
+            expiresAt: context.session.session.expiresAt,
+            ipAddress: context.session.session.ipAddress,
+            userAgent: context.session.session.userAgent,
+            impersonatedBy: context.session.session.impersonatedBy,
           }
         : null,
     };
   }),
-});
+};

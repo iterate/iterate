@@ -1,4 +1,3 @@
-import { router } from "./trpc.ts";
 import { userRouter } from "./routers/user.ts";
 import { organizationRouter } from "./routers/organization.ts";
 import { projectRouter } from "./routers/project.ts";
@@ -8,7 +7,7 @@ import { testingRouter } from "./routers/testing.ts";
 import { envVarRouter } from "./routers/env-var.ts";
 import { accessTokenRouter } from "./routers/access-token.ts";
 
-export const appRouter = router({
+export const appRouter = {
   user: userRouter,
   organization: organizationRouter,
   project: projectRouter,
@@ -17,6 +16,6 @@ export const appRouter = router({
   testing: testingRouter,
   envVar: envVarRouter,
   accessToken: accessTokenRouter,
-});
+};
 
 export type AppRouter = typeof appRouter;

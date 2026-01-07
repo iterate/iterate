@@ -1,8 +1,8 @@
 import { useState, type FormEvent, Suspense } from "react";
 import { createFileRoute } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
   Field,
@@ -12,7 +12,7 @@ import {
 } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/user/settings")({
+export const Route = createFileRoute("/_auth-required/user/settings")({
   component: UserSettingsRoute,
 });
 
@@ -30,16 +30,16 @@ function UserSettingsRoute() {
   );
 }
 
+type User = { id: string; name: string; email: string };
+
 function UserSettingsPage() {
-  const queryClient = useQueryClient();
-  const { data: user } = useSuspenseQuery(trpc.user.me.queryOptions());
+  const { data: user } = useSuspenseQuery(orpc.user.me.queryOptions()) as { data: User | null };
 
   const updateUser = useMutation({
     mutationFn: async (name: string) => {
-      return trpcClient.user.updateSettings.mutate({ name });
+      return orpcClient.user.updateSettings({ name });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: trpc.user.me.queryKey() });
       toast.success("Settings updated");
     },
     onError: (error) => {

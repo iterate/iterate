@@ -3,7 +3,7 @@ import { Shield, Terminal, Info } from "lucide-react";
 import { cn } from "../../lib/cn.ts";
 import { sessionQueryOptions } from "../../lib/session-query.ts";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin")({
+export const Route = createFileRoute("/_auth-required/_/admin")({
   beforeLoad: async ({ context }) => {
     const session = await context.queryClient.ensureQueryData(sessionQueryOptions());
     if (session?.user?.role !== "admin") {
@@ -35,13 +35,13 @@ function AdminLayout() {
             Dashboard
           </Link>
           <Link
-            to="/admin/trpc-tools"
+            to="/admin/api-tools"
             className={cn(
               "flex items-center gap-2 px-3 py-2 text-sm rounded-md hover:bg-accent",
             )}
           >
             <Terminal className="h-4 w-4" />
-            tRPC Tools
+            API Tools
           </Link>
           <Link
             to="/admin/session-info"

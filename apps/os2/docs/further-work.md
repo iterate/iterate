@@ -10,7 +10,7 @@ This document tracks additional cleanup and improvements identified during code 
 
 ### 2. ~~Remove Duplicate Database Helpers~~ ✅
 - [x] Deleted `backend/db/helpers.ts` (completely unused)
-- [x] Removed unused helper functions from `backend/trpc/trpc.ts`
+- [x] Removed unused helper functions from backend router utilities
 
 ### 3. ~~Remove Debug Logs in Slack Integration~~ ✅
 - [x] Removed debug `console.log` statements from `backend/integrations/slack/slack.ts`

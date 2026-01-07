@@ -22,24 +22,32 @@ export const Route = createRootRouteWithContext<TanstackRouterContext>()({
     links: [{ rel: "icon", href: "/favicon.ico" }],
   }),
   component: RootComponent,
-  wrapInSuspense: true,
 });
 
 function RootComponent() {
   return (
     <RootDocument>
       <AppErrorBoundary>
-        <Suspense
-          fallback={
-            <div className="flex min-h-screen items-center justify-center">
-              <div className="text-muted-foreground">Loading...</div>
-            </div>
-          }
-        >
+        <Suspense fallback={<LoadingFallback />}>
           <Outlet />
         </Suspense>
       </AppErrorBoundary>
     </RootDocument>
+  );
+}
+
+function LoadingFallback() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        minHeight: "100vh",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div style={{ color: "#71717a" }}>Loading...</div>
+    </div>
   );
 }
 

@@ -4,10 +4,10 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { GitBranch } from "lucide-react";
 import { toast } from "sonner";
 import { EmptyState } from "../../../components/empty-state.tsx";
-import { trpc } from "../../../lib/trpc.tsx";
+import { orpc } from "../../../lib/orpc.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
 )({
   component: ProjectRepoRoute,
 });
@@ -26,16 +26,25 @@ function ProjectRepoRoute() {
   );
 }
 
+type Project = {
+  id: string;
+  name: string;
+  slug: string;
+  repo?: { name: string; provider: string; owner: string; defaultBranch: string } | null;
+};
+
 function ProjectRepoPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/repo",
   });
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
-  );
+  ) as { data: Project };
 
   const repo = project?.repo;
 

@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { orpcClient } from "../../../lib/orpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -13,7 +13,7 @@ import {
 import { Input } from "../../../components/ui/input.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
+  "/_auth-required/_/orgs/$organizationSlug/projects/new",
 )({
   component: NewProjectPage,
 });
@@ -23,20 +23,16 @@ function NewProjectPage() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/projects/new",
   });
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const [name, setName] = useState("");
 
   const createProject = useMutation({
     mutationFn: async (projectName: string) => {
-      return trpcClient.project.create.mutate({
+      return orpcClient.project.create({
         organizationSlug: params.organizationSlug,
         name: projectName,
       });
     },
     onSuccess: (project) => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
-      });
       toast.success("Project created");
       navigate({
         to: "/orgs/$organizationSlug/projects/$projectSlug",
@@ -68,6 +64,7 @@ function NewProjectPage() {
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 disabled={createProject.isPending}
+                autoFocus
               />
             </Field>
           </FieldSet>

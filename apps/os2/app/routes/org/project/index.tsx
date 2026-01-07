@@ -1,9 +1,9 @@
 import { useState, Suspense, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { KeyRound, Copy, CheckCheck } from "lucide-react";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../../lib/orpc.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
@@ -26,7 +26,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Spinner } from "../../../components/ui/spinner.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/",
 )({
   component: ProjectAccessTokensRoute,
 });
@@ -45,37 +45,40 @@ function ProjectAccessTokensRoute() {
   );
 }
 
+type AccessToken = {
+  id: string;
+  name: string;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+};
+
 function ProjectAccessTokensPage() {
   const params = useParams({
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/",
   });
-  const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const { data: tokens } = useSuspenseQuery(
-    trpc.accessToken.list.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.accessToken.list.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
-  );
+  ) as { data: AccessToken[] };
 
   const createToken = useMutation({
     mutationFn: async (tokenName: string) => {
-      return trpcClient.accessToken.create.mutate({
+      return orpcClient.accessToken.create({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name: tokenName,
       });
     },
     onSuccess: (data) => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.accessToken.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       setName("");
       setNewToken(data.token);
       toast.success("Access token created!");
@@ -87,19 +90,13 @@ function ProjectAccessTokensPage() {
 
   const revokeToken = useMutation({
     mutationFn: async (tokenId: string) => {
-      return trpcClient.accessToken.revoke.mutate({
+      return orpcClient.accessToken.revoke({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         id: tokenId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.accessToken.list.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       toast.success("Access token revoked!");
     },
     onError: (error) => {

@@ -1,9 +1,9 @@
 import { createFileRoute, Outlet, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { trpc } from "../../../lib/trpc.tsx";
+import { orpc } from "../../../lib/orpc.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug",
 )({
   component: ProjectLayout,
 });
@@ -14,9 +14,11 @@ function ProjectLayout() {
   });
 
   useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
   );
 

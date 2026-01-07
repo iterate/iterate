@@ -1,15 +1,20 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin/session-info")({
+export const Route = createFileRoute("/_auth-required/_/admin/session-info")({
   component: SessionInfoPage,
 });
 
+type SessionInfo = {
+  user: unknown;
+  session: { impersonatedBy?: string } | null;
+};
+
 function SessionInfoPage() {
   const { data: sessionInfo } = useSuspenseQuery(
-    trpc.admin.sessionInfo.queryOptions(),
-  );
+    orpc.admin.sessionInfo.queryOptions(),
+  ) as { data: SessionInfo };
 
   return (
     <div className="p-8 space-y-6">

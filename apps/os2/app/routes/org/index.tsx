@@ -1,13 +1,15 @@
 import { createFileRoute, redirect } from "@tanstack/react-router";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug/")({
+type Project = { id: string; name: string; slug: string };
+
+export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug/")({
   beforeLoad: async ({ context, params }) => {
-    const projects = await context.queryClient.ensureQueryData(
-      trpc.project.list.queryOptions({
-        organizationSlug: params.organizationSlug,
+    const projects = (await context.queryClient.ensureQueryData(
+      orpc.project.list.queryOptions({
+        input: { organizationSlug: params.organizationSlug },
       }),
-    );
+    )) as Project[];
 
     if (projects && projects.length > 0) {
       throw redirect({

@@ -1,6 +1,7 @@
 import { betterAuth } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { tanstackStartCookies } from "better-auth/tanstack-start";
 import { typeid } from "typeid-js";
 import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
@@ -25,29 +26,6 @@ export const getAuth = (db: DB) => {
         verification: schema.verification,
       },
     }),
-    plugins: [
-      admin(),
-      emailOTP({
-        otpLength: 6,
-        expiresIn: 300,
-        generateOTP: ({ email }) => {
-          if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
-            return TEST_OTP_CODE;
-          }
-          return undefined;
-        },
-        sendVerificationOTP: async ({ email, otp }) => {
-          if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
-            logger.info(
-              `[DEV] Skipping email for test address: ${email}. Use OTP: ${TEST_OTP_CODE}`,
-            );
-            return;
-          }
-          logger.info(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
-          // TODO: Implement actual email sending (e.g., Resend, SendGrid, etc.)
-        },
-      }),
-    ],
     socialProviders: {
       google: {
         scope: [
@@ -79,6 +57,29 @@ export const getAuth = (db: DB) => {
         },
       },
     },
+    plugins: [
+      admin(),
+      emailOTP({
+        otpLength: 6,
+        expiresIn: 300,
+        generateOTP: ({ email }) => {
+          if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+            return TEST_OTP_CODE;
+          }
+          return undefined;
+        },
+        sendVerificationOTP: async ({ email, otp }) => {
+          if (isNonProd && TEST_EMAIL_PATTERN.test(email)) {
+            logger.info(
+              `[DEV] Skipping email for test address: ${email}. Use OTP: ${TEST_OTP_CODE}`,
+            );
+            return;
+          }
+          logger.info(`[EMAIL OTP] Would send OTP ${otp} to ${email}`);
+        },
+      }),
+      tanstackStartCookies(),
+    ],
   });
 };
 

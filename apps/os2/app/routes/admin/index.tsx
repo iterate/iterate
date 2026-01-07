@@ -1,20 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { Users, Building2 } from "lucide-react";
-import { trpc } from "../../lib/trpc.tsx";
+import { orpc } from "../../lib/orpc.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/admin/")({
+export const Route = createFileRoute("/_auth-required/_/admin/")({
   component: AdminDashboardPage,
 });
 
+type User = { id: string; name: string; email: string; role: string | null };
+type Organization = { id: string; name: string; slug: string; memberCount: number; projectCount: number };
+
 function AdminDashboardPage() {
   const { data: users } = useSuspenseQuery(
-    trpc.admin.listUsers.queryOptions({ limit: 10 }),
-  );
+    orpc.admin.listUsers.queryOptions({ input: { limit: 10 } }),
+  ) as { data: User[] };
 
   const { data: organizations } = useSuspenseQuery(
-    trpc.admin.listOrganizations.queryOptions({ limit: 10 }),
-  );
+    orpc.admin.listOrganizations.queryOptions({ input: { limit: 10 } }),
+  ) as { data: Organization[] };
 
   return (
     <div className="p-8 space-y-8">

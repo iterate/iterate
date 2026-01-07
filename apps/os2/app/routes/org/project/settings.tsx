@@ -1,8 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams, useNavigate } from "@tanstack/react-router";
-import { useMutation, useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { trpc, trpcClient } from "../../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../../lib/orpc.tsx";
 import { Button } from "../../../components/ui/button.tsx";
 import {
   Field,
@@ -12,8 +12,10 @@ import {
 } from "../../../components/ui/field.tsx";
 import { Input } from "../../../components/ui/input.tsx";
 
+type Project = { id: string; name: string; slug: string };
+
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
 )({
   component: ProjectSettingsPage,
 });
@@ -23,35 +25,27 @@ function ProjectSettingsPage() {
     from: "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/settings",
   });
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
 
   const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
+    orpc.project.bySlug.queryOptions({
+      input: {
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+      },
     }),
-  );
+  ) as { data: Project };
 
   const [name, setName] = useState(project.name);
 
   const updateProject = useMutation({
     mutationFn: async (nextName: string) => {
-      return trpcClient.project.update.mutate({
+      return orpcClient.project.update({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name: nextName,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
-      });
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.bySlug.queryKey({
-          organizationSlug: params.organizationSlug,
-          projectSlug: params.projectSlug,
-        }),
-      });
       toast.success("Project updated");
     },
     onError: (error) => {
@@ -61,15 +55,12 @@ function ProjectSettingsPage() {
 
   const deleteProject = useMutation({
     mutationFn: async () => {
-      return trpcClient.project.delete.mutate({
+      return orpcClient.project.delete({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.project.list.queryKey({ organizationSlug: params.organizationSlug }),
-      });
       toast.success("Project deleted");
       navigate({ to: "/orgs/$organizationSlug", params: { organizationSlug: params.organizationSlug } });
     },

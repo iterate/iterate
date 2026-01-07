@@ -18,7 +18,7 @@ import {
   TableRow,
 } from "./ui/table.tsx";
 
-interface Machine {
+export interface Machine {
   id: string;
   name: string;
   type: string;

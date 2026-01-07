@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { MoreHorizontal, UserMinus, Shield, ShieldCheck, User } from "lucide-react";
-import { trpc, trpcClient } from "../../lib/trpc.tsx";
+import { orpc, orpcClient } from "../../lib/orpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import { Badge } from "../../components/ui/badge.tsx";
 import {
@@ -29,42 +29,45 @@ import {
 } from "../../components/ui/field.tsx";
 import { Input } from "../../components/ui/input.tsx";
 
-export const Route = createFileRoute("/_auth-required.layout/_/orgs/$organizationSlug/team")({
+export const Route = createFileRoute("/_auth-required/_/orgs/$organizationSlug/team")({
   component: OrgTeamPage,
 });
 
+type Member = {
+  id: string;
+  userId: string;
+  role: "owner" | "admin" | "member";
+  user: { id: string; name: string; email: string; image?: string | null };
+  createdAt: Date;
+};
+type Organization = { id: string; name: string; slug: string; role?: string };
+
 function OrgTeamPage() {
   const params = useParams({ from: "/_auth-required.layout/_/orgs/$organizationSlug/team" });
-  const queryClient = useQueryClient();
   const { user: currentUser } = useSessionUser();
   const [email, setEmail] = useState("");
 
   const { data: members } = useSuspenseQuery(
-    trpc.organization.members.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.members.queryOptions({
+      input: { organizationSlug: params.organizationSlug },
     }),
-  );
+  ) as { data: Member[] };
 
   const { data: org } = useSuspenseQuery(
-    trpc.organization.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
+    orpc.organization.bySlug.queryOptions({
+      input: { organizationSlug: params.organizationSlug },
     }),
-  );
+  ) as { data: Organization };
 
   const updateRole = useMutation({
     mutationFn: async ({ userId, role }: { userId: string; role: "member" | "admin" | "owner" }) => {
-      return trpcClient.organization.updateMemberRole.mutate({
+      return orpcClient.organization.updateMemberRole({
         organizationSlug: params.organizationSlug,
         userId,
         role,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       toast.success("Role updated!");
     },
     onError: (error) => {
@@ -74,17 +77,12 @@ function OrgTeamPage() {
 
   const addMember = useMutation({
     mutationFn: async (emailAddress: string) => {
-      return trpcClient.organization.addMember.mutate({
+      return orpcClient.organization.addMember({
         organizationSlug: params.organizationSlug,
         email: emailAddress,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       setEmail("");
       toast.success("Member added!");
     },
@@ -95,17 +93,12 @@ function OrgTeamPage() {
 
   const removeMember = useMutation({
     mutationFn: async (userId: string) => {
-      return trpcClient.organization.removeMember.mutate({
+      return orpcClient.organization.removeMember({
         organizationSlug: params.organizationSlug,
         userId,
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({
-        queryKey: trpc.organization.members.queryKey({
-          organizationSlug: params.organizationSlug,
-        }),
-      });
       toast.success("Member removed!");
     },
     onError: (error) => {

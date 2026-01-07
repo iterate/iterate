@@ -1,17 +1,17 @@
 import { Hono, type Context } from "hono";
-import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { RPCHandler } from "@orpc/server/fetch";
+import { onError } from "@orpc/server";
 import { contextStorage } from "hono/context-storage";
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { cors } from "hono/cors";
 import { secureHeaders } from "hono/secure-headers";
 import { typeid } from "typeid-js";
-import { getHTTPStatusCodeFromError } from "@trpc/server/http";
 import tanstackStartServerEntry from "@tanstack/react-start/server-entry";
 import type { CloudflareEnv } from "../env.ts";
 import { getDb, type DB } from "./db/client.ts";
 import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
-import { appRouter } from "./trpc/root.ts";
-import { createContext } from "./trpc/context.ts";
+import { appRouter } from "./orpc/root.ts";
+import { createContext } from "./orpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { logger } from "./tag-logger.ts";
 import { TanstackQueryInvalidator } from "./durable-objects/tanstack-query-invalidator.ts";
@@ -20,7 +20,6 @@ export type Variables = {
   auth: Auth;
   session: AuthSession;
   db: DB;
-  trpcCaller: ReturnType<typeof appRouter.createCaller>;
 };
 
 const app = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -50,8 +49,6 @@ app.use("*", async (c, next) => {
   c.set("db", db);
   c.set("auth", auth);
   c.set("session", session);
-  const trpcCaller = appRouter.createCaller(createContext(c));
-  c.set("trpcCaller", trpcCaller);
   return next();
 });
 
@@ -77,30 +74,32 @@ app.onError((err, c) => {
 
 app.all("/api/auth/*", (c) => c.var.auth.handler(c.req.raw));
 
-// tRPC endpoint
-app.all("/api/trpc/*", (c) => {
-  return fetchRequestHandler({
-    endpoint: "/api/trpc",
-    req: c.req.raw,
-    router: appRouter,
-    allowMethodOverride: true,
-    createContext: () => createContext(c),
-    onError: ({ error, path }) => {
-      const procedurePath = path ?? "unknown";
-      const status = getHTTPStatusCodeFromError(error);
+const orpcHandler = new RPCHandler(appRouter, {
+  interceptors: [
+    onError((error: unknown) => {
+      const err = error as { code?: string; message?: string } | null;
+      const status = err?.code === "INTERNAL_SERVER_ERROR" ? 500 : 400;
+      const message = err?.message ?? "Unknown error";
       if (status >= 500) {
-        logger.error(`TRPC Error ${status} in ${procedurePath}: ${error.message}`, error);
+        logger.error(`oRPC Error ${status}: ${message}`, error);
       } else {
-        logger.warn(`TRPC Error ${status} in ${procedurePath}:\n${error.stack}`);
+        logger.warn(`oRPC Error ${status}: ${message}`);
       }
-    },
-  });
+    }),
+  ],
 });
 
-// Mount the Slack integration app
+app.all("/api/orpc/*", async (c) => {
+  const { response } = await orpcHandler.handle(c.req.raw, {
+    prefix: "/api/orpc",
+    context: createContext(c),
+  });
+
+  return response ?? new Response("Not found", { status: 404 });
+});
+
 app.route("/api/integrations/slack", slackApp);
 
-// WebSocket endpoint for query invalidation
 app.get("/api/ws/invalidate", (c) => {
   const organizationId = c.req.query("organizationId");
   if (!organizationId) {
@@ -148,4 +147,3 @@ export default class extends WorkerEntrypoint {
 }
 
 export { TanstackQueryInvalidator };
-

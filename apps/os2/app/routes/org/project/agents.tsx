@@ -3,7 +3,7 @@ import { Bot } from "lucide-react";
 import { EmptyState } from "../../../components/empty-state.tsx";
 
 export const Route = createFileRoute(
-  "/_auth-required.layout/_/orgs/$organizationSlug/_/projects/$projectSlug/agents",
+  "/_auth-required/_/orgs/$organizationSlug/_/projects/$projectSlug/agents",
 )({
   component: ProjectAgentsPage,
 });
