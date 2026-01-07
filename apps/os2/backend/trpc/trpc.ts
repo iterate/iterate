@@ -3,7 +3,6 @@ import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
 import superjson from "superjson";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
-import type { DB } from "../db/client.ts";
 import type { Context } from "./context.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
@@ -77,66 +76,7 @@ export const protectedProcedure = publicProcedure.use(({ ctx, next }) => {
   });
 });
 
-// Helper function to get user's organizations
-export async function getUserOrganizations(db: DB, userId: string) {
-  return db.query.organizationUserMembership.findMany({
-    where: eq(organizationUserMembership.userId, userId),
-    with: {
-      organization: true,
-    },
-  });
-}
-
-// Helper function to get user's organization access
-export async function getUserOrganizationAccess(
-  db: DB,
-  userId: string,
-  organizationId: string,
-): Promise<{ hasAccess: boolean; organization: any | null; membership: any | null }> {
-  const membership = await db.query.organizationUserMembership.findFirst({
-    where: and(
-      eq(organizationUserMembership.userId, userId),
-      eq(organizationUserMembership.organizationId, organizationId),
-    ),
-    with: {
-      organization: true,
-    },
-  });
-
-  if (!membership) {
-    return { hasAccess: false, organization: null, membership: null };
-  }
-
-  return { hasAccess: true, organization: membership.organization, membership };
-}
-
-// Helper to check project access
-export async function getUserProjectAccess(db: DB, userId: string, projectId: string) {
-  const proj = await db.query.project.findFirst({
-    where: eq(projectTable.id, projectId),
-    with: {
-      organization: true,
-    },
-  });
-
-  if (!proj) {
-    return { hasAccess: false, project: null };
-  }
-
-  const { hasAccess, membership } = await getUserOrganizationAccess(
-    db,
-    userId,
-    proj.organizationId,
-  );
-
-  return {
-    hasAccess,
-    project: hasAccess ? proj : null,
-    membership,
-  };
-}
-
-// Organization protected procedure that requires both authentication and organization membership
+/** Organization protected procedure that requires both authentication and organization membership */
 // Uses slug instead of ID
 export const orgProtectedProcedure = protectedProcedure
   .input(z.object({ organizationSlug: z.string() }))

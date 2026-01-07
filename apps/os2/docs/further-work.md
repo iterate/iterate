@@ -2,52 +2,44 @@
 
 This document tracks additional cleanup and improvements identified during code review.
 
-## High Priority
+## Completed
 
-### 1. Remove Dead WebSocket Code
-- [ ] Delete `app/hooks/use-websocket.ts` (150 lines of dead code)
-- [ ] Remove `useOrganizationWebSocket` import from `app/routes/org/layout.tsx`
+### 1. ~~Remove Dead WebSocket Code~~ ✅
+- [x] Delete `app/hooks/use-websocket.ts` (150 lines of dead code)
+- [x] Remove `useOrganizationWebSocket` import from `app/routes/org/layout.tsx`
 
-The WebSocket Durable Object was removed but the client-side hook and its usage remain.
+### 2. ~~Remove Duplicate Database Helpers~~ ✅
+- [x] Deleted `backend/db/helpers.ts` (completely unused)
+- [x] Removed unused helper functions from `backend/trpc/trpc.ts`
 
-### 2. Remove Duplicate Database Helpers
-- [ ] Review `backend/db/helpers.ts` for duplicates with trpc.ts middleware
-- [ ] Remove or consolidate duplicate functions
+### 3. ~~Remove Debug Logs in Slack Integration~~ ✅
+- [x] Removed debug `console.log` statements from `backend/integrations/slack/slack.ts`
+- Note: `console.warn`/`console.error` retained for legitimate warnings/errors
 
-The helpers file contains functions that may duplicate functionality in the tRPC middleware.
-
-### 3. Fix Logging in Slack Integration
-- [ ] Replace `console.warn`/`console.log` with `logger` in `backend/integrations/slack/slack.ts`
-
-Lines with console usage: 27, 55, 75, 89, 131, 159
+### 4. ~~Improve Type Safety~~ ✅
+- [x] Removed `as any` casts in `app/lib/session-query.ts`
+- [x] Added proper typing for better-auth session extensions (role, impersonatedBy)
 
 ## Medium Priority
 
-### 4. Remove Unnecessary React Imports
-- [ ] Remove `import * as React from "react"` from files that don't need it
+### 5. Improve React Import Style (Optional)
+Most UI components use `import * as React from "react"` which is the default shadcn pattern.
+While these could be changed to named imports, it's a stylistic preference that doesn't affect functionality.
 
-Files identified:
-- app/components/project-selector.tsx
-- app/components/ui/button.tsx
-- app/components/ui/card.tsx
-- app/components/ui/dialog.tsx
-- app/components/ui/dropdown-menu.tsx
-- app/components/ui/input.tsx
-- app/components/ui/label.tsx
-- app/components/ui/select.tsx
-- app/components/ui/sidebar.tsx
-- app/components/ui/tabs.tsx
-- app/components/ui/textarea.tsx
-
-### 5. Improve Type Safety
-- [ ] Remove `as any` casts in `app/lib/session-query.ts`
-- [ ] Add proper typing for better-auth session responses
+Files using `import * as React`:
+- app/components/machine-table.tsx
+- app/components/empty-state.tsx
+- app/components/ui/button.tsx (uses forwardRef)
+- app/components/ui/card.tsx (uses forwardRef)
+- app/components/ui/dialog.tsx (uses forwardRef)
+- app/components/ui/dropdown-menu.tsx (uses forwardRef)
+- app/components/ui/input.tsx (uses forwardRef)
+- app/components/ui/input-otp.tsx
+- app/components/ui/textarea.tsx (only uses ComponentProps type)
+- app/components/ui/table.tsx
+- app/components/ui/badge.tsx
 
 ## Low Priority
 
-### 6. Review Unused Exports
-- [ ] Audit helper functions in `backend/trpc/trpc.ts` for unused exports
-- [ ] Remove any dead code
-
-### 7. Consider Consolidating Auth Utilities
+### 6. Consider Consolidating Auth Utilities
 - [ ] Review if `backend/auth/auth.ts` and related files can be simplified

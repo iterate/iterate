@@ -120,15 +120,11 @@ slackApp.post("/interactive", async (c) => {
     return c.json({ error: "Missing payload" }, 400);
   }
 
-  let payload: unknown;
   try {
-    payload = JSON.parse(payloadStr);
+    JSON.parse(payloadStr);
   } catch {
     return c.json({ error: "Invalid JSON" }, 400);
   }
-
-  // For now, just acknowledge - actual handling would be implemented later
-  console.log("Received Slack interactive payload:", payload);
 
   return c.json({ ok: true });
 });
@@ -151,14 +147,6 @@ slackApp.post("/commands", async (c) => {
     return c.json({ error: "Invalid signature" }, 401);
   }
 
-  // Parse form data
-  const formData = new URLSearchParams(body);
-  const command = formData.get("command");
-  const text = formData.get("text");
-
-  console.log(`Received slash command: ${command} ${text}`);
-
-  // For now, just acknowledge
   return c.json({
     response_type: "ephemeral",
     text: "Command received! This feature is coming soon.",

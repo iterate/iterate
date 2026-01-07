@@ -2,7 +2,6 @@ import { createFileRoute, Outlet, redirect, useParams } from "@tanstack/react-ro
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
-import { useOrganizationWebSocket } from "../../hooks/use-websocket.ts";
 import { AppSidebar } from "../../components/app-sidebar.tsx";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../../components/ui/sidebar.tsx";
 
@@ -43,8 +42,6 @@ function OrgLayout() {
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
-
-  useOrganizationWebSocket(currentOrg.id);
 
   const organizationsWithProjects = (organizations || []).map((organization) => ({
     id: organization.id,
