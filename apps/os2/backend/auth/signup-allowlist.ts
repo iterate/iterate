@@ -24,4 +24,3 @@ export function isEmailAllowed(email: string, allowlist: string): boolean {
 
   return false;
 }
-
