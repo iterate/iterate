@@ -19,11 +19,13 @@
   "dependencies": {
     "@hono/node-server": "^1.19.6",
     "@hono/vite-dev-server": "^0.24.0",
+    "@daytonaio/sdk": "^0.128.1",
     "@hono/zod-validator": "^0.7.5",
     "@hookform/resolvers": "^5.2.2",
     "@mariozechner/pi-ai": "^0.37.3",
     "@mariozechner/pi-coding-agent": "^0.37.3",
     "@neondatabase/serverless": "^1.0.2",
+    "@radix-ui/react-select": "^2.2.6",
     "@react-hookz/web": "^25.2.0",
     "@sinclair/typebox": "^0.34.47",
     "@slack/types": "^2.19.0",

@@ -192,17 +192,27 @@ export const projectEnvVar = pgTable(
       .text()
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
+    machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     encryptedValue: t.text().notNull(),
+    type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.projectId, t.key), index().on(t.projectId)],
+  (t) => [
+    uniqueIndex().on(t.projectId, t.machineId, t.key),
+    index().on(t.projectId),
+    index().on(t.machineId),
+  ],
 );
 
 export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   project: one(project, {
     fields: [projectEnvVar.projectId],
     references: [project.id],
+  }),
+  machine: one(machine, {
+    fields: [projectEnvVar.machineId],
+    references: [machine.id],
   }),
 }));
 
@@ -281,6 +291,7 @@ export const machine = pgTable(
       .text({ enum: [...MachineState] })
       .notNull()
       .default("started"),
+    externalId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),

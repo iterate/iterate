@@ -6,20 +6,33 @@ import { projectEnvVar } from "../../db/schema.ts";
 import { encrypt } from "../../utils/encryption.ts";
 
 export const envVarRouter = router({
-  list: projectProtectedProcedure.query(async ({ ctx }) => {
-    const envVars = await ctx.db.query.projectEnvVar.findMany({
-      where: eq(projectEnvVar.projectId, ctx.project.id),
-      orderBy: (vars, { asc }) => [asc(vars.key)],
-    });
+  list: projectProtectedProcedure
+    .input(
+      z.object({
+        machineId: z.string().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const envVars = await ctx.db.query.projectEnvVar.findMany({
+        where: input.machineId
+          ? and(
+              eq(projectEnvVar.projectId, ctx.project.id),
+              eq(projectEnvVar.machineId, input.machineId),
+            )
+          : eq(projectEnvVar.projectId, ctx.project.id),
+        orderBy: (vars, { asc }) => [asc(vars.key)],
+      });
 
-    return envVars.map((v) => ({
-      id: v.id,
-      key: v.key,
-      maskedValue: maskValue(v.encryptedValue),
-      createdAt: v.createdAt,
-      updatedAt: v.updatedAt,
-    }));
-  }),
+      return envVars.map((v) => ({
+        id: v.id,
+        key: v.key,
+        machineId: v.machineId,
+        type: v.type,
+        maskedValue: maskValue(v.encryptedValue),
+        createdAt: v.createdAt,
+        updatedAt: v.updatedAt,
+      }));
+    }),
 
   set: projectProtectedMutation
     .input(
@@ -33,13 +46,18 @@ export const envVarRouter = router({
               "Key must be uppercase letters, numbers, and underscores, starting with a letter or underscore",
           }),
         value: z.string(),
+        machineId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const encryptedValue = await encrypt(input.value);
 
       const existing = await ctx.db.query.projectEnvVar.findFirst({
-        where: and(eq(projectEnvVar.projectId, ctx.project.id), eq(projectEnvVar.key, input.key)),
+        where: and(
+          eq(projectEnvVar.projectId, ctx.project.id),
+          eq(projectEnvVar.key, input.key),
+          input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
+        ),
       });
 
       if (existing) {
@@ -52,6 +70,7 @@ export const envVarRouter = router({
         return {
           id: updated.id,
           key: updated.key,
+          machineId: updated.machineId,
           maskedValue: maskValue(updated.encryptedValue),
           createdAt: updated.createdAt,
           updatedAt: updated.updatedAt,
@@ -62,6 +81,7 @@ export const envVarRouter = router({
         .insert(projectEnvVar)
         .values({
           projectId: ctx.project.id,
+          machineId: input.machineId,
           key: input.key,
           encryptedValue,
         })
@@ -77,6 +97,7 @@ export const envVarRouter = router({
       return {
         id: created.id,
         key: created.key,
+        machineId: created.machineId,
         maskedValue: maskValue(created.encryptedValue),
         createdAt: created.createdAt,
         updatedAt: created.updatedAt,
@@ -87,11 +108,16 @@ export const envVarRouter = router({
     .input(
       z.object({
         key: z.string(),
+        machineId: z.string().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       const existing = await ctx.db.query.projectEnvVar.findFirst({
-        where: and(eq(projectEnvVar.projectId, ctx.project.id), eq(projectEnvVar.key, input.key)),
+        where: and(
+          eq(projectEnvVar.projectId, ctx.project.id),
+          eq(projectEnvVar.key, input.key),
+          input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
+        ),
       });
 
       if (!existing) {
@@ -101,7 +127,21 @@ export const envVarRouter = router({
         });
       }
 
-      await ctx.db.delete(projectEnvVar).where(eq(projectEnvVar.id, existing.id));
+      if (existing.type === "system") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "System environment variables cannot be deleted manually",
+        });
+      }
+
+      await ctx.db
+        .delete(projectEnvVar)
+        .where(
+          and(
+            eq(projectEnvVar.id, existing.id),
+            input.machineId ? eq(projectEnvVar.machineId, input.machineId) : undefined,
+          ),
+        );
 
       return { success: true };
     }),
