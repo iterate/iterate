@@ -1,7 +1,5 @@
 import * as fs from "fs";
 import * as path from "path";
-import * as YAML from "yaml";
-import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
@@ -13,6 +11,8 @@ import {
   setAppendMessage,
   type PiStreamMessage,
 } from "./pi/index.ts";
+import { Hono } from "hono";
+import * as YAML from "yaml";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Store (in-memory + YAML persistence)

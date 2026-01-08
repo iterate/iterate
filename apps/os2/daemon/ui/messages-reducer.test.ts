@@ -1,13 +1,13 @@
 import { readFileSync } from "fs";
 import { join } from "path";
-import { describe, it, expect } from "vitest";
-import YAML from "yaml";
 import {
   reduceEvents,
   createInitialState,
   messagesReducer,
   getMessages,
 } from "./messages-reducer.ts";
+import { describe, it, expect } from "vitest";
+import YAML from "yaml";
 
 /**
  * Parse a YAML stream file and extract events from the messages array.

@@ -2,17 +2,6 @@
 
 /* eslint-disable react-refresh/only-export-components -- not sure if this is actually bad */
 
-window.addEventListener("unhandledrejection", (e) => {
-  if (e.reason instanceof TypeError && e.reason.message === "network error") {
-    e.preventDefault();
-  }
-});
-
-import { createRoot } from "react-dom/client";
-import { useState, useReducer, useEffect, useRef, useCallback } from "react";
-
-const API_URL = window.location.origin + "/daemon";
-
 import {
   messagesReducer,
   createInitialState,
@@ -22,6 +11,18 @@ import {
   type EventFeedItem,
   type ContentBlock,
 } from "./messages-reducer.ts";
+
+window.addEventListener("unhandledrejection", (e) => {
+  if (e.reason instanceof TypeError && e.reason.message === "network error") {
+    e.preventDefault();
+  }
+});
+
+// eslint-disable-next-line import/extensions -- wut
+import { createRoot } from "react-dom/client";
+import { useState, useReducer, useEffect, useRef, useCallback } from "react";
+
+const API_URL = window.location.origin + "/daemon";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
