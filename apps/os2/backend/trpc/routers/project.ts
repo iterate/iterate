@@ -231,7 +231,10 @@ export const projectRouter = router({
       await tx
         .delete(schema.projectConnection)
         .where(
-          and(eq(projectConnection.projectId, ctx.project.id), eq(projectConnection.provider, "github-app")),
+          and(
+            eq(projectConnection.projectId, ctx.project.id),
+            eq(projectConnection.provider, "github-app"),
+          ),
         );
 
       await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
