@@ -165,6 +165,23 @@ export default defineConfig([
       "no-console": "off",
     },
   },
+  {
+    name: "playwright-rules",
+    files: ["**/*.e2e.ts", "**/e2e/**/*.ts"],
+    rules: {
+      "react-hooks/rules-of-hooks": "off",
+      "no-console": "off",
+      "no-restricted-imports": [
+        "error",
+        {
+          name: "@playwright/test",
+          importNames: ["test"],
+          message:
+            "Use import { test } from './test-helpers.ts' instead. It has some opinionated conventions like adding a spinner waiter to the waitFor/click etc..",
+        },
+      ],
+    },
+  },
   { plugins: { unicorn: eslintPluginUnicorn } },
   {
     rules: {
