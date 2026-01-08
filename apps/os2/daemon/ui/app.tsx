@@ -11,7 +11,10 @@ window.addEventListener("unhandledrejection", (e) => {
 import { createRoot } from "react-dom/client";
 import { useState, useReducer, useEffect, useRef, useCallback } from "react";
 
-const API_URL = window.location.origin + "/daemon";
+const IS_STANDALONE = !window.location.pathname.startsWith("/daemon");
+const BASE_PATH = IS_STANDALONE ? "" : "/daemon";
+const UI_PATH = IS_STANDALONE ? "/ui" : "/daemon/ui";
+const API_URL = window.location.origin + BASE_PATH;
 
 import {
   messagesReducer,
@@ -45,15 +48,17 @@ interface RegistryEvent {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function parseAgentFromPath(): string | null {
-  if (window.location.pathname === "/daemon" || window.location.pathname === "/daemon/") {
-    window.history.replaceState({}, "", "/daemon/ui");
+  const pathname = window.location.pathname;
+  if (pathname === BASE_PATH || pathname === BASE_PATH + "/") {
+    window.history.replaceState({}, "", UI_PATH);
   }
-  const match = window.location.pathname.match(/^\/daemon\/ui\/agents\/(.+)$/);
+  const agentPattern = new RegExp(`^${UI_PATH}/agents/(.+)$`);
+  const match = pathname.match(agentPattern);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
 function navigateToAgent(agentId: string | null) {
-  const newPath = agentId ? `/daemon/ui/agents/${encodeURIComponent(agentId)}` : "/daemon/ui";
+  const newPath = agentId ? `${UI_PATH}/agents/${encodeURIComponent(agentId)}` : UI_PATH;
   if (window.location.pathname !== newPath) {
     window.history.pushState({}, "", newPath);
   }

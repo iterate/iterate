@@ -1,5 +1,6 @@
 packages:
   - apps/*
+  - apps/os2/daemon
   - packages/*
   - estates/*
   - estates/*/apps/*

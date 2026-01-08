@@ -845,6 +845,64 @@ importers:
         specifier: ^8.19.0
         version: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
 
+  apps/os2/daemon:
+    dependencies:
+      '@durable-streams/client':
+        specifier: ^0.1.2
+        version: 0.1.3
+      '@hono/node-server':
+        specifier: ^1.13.0
+        version: 1.19.6(hono@4.11.3)
+      '@mariozechner/pi-ai':
+        specifier: ^0.36.0
+        version: 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-coding-agent':
+        specifier: ^0.36.0
+        version: 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@sinclair/typebox':
+        specifier: ^0.34.0
+        version: 0.34.47
+      hono:
+        specifier: ^4.11.3
+        version: 4.11.3
+      react:
+        specifier: ^19.2.3
+        version: 19.2.3
+      react-dom:
+        specifier: ^19.2.3
+        version: 19.2.3(react@19.2.3)
+      yaml:
+        specifier: ^2.7.0
+        version: 2.8.2
+    devDependencies:
+      '@hono/vite-dev-server':
+        specifier: ^0.24.0
+        version: 0.24.0(hono@4.11.3)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      '@types/react':
+        specifier: ^19.2.7
+        version: 19.2.7
+      '@types/react-dom':
+        specifier: ^19.2.3
+        version: 19.2.3(@types/react@19.2.7)
+      '@vitejs/plugin-react':
+        specifier: ^5.1.1
+        version: 5.1.2(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
+      tsx:
+        specifier: ^4.20.6
+        version: 4.20.6
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vite:
+        specifier: 7.2.4
+        version: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+      vitest:
+        specifier: 4.0.15
+        version: 4.0.15(@opentelemetry/api@1.9.0)(@types/node@24.10.1)(@vitest/ui@4.0.15)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+
   estates/garple:
     dependencies:
       '@radix-ui/react-select':
@@ -1705,6 +1763,10 @@ packages:
 
   '@drizzle-team/brocli@0.10.2':
     resolution: {integrity: sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w==}
+
+  '@durable-streams/client@0.1.3':
+    resolution: {integrity: sha512-zlNpHMlr9GKCvm0ziuEPN0K5qkqxV6AQUu8Ce03mIIOzGBAovlPznUSBvSQlvPuZqru4xdxD8ltltJ0aB5InzA==}
+    engines: {node: '>=18.0.0'}
 
   '@emnapi/core@1.6.0':
     resolution: {integrity: sha512-zq/ay+9fNIJJtJiZxdTnXS20PllcYMX3OE23ESc4HK/bdYu3cOWYVhsOhVnXALfU/uqJIxn5NBPd9z4v+SfoSg==}
@@ -2972,12 +3034,26 @@ packages:
   '@marijn/find-cluster-break@1.0.2':
     resolution: {integrity: sha512-l0h88YhZFyKdXIFNfSWpyjStDjGHwZ/U7iobcK1cQQD8sejsONdQtTVU+1wVN1PBw40PiiHB1vA5S7VTfQiP9g==}
 
+  '@mariozechner/pi-agent-core@0.36.0':
+    resolution: {integrity: sha512-86BI1/j/MLxQHSWRXVLz8+NuSmDvLQebNb40+lFDI9XI9YBh8+r5fkYgU43u4j2TvANZ7iW6SFFnhWhzy8y6dg==}
+    engines: {node: '>=20.0.0'}
+
   '@mariozechner/pi-agent-core@0.37.3':
     resolution: {integrity: sha512-P209454OzN/VxtvhAQTbgmoHg9uaSPxmO9dp5Xx0O/PehZK75gbq3HRtvwwv7Ykd72rYla7Czx+zeFsAhpgskw==}
     engines: {node: '>=20.0.0'}
 
+  '@mariozechner/pi-ai@0.36.0':
+    resolution: {integrity: sha512-xkzTgvdMzAZ/L/TgMH8z9Zi+aH0EWc54l5ygiafwvCgDk7xvfbylQG6pa9yn5zEn9T4NF9byJNk+nMHnycZvMQ==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
   '@mariozechner/pi-ai@0.37.3':
     resolution: {integrity: sha512-KK00ZK9uS+1L/jjbdj/mO8J+3GeIW1/eBbb1zPLzwDlQuPGjjxFzpButH9Gb54IFLMIdPDIfwPbyDhS+FT8WGw==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-coding-agent@0.36.0':
+    resolution: {integrity: sha512-lKdpuGE0yVs/96GnDhrPLEEFhRteHRtnkfX04KIBpcsEXXg2vyAlpxtjtZ9nlhYqLLIY7qJRkeyjbhcFFfbAAA==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -2985,6 +3061,10 @@ packages:
     resolution: {integrity: sha512-tucS/xeeN294Ld2LTjn55rYPgVqTawtCKi2JTIxn/W0ysh3p4Z97f3oe9d8LdmN5AJ/1+zGnzCLMu5OgToIWNg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
+
+  '@mariozechner/pi-tui@0.36.0':
+    resolution: {integrity: sha512-4n+nmTd36q0AVCbqWmjtTHTjIEwlGayKKhc+4QbpN9U3Z9jyQQa8Za1P2OHRmi6Jeu+ISuf4VBDvgmgCaxPZYg==}
+    engines: {node: '>=20.0.0'}
 
   '@mariozechner/pi-tui@0.37.3':
     resolution: {integrity: sha512-5mWYcxAyeiTm7uupMwlAQwQN6VKTRVDSZhBj0XmltjQ08gq9OMvQYeeQGfojeOBSfCAzcm/KoEUbzuUrjB/MSA==}
@@ -4244,6 +4324,9 @@ packages:
   '@rolldown/pluginutils@1.0.0-beta.47':
     resolution: {integrity: sha512-8QagwMH3kNCuzD8EWL8R2YPW5e4OrHNSAHRFDdmFqEwEaD/KcNKjVoumo+gP2vW5eKB2UPbM6vTYiGZX0ixLnw==}
 
+  '@rolldown/pluginutils@1.0.0-beta.53':
+    resolution: {integrity: sha512-vENRlFU4YbrwVqNDZ7fLvy+JR1CRkyr01jhSiDpE1u6py3OMzQfztQU2jxykW3ALNxO4kSlqIDeYyD0Y9RcQeQ==}
+
   '@rollup/rollup-android-arm-eabi@4.52.5':
     resolution: {integrity: sha512-8c1vW4ocv3UOMp9K+gToY5zL2XiiVw3k7f1ksf4yO1FlDFQ1C2u72iACFnSOceJFsWskc2WZNqeRhFRPzv+wtQ==}
     cpu: [arm]
@@ -5265,6 +5348,12 @@ packages:
 
   '@vitejs/plugin-react@5.1.1':
     resolution: {integrity: sha512-WQfkSw0QbQ5aJ2CHYw23ZGkqnRwqKHD/KYsMeTkZzPT4Jcf0DcBxBtwMJxnu6E7oxw5+JC6ZAiePgh28uJ1HBA==}
+    engines: {node: ^20.19.0 || >=22.12.0}
+    peerDependencies:
+      vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
+
+  '@vitejs/plugin-react@5.1.2':
+    resolution: {integrity: sha512-EcA07pHJouywpzsoTUqNh5NwGayl2PPVEJKUSinGGSxFGYn+shYbqMGBg6FXDqgXum9Ou/ecb+411ssw8HImJQ==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
@@ -7260,6 +7349,10 @@ packages:
     resolution: {integrity: sha512-icXIITfw/07Q88nLSkB9aiUrd8rYzSweK681Kjo/TSggaGbOX4RRyxxm71v+3PC8C/j+4rlxGeoTRxQDkaJkUw==}
     engines: {node: '>=16.9.0'}
 
+  hono@4.11.3:
+    resolution: {integrity: sha512-PmQi306+M/ct/m5s66Hrg+adPnkD5jiO6IjA7WhWw0gSBSo1EcRegwuI1deZ+wd5pzCGynCcn2DprnE4/yEV4w==}
+    engines: {node: '>=16.9.0'}
+
   hookable@5.5.3:
     resolution: {integrity: sha512-Yc+BQe8SvoXH1643Qez1zqLRmbA5rCL+sSmk6TVos0LWVfNIB7PGncdlId77WzLGSIB5KaWgTaNTs2lNVEI6VQ==}
 
@@ -9122,6 +9215,11 @@ packages:
     peerDependencies:
       react: ^19.2.0
 
+  react-dom@19.2.3:
+    resolution: {integrity: sha512-yELu4WmLPw5Mr/lmeEpox5rw3RETacE++JgHqQzd2dg+YbJuat3jH4ingc+WPZhxaoFzdv9y33G+F7Nl5O0GBg==}
+    peerDependencies:
+      react: ^19.2.3
+
   react-hook-form@7.67.0:
     resolution: {integrity: sha512-E55EOwKJHHIT/I6J9DmQbCWToAYSw9nN5R57MZw9rMtjh+YQreMDxRLfdjfxQbiJ3/qbg3Z02wGzBX4M+5fMtQ==}
     engines: {node: '>=18.0.0'}
@@ -10838,6 +10936,12 @@ snapshots:
     optionalDependencies:
       zod: 4.1.12
 
+  '@anthropic-ai/sdk@0.71.2(zod@4.1.13)':
+    dependencies:
+      json-schema-to-ts: 3.1.1
+    optionalDependencies:
+      zod: 4.1.13
+
   '@apidevtools/json-schema-ref-parser@11.9.3':
     dependencies:
       '@jsdevtools/ono': 7.1.3
@@ -11734,6 +11838,11 @@ snapshots:
 
   '@drizzle-team/brocli@0.10.2': {}
 
+  '@durable-streams/client@0.1.3':
+    dependencies:
+      '@microsoft/fetch-event-source': 2.0.1
+      fastq: 1.19.1
+
   '@emnapi/core@1.6.0':
     dependencies:
       '@emnapi/wasi-threads': 1.1.0
@@ -12309,10 +12418,23 @@ snapshots:
     dependencies:
       hono: 4.10.7
 
+  '@hono/node-server@1.19.6(hono@4.11.3)':
+    dependencies:
+      hono: 4.11.3
+
   '@hono/vite-dev-server@0.24.0(hono@4.10.7)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
     dependencies:
       '@hono/node-server': 1.19.6(hono@4.10.7)
       hono: 4.10.7
+      minimatch: 9.0.5
+    optionalDependencies:
+      miniflare: 4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      wrangler: 4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+
+  '@hono/vite-dev-server@0.24.0(hono@4.11.3)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))':
+    dependencies:
+      '@hono/node-server': 1.19.6(hono@4.11.3)
+      hono: 4.11.3
       minimatch: 9.0.5
     optionalDependencies:
       miniflare: 4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -12739,10 +12861,42 @@ snapshots:
 
   '@marijn/find-cluster-break@1.0.2': {}
 
+  '@mariozechner/pi-agent-core@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@mariozechner/pi-ai': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.36.0
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
   '@mariozechner/pi-agent-core@0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)':
     dependencies:
       '@mariozechner/pi-ai': 0.37.3(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       '@mariozechner/pi-tui': 0.37.3
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-ai@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@anthropic-ai/sdk': 0.71.2(zod@4.1.13)
+      '@google/genai': 1.34.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      '@mistralai/mistralai': 1.10.0
+      '@sinclair/typebox': 0.34.47
+      ajv: 8.17.1
+      ajv-formats: 3.0.1(ajv@8.17.1)
+      chalk: 5.6.2
+      openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      partial-json: 0.1.7
+      zod-to-json-schema: 3.25.0(zod@4.1.13)
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -12763,6 +12917,28 @@ snapshots:
       openai: 6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12)
       partial-json: 0.1.7
       zod-to-json-schema: 3.25.0(zod@4.1.12)
+    transitivePeerDependencies:
+      - '@modelcontextprotocol/sdk'
+      - bufferutil
+      - supports-color
+      - utf-8-validate
+      - ws
+      - zod
+
+  '@mariozechner/pi-coding-agent@0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)':
+    dependencies:
+      '@crosscopy/clipboard': 0.2.8
+      '@mariozechner/pi-agent-core': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-ai': 0.36.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13)
+      '@mariozechner/pi-tui': 0.36.0
+      chalk: 5.6.2
+      cli-highlight: 2.1.11
+      diff: 8.0.2
+      file-type: 21.3.0
+      glob: 11.1.0
+      jiti: 2.6.1
+      marked: 15.0.12
+      sharp: 0.34.5
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -12794,6 +12970,14 @@ snapshots:
       - utf-8-validate
       - ws
       - zod
+
+  '@mariozechner/pi-tui@0.36.0':
+    dependencies:
+      '@types/mime-types': 2.1.4
+      chalk: 5.6.2
+      get-east-asian-width: 1.4.0
+      marked: 15.0.12
+      mime-types: 3.0.1
 
   '@mariozechner/pi-tui@0.37.3':
     dependencies:
@@ -14451,6 +14635,8 @@ snapshots:
 
   '@rolldown/pluginutils@1.0.0-beta.47': {}
 
+  '@rolldown/pluginutils@1.0.0-beta.53': {}
+
   '@rollup/rollup-android-arm-eabi@4.52.5':
     optional: true
 
@@ -15706,6 +15892,18 @@ snapshots:
       '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.28.5)
       '@babel/plugin-transform-react-jsx-source': 7.27.1(@babel/core@7.28.5)
       '@rolldown/pluginutils': 1.0.0-beta.47
+      '@types/babel__core': 7.20.5
+      react-refresh: 0.18.0
+      vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
+    transitivePeerDependencies:
+      - supports-color
+
+  '@vitejs/plugin-react@5.1.2(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))':
+    dependencies:
+      '@babel/core': 7.28.5
+      '@babel/plugin-transform-react-jsx-self': 7.27.1(@babel/core@7.28.5)
+      '@babel/plugin-transform-react-jsx-source': 7.27.1(@babel/core@7.28.5)
+      '@rolldown/pluginutils': 1.0.0-beta.53
       '@types/babel__core': 7.20.5
       react-refresh: 0.18.0
       vite: 7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2)
@@ -18066,6 +18264,8 @@ snapshots:
 
   hono@4.10.7: {}
 
+  hono@4.11.3: {}
+
   hookable@5.5.3: {}
 
   hosted-git-info@2.8.9: {}
@@ -19323,6 +19523,11 @@ snapshots:
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
       zod: 4.1.12
 
+  openai@6.10.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.13):
+    optionalDependencies:
+      ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
+      zod: 4.1.13
+
   openai@6.3.0(ws@8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(zod@4.1.12):
     optionalDependencies:
       ws: 8.19.0(bufferutil@4.0.9)(utf-8-validate@5.0.10)
@@ -20080,6 +20285,11 @@ snapshots:
   react-dom@19.2.0(react@19.2.0):
     dependencies:
       react: 19.2.0
+      scheduler: 0.27.0
+
+  react-dom@19.2.3(react@19.2.3):
+    dependencies:
+      react: 19.2.3
       scheduler: 0.27.0
 
   react-hook-form@7.67.0(react@19.2.0):
@@ -21907,6 +22117,10 @@ snapshots:
   zod-to-json-schema@3.25.0(zod@4.1.12):
     dependencies:
       zod: 4.1.12
+
+  zod-to-json-schema@3.25.0(zod@4.1.13):
+    dependencies:
+      zod: 4.1.13
 
   zod-to-ts@1.2.0(typescript@5.9.3)(zod@3.25.76):
     dependencies:
