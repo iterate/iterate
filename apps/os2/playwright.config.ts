@@ -13,6 +13,7 @@ export default defineConfig({
   reporter: "list",
   timeout: 120_000,
   use: {
+    actionTimeout: 5000,
     baseURL,
     trace: "on-first-retry",
   },
@@ -25,7 +26,7 @@ export default defineConfig({
   webServer: {
     command: "pnpm dev",
     url: baseURL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: true,
     timeout: 120_000,
   },
 });
