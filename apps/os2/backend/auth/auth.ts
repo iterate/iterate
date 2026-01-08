@@ -1,4 +1,4 @@
-import { betterAuth } from "better-auth";
+import { betterAuth, APIError } from "better-auth";
 import { admin, emailOTP } from "better-auth/plugins";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { typeid } from "typeid-js";
@@ -6,11 +6,14 @@ import { type DB } from "../db/client.ts";
 import * as schema from "../db/schema.ts";
 import { env, isNonProd, type CloudflareEnv } from "../../env.ts";
 import { logger } from "../tag-logger.ts";
+import { isEmailAllowed } from "./signup-allowlist.ts";
 
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
+  const signupAllowlist = envParam.SIGNUP_ALLOWLIST ?? "*@nustom.com";
+
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
@@ -25,6 +28,20 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
         verification: schema.verification,
       },
     }),
+    databaseHooks: {
+      user: {
+        create: {
+          before: async (user) => {
+            if (!isEmailAllowed(user.email, signupAllowlist)) {
+              throw new APIError("FORBIDDEN", {
+                message: "Sign up is not available for this email address",
+              });
+            }
+            return { data: user };
+          },
+        },
+      },
+    },
     plugins: [
       admin(),
       emailOTP({

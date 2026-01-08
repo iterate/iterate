@@ -74,7 +74,8 @@ const Env = z.object({
   ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
-} satisfies Record<string, typeof Required | typeof Optional>);
+  SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
+} satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
