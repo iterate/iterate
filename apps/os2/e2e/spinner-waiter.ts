@@ -58,7 +58,7 @@ function setup(page: Page) {
           });
         }
 
-        const spinnerLocator = page.locator(
+        const spinnerLocator = this.page().locator(
           `[data-spinner],[data-spinner='true'],:text-matches("loading\\.\\.\\.$", "i")`,
         ) as LocatorWithOriginal;
         const union = this.or(spinnerLocator) as LocatorWithOriginal;
