@@ -1,5 +1,5 @@
-import { test, expect, type Page } from "@playwright/test";
-import { login, ensureOrganization, ensureProject } from "./test-helpers.ts";
+import { expect, type Page } from "@playwright/test";
+import { login, ensureOrganization, ensureProject, test } from "./test-helpers.ts";
 
 async function goToMachinesPage(page: Page, baseURL: string) {
   const url = new URL(page.url());

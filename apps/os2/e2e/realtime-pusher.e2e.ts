@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./test-helpers.ts";
 
 test.describe("realtime pusher", () => {
   test("mutation broadcasts invalidation via WebSocket", async ({ page, baseURL }) => {

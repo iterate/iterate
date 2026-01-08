@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./test-helpers.ts";
 
 test.describe("daemon chat", () => {
   test("can create agent and receive chat response", async ({ page, baseURL }) => {

@@ -1,10 +1,11 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
 import {
   login,
   ensureOrganization,
   ensureProject,
   getProjectBasePath,
   getOrganizationSlug,
+  test,
 } from "./test-helpers.ts";
 
 test.describe("shell navigation", () => {
