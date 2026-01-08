@@ -45,6 +45,8 @@ function setup(page: Page) {
 
   // override the `.click` method on the prototype, not just this instance:
   for (const method of overrideableMethods) {
+    if (locatorPrototype[`${method}_original`]) continue;
+
     locatorPrototype[`${method}_original`] = locatorPrototype[method];
     Object.defineProperty(locatorPrototype, method, {
       value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
