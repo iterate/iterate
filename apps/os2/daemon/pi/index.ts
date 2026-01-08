@@ -14,7 +14,7 @@ import {
   type AgentSession,
   type AgentSessionEvent,
 } from "@mariozechner/pi-coding-agent";
-import { createCustomTools } from "./custom-tools.ts";
+import { createCustomTools, type SlackContext } from "./custom-tools.ts";
 
 // appendMessage is injected to avoid circular dependency with index.ts
 type AppendMessageFn = (
@@ -63,11 +63,14 @@ function getModelRegistry(): ModelRegistry {
   return sharedModelRegistry;
 }
 
-export async function createPiSession(streamId: string): Promise<AgentSession> {
+export async function createPiSession(
+  streamId: string,
+  slackContext?: SlackContext,
+): Promise<AgentSession> {
   if (!appendMessageFn)
     throw new Error("appendMessage not initialized - call setAppendMessage first");
 
-  const customTools = createCustomTools(streamId, appendMessageFn);
+  const customTools = createCustomTools(streamId, appendMessageFn, slackContext);
   const cwd = process.cwd();
 
   const model = getModel("anthropic", "claude-sonnet-4-20250514");
@@ -85,14 +88,18 @@ export async function createPiSession(streamId: string): Promise<AgentSession> {
     `[Pi] API key for ${model.id}: ${apiKey ? `${apiKey.substring(0, 10)}...` : "NOT FOUND"}`,
   );
 
+  const systemPrompt = slackContext
+    ? "You are a helpful assistant responding to Slack messages. Be concise. IMPORTANT: Always use the sendSlackMessage tool to respond to the user - do not just output text."
+    : "You are a helpful coding assistant. Be concise in your responses.";
+
   const { session } = await createAgentSession({
     cwd,
     model,
     thinkingLevel: "off",
     authStorage: getAuthStorage(),
     modelRegistry: getModelRegistry(),
-    systemPrompt: "You are a helpful coding assistant. Be concise in your responses.",
-    tools: codingTools,
+    systemPrompt,
+    tools: slackContext ? [] : codingTools,
     customTools,
     sessionManager: SessionManager.inMemory(),
     settingsManager: SettingsManager.inMemory({

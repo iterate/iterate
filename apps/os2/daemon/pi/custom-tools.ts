@@ -1,8 +1,3 @@
-/**
- * Custom tools that demonstrate harness integration.
- * These tools show that Pi sessions can access context from the surrounding daemon.
- */
-
 import { Type, type Static } from "@sinclair/typebox";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 
@@ -13,18 +8,28 @@ type AppendMessageFn = (
   metadata?: Record<string, unknown>,
 ) => Promise<{ offset: string }>;
 
-/**
- * Create custom tools that are injected with harness context.
- */
+export interface SlackContext {
+  channel?: string;
+  threadTs?: string;
+  user?: string;
+}
+
 export function createCustomTools(
   agentId: string,
   appendMessage: AppendMessageFn,
+  slackContext?: SlackContext,
 ): ToolDefinition[] {
-  return [
+  const tools: ToolDefinition[] = [
     createGetAgentNameTool(agentId),
     createMessageAgentTool(agentId, appendMessage),
     createGetSecretTool(),
   ];
+
+  if (slackContext) {
+    tools.push(createSendSlackMessageTool(agentId, appendMessage, slackContext));
+  }
+
+  return tools;
 }
 
 function createGetAgentNameTool(agentId: string): ToolDefinition {
@@ -97,5 +102,44 @@ function createGetSecretTool(): ToolDefinition {
       content: [{ type: "text", text: "the singularity is here" }],
       details: {},
     }),
+  };
+}
+
+function createSendSlackMessageTool(
+  agentId: string,
+  appendMessage: AppendMessageFn,
+  slackContext: SlackContext,
+): ToolDefinition {
+  const SendSlackMessageParams = Type.Object({
+    text: Type.String({ description: "The message text to send to the Slack channel/thread" }),
+  });
+
+  return {
+    name: "sendSlackMessage",
+    label: "Send Slack Message",
+    description:
+      "Send a message back to the Slack channel/thread that triggered this conversation. Use this to respond to the user.",
+    parameters: SendSlackMessageParams,
+    execute: async (_toolCallId: string, params: Static<typeof SendSlackMessageParams>) => {
+      const { text } = params;
+
+      await appendMessage(
+        agentId,
+        {
+          type: "slack_message_to_send",
+          text,
+          channel: slackContext.channel,
+          threadTs: slackContext.threadTs,
+          timestamp: new Date().toISOString(),
+        },
+        "agent",
+        { slackContext },
+      );
+
+      return {
+        content: [{ type: "text", text: `Message queued to be sent to Slack.` }],
+        details: { text, channel: slackContext.channel, threadTs: slackContext.threadTs },
+      };
+    },
   };
 }

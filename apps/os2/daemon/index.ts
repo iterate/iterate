@@ -270,7 +270,6 @@ app.use(
 app.get("/", (c) => c.redirect("/ui"));
 app.get("/platform/ping", (c) => c.text("PONG"));
 
-// Slack webhook
 app.post("/edge/slack", async (c) => {
   let webhook: SlackWebhook;
   try {
@@ -278,11 +277,59 @@ app.post("/edge/slack", async (c) => {
   } catch {
     return c.text("Invalid JSON", 400);
   }
+
+  if (webhook.type === "url_verification") {
+    return c.json({ challenge: webhook.challenge });
+  }
+
   const event = webhook.event;
   if (!event) return c.text("OK");
+  if (event.bot_id) return c.text("OK");
+  if (event.type !== "message" || !event.text) return c.text("OK");
+
   const threadId = event.thread_ts ?? event.ts;
   if (!threadId) return c.text("Missing thread identifier", 400);
-  appendMessage(threadId, webhook, "slack", { channel: event.channel, user: event.user });
+
+  const slackContext = {
+    channel: event.channel,
+    threadTs: threadId,
+    user: event.user,
+  };
+
+  let agent = getAgent(threadId);
+  if (!agent) {
+    agent = await createAgent(threadId, "application/json", { createPiSession: false });
+    agent.slackContext = slackContext;
+    try {
+      agent.piSession = await createPiSession(threadId, slackContext);
+      console.log(`Created Pi session with Slack context for thread: ${threadId}`);
+    } catch (error) {
+      console.error(`Failed to create Pi session for ${threadId}:`, error);
+    }
+  }
+
+  await appendMessage(threadId, webhook, "slack", { channel: event.channel, user: event.user });
+
+  if (agent.piSession && event.text) {
+    await appendMessage(
+      threadId,
+      { type: "user_prompt", text: event.text } satisfies PiStreamMessage,
+      "user",
+    );
+
+    promptPiSession(agent.piSession, event.text).catch((error) => {
+      console.error(`Pi prompt error for ${threadId}:`, error);
+      appendMessage(
+        threadId,
+        {
+          type: "error",
+          message: error instanceof Error ? error.message : String(error),
+        } satisfies PiStreamMessage,
+        "system",
+      );
+    });
+  }
+
   return c.text("OK");
 });
 
