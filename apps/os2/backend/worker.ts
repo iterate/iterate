@@ -12,6 +12,7 @@ import { getAuth, type Auth, type AuthSession } from "./auth/auth.ts";
 import { appRouter } from "./trpc/root.ts";
 import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
+import { githubApp } from "./integrations/github/github.ts";
 import { logger } from "./tag-logger.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 
@@ -79,8 +80,9 @@ app.all("/api/trpc/*", (c) => {
   });
 });
 
-// Mount the Slack integration app
+// Mount integration apps
 app.route("/api/integrations/slack", slackApp);
+app.route("/api/integrations/github", githubApp);
 
 // WebSocket endpoint for realtime push (query invalidation)
 app.get("/api/ws/realtime", (c) => {
