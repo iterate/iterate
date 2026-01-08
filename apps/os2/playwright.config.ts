@@ -13,7 +13,7 @@ export default defineConfig({
   reporter: "list",
   timeout: 120_000,
   use: {
-    actionTimeout: 5000,
+    actionTimeout: 1000,
     baseURL,
     trace: "on-first-retry",
   },

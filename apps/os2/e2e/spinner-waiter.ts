@@ -16,7 +16,9 @@ const defaults: spinnerWaiter.Settings = { spinnerTimeout: 30_000, disabled: fal
 export const spinnerWaiter = { setup, settings, defaults };
 
 const getSettings = () => {
-  return { ...defaults, ...settings.getStore() };
+  const result = { ...defaults, ...settings.getStore() };
+  if (result.spinnerTimeout <= 1000) throw new Error("spinnerTimeout must be greater than 1000ms");
+  return result;
 };
 
 const overrideableMethods = [
@@ -45,14 +47,18 @@ function setup(page: Page) {
   for (const method of overrideableMethods) {
     locatorPrototype[`${method}_original`] = locatorPrototype[method];
     Object.defineProperty(locatorPrototype, method, {
-      value: async function (this: LocatorWithOriginal, options: any) {
+      value: async function (this: LocatorWithOriginal, ...args: unknown[]) {
+        const _options = args.at(-1) as any;
         const settings = getSettings();
-        const skipSpinnerCheck = settings.disabled || options?.skipSpinnerCheck;
+        const skipSpinnerCheck = settings.disabled || _options?.skipSpinnerCheck;
 
         settings.log(`${this}.${method}(...) ${JSON.stringify({ skipSpinnerCheck })}`);
 
+        const callOriginal = async (argsList: unknown[]) =>
+          (this[`${method}_original`] as Function)(...argsList);
+
         if (skipSpinnerCheck) {
-          return await this[`${method}_original`](options).catch((e) => {
+          return await callOriginal(args).catch((e) => {
             adjustError(e);
             throw e;
           });
@@ -79,7 +85,7 @@ function setup(page: Page) {
 
         if (await this.isVisible()) {
           // seems it's ready, just do the original operation
-          return await this[`${method}_original`](options).catch((e) => {
+          return await callOriginal(args).catch((e) => {
             adjustError(e as Error, []);
             throw e;
           });
@@ -90,24 +96,27 @@ function setup(page: Page) {
         );
 
         const race = await Promise.race([
-          this[`${method}_original`]({ ...options, timeout: settings.spinnerTimeout }).then(
-            (result) => {
-              return { outcome: "success" as const, result };
-            },
-          ),
+          // the original operation might have side effects (e.g. click), and we give it one last chance if the spinner disappears first - so make give the original operation a bit less time to complete.
+          callOriginal([
+            ...args.slice(0, -1),
+            { ..._options, timeout: settings.spinnerTimeout - 1000 },
+          ])
+            .then((result) => ({ outcome: "success" as const, result }))
+            .catch((e) => ({ outcome: "error" as const, error: e })),
           spinnerLocator
             .waitFor_original({ timeout: settings.spinnerTimeout, state: "hidden" })
-            .then((result) => {
-              return { outcome: "spinner-hidden" as const, result };
-            }),
-        ]).catch((e) => {
-          adjustError(e as Error, [
-            `${this}.${method}(...) didn't succeed and spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`,
-          ]);
-          throw e;
-        });
+            .then((result) => ({ outcome: "spinner-hidden" as const, result }))
+            .catch((e) => ({ outcome: "error" as const, error: e })),
+        ]);
 
         settings.log(`race result: ${JSON.stringify(race)}`);
+
+        if (race.outcome === "error") {
+          adjustError(race.error as Error, [
+            `${this}.${method}(...) didn't succeed and spinner was still visible after ${settings.spinnerTimeout}ms, the UI is likely stuck.`,
+          ]);
+          throw race.error;
+        }
 
         if (race.outcome === "success") {
           return race.result;
@@ -115,7 +124,7 @@ function setup(page: Page) {
 
         if (race.outcome === "spinner-hidden") {
           // spinner was hidden before the operation completed, give it one last chance
-          return await this[`${method}_original`](options).catch((e) => {
+          return await callOriginal(args).catch((e) => {
             adjustError(e as Error, [
               `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
             ]);
