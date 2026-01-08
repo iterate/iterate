@@ -293,7 +293,9 @@ function EnvVarSection({
                   )}
                 </span>
               </TableCell>
-              <TableCell className="font-mono text-muted-foreground">{envVar.maskedValue}</TableCell>
+              <TableCell className="font-mono text-muted-foreground">
+                {envVar.maskedValue}
+              </TableCell>
               <TableCell className="text-muted-foreground">
                 {new Date(envVar.updatedAt).toLocaleDateString()}
               </TableCell>
