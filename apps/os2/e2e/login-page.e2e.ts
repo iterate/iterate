@@ -18,8 +18,8 @@ test.describe("login page", () => {
     const emailInput = page.getByTestId("email-input");
     const submitButton = page.getByTestId("email-submit-button");
 
-    await expect(emailInput).toBeVisible();
-    await expect(submitButton).toBeVisible();
+    await expect(emailInput).toBeEnabled({ timeout: 5000 });
+    await expect(submitButton).toBeEnabled({ timeout: 5000 });
 
     await emailInput.fill(email);
     await submitButton.click();

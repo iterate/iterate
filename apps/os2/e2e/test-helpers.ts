@@ -8,7 +8,7 @@ export async function login(page: Page, email: string, baseURL?: string) {
 
   // Wait for and fill the email input using data-testid for reliability
   const emailInput = page.getByTestId("email-input");
-  await expect(emailInput).toBeVisible({ timeout: 5000 });
+  await expect(emailInput).toBeEnabled({ timeout: 5000 });
   await emailInput.fill(email);
 
   // Click submit button - wait for it to be enabled first
