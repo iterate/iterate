@@ -36,7 +36,7 @@ export default defineConfig({
         })
       : null,
     devtools(),
-    daemonPlugin(),
+    // daemonPlugin(),
     {
       name: "os2:force-vite-public-url",
       configureServer(server) {
@@ -73,6 +73,7 @@ export default defineConfig({
   },
 });
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- remove this when jonas does daemon changes
 function daemonPlugin(): Plugin {
   return {
     name: "os2:daemon",

@@ -29,30 +29,26 @@ const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
 
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
-  try {
-    const dopplerConfig = z
-      .object({ environment: z.string() })
-      .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
+  const dopplerConfig = z
+    .object({ environment: z.string() })
+    .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
 
-    if (isProduction && dopplerConfig.environment !== "prd") {
-      throw new Error(
-        `You are trying to deploy to production, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
+  if (isProduction && !dopplerConfig.environment.startsWith("prd")) {
+    throw new Error(
+      `You are trying to deploy to production, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
+  }
 
-    if (isStaging && dopplerConfig.environment !== "stg") {
-      throw new Error(
-        `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
+  if (isStaging && !dopplerConfig.environment.startsWith("stg")) {
+    throw new Error(
+      `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
+  }
 
-    if (isDevelopment && !dopplerConfig.environment.startsWith("dev")) {
-      throw new Error(
-        `You are trying to develop locally, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
-  } catch (e) {
-    throw new Error("Failed to determine doppler environment", { cause: e });
+  if (isDevelopment && !dopplerConfig.environment.startsWith("dev")) {
+    throw new Error(
+      `You are trying to develop locally, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
   }
 }
 
@@ -80,6 +76,7 @@ const Env = z.object({
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
   SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {
@@ -162,7 +159,7 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+    await migrate(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -170,9 +167,25 @@ async function setupDatabase() {
   }
 
   if (isProduction) {
-    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+    const planetscaleDb = await Database("planetscale-db", {
+      name: "os2-production",
+      clusterSize: "PS_10",
+      adopt: true,
+      arch: "x86",
+      kind: "postgresql",
+      delete: false,
+    });
+
+    const role = await Role("db-role", {
+      database: planetscaleDb,
+      inheritedRoles: ["postgres"],
+      delete: false,
+    });
+
+    await migrate(role.connectionUrl.unencrypted);
+
     return {
-      DATABASE_URL: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
