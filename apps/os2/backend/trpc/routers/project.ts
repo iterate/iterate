@@ -16,7 +16,7 @@ import {
   listInstallationRepositories,
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
-import { revokeSlackToken } from "../../integrations/slack/slack.ts";
+import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
@@ -267,16 +267,15 @@ export const projectRouter = router({
         expiresAt,
       });
 
-      // Create Slack OAuth URL with bot scopes
-      // These scopes allow the bot to read team info, channels, and send messages
+      // Build Slack OAuth v2 URL manually
+      // arctic.Slack uses OpenID Connect endpoint which only supports user auth scopes
+      // For bot scopes, we need /oauth/v2/authorize
       const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
-      const slack = new arctic.Slack(
-        ctx.env.SLACK_CLIENT_ID,
-        ctx.env.SLACK_CLIENT_SECRET,
-        redirectUri,
-      );
-      const scopes = ["team:read", "channels:read", "chat:write", "users:read"];
-      const authorizationUrl = slack.createAuthorizationURL(state, scopes);
+      const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
+      authorizationUrl.searchParams.set("client_id", ctx.env.SLACK_CLIENT_ID);
+      authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+      authorizationUrl.searchParams.set("state", state);
+      authorizationUrl.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
 
       return { authorizationUrl: authorizationUrl.toString() };
     }),

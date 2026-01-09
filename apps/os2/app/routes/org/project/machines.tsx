@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,7 +13,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "../../../components/ui/dialog.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
@@ -36,13 +35,6 @@ function ProjectMachinesPage() {
       organizationSlug: params.organizationSlug,
       projectSlug: params.projectSlug,
       includeArchived: false,
-    }),
-  );
-
-  const { data: project } = useSuspenseQuery(
-    trpc.project.bySlug.queryOptions({
-      organizationSlug: params.organizationSlug,
-      projectSlug: params.projectSlug,
     }),
   );
 
@@ -113,74 +105,80 @@ function ProjectMachinesPage() {
     },
   });
 
-  const handleCreateMachine = () => {
+  const handleCreateMachine = (e: FormEvent) => {
+    e.preventDefault();
     if (newMachineName.trim()) {
       createMachine.mutate(newMachineName.trim());
     }
   };
 
-  return (
-    <div className="p-8">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">{project?.name || "Machines"}</h1>
-        <div className="flex items-center gap-4">
-          <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4 mr-2" />
-                New Machine
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Create Machine</DialogTitle>
-                <DialogDescription>Create a new machine in this project.</DialogDescription>
-              </DialogHeader>
-              <div className="py-4">
-                <Input
-                  placeholder="Machine name"
-                  value={newMachineName}
-                  onChange={(e) => setNewMachineName(e.target.value)}
-                  disabled={createMachine.isPending}
-                />
-              </div>
-              <DialogFooter>
-                <Button
-                  variant="outline"
-                  onClick={() => setCreateDialogOpen(false)}
-                  disabled={createMachine.isPending}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateMachine}
-                  disabled={!newMachineName.trim() || createMachine.isPending}
-                >
-                  {createMachine.isPending ? "Creating..." : "Create"}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
+  const createDialog = (
+    <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
+      <DialogContent>
+        <form onSubmit={handleCreateMachine}>
+          <DialogHeader>
+            <DialogTitle>Create Machine</DialogTitle>
+            <DialogDescription>Create a new machine in this project.</DialogDescription>
+          </DialogHeader>
+          <div className="py-4">
+            <Input
+              placeholder="Machine name"
+              value={newMachineName}
+              onChange={(e) => setNewMachineName(e.target.value)}
+              disabled={createMachine.isPending}
+              autoFocus
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setCreateDialogOpen(false)}
+              disabled={createMachine.isPending}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={!newMachineName.trim() || createMachine.isPending}>
+              {createMachine.isPending ? "Creating..." : "Create"}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 
-      {machines.length > 0 ? (
-        <MachineTable
-          machines={machines}
-          organizationSlug={params.organizationSlug}
-          projectSlug={params.projectSlug}
-          onArchive={(id) => archiveMachine.mutate(id)}
-          onUnarchive={(id) => unarchiveMachine.mutate(id)}
-          onDelete={(id) => deleteMachine.mutate(id)}
-        />
-      ) : (
+  if (machines.length === 0) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        {createDialog}
         <EmptyState
           icon={<Server className="h-12 w-12" />}
           title="No machines yet"
           description="Create your first machine to get started."
           action={<Button onClick={() => setCreateDialogOpen(true)}>Create Machine</Button>}
         />
-      )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-8">
+      {createDialog}
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-2xl font-bold">Machines</h1>
+        <Button onClick={() => setCreateDialogOpen(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          New Machine
+        </Button>
+      </div>
+      <MachineTable
+        machines={machines}
+        organizationSlug={params.organizationSlug}
+        projectSlug={params.projectSlug}
+        onArchive={(id) => archiveMachine.mutate(id)}
+        onUnarchive={(id) => unarchiveMachine.mutate(id)}
+        onDelete={(id) => deleteMachine.mutate(id)}
+      />
     </div>
   );
 }

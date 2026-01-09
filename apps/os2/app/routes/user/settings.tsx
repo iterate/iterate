@@ -83,6 +83,7 @@ function UserSettingsForm({ user, isSaving, onSubmit }: UserSettingsFormProps) {
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 disabled={isSaving}
+                autoFocus
               />
             </Field>
             <Field>

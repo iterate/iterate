@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
-import * as arctic from "arctic";
+import { WebClient } from "@slack/web-api";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
@@ -10,16 +10,36 @@ import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
 import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
 
+export const SLACK_BOT_SCOPES = [
+  "channels:history",
+  "channels:join",
+  "channels:manage",
+  "channels:read",
+  "chat:write",
+  "chat:write.public",
+  "files:read",
+  "files:write",
+  "groups:history",
+  "groups:read",
+  "im:history",
+  "im:read",
+  "im:write",
+  "mpim:history",
+  "mpim:read",
+  "reactions:read",
+  "reactions:write",
+  "users.profile:read",
+  "users:read",
+  "users:read.email",
+  "assistant:write",
+  "conversations.connect:write",
+];
+
 export type SlackOAuthStateData = {
   projectId: string;
   userId: string;
   callbackURL?: string;
 };
-
-export function createSlackClient(env: CloudflareEnv) {
-  const redirectURI = `${env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
-  return new arctic.Slack(env.SLACK_CLIENT_ID, env.SLACK_CLIENT_SECRET, redirectURI);
-}
 
 /**
  * Revoke a Slack access token using auth.revoke API
@@ -118,40 +138,35 @@ slackApp.get(
       return c.json({ error: "User mismatch - please restart the Slack connection flow" }, 403);
     }
 
-    const slack = createSlackClient(c.env);
+    // Use WebClient for proper OAuth v2 token exchange
+    // arctic.Slack uses OpenID Connect which doesn't work with bot scopes
+    const redirectUri = `${c.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
+    const slackClient = new WebClient();
 
-    let tokens: arctic.OAuth2Tokens;
+    let tokens;
     try {
-      tokens = await slack.validateAuthorizationCode(code);
+      tokens = await slackClient.oauth.v2.access({
+        client_id: c.env.SLACK_CLIENT_ID,
+        client_secret: c.env.SLACK_CLIENT_SECRET,
+        code,
+        redirect_uri: redirectUri,
+      });
     } catch (error) {
-      logger.error("Failed to validate Slack authorization code", error);
+      logger.error("Failed to exchange Slack authorization code", error);
       return c.json({ error: "Failed to validate authorization code" }, 400);
     }
 
-    const accessToken = tokens.accessToken();
-
-    // Fetch team info from Slack
-    const teamResponse = await fetch("https://slack.com/api/team.info", {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (!teamResponse.ok) {
-      logger.error("Failed to fetch Slack team info", await teamResponse.text());
-      return c.json({ error: "Failed to get team info" }, 400);
+    if (!tokens.ok || !tokens.access_token || !tokens.team?.id) {
+      logger.error("Slack oauth.v2.access failed", tokens.error);
+      return c.json({ error: "Failed to get tokens from Slack" }, 400);
     }
 
-    const teamData = (await teamResponse.json()) as {
-      ok: boolean;
-      team?: { id: string; name: string; domain: string };
-      error?: string;
+    const accessToken = tokens.access_token;
+    const teamData = {
+      id: tokens.team.id,
+      name: tokens.team.name ?? "Unknown",
+      domain: (tokens as { team: { domain?: string } }).team.domain ?? tokens.team.id,
     };
-
-    if (!teamData.ok || !teamData.team) {
-      logger.error("Slack team.info API error", teamData.error);
-      return c.json({ error: "Failed to get team info from Slack" }, 400);
-    }
 
     const encryptedAccessToken = await encrypt(accessToken);
 
@@ -164,11 +179,11 @@ slackApp.get(
         await tx
           .update(schema.projectConnection)
           .set({
-            externalId: teamData.team!.id,
+            externalId: teamData.id,
             providerData: {
-              teamId: teamData.team!.id,
-              teamName: teamData.team!.name,
-              teamDomain: teamData.team!.domain,
+              teamId: teamData.id,
+              teamName: teamData.name,
+              teamDomain: teamData.domain,
               encryptedAccessToken,
             },
           })
@@ -177,13 +192,13 @@ slackApp.get(
         await tx.insert(schema.projectConnection).values({
           projectId,
           provider: "slack",
-          externalId: teamData.team!.id,
+          externalId: teamData.id,
           scope: "project",
           userId,
           providerData: {
-            teamId: teamData.team!.id,
-            teamName: teamData.team!.name,
-            teamDomain: teamData.team!.domain,
+            teamId: teamData.id,
+            teamName: teamData.name,
+            teamDomain: teamData.domain,
             encryptedAccessToken,
           },
         });
