@@ -5,7 +5,8 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
-import type { Agent, Message, SlackWebhook } from "./types.ts";
+import type { Agent, Message, SlackWebhook, ControlEvent } from "./types.ts";
+import { isControlEvent } from "./types.ts";
 import {
   createPiSession,
   disposePiSession,
@@ -20,6 +21,7 @@ import {
 
 const STORAGE_DIR = new URL("./.iterate", import.meta.url).pathname;
 const agents = new Map<string, Agent>();
+const pendingAgentCreations = new Map<string, Promise<Agent>>();
 
 interface StreamData {
   id: string;
@@ -60,28 +62,32 @@ function deleteStreamFromDisk(id: string): void {
 function initializeStore(): void {
   fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
-  const streamIds = fs.existsSync(STORAGE_DIR)
-    ? fs
-        .readdirSync(STORAGE_DIR)
-        .filter((f) => f.endsWith(".yaml"))
-        .map((f) => f.replace(/\.yaml$/, ""))
+  const streamFiles = fs.existsSync(STORAGE_DIR)
+    ? fs.readdirSync(STORAGE_DIR).filter((f) => f.endsWith(".yaml"))
     : [];
 
-  for (const id of streamIds) {
-    const data = loadStreamFromDisk(id);
-    if (data) {
-      agents.set(id, {
+  let loadedCount = 0;
+  for (const file of streamFiles) {
+    const sanitizedId = file.replace(/\.yaml$/, "");
+    const data = loadStreamFromDisk(sanitizedId);
+    if (data && Array.isArray(data.messages)) {
+      const maxOffset =
+        data.messages.length > 0
+          ? Math.max(...data.messages.map((m) => parseInt(m.offset, 10) || 0)) + 1
+          : 0;
+      agents.set(data.id, {
         id: data.id,
         contentType: data.contentType,
         createdAt: data.createdAt,
         messages: data.messages,
         subscribers: new Set(),
-        nextOffset: data.messages.length,
+        nextOffset: maxOffset,
       });
+      loadedCount++;
     }
   }
 
-  console.log(`Loaded ${streamIds.length} streams from disk`);
+  console.log(`Loaded ${loadedCount} streams from disk`);
 }
 
 function getAgent(id: string): Agent | undefined {
@@ -96,27 +102,39 @@ async function createAgent(
   const existing = agents.get(id);
   if (existing) return existing;
 
-  const agent: Agent = {
-    id,
-    contentType,
-    createdAt: new Date().toISOString(),
-    messages: [],
-    subscribers: new Set(),
-    nextOffset: 0,
-  };
+  const pending = pendingAgentCreations.get(id);
+  if (pending) return pending;
 
-  if (options.createPiSession && !id.startsWith("__")) {
-    try {
-      agent.piSession = await createPiSession(id);
-      console.log(`Created Pi session for agent: ${id}`);
-    } catch (error) {
-      console.error(`Failed to create Pi session for ${id}:`, error);
+  const creationPromise = (async () => {
+    const agent: Agent = {
+      id,
+      contentType,
+      createdAt: new Date().toISOString(),
+      messages: [],
+      subscribers: new Set(),
+      nextOffset: 0,
+    };
+
+    if (options.createPiSession && !id.startsWith("__")) {
+      try {
+        agent.piSession = await createPiSession(id);
+        console.log(`Created Pi session for agent: ${id}`);
+      } catch (error) {
+        console.error(`Failed to create Pi session for ${id}:`, error);
+      }
     }
-  }
 
-  agents.set(id, agent);
-  saveStreamToDisk(agent);
-  return agent;
+    agents.set(id, agent);
+    saveStreamToDisk(agent);
+    return agent;
+  })();
+
+  pendingAgentCreations.set(id, creationPromise);
+  try {
+    return await creationPromise;
+  } finally {
+    pendingAgentCreations.delete(id);
+  }
 }
 
 function deleteAgent(id: string): void {
@@ -147,7 +165,13 @@ async function appendMessage(
   source: string,
   metadata: Record<string, unknown> = {},
 ): Promise<Message> {
+  const isNew = !agents.get(agentId);
   const agent = agents.get(agentId) ?? (await createAgent(agentId));
+
+  // If agent was implicitly created, register it so the UI knows about it
+  if (isNew && !agentId.startsWith("__")) {
+    await onStreamCreated(agentId, agent.contentType);
+  }
 
   const message: Message = {
     offset: String(agent.nextOffset++),
@@ -173,7 +197,40 @@ async function appendMessage(
     }
   }
 
+  // After-hook: process control events
+  if (isControlEvent(content)) {
+    processControlEvent(agent, content).catch((error) => {
+      console.error(`[Control] Failed to process control event for ${agentId}:`, error);
+      appendMessage(
+        agentId,
+        { type: "error", message: error instanceof Error ? error.message : String(error) },
+        "system",
+      );
+    });
+  }
+
   return message;
+}
+
+async function processControlEvent(agent: Agent, event: ControlEvent): Promise<void> {
+  console.log(`[Control] Processing control event for ${agent.id}:`, event.action);
+  switch (event.action) {
+    case "prompt": {
+      // Lazily create Pi session if needed
+      if (!agent.piSession && !agent.id.startsWith("__")) {
+        agent.piSession = await createPiSession(agent.id);
+        console.log(`[Control] Lazily created Pi session for agent: ${agent.id}`);
+      }
+      if (agent.piSession) {
+        await promptPiSession(agent.piSession, event.payload.text);
+      } else {
+        console.warn(`[Control] No Pi session available for agent: ${agent.id}`);
+      }
+      break;
+    }
+    default:
+      console.warn(`[Control] Unknown control action: ${(event as ControlEvent).action}`);
+  }
 }
 
 function getMessagesFromOffset(agentId: string, offset: string): Message[] {
@@ -282,7 +339,7 @@ app.post("/edge/slack", async (c) => {
   if (!event) return c.text("OK");
   const threadId = event.thread_ts ?? event.ts;
   if (!threadId) return c.text("Missing thread identifier", 400);
-  appendMessage(threadId, webhook, "slack", { channel: event.channel, user: event.user });
+  await appendMessage(threadId, webhook, "slack", { channel: event.channel, user: event.user });
   return c.text("OK");
 });
 
@@ -352,12 +409,15 @@ app.post("/agents/*", async (c) => {
   const agent = getAgent(streamPath)!;
 
   // Lazily create Pi session for agents loaded from disk that don't have one yet
-  if (!agent.piSession && !streamPath.startsWith("__")) {
+  if (!agent.piSession && !agent.piSessionPending && !streamPath.startsWith("__")) {
+    agent.piSessionPending = true;
     try {
       agent.piSession = await createPiSession(streamPath);
       console.log(`Lazily created Pi session for agent: ${streamPath}`);
     } catch (error) {
       console.error(`Failed to lazily create Pi session for ${streamPath}:`, error);
+    } finally {
+      agent.piSessionPending = false;
     }
   }
 
