@@ -21,7 +21,7 @@ const cloneAndSetupRepo = () => {
 const startDaemon = () => {
   console.log(`Starting daemon with vite in ${DAEMON_PATH}...`);
 
-  const daemon = spawn("pnpm", ["dev"], {
+  const daemon = spawn("pnpm", ["vite"], {
     cwd: DAEMON_PATH,
     stdio: "inherit",
     env: {
