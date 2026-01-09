@@ -6,9 +6,9 @@ import * as arctic from "arctic";
 import type { CloudflareEnv } from "../../../env.ts";
 import type { Variables } from "../../worker.ts";
 import * as schema from "../../db/schema.ts";
-import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
 import { logger } from "../../tag-logger.ts";
 import { encrypt } from "../../utils/encryption.ts";
+import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
 
 export type SlackOAuthStateData = {
   projectId: string;

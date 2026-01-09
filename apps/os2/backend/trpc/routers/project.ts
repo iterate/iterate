@@ -312,7 +312,10 @@ export const projectRouter = router({
     await ctx.db
       .delete(schema.projectConnection)
       .where(
-        and(eq(projectConnection.projectId, ctx.project.id), eq(projectConnection.provider, "slack")),
+        and(
+          eq(projectConnection.projectId, ctx.project.id),
+          eq(projectConnection.provider, "slack"),
+        ),
       );
 
     return { success: true };

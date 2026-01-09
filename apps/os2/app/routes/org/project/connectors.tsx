@@ -79,9 +79,7 @@ function ProjectConnectorsContent() {
     <div className="p-8 max-w-4xl space-y-8">
       <div className="space-y-1">
         <h1 className="text-2xl font-bold">Connectors</h1>
-        <p className="text-sm text-muted-foreground">
-          Connect external services to this project.
-        </p>
+        <p className="text-sm text-muted-foreground">Connect external services to this project.</p>
       </div>
 
       <section className="space-y-4">
@@ -98,9 +96,7 @@ function ProjectConnectorsContent() {
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium">Slack</span>
-                  {slackConnection.connected ? (
-                    <Badge variant="secondary">Connected</Badge>
-                  ) : null}
+                  {slackConnection.connected ? <Badge variant="secondary">Connected</Badge> : null}
                 </div>
                 {slackConnection.connected && slackConnection.teamName ? (
                   <div className="flex items-center gap-2">
@@ -136,10 +132,7 @@ function ProjectConnectorsContent() {
                 Disconnect
               </Button>
             ) : (
-              <Button
-                onClick={() => startSlackOAuth.mutate()}
-                disabled={startSlackOAuth.isPending}
-              >
+              <Button onClick={() => startSlackOAuth.mutate()} disabled={startSlackOAuth.isPending}>
                 {startSlackOAuth.isPending ? <Spinner className="mr-2" /> : null}
                 Add to Slack
               </Button>
