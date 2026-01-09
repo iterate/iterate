@@ -1,14 +1,13 @@
-import { Link } from '@tanstack/react-router'
-import { useState } from 'react'
-import { Home, Info, Menu, Settings, X } from 'lucide-react'
+import { Link } from "@tanstack/react-router";
+import { useState } from "react";
+import { Home, Info, Menu, Settings, X } from "lucide-react";
 
 export default function Header() {
-  const [isOpen, setIsOpen] = useState(false)
+  const [isOpen, setIsOpen] = useState(false);
 
-  const linkClass =
-    'flex items-center gap-3 p-3 rounded-lg hover:bg-accent transition-colors'
+  const linkClass = "flex items-center gap-3 p-3 rounded-lg hover:bg-accent transition-colors";
   const activeLinkClass =
-    'flex items-center gap-3 p-3 rounded-lg bg-primary text-primary-foreground transition-colors'
+    "flex items-center gap-3 p-3 rounded-lg bg-primary text-primary-foreground transition-colors";
 
   return (
     <>
@@ -27,7 +26,7 @@ export default function Header() {
 
       <aside
         className={`fixed top-0 left-0 h-full w-64 bg-background border-r shadow-lg z-50 transform transition-transform duration-300 ease-in-out flex flex-col ${
-          isOpen ? 'translate-x-0' : '-translate-x-full'
+          isOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex items-center justify-between p-4 border-b">
@@ -75,11 +74,8 @@ export default function Header() {
       </aside>
 
       {isOpen && (
-        <div
-          className="fixed inset-0 bg-black/50 z-40"
-          onClick={() => setIsOpen(false)}
-        />
+        <div className="fixed inset-0 bg-black/50 z-40" onClick={() => setIsOpen(false)} />
       )}
     </>
-  )
+  );
 }
