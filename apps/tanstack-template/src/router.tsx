@@ -14,11 +14,7 @@ export const getRouter = () => {
       ...rqContext,
     },
     defaultPreload: "intent",
-    Wrap: ({ children }) => (
-      <Provider queryClient={rqContext.queryClient}>
-        {children}
-      </Provider>
-    ),
+    Wrap: ({ children }) => <Provider queryClient={rqContext.queryClient}>{children}</Provider>,
   });
 
   setupRouterSsrQueryIntegration({ router, queryClient: rqContext.queryClient });
