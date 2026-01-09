@@ -143,7 +143,7 @@ describe("EventStream", () => {
   });
 
   describe("subscribe with offset", () => {
-    it.effect("returns events from specified offset", () =>
+    it.effect("returns events from specified offset (exclusive)", () =>
       Effect.gen(function* () {
         const stream = yield* makeEventStream({ name: testStreamName });
 
@@ -151,8 +151,8 @@ describe("EventStream", () => {
         yield* stream.append({ data: { n: 1 } });
         yield* stream.append({ data: { n: 2 } });
 
-        // Subscribe from offset 1 (should get n:1 and n:2)
-        const eventStream = yield* stream.subscribe({ offset: makeOffset(1) });
+        // Subscribe from offset 0 (exclusive - should get n:1 and n:2, events after offset 0)
+        const eventStream = yield* stream.subscribe({ offset: makeOffset(0) });
         const events = yield* eventStream.pipe(
           Stream.take(2),
           Stream.runCollect,

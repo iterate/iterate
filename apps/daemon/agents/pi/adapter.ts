@@ -1,7 +1,7 @@
 /**
  * Pi Harness Adapter
  *
- * Connects a Pi coding agent session to a durable event stream.
+ * Connects a Pi coding agent session to an event stream.
  * - Subscribes to stream for action events (prompt, abort)
  * - Calls Pi SDK methods in response
  * - Wraps Pi SDK events and appends to stream
@@ -17,10 +17,14 @@ import {
   discoverModels,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
-import { Console, Deferred, Effect, Fiber, Queue, Stream } from "effect";
-import type { ClientError } from "../durable-streams/client.ts";
-import { StreamClientService } from "../durable-streams/client.ts";
-import { makeOffset, type StreamName } from "../durable-streams/types.ts";
+import { Console, Deferred, Effect, Fiber, Queue, Scope, Stream } from "effect";
+import { StreamManagerService } from "../../event-stream/stream-manager.ts";
+import {
+  makeOffset,
+  type StreamName,
+  type StorageError,
+  type InvalidOffsetError,
+} from "../../event-stream/types.ts";
 import {
   type EventStreamId,
   makePiEventReceivedEvent,
@@ -52,9 +56,9 @@ export const runPiAdapter = (
   streamName: StreamName,
   eventStreamId: EventStreamId,
   readyDeferred?: Deferred.Deferred<void, never>,
-): Effect.Effect<void, ClientError, StreamClientService> =>
+): Effect.Effect<void, StorageError | InvalidOffsetError, StreamManagerService | Scope.Scope> =>
   Effect.gen(function* () {
-    const client = yield* StreamClientService;
+    const manager = yield* StreamManagerService;
 
     const state: PiAdapterState = {
       session: null,
@@ -71,7 +75,7 @@ export const runPiAdapter = (
         Stream.runForEach((piEvent) =>
           Effect.gen(function* () {
             const wrappedEvent = makePiEventReceivedEvent(eventStreamId, piEvent.type, piEvent);
-            yield* client.append({
+            yield* manager.append({
               name: streamName,
               data: wrappedEvent,
             });
@@ -171,13 +175,13 @@ export const runPiAdapter = (
     yield* Console.log(`[Pi Adapter] Subscribing to stream: ${streamName}`);
 
     // Get current event count to subscribe from the end
-    const existingEvents = yield* client.get({ name: streamName });
+    const existingEvents = yield* manager.getFrom({ name: streamName });
     const startOffset = makeOffset(existingEvents.length);
     yield* Console.log(
       `[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`,
     );
 
-    const eventStream = yield* client.subscribe({ name: streamName, offset: startOffset });
+    const eventStream = yield* manager.subscribe({ name: streamName, offset: startOffset });
 
     // Process events in a forked fiber
     const processFiber = yield* Effect.fork(

@@ -1,19 +1,17 @@
 /**
- * Event types for the agent wrapper architecture.
+ * Event types for the Pi agent adapter.
  *
  * Events follow the Iterate envelope format with verbatim harness payloads.
- * See src/architecture-sketch.md for the full design.
  */
 import { Schema } from "effect";
-import { EventStreamId } from "../durable-streams/types.ts";
+import { EventStreamId } from "../../event-stream/types.ts";
 
-// Re-export for convenience
-export { EventStreamId } from "../durable-streams/types.ts";
+export { EventStreamId } from "../../event-stream/types.ts";
 
 /**
  * Base envelope for all Iterate events.
  *
- * Protocol fields (offset) are assigned by durable-streams.
+ * Protocol fields (offset) are assigned by event-stream.
  * Envelope fields are always present. Type-specific payload varies.
  */
 export class IterateEventEnvelope extends Schema.Class<IterateEventEnvelope>(
@@ -150,7 +148,6 @@ export const makeSessionCreateEvent = (
   eventStreamId: EventStreamId,
   options?: { cwd?: string; model?: string; thinkingLevel?: string; sessionFile?: string },
 ): SessionCreateEvent => {
-  // Build payload without undefined values (Schema.optional doesn't accept undefined)
   const payloadFields: {
     cwd?: string;
     model?: string;

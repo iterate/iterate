@@ -105,27 +105,20 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
       const logPath = resolvePath(config.logFile);
       const out = openSync(logPath, "a");
 
-      // Use import.meta.url to locate main.ts reliably regardless of cwd
-      const mainScript = join(__dirname, "main.ts");
-      const child = spawn(
-        "npx",
-        [
-          "tsx",
-          mainScript,
-          "server",
-          "run",
-          "--port",
-          String(config.port),
-          "--storage",
-          config.storage,
-        ],
-        {
-          detached: true,
-          stdio: ["ignore", out, out],
-          cwd,
-          env: { ...process.env },
+      // Launch the daemon server from the daemon package
+      // The daemon server is in apps/daemon/server.ts
+      const daemonPackagePath = join(__dirname, "..", "daemon");
+      const serverScript = join(daemonPackagePath, "server.ts");
+
+      const child = spawn("npx", ["tsx", serverScript], {
+        detached: true,
+        stdio: ["ignore", out, out],
+        cwd,
+        env: {
+          ...process.env,
+          PORT: String(config.port),
         },
-      );
+      });
       child.unref();
       return child.pid!;
     }).pipe(Effect.orDie);
@@ -225,7 +218,7 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
 };
 
 /** Daemon service tag and implementation */
-export class DaemonService extends Effect.Service<DaemonService>()("@event-stream/Daemon", {
+export class DaemonService extends Effect.Service<DaemonService>()("@iterate/cli/Daemon", {
   effect: Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;

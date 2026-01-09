@@ -100,18 +100,18 @@ describe("StreamManagerService", () => {
       }).pipe(Effect.scoped, Effect.provide(StreamManagerService.InMemory)),
     );
 
-    it.effect("subscribes with offset", () =>
+    it.effect("subscribes with offset (exclusive)", () =>
       Effect.gen(function* () {
         const manager = yield* StreamManagerService;
 
-        yield* manager.append({ name: testStreamName, data: "event0" });
-        const event1 = yield* manager.append({ name: testStreamName, data: "event1" });
+        const event0 = yield* manager.append({ name: testStreamName, data: "event0" });
+        yield* manager.append({ name: testStreamName, data: "event1" });
         yield* manager.append({ name: testStreamName, data: "event2" });
 
-        // Subscribe starting from event1's offset
+        // Subscribe starting after event0's offset (exclusive - gets event1 and event2)
         const eventStream = yield* manager.subscribe({
           name: testStreamName,
-          offset: event1.offset,
+          offset: event0.offset,
         });
 
         // Take 2 from historical (event1 + event2)

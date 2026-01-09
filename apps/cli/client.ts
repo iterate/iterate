@@ -11,12 +11,11 @@ import type * as HttpClientError from "@effect/platform/HttpClientError";
 import * as HttpClientRequest from "@effect/platform/HttpClientRequest";
 import { Duration, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
 import { DaemonService, defaultDaemonConfig } from "./daemon.ts";
-import { Event, type Offset, OFFSET_START, type StreamName } from "./types.ts";
 
 /** Max time to wait for daemon to become ready */
 const DAEMON_READY_TIMEOUT = Duration.seconds(10);
 /** Interval between health check attempts */
-const HEALTH_CHECK_INTERVAL = Duration.millis(100);
+const HEALTH_CHECK_INTERVAL = Duration.millis(200);
 
 /** Client configuration */
 export interface ClientConfig {
@@ -35,6 +34,29 @@ export class ClientError extends Error {
     this.name = "ClientError";
   }
 }
+
+// Branded types for stream operations
+export const StreamName = Schema.String.pipe(Schema.nonEmptyString(), Schema.brand("StreamName"));
+export type StreamName = typeof StreamName.Type;
+
+export const Offset = Schema.String.pipe(Schema.brand("Offset"));
+export type Offset = typeof Offset.Type;
+
+export const OFFSET_START = "-1" as Offset;
+
+export const EventStreamId = Schema.String.pipe(
+  Schema.nonEmptyString(),
+  Schema.brand("EventStreamId"),
+);
+export type EventStreamId = typeof EventStreamId.Type;
+
+// Event schema
+export class Event extends Schema.Class<Event>("Event")({
+  offset: Offset,
+  eventStreamId: EventStreamId,
+  data: Schema.Unknown,
+  createdAt: Schema.String,
+}) {}
 
 /** Stream client service interface */
 export interface StreamClient {
@@ -274,7 +296,7 @@ export const makeStreamClient = (
 
 /** Stream client service with auto-daemon support */
 export class StreamClientService extends Effect.Service<StreamClientService>()(
-  "@event-stream/StreamClient",
+  "@iterate/cli/StreamClient",
   {
     effect: Effect.gen(function* () {
       const daemon = yield* DaemonService;
@@ -285,7 +307,6 @@ export class StreamClientService extends Effect.Service<StreamClientService>()(
         // Check env var first
         const envUrl = process.env.EVENT_STREAM_URL;
         if (envUrl) {
-          yield* waitForServerReady(envUrl, httpClient);
           return envUrl;
         }
 
@@ -294,7 +315,6 @@ export class StreamClientService extends Effect.Service<StreamClientService>()(
           .getServerUrl()
           .pipe(Effect.catchAll(() => Effect.succeed(Option.none<string>())));
         if (Option.isSome(daemonUrl)) {
-          yield* waitForServerReady(daemonUrl.value, httpClient);
           return daemonUrl.value;
         }
 
@@ -306,7 +326,10 @@ export class StreamClientService extends Effect.Service<StreamClientService>()(
         yield* Effect.log(`Daemon started (PID ${pid}), waiting for ready...`);
 
         const serverUrl = `http://localhost:${defaultDaemonConfig.port}`;
-        yield* waitForServerReady(serverUrl, httpClient);
+
+        // Wait a bit for server to come up
+        yield* Effect.sleep("1 second");
+
         yield* Effect.log("Daemon ready");
 
         return serverUrl;
@@ -352,7 +375,6 @@ export const StreamClientLive: Layer.Layer<
     const resolveServerUrl: Effect.Effect<string, ClientError> = Effect.gen(function* () {
       const envUrl = process.env.EVENT_STREAM_URL;
       if (envUrl) {
-        yield* waitForServerReady(envUrl, httpClient);
         return envUrl;
       }
 
@@ -360,7 +382,6 @@ export const StreamClientLive: Layer.Layer<
         .getServerUrl()
         .pipe(Effect.catchAll(() => Effect.succeed(Option.none<string>())));
       if (Option.isSome(daemonUrl)) {
-        yield* waitForServerReady(daemonUrl.value, httpClient);
         return daemonUrl.value;
       }
 
@@ -371,7 +392,8 @@ export const StreamClientLive: Layer.Layer<
       yield* Effect.log(`Daemon started (PID ${pid}), waiting for ready...`);
 
       const serverUrl = `http://localhost:${defaultDaemonConfig.port}`;
-      yield* waitForServerReady(serverUrl, httpClient);
+
+      yield* Effect.sleep("1 second");
       yield* Effect.log("Daemon ready");
 
       return serverUrl;

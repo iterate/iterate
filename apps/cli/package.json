@@ -1,0 +1,20 @@
+{
+  "name": "@iterate-com/cli",
+  "version": "0.0.1",
+  "type": "module",
+  "bin": {
+    "iterate": "./main.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@effect/cli": "^0.60.0",
+    "@effect/experimental": "^0.44.21",
+    "@effect/platform": "^0.82.0",
+    "@effect/platform-node": "^0.78.0",
+    "@types/node": "^24.10.1",
+    "effect": "^3.19.0",
+    "typescript": "^5.9.3"
+  }
+}
