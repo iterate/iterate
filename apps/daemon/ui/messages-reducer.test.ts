@@ -1,5 +1,5 @@
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import YAML from "yaml";
 import {
@@ -8,6 +8,22 @@ import {
   messagesReducer,
   getMessages,
 } from "./messages-reducer.ts";
+
+const PI_EVENT_RECEIVED = "iterate:agent:harness:pi:event-received";
+
+/**
+ * Wrap a raw Pi SDK event in the standard envelope format.
+ */
+function wrapPiEvent(piEvent: Record<string, unknown>) {
+  return {
+    type: PI_EVENT_RECEIVED,
+    createdAt: new Date().toISOString(),
+    payload: {
+      piEventType: piEvent.type,
+      piEvent,
+    },
+  };
+}
 
 /**
  * Parse a YAML stream file and extract events from the messages array.
@@ -19,7 +35,7 @@ function parseYamlStream(yamlString: string): unknown[] {
     return [];
   }
   // Extract the `content` field from each message, which is the actual event
-  return data.messages.map((m: any) => m.content);
+  return data.messages.map((m: Record<string, unknown>) => m.content);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -33,90 +49,117 @@ createdAt: 2026-01-05T20:00:00.000Z
 messages:
   - offset: "1"
     content:
-      type: user_prompt
-      text: hello
-      timestamp: 1234567890
-    timestamp: 2026-01-05T20:00:01.000Z
-    source: user
-    metadata: {}
-  - offset: "2"
-    content:
-      type: agent_start
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.001Z
+      payload:
+        piEventType: agent_start
+        piEvent:
+          type: agent_start
     timestamp: 2026-01-05T20:00:01.001Z
     source: system
     metadata: {}
+  - offset: "2"
+    content:
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.002Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: user
+            content:
+              - type: text
+                text: hello
+            timestamp: 1234567890
+    timestamp: 2026-01-05T20:00:01.002Z
+    source: user
+    metadata: {}
   - offset: "3"
     content:
-      type: message_start
-      message:
-        role: user
-        content:
-          - type: text
-            text: hello
-        timestamp: 1234567890
-    timestamp: 2026-01-05T20:00:01.002Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.003Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: user
+            content:
+              - type: text
+                text: hello
+            timestamp: 1234567890
+    timestamp: 2026-01-05T20:00:01.003Z
     source: user
     metadata: {}
   - offset: "4"
     content:
-      type: message_end
-      message:
-        role: user
-        content:
-          - type: text
-            text: hello
-        timestamp: 1234567890
-    timestamp: 2026-01-05T20:00:01.003Z
-    source: user
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.004Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: assistant
+            content: []
+            timestamp: 1234567891
+    timestamp: 2026-01-05T20:00:01.004Z
+    source: assistant
     metadata: {}
   - offset: "5"
     content:
-      type: message_start
-      message:
-        role: assistant
-        content: []
-        timestamp: 1234567891
-    timestamp: 2026-01-05T20:00:01.004Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.005Z
+      payload:
+        piEventType: message_update
+        piEvent:
+          type: message_update
+          assistantMessageEvent:
+            type: text_delta
+            partial:
+              role: assistant
+              content:
+                - type: text
+                  text: "Hi there!"
+              timestamp: 1234567891
+    timestamp: 2026-01-05T20:00:01.005Z
     source: assistant
     metadata: {}
   - offset: "6"
     content:
-      type: message_update
-      assistantMessageEvent:
-        type: text_delta
-        partial:
-          role: assistant
-          content:
-            - type: text
-              text: "Hi there!"
-          timestamp: 1234567891
-    timestamp: 2026-01-05T20:00:01.005Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.006Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "Hi there!"
+            timestamp: 1234567891
+    timestamp: 2026-01-05T20:00:01.006Z
     source: assistant
     metadata: {}
   - offset: "7"
     content:
-      type: message_end
-      message:
-        role: assistant
-        content:
-          - type: text
-            text: "Hi there!"
-        timestamp: 1234567891
-    timestamp: 2026-01-05T20:00:01.006Z
-    source: assistant
-    metadata: {}
-  - offset: "8"
-    content:
-      type: agent_end
-      messages:
-        - role: user
-          content:
-            - type: text
-              text: hello
-        - role: assistant
-          content:
-            - type: text
-              text: "Hi there!"
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.007Z
+      payload:
+        piEventType: agent_end
+        piEvent:
+          type: agent_end
+          messages:
+            - role: user
+              content:
+                - type: text
+                  text: hello
+            - role: assistant
+              content:
+                - type: text
+                  text: "Hi there!"
     timestamp: 2026-01-05T20:00:01.007Z
     source: system
     metadata: {}
@@ -134,145 +177,213 @@ messages:
   # First turn
   - offset: "1"
     content:
-      type: user_prompt
-      text: haha
-      timestamp: 1000
-    timestamp: 2026-01-05T20:00:01.000Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.001Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: user
+            content:
+              - type: text
+                text: haha
+            timestamp: 1000
+    timestamp: 2026-01-05T20:00:01.001Z
     source: user
     metadata: {}
   - offset: "2"
     content:
-      type: message_start
-      message:
-        role: user
-        content:
-          - type: text
-            text: haha
-        timestamp: 1000
-    timestamp: 2026-01-05T20:00:01.001Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.002Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: user
+            content:
+              - type: text
+                text: haha
+            timestamp: 1000
+    timestamp: 2026-01-05T20:00:01.002Z
     source: user
     metadata: {}
   - offset: "3"
     content:
-      type: message_start
-      message:
-        role: assistant
-        content: []
-        timestamp: 1001
-    timestamp: 2026-01-05T20:00:01.002Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.003Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: assistant
+            content: []
+            timestamp: 1001
+    timestamp: 2026-01-05T20:00:01.003Z
     source: assistant
     metadata: {}
   - offset: "4"
     content:
-      type: message_update
-      assistantMessageEvent:
-        type: text_delta
-        partial:
-          role: assistant
-          content:
-            - type: text
-              text: "Haha! 😄"
-          timestamp: 1001
-    timestamp: 2026-01-05T20:00:01.003Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.004Z
+      payload:
+        piEventType: message_update
+        piEvent:
+          type: message_update
+          assistantMessageEvent:
+            type: text_delta
+            partial:
+              role: assistant
+              content:
+                - type: text
+                  text: "Haha! 😄"
+              timestamp: 1001
+    timestamp: 2026-01-05T20:00:01.004Z
     source: assistant
     metadata: {}
   - offset: "5"
     content:
-      type: message_end
-      message:
-        role: assistant
-        content:
-          - type: text
-            text: "Haha! 😄"
-        timestamp: 1001
-    timestamp: 2026-01-05T20:00:01.004Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.005Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "Haha! 😄"
+            timestamp: 1001
+    timestamp: 2026-01-05T20:00:01.005Z
     source: assistant
     metadata: {}
   - offset: "6"
     content:
-      type: agent_end
-      messages:
-        - role: user
-          content:
-            - type: text
-              text: haha
-        - role: assistant
-          content:
-            - type: text
-              text: "Haha! 😄"
-    timestamp: 2026-01-05T20:00:01.005Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:01.006Z
+      payload:
+        piEventType: agent_end
+        piEvent:
+          type: agent_end
+          messages:
+            - role: user
+              content:
+                - type: text
+                  text: haha
+            - role: assistant
+              content:
+                - type: text
+                  text: "Haha! 😄"
+    timestamp: 2026-01-05T20:00:01.006Z
     source: system
     metadata: {}
   # Second turn
   - offset: "7"
     content:
-      type: user_prompt
-      text: why not laugh more?
-      timestamp: 2000
-    timestamp: 2026-01-05T20:00:02.000Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.001Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: user
+            content:
+              - type: text
+                text: why not laugh more?
+            timestamp: 2000
+    timestamp: 2026-01-05T20:00:02.001Z
     source: user
     metadata: {}
   - offset: "8"
     content:
-      type: message_start
-      message:
-        role: user
-        content:
-          - type: text
-            text: why not laugh more?
-        timestamp: 2000
-    timestamp: 2026-01-05T20:00:02.001Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.002Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: user
+            content:
+              - type: text
+                text: why not laugh more?
+            timestamp: 2000
+    timestamp: 2026-01-05T20:00:02.002Z
     source: user
     metadata: {}
   - offset: "9"
     content:
-      type: message_start
-      message:
-        role: assistant
-        content: []
-        timestamp: 2001
-    timestamp: 2026-01-05T20:00:02.002Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.003Z
+      payload:
+        piEventType: message_start
+        piEvent:
+          type: message_start
+          message:
+            role: assistant
+            content: []
+            timestamp: 2001
+    timestamp: 2026-01-05T20:00:02.003Z
     source: assistant
     metadata: {}
   - offset: "10"
     content:
-      type: message_update
-      assistantMessageEvent:
-        type: text_delta
-        partial:
-          role: assistant
-          content:
-            - type: text
-              text: "You got me there! 😂"
-          timestamp: 2001
-    timestamp: 2026-01-05T20:00:02.003Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.004Z
+      payload:
+        piEventType: message_update
+        piEvent:
+          type: message_update
+          assistantMessageEvent:
+            type: text_delta
+            partial:
+              role: assistant
+              content:
+                - type: text
+                  text: "You got me there! 😂"
+              timestamp: 2001
+    timestamp: 2026-01-05T20:00:02.004Z
     source: assistant
     metadata: {}
   - offset: "11"
     content:
-      type: message_end
-      message:
-        role: assistant
-        content:
-          - type: text
-            text: "You got me there! 😂"
-        timestamp: 2001
-    timestamp: 2026-01-05T20:00:02.004Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.005Z
+      payload:
+        piEventType: message_end
+        piEvent:
+          type: message_end
+          message:
+            role: assistant
+            content:
+              - type: text
+                text: "You got me there! 😂"
+            timestamp: 2001
+    timestamp: 2026-01-05T20:00:02.005Z
     source: assistant
     metadata: {}
   - offset: "12"
     content:
-      type: agent_end
-      messages:
-        - role: user
-          content:
-            - type: text
-              text: why not laugh more?
-        - role: assistant
-          content:
-            - type: text
-              text: "You got me there! 😂"
-    timestamp: 2026-01-05T20:00:02.005Z
+      type: iterate:agent:harness:pi:event-received
+      createdAt: 2026-01-05T20:00:02.006Z
+      payload:
+        piEventType: agent_end
+        piEvent:
+          type: agent_end
+          messages:
+            - role: user
+              content:
+                - type: text
+                  text: why not laugh more?
+            - role: assistant
+              content:
+                - type: text
+                  text: "You got me there! 😂"
+    timestamp: 2026-01-05T20:00:02.006Z
     source: system
     metadata: {}
 `;
@@ -355,36 +466,44 @@ describe("messagesReducer", () => {
   describe("streaming state", () => {
     it("should set isStreaming=true on assistant message_start", () => {
       let state = createInitialState();
-      state = messagesReducer(state, {
-        type: "message_start",
-        message: { role: "assistant", content: [], timestamp: 123 },
-      });
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_start",
+          message: { role: "assistant", content: [], timestamp: 123 },
+        }),
+      );
 
       expect(state.isStreaming).toBe(true);
       expect(state.streamingMessage).toMatchObject({
         role: "assistant",
         content: [],
-        timestamp: 123,
       });
     });
 
     it("should update streamingMessage on message_update", () => {
       let state = createInitialState();
-      state = messagesReducer(state, {
-        type: "message_start",
-        message: { role: "assistant", content: [], timestamp: 123 },
-      });
-      state = messagesReducer(state, {
-        type: "message_update",
-        assistantMessageEvent: {
-          type: "text_delta",
-          partial: {
-            role: "assistant",
-            content: [{ type: "text", text: "Hello" }],
-            timestamp: 123,
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_start",
+          message: { role: "assistant", content: [], timestamp: 123 },
+        }),
+      );
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_update",
+          assistantMessageEvent: {
+            type: "text_delta",
+            partial: {
+              role: "assistant",
+              content: [{ type: "text", text: "Hello" }],
+              timestamp: 123,
+            },
           },
-        },
-      });
+        }),
+      );
 
       expect(state.isStreaming).toBe(true);
       expect(state.streamingMessage?.content[0].text).toBe("Hello");
@@ -392,18 +511,24 @@ describe("messagesReducer", () => {
 
     it("should finalize message and stop streaming on message_end", () => {
       let state = createInitialState();
-      state = messagesReducer(state, {
-        type: "message_start",
-        message: { role: "assistant", content: [], timestamp: 123 },
-      });
-      state = messagesReducer(state, {
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [{ type: "text", text: "Final message" }],
-          timestamp: 123,
-        },
-      });
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_start",
+          message: { role: "assistant", content: [], timestamp: 123 },
+        }),
+      );
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_end",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Final message" }],
+            timestamp: 123,
+          },
+        }),
+      );
 
       expect(state.isStreaming).toBe(false);
       expect(state.streamingMessage).toBeUndefined();
@@ -413,36 +538,49 @@ describe("messagesReducer", () => {
     });
   });
 
-  describe("duplicate detection", () => {
-    it("should not add duplicate user messages from user_prompt with same timestamp", () => {
+  describe("user messages from message_end", () => {
+    it("should render user message only from message_end, not message_start", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 1000 });
-      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 1000 });
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_start",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: 123,
+          },
+        }),
+      );
+
+      expect(getMessages(state)).toHaveLength(0);
+
+      state = messagesReducer(
+        state,
+        wrapPiEvent({
+          type: "message_end",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "hello" }],
+            timestamp: 123,
+          },
+        }),
+      );
 
       expect(getMessages(state)).toHaveLength(1);
+      expect(getMessages(state)[0].role).toBe("user");
+      expect(getMessages(state)[0].content[0].text).toBe("hello");
     });
 
-    it("should allow repeated messages with different timestamps", () => {
+    it("should not render messages from action events", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "user_prompt", text: "yes", timestamp: 1000 });
-      state = messagesReducer(state, { type: "user_prompt", text: "yes", timestamp: 2000 });
-
-      expect(getMessages(state)).toHaveLength(2);
-    });
-
-    it("should not add duplicate user messages from message_start with same timestamp", () => {
-      let state = createInitialState();
-      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 123 });
       state = messagesReducer(state, {
-        type: "message_start",
-        message: {
-          role: "user",
-          content: [{ type: "text", text: "hello" }],
-          timestamp: 123,
-        },
+        type: "iterate:agent:harness:pi:action:prompt:called",
+        payload: { content: "hello" },
       });
 
-      expect(getMessages(state)).toHaveLength(1);
+      expect(getMessages(state)).toHaveLength(0);
+      expect(state.rawEvents).toHaveLength(1);
     });
   });
 
@@ -457,7 +595,7 @@ describe("messagesReducer", () => {
 
     it("should pass through unknown event types", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "unknown_event", data: "test" });
+      state = messagesReducer(state, { type: "some:unknown:event", data: "test" });
 
       expect(getMessages(state)).toHaveLength(0);
       expect(state.rawEvents).toHaveLength(1);
@@ -465,8 +603,8 @@ describe("messagesReducer", () => {
 
     it("should handle turn_start and agent_start events gracefully", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "turn_start" });
-      state = messagesReducer(state, { type: "agent_start" });
+      state = messagesReducer(state, wrapPiEvent({ type: "turn_start" }));
+      state = messagesReducer(state, wrapPiEvent({ type: "agent_start" }));
 
       expect(getMessages(state)).toHaveLength(0);
       expect(state.rawEvents).toHaveLength(2);

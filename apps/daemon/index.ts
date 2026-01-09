@@ -471,27 +471,8 @@ app.get("/agents/*", (c) => {
             Effect.sync(() => {
               lastOffset = event.offset;
 
-              // Extract the event data and format it for the UI
-              const eventData = event.data as Record<string, unknown>;
-
-              // Check if this is a Pi event received wrapper
-              if (eventData?.type === PiEventTypes.EVENT_RECEIVED) {
-                const payload = eventData.payload as { piEvent: unknown };
-                // Send the wrapped Pi event directly
-                stream.writeSSE({ event: "data", data: JSON.stringify([payload.piEvent]) });
-              } else if (eventData?.type === PiEventTypes.PROMPT) {
-                // Convert prompt event to user_prompt format for UI
-                const payload = eventData.payload as { content: string };
-                const userPrompt = {
-                  type: "user_prompt",
-                  text: payload.content,
-                  timestamp: eventData.createdAt,
-                };
-                stream.writeSSE({ event: "data", data: JSON.stringify([userPrompt]) });
-              } else {
-                // Send other events as-is
-                stream.writeSSE({ event: "data", data: JSON.stringify([eventData]) });
-              }
+              // Send all events as-is - the reducer handles unwrapping Pi events
+              stream.writeSSE({ event: "data", data: JSON.stringify([event.data]) });
 
               // Send control event with offset
               stream.writeSSE({

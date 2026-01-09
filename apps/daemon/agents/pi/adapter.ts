@@ -181,6 +181,21 @@ export const runPiAdapter = (
       `[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`,
     );
 
+    // When reattaching to an existing stream, we need to recreate the session
+    // Find the SESSION_CREATE event and replay it (but NOT prompts - they've already been processed)
+    if (existingEvents.length > 0) {
+      const sessionCreateEvent = existingEvents.find((event) => {
+        const data = event.data as { type?: string } | null;
+        return data?.type === PiEventTypes.SESSION_CREATE;
+      });
+
+      if (sessionCreateEvent) {
+        const data = sessionCreateEvent.data as { payload?: unknown };
+        yield* Console.log("[Pi Adapter] Reattaching - replaying session create");
+        yield* handleSessionCreate(data.payload as SessionCreatePayload);
+      }
+    }
+
     const eventStream = yield* manager.subscribe({ name: streamName, offset: startOffset });
 
     // Process events in a forked fiber

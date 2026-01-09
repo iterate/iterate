@@ -94,13 +94,6 @@ async function createAgent(name: string): Promise<boolean> {
   return res.ok;
 }
 
-async function deleteAgent(name: string): Promise<boolean> {
-  const res = await fetch(`${API_URL}/agents/${encodeURIComponent(name)}`, {
-    method: "DELETE",
-  });
-  return res.ok || res.status === 204;
-}
-
 async function sendMessage(agentPath: string, text: string): Promise<boolean> {
   const res = await fetch(`${API_URL}/agents/${encodeURIComponent(agentPath)}`, {
     method: "POST",
@@ -191,13 +184,11 @@ function Sidebar({
   agents,
   selectedAgent,
   onSelect,
-  onDelete,
   onCreate,
 }: {
   agents: AgentInfo[];
   selectedAgent: string | null;
   onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
   onCreate: (name: string) => void;
 }) {
   const [name, setName] = useState("");
@@ -246,27 +237,13 @@ function Sidebar({
                 <li key={a.path}>
                   <button
                     onClick={() => onSelect(a.path)}
-                    className={`group w-full flex items-center justify-between px-3 py-2 rounded-lg text-left text-sm transition-colors ${
+                    className={`w-full px-3 py-2 rounded-lg text-left text-sm transition-colors ${
                       selectedAgent === a.path
                         ? "bg-indigo-600 text-white"
                         : "text-zinc-300 hover:bg-zinc-800"
                     }`}
                   >
                     <span className="truncate">{a.path}</span>
-                    <span
-                      role="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDelete(a.path);
-                      }}
-                      className={`opacity-0 group-hover:opacity-100 ml-2 px-1.5 rounded transition-opacity ${
-                        selectedAgent === a.path
-                          ? "text-indigo-200 hover:text-white"
-                          : "text-zinc-500 hover:text-red-400"
-                      }`}
-                    >
-                      ×
-                    </span>
                   </button>
                 </li>
               ))}
@@ -326,16 +303,24 @@ function EventLine({ event }: { event: EventFeedItem }) {
   const [expanded, setExpanded] = useState(false);
   const timeStr = new Date(event.timestamp).toLocaleTimeString();
 
+  // Extract nested piEventType for event-received events
+  const raw = event.raw as Record<string, unknown> | null;
+  const payload = raw?.payload as { piEventType?: string } | undefined;
+  const piEventType = payload?.piEventType;
+
   return (
     <div className="flex flex-col">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 text-xs text-zinc-500 hover:text-zinc-400 transition-colors py-0.5 cursor-pointer"
       >
-        <span className="text-zinc-600">{expanded ? "▼" : "▶"}</span>
-        <span className="font-mono">{event.eventType}</span>
+        <span className="font-mono">
+          {event.eventType}
+          {piEventType && <span className="text-zinc-400"> → {piEventType}</span>}
+        </span>
         <span className="text-zinc-600">·</span>
         <span className="text-zinc-600">{timeStr}</span>
+        <span className="text-zinc-600">{expanded ? "▼" : "▶"}</span>
       </button>
       {expanded && (
         <pre className="text-xs bg-zinc-800/50 p-2 rounded mt-1 mb-2 overflow-x-auto font-mono text-zinc-400 border border-zinc-700/50">
@@ -527,14 +512,6 @@ function App() {
     }
   }, [selectedAgent, agents, registryLoaded]);
 
-  const handleDelete = async (path: string) => {
-    if (!confirm(`Delete agent "${path}"?`)) return;
-    const ok = await deleteAgent(path);
-    if (ok && selectedAgent === path) {
-      setSelectedAgent(null);
-    }
-  };
-
   // Only render AgentChat once the agent exists in the registry
   const shouldShowChat = selectedAgent && agentReady;
 
@@ -544,7 +521,6 @@ function App() {
         agents={agents}
         selectedAgent={selectedAgent}
         onSelect={setSelectedAgent}
-        onDelete={handleDelete}
         onCreate={setSelectedAgent}
       />
       <main className="flex-1 bg-zinc-900">
