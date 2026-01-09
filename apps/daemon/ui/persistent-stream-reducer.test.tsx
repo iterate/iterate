@@ -143,7 +143,7 @@ describe("usePersistentStream", () => {
 
   describe("connection stability (no infinite loops)", () => {
     it("creates only ONE EventSource even after up-to-date control event", async () => {
-      const { result } = renderHook(() =>
+      renderHook(() =>
         usePersistentStream({
           url: "/test",
           storageKey: "stability-1",

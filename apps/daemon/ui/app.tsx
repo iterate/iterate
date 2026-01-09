@@ -9,7 +9,7 @@ window.addEventListener("unhandledrejection", (e) => {
 });
 
 import { createRoot } from "react-dom/client";
-import { useState, useReducer, useEffect, useRef, useCallback, Suspense } from "react";
+import { useState, useReducer, useEffect, useRef, useCallback } from "react";
 
 const IS_STANDALONE = !window.location.pathname.startsWith("/daemon");
 const BASE_PATH = IS_STANDALONE ? "" : "/daemon";

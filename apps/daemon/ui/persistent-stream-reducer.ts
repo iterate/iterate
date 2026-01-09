@@ -132,7 +132,7 @@ interface SuspenseResource<T> {
 
 const suspenseCache = new Map<string, SuspenseResource<void>>();
 
-function createSuspenseResource(key: string, promise: Promise<void>): SuspenseResource<void> {
+function createSuspenseResource(_key: string, promise: Promise<void>): SuspenseResource<void> {
   let status: SuspenseStatus = "pending";
   let error: unknown;
 
@@ -436,7 +436,8 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
       elector?.die();
       channel?.close();
     };
-  }, [url, storageKey]); // Minimal deps - only re-run when these change
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- Intentionally minimal deps to avoid infinite loops. reducer/initialState/replayBatchSize are stable.
+  }, [url, storageKey]);
 
   // Throw for Suspense if enabled and not ready
   if (suspense && url && phase !== "ready" && phase !== "idle") {
