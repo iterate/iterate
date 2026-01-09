@@ -124,6 +124,7 @@ function OrgTeamPage() {
                   onChange={(event) => setEmail(event.target.value)}
                   placeholder="name@company.com"
                   disabled={addMember.isPending}
+                  autoFocus
                 />
               </Field>
             </FieldSet>

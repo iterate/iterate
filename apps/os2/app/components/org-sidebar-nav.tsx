@@ -61,24 +61,19 @@ export function OrgSidebarNav({ orgSlug, orgName, projects }: OrgSidebarNavProps
         <SidebarGroupLabel>Projects</SidebarGroupLabel>
         <SidebarGroupContent>
           <SidebarMenu>
-            {projects.map((project) => {
-              const isProjectActive = location.pathname.startsWith(
-                `/orgs/${orgSlug}/projects/${project.slug}`,
-              );
-              return (
-                <SidebarMenuItem key={project.id}>
-                  <SidebarMenuButton asChild isActive={isProjectActive}>
-                    <Link
-                      to="/orgs/$organizationSlug/projects/$projectSlug"
-                      params={{ organizationSlug: orgSlug, projectSlug: project.slug }}
-                    >
-                      <Box className="h-4 w-4" />
-                      <span>{project.name}</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              );
-            })}
+            {projects.map((project) => (
+              <SidebarMenuItem key={project.id}>
+                <SidebarMenuButton asChild>
+                  <Link
+                    to="/orgs/$organizationSlug/projects/$projectSlug"
+                    params={{ organizationSlug: orgSlug, projectSlug: project.slug }}
+                  >
+                    <Box className="h-4 w-4" />
+                    <span>{project.name}</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <Link

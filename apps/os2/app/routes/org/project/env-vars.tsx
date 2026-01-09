@@ -158,6 +158,7 @@ function ProjectEnvVarsPage() {
                 disabled={setEnvVar.isPending}
                 pattern="[A-Z_][A-Z0-9_]*"
                 title="Uppercase letters, numbers, and underscores only, starting with a letter or underscore"
+                autoFocus
               />
               <FieldDescription>
                 Uppercase letters, numbers, and underscores only (e.g., API_KEY, DATABASE_URL)
