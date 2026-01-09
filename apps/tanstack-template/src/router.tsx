@@ -1,11 +1,12 @@
 import { createRouter } from "@tanstack/react-router";
 import { setupRouterSsrQueryIntegration } from "@tanstack/react-router-ssr-query";
-import * as TanstackQuery from "./integrations/tanstack-query/root-provider.tsx";
+import { Provider } from "./integrations/tanstack-query/root-provider.tsx";
+import { getContext } from "./integrations/tanstack-query/trpc-client.ts";
 
 import { routeTree } from "./routeTree.gen";
 
 export const getRouter = () => {
-  const rqContext = TanstackQuery.getContext();
+  const rqContext = getContext();
 
   const router = createRouter({
     routeTree,
@@ -14,9 +15,9 @@ export const getRouter = () => {
     },
     defaultPreload: "intent",
     Wrap: ({ children }) => (
-      <TanstackQuery.Provider queryClient={rqContext.queryClient}>
+      <Provider queryClient={rqContext.queryClient}>
         {children}
-      </TanstackQuery.Provider>
+      </Provider>
     ),
   });
 
