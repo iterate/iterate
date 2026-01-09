@@ -9,7 +9,7 @@ import { Badge } from "../../../components/ui/badge.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 
-const searchSchema = z.object({
+const Search = z.object({
   error: z.string().optional(),
   project: z.string().optional(),
 });
@@ -18,7 +18,7 @@ export const Route = createFileRoute(
   "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
 )({
   component: ProjectConnectorsPage,
-  validateSearch: searchSchema,
+  validateSearch: Search,
 });
 
 function ProjectConnectorsPage() {
