@@ -195,7 +195,7 @@ async function deployWorker() {
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
-      DAYTONA_SNAPSHOT_NAME: `iterate-sandbox-0.0.1-dev`,
+      DAYTONA_SNAPSHOT_NAME: `iterate-sandbox-0.0.2-dev`,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
     assets: {
