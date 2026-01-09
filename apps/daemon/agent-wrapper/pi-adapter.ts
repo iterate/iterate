@@ -173,7 +173,9 @@ export const runPiAdapter = (
     // Get current event count to subscribe from the end
     const existingEvents = yield* client.get({ name: streamName });
     const startOffset = makeOffset(existingEvents.length);
-    yield* Console.log(`[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`);
+    yield* Console.log(
+      `[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`,
+    );
 
     const eventStream = yield* client.subscribe({ name: streamName, offset: startOffset });
 

@@ -17,7 +17,18 @@ import { logger } from "hono/logger";
 import { streamSSE } from "hono/streaming";
 import { NodeContext, NodeHttpClient } from "@effect/platform-node";
 import { FileSystem, Path } from "@effect/platform";
-import { Effect, Layer, Ref, Stream, Fiber, Queue, Console, Deferred, Scope, ManagedRuntime } from "effect";
+import {
+  Effect,
+  Layer,
+  Ref,
+  Stream,
+  Fiber,
+  Queue,
+  Console,
+  Deferred,
+  Scope,
+  ManagedRuntime,
+} from "effect";
 
 import { DATA_DIR } from "./durable-streams/daemon.ts";
 import { Storage } from "./durable-streams/storage.ts";
@@ -124,7 +135,10 @@ interface AdapterInfo {
 const adapters = new Map<string, AdapterInfo>();
 
 // Track pending session creations to prevent race conditions
-const pendingSessionCreations = new Map<string, Promise<{ streamName: StreamName; eventStreamId: EventStreamId }>>();
+const pendingSessionCreations = new Map<
+  string,
+  Promise<{ streamName: StreamName; eventStreamId: EventStreamId }>
+>();
 
 // Registry SSE subscribers - used to broadcast when adapters are created/deleted
 type RegistrySubscriber = (event: {
@@ -480,7 +494,7 @@ app.get("/agents/*", (c) => {
 
   return streamSSE(c, async (stream) => {
     let lastOffset = "0";
-    let isFirstBatch = true;
+    const isFirstBatch = true;
 
     try {
       // Subscribe to the stream
