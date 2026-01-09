@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PTY Terminal</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #1e1e1e;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+      #status {
+        padding: 8px 16px;
+        background: #2d2d2d;
+        color: #888;
+        font-family: monospace;
+        font-size: 12px;
+      }
+      #status.connected {
+        color: #27c93f;
+      }
+      #terminal-container {
+        flex: 1;
+        padding: 8px;
+        background: #1e1e1e;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="status">Connecting...</div>
+    <div id="terminal-container"></div>
+
+    <script type="module">
+      import { init, Terminal, FitAddon } from "ghostty-web";
+
+      const status = document.getElementById("status");
+      let term, ws, fitAddon;
+
+      async function main() {
+        await init();
+
+        term = new Terminal({
+          cursorBlink: true,
+          fontSize: 14,
+          fontFamily: 'Monaco, Menlo, "Courier New", monospace',
+          theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+          scrollback: 10000,
+        });
+
+        fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById("terminal-container"));
+        fitAddon.fit();
+        fitAddon.observeResize();
+
+        window.addEventListener("resize", () => fitAddon.fit());
+
+        term.onResize((size) => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "resize", cols: size.cols, rows: size.rows }));
+          }
+        });
+
+        term.onData((data) => {
+          if (ws?.readyState === WebSocket.OPEN) {
+            ws.send(data);
+          }
+        });
+
+        connect();
+      }
+
+      function connect() {
+        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        const wsUrl = `${protocol}//${window.location.host}/ws/pty?cols=${term.cols}&rows=${term.rows}`;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+          status.textContent = "Connected";
+          status.className = "connected";
+        };
+
+        ws.onmessage = (event) => term.write(event.data);
+
+        ws.onclose = () => {
+          status.textContent = "Disconnected - reconnecting...";
+          status.className = "";
+          setTimeout(connect, 3000);
+        };
+
+        ws.onerror = () => {
+          status.textContent = "Error";
+          status.className = "";
+        };
+      }
+
+      main();
+    </script>
+  </body>
+</html>

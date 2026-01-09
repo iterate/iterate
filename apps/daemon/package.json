@@ -8,6 +8,7 @@
     "build": "doppler run -- vite build",
     "test": "doppler run -- vitest run",
     "test:watch": "doppler run -- vitest",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
@@ -15,10 +16,12 @@
     "@effect/platform-node": "^0.78.0",
     "@effect/vitest": "^0.27.0",
     "@hono/vite-dev-server": "^0.24.0",
+    "@playwright/test": "^1.57.0",
     "@testing-library/react": "^16.3.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.5.10",
     "@vitejs/plugin-react": "^5.1.1",
     "effect": "^3.19.0",
     "jsdom": "^27.4.0",
@@ -34,9 +37,12 @@
     "@mariozechner/pi-coding-agent": "^0.42.0",
     "@sinclair/typebox": "^0.34.0",
     "broadcast-channel": "^7.2.0",
+    "@lydell/node-pty": "^1.0.1",
+    "ghostty-web": "^0.4.0",
     "hono": "^4.11.3",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
+    "ws": "^8.18.0",
     "yaml": "^2.7.0"
   }
 }
