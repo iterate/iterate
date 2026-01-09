@@ -20,7 +20,7 @@ test.describe("slack agent integration", () => {
       },
     };
 
-    const webhookResponse = await request.post(`${baseURL}/daemon/edge/slack`, {
+    const webhookResponse = await request.post(`${baseURL}/edge/slack`, {
       data: slackWebhook,
       headers: { "Content-Type": "application/json" },
     });
@@ -34,7 +34,7 @@ test.describe("slack agent integration", () => {
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       const messagesResponse = await request.get(
-        `${baseURL}/daemon/agents/${encodeURIComponent(threadTs)}?offset=-1`,
+        `${baseURL}/agents/${encodeURIComponent(threadTs)}?offset=-1`,
       );
 
       if (!messagesResponse.ok()) continue;

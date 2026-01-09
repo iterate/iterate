@@ -10,7 +10,7 @@
     "iterate": "pnpm run --silent os iterate",
     "os": "cd apps/os && pnpm",
     "os2": "cd apps/os2 && pnpm",
-    "daemon": "cd apps/os2/daemon && pnpm",
+    "daemon": "cd apps/daemon && pnpm",
     "e2e": "WORKER_URL='http://localhost:5173' doppler run -- pnpm os e2e",
     "eval": "doppler run -- pnpm os eval",
     "eval:light": "doppler run -- env -u BRAINTRUST_API_KEY pnpm os eval",

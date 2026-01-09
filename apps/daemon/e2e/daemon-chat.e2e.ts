@@ -4,7 +4,7 @@ test.describe("daemon chat", () => {
   test("can create agent and receive chat response", async ({ page, baseURL }) => {
     const agentName = `test-agent-${new Date().toISOString()}`;
 
-    await page.goto(`${baseURL}/daemon/ui`);
+    await page.goto(`${baseURL}/ui`);
 
     await expect(page.getByRole("heading", { name: "Agents" })).toBeVisible();
 

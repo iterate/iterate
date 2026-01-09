@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 
 const REPO_PATH = "/repos/iterate";
 const REPO_URL = "https://github.com/iterate/iterate.git";
-const DAEMON_PATH = `${REPO_PATH}/apps/os2/daemon`;
+const DAEMON_PATH = `${REPO_PATH}/apps/daemon`;
 
 const cloneAndSetupRepo = () => {
   if (existsSync(REPO_PATH)) {
