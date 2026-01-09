@@ -1356,8 +1356,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/sdk
 
-  packages/ngrok: {}
-
   packages/sdk:
     dependencies:
       dedent:
