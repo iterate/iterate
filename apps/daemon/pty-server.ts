@@ -1,9 +1,9 @@
-import { WebSocketServer, WebSocket } from "ws";
 import type { Server as HttpServer } from "http";
 import type { Server as HttpsServer } from "https";
 import type { Http2SecureServer, Http2Server } from "http2";
-import pty from "@lydell/node-pty";
 import { homedir } from "os";
+import pty from "@lydell/node-pty";
+import { WebSocketServer, WebSocket } from "ws";
 
 type ServerType = HttpServer | HttpsServer | Http2Server | Http2SecureServer;
 

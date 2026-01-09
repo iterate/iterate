@@ -1,9 +1,9 @@
 // todo: consider deleting this/consolidating into apps/os2/vite.config.ts
+import { homedir } from "os";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import devServer from "@hono/vite-dev-server";
 import type { ViteDevServer } from "vite";
-import { homedir } from "os";
 import { WebSocketServer } from "ws";
 
 // Dev plugin for PTY WebSocket (only runs in dev mode)

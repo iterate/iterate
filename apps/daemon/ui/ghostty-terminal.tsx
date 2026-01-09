@@ -4,14 +4,14 @@ interface GhosttyTerminalProps {
   wsBase?: string;
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 type TerminalInstance = any;
 type FitAddonInstance = any;
-/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
+  const [connectionStatus, setConnectionStatus] = useState<
+    "connecting" | "connected" | "disconnected"
+  >("connecting");
   const termRef = useRef<TerminalInstance>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
@@ -96,11 +96,13 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
       // Handle resize
       term.onResize((size: { cols: number; rows: number }) => {
         if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({
-            type: "resize",
-            cols: size.cols,
-            rows: size.rows,
-          }));
+          ws.send(
+            JSON.stringify({
+              type: "resize",
+              cols: size.cols,
+              rows: size.rows,
+            }),
+          );
         }
       });
 

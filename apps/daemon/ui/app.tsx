@@ -389,11 +389,7 @@ function AgentView({ agentPath }: { agentPath: string }) {
 
       {/* Tab Content */}
       <div className="flex-1 overflow-hidden">
-        {activeTab === "webui" ? (
-          <AgentChat agentPath={agentPath} />
-        ) : (
-          <GhosttyTerminal />
-        )}
+        {activeTab === "webui" ? <AgentChat agentPath={agentPath} /> : <GhosttyTerminal />}
       </div>
     </div>
   );
