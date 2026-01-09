@@ -242,4 +242,79 @@ export const projectRouter = router({
 
     return { success: true };
   }),
+
+  // Start Slack OAuth flow
+  startSlackOAuthFlow: projectProtectedMutation
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = arctic.generateState();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        projectId: ctx.project.id,
+        redirectUri,
+        callbackURL: input.callbackURL,
+      });
+
+      await ctx.db.insert(verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      // Create Slack OAuth URL with bot scopes
+      // These scopes allow the bot to read team info, channels, and send messages
+      const slack = new arctic.Slack(
+        ctx.env.SLACK_CLIENT_ID,
+        ctx.env.SLACK_CLIENT_SECRET,
+        redirectUri,
+      );
+      const scopes = ["team:read", "channels:read", "chat:write", "users:read"];
+      const authorizationUrl = slack.createAuthorizationURL(state, scopes);
+
+      return { authorizationUrl: authorizationUrl.toString() };
+    }),
+
+  // Get Slack connection status
+  getSlackConnection: projectProtectedProcedure.query(async ({ ctx }) => {
+    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+    const providerData = connection?.providerData as {
+      teamId?: string;
+      teamName?: string;
+      teamDomain?: string;
+    } | null;
+
+    return {
+      connected: !!connection,
+      teamId: providerData?.teamId ?? null,
+      teamName: providerData?.teamName ?? null,
+      teamDomain: providerData?.teamDomain ?? null,
+    };
+  }),
+
+  // Disconnect Slack
+  disconnectSlack: projectProtectedMutation.mutation(async ({ ctx }) => {
+    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+
+    if (!connection) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Slack connection found for this project",
+      });
+    }
+
+    await ctx.db
+      .delete(schema.projectConnection)
+      .where(
+        and(eq(projectConnection.projectId, ctx.project.id), eq(projectConnection.provider, "slack")),
+      );
+
+    return { success: true };
+  }),
 });
