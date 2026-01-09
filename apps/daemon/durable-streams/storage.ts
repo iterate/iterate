@@ -5,8 +5,8 @@
  * - InMemory: Fast, ephemeral (for tests)
  * - FileSystem: Persistent JSON files (for production)
  */
-import { FileSystem, Path } from "@effect/platform"
-import { Effect, Layer, Schema } from "effect"
+import { FileSystem, Path } from "@effect/platform";
+import { Effect, Layer, Schema } from "effect";
 import {
   Event,
   type EventStreamId,
@@ -14,15 +14,15 @@ import {
   makeOffset,
   type Offset,
   StorageError,
-  type StreamName
-} from "./types.ts"
+  type StreamName,
+} from "./types.ts";
 
 /** Stored event shape (internal) */
 interface StoredEvent {
-  readonly offset: Offset
-  readonly eventStreamId: EventStreamId
-  readonly data: unknown
-  readonly createdAt: string
+  readonly offset: Offset;
+  readonly eventStreamId: EventStreamId;
+  readonly data: unknown;
+  readonly createdAt: string;
 }
 
 /** Storage service interface - all methods use object params */
@@ -30,91 +30,86 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
   succeed: {
     /** Append events to a stream, returns created events with offsets */
     append: (_opts: {
-      name: StreamName
-      events: ReadonlyArray<{ data: unknown }>
+      name: StreamName;
+      events: ReadonlyArray<{ data: unknown }>;
     }): Effect.Effect<ReadonlyArray<Event>, StorageError> => Effect.succeed([]),
 
     /** Get events from offset (inclusive). Offset -1 means from start */
     getFrom: (_opts: {
-      name: StreamName
-      offset: Offset
-      limit?: number
+      name: StreamName;
+      offset: Offset;
+      limit?: number;
     }): Effect.Effect<ReadonlyArray<Event>, StorageError> => Effect.succeed([]),
 
     /** Get all events for a stream */
-    getAll: (_opts: {
-      name: StreamName
-    }): Effect.Effect<ReadonlyArray<Event>, StorageError> => Effect.succeed([]),
+    getAll: (_opts: { name: StreamName }): Effect.Effect<ReadonlyArray<Event>, StorageError> =>
+      Effect.succeed([]),
 
     /** Check if stream exists */
-    exists: (_opts: {
-      name: StreamName
-    }): Effect.Effect<boolean, StorageError> => Effect.succeed(false),
+    exists: (_opts: { name: StreamName }): Effect.Effect<boolean, StorageError> =>
+      Effect.succeed(false),
 
     /** Create stream (idempotent) */
-    create: (_opts: {
-      name: StreamName
-    }): Effect.Effect<void, StorageError> => Effect.void,
+    create: (_opts: { name: StreamName }): Effect.Effect<void, StorageError> => Effect.void,
 
     /** Delete stream */
-    delete: (_opts: {
-      name: StreamName
-    }): Effect.Effect<void, StorageError> => Effect.void,
+    delete: (_opts: { name: StreamName }): Effect.Effect<void, StorageError> => Effect.void,
 
     /** List all stream names */
-    list: (): Effect.Effect<ReadonlyArray<StreamName>, StorageError> => Effect.succeed([])
+    list: (): Effect.Effect<ReadonlyArray<StreamName>, StorageError> => Effect.succeed([]),
   },
-  accessors: true
+  accessors: true,
 }) {
   /** In-memory storage implementation. Uses mutable Map for simplicity in tests. */
   static readonly InMemory: Layer.Layer<Storage> = Layer.sync(Storage, () => {
-    const store = new Map<StreamName, Array<StoredEvent>>()
+    const store = new Map<StreamName, Array<StoredEvent>>();
 
     return {
       append: (opts: { name: StreamName; events: ReadonlyArray<{ data: unknown }> }) =>
         Effect.sync(() => {
           if (!store.has(opts.name)) {
-            store.set(opts.name, [])
+            store.set(opts.name, []);
           }
-          const events = store.get(opts.name)!
-          const createdAt = new Date().toISOString()
-          const eventStreamId = opts.name as unknown as EventStreamId
-          const newEvents: Array<Event> = opts.events.map((e, i) =>
-            new Event({
-              offset: makeOffset(events.length + i),
-              eventStreamId,
-              data: e.data,
-              createdAt
-            })
-          )
+          const events = store.get(opts.name)!;
+          const createdAt = new Date().toISOString();
+          const eventStreamId = opts.name as unknown as EventStreamId;
+          const newEvents: Array<Event> = opts.events.map(
+            (e, i) =>
+              new Event({
+                offset: makeOffset(events.length + i),
+                eventStreamId,
+                data: e.data,
+                createdAt,
+              }),
+          );
           store.set(opts.name, [
             ...events,
             ...newEvents.map((e) => ({
               offset: e.offset,
               eventStreamId: e.eventStreamId,
               data: e.data,
-              createdAt: e.createdAt
-            }))
-          ])
-          return newEvents
+              createdAt: e.createdAt,
+            })),
+          ]);
+          return newEvents;
         }),
 
       getFrom: (opts: { name: StreamName; offset: Offset; limit?: number }) =>
         Effect.sync(() => {
-          const events = store.get(opts.name) ?? []
+          const events = store.get(opts.name) ?? [];
           if (isStartOffset(opts.offset)) {
-            const limited = opts.limit ? events.slice(0, opts.limit) : events
-            return limited.map((e) => new Event(e))
+            const limited = opts.limit ? events.slice(0, opts.limit) : events;
+            return limited.map((e) => new Event(e));
           }
-          const filtered = events.filter((e) => e.offset >= opts.offset)
-          const limited = opts.limit ? filtered.slice(0, opts.limit) : filtered
-          return limited.map((e) => new Event(e))
+          const filtered = events.filter((e) => e.offset >= opts.offset);
+          const limited = opts.limit ? filtered.slice(0, opts.limit) : filtered;
+          return limited.map((e) => new Event(e));
         }),
 
       getAll: (opts: { name: StreamName }) =>
         Effect.sync(() => {
-          const events = store.get(opts.name) ?? []
-          return events.map((e) => new Event(e))
+          const events = store.get(opts.name) ?? [];
+          return events.map((e) => new Event(e));
         }),
 
       exists: (opts: { name: StreamName }) => Effect.sync(() => store.has(opts.name)),
@@ -122,18 +117,18 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
       create: (opts: { name: StreamName }) =>
         Effect.sync(() => {
           if (!store.has(opts.name)) {
-            store.set(opts.name, [])
+            store.set(opts.name, []);
           }
         }),
 
       delete: (opts: { name: StreamName }) =>
         Effect.sync(() => {
-          store.delete(opts.name)
+          store.delete(opts.name);
         }),
 
-      list: () => Effect.sync(() => Array.from(store.keys()))
-    } as unknown as Storage
-  })
+      list: () => Effect.sync(() => Array.from(store.keys())),
+    } as unknown as Storage;
+  });
 
   /**
    * FileSystem storage implementation.
@@ -145,104 +140,119 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
    * Requires dataDir to be provided (typically .iterate/)
    */
   static FileSystem(opts: {
-    dataDir: string
+    dataDir: string;
   }): Layer.Layer<Storage, never, FileSystem.FileSystem | Path.Path> {
     return Layer.effect(
       Storage,
-      Effect.gen(function*() {
-        const fs = yield* FileSystem.FileSystem
-        const path = yield* Path.Path
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
 
-        const streamsDir = path.join(opts.dataDir, "streams")
+        const streamsDir = path.join(opts.dataDir, "streams");
 
-        const getStreamPath = (name: StreamName) => path.join(streamsDir, `${name}.json`)
+        const getStreamPath = (name: StreamName) => path.join(streamsDir, `${name}.json`);
 
         // Schema for file contents
         const FileSchema = Schema.Struct({
-          events: Schema.Array(Schema.Struct({
-            offset: Schema.String,
-            eventStreamId: Schema.String,
-            data: Schema.Unknown,
-            createdAt: Schema.String
-          }))
-        })
+          events: Schema.Array(
+            Schema.Struct({
+              offset: Schema.String,
+              eventStreamId: Schema.String,
+              data: Schema.Unknown,
+              createdAt: Schema.String,
+            }),
+          ),
+        });
 
-        const readStreamFile = (name: StreamName): Effect.Effect<Array<StoredEvent>, StorageError> =>
-          Effect.gen(function*() {
-            const filePath = getStreamPath(name)
-            const exists = yield* fs.exists(filePath).pipe(
-              Effect.catchAll(() => Effect.succeed(false))
-            )
+        const readStreamFile = (
+          name: StreamName,
+        ): Effect.Effect<Array<StoredEvent>, StorageError> =>
+          Effect.gen(function* () {
+            const filePath = getStreamPath(name);
+            const exists = yield* fs
+              .exists(filePath)
+              .pipe(Effect.catchAll(() => Effect.succeed(false)));
 
             if (!exists) {
-              return []
+              return [];
             }
 
-            const content = yield* fs.readFileString(filePath).pipe(
-              Effect.mapError((e) => new StorageError({ message: `Failed to read stream file: ${e}` }))
-            )
+            const content = yield* fs
+              .readFileString(filePath)
+              .pipe(
+                Effect.mapError(
+                  (e) => new StorageError({ message: `Failed to read stream file: ${e}` }),
+                ),
+              );
 
             const parsed = yield* Effect.try({
               try: () => JSON.parse(content) as unknown,
-              catch: (e) => new StorageError({ message: `Invalid JSON in stream file: ${e}` })
-            })
+              catch: (e) => new StorageError({ message: `Invalid JSON in stream file: ${e}` }),
+            });
 
             const decoded = yield* Schema.decodeUnknown(FileSchema)(parsed).pipe(
-              Effect.mapError((e) => new StorageError({ message: `Invalid stream file schema: ${e}` }))
-            )
+              Effect.mapError(
+                (e) => new StorageError({ message: `Invalid stream file schema: ${e}` }),
+              ),
+            );
 
             return decoded.events.map((e) => ({
               offset: e.offset as Offset,
               eventStreamId: e.eventStreamId as EventStreamId,
               data: e.data,
-              createdAt: e.createdAt
-            }))
-          })
+              createdAt: e.createdAt,
+            }));
+          });
 
         const writeStreamFile = (
           name: StreamName,
-          events: Array<StoredEvent>
+          events: Array<StoredEvent>,
         ): Effect.Effect<void, StorageError> =>
-          Effect.gen(function*() {
+          Effect.gen(function* () {
             // Ensure directory exists
-            yield* fs.makeDirectory(streamsDir, { recursive: true }).pipe(
-              Effect.catchAll(() => Effect.void)
-            )
+            yield* fs
+              .makeDirectory(streamsDir, { recursive: true })
+              .pipe(Effect.catchAll(() => Effect.void));
 
-            const filePath = getStreamPath(name)
+            const filePath = getStreamPath(name);
             const content = JSON.stringify(
               {
                 events: events.map((e) => ({
                   offset: e.offset,
                   eventStreamId: e.eventStreamId,
                   data: e.data,
-                  createdAt: e.createdAt
-                }))
+                  createdAt: e.createdAt,
+                })),
               },
               null,
-              2
-            )
+              2,
+            );
 
-            yield* fs.writeFileString(filePath, content).pipe(
-              Effect.mapError((e) => new StorageError({ message: `Failed to write stream file: ${e}` }))
-            )
-          })
+            yield* fs
+              .writeFileString(filePath, content)
+              .pipe(
+                Effect.mapError(
+                  (e) => new StorageError({ message: `Failed to write stream file: ${e}` }),
+                ),
+              );
+          });
 
         return {
           append: (appendOpts: { name: StreamName; events: ReadonlyArray<{ data: unknown }> }) =>
-            Effect.gen(function*() {
-              const existing = yield* readStreamFile(appendOpts.name)
-              const createdAt = new Date().toISOString()
-              const eventStreamId = appendOpts.name as unknown as EventStreamId
+            Effect.gen(function* () {
+              const existing = yield* readStreamFile(appendOpts.name);
+              const createdAt = new Date().toISOString();
+              const eventStreamId = appendOpts.name as unknown as EventStreamId;
 
-              const newEvents: Array<Event> = appendOpts.events.map((e, i) =>
-                new Event({
-                  offset: makeOffset(existing.length + i),
-                  eventStreamId,
-                  data: e.data,
-                  createdAt
-                })
-              )
+              const newEvents: Array<Event> = appendOpts.events.map(
+                (e, i) =>
+                  new Event({
+                    offset: makeOffset(existing.length + i),
+                    eventStreamId,
+                    data: e.data,
+                    createdAt,
+                  }),
+              );
 
               const combined = [
                 ...existing,
@@ -250,79 +260,79 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
                   offset: e.offset,
                   eventStreamId: e.eventStreamId,
                   data: e.data,
-                  createdAt: e.createdAt
-                }))
-              ]
+                  createdAt: e.createdAt,
+                })),
+              ];
 
-              yield* writeStreamFile(appendOpts.name, combined)
+              yield* writeStreamFile(appendOpts.name, combined);
 
-              return newEvents
+              return newEvents;
             }),
 
           getFrom: (getFromOpts: { name: StreamName; offset: Offset; limit?: number }) =>
-            Effect.gen(function*() {
-              const events = yield* readStreamFile(getFromOpts.name)
+            Effect.gen(function* () {
+              const events = yield* readStreamFile(getFromOpts.name);
 
-              let filtered: Array<StoredEvent>
+              let filtered: Array<StoredEvent>;
               if (isStartOffset(getFromOpts.offset)) {
-                filtered = events
+                filtered = events;
               } else {
-                filtered = events.filter((e) => e.offset >= getFromOpts.offset)
+                filtered = events.filter((e) => e.offset >= getFromOpts.offset);
               }
 
-              const limited = getFromOpts.limit ? filtered.slice(0, getFromOpts.limit) : filtered
-              return limited.map((e) => new Event(e))
+              const limited = getFromOpts.limit ? filtered.slice(0, getFromOpts.limit) : filtered;
+              return limited.map((e) => new Event(e));
             }),
 
           getAll: (getAllOpts: { name: StreamName }) =>
-            Effect.gen(function*() {
-              const events = yield* readStreamFile(getAllOpts.name)
-              return events.map((e) => new Event(e))
+            Effect.gen(function* () {
+              const events = yield* readStreamFile(getAllOpts.name);
+              return events.map((e) => new Event(e));
             }),
 
           exists: (existsOpts: { name: StreamName }) =>
-            fs.exists(getStreamPath(existsOpts.name)).pipe(
-              Effect.catchAll(() => Effect.succeed(false))
-            ),
+            fs
+              .exists(getStreamPath(existsOpts.name))
+              .pipe(Effect.catchAll(() => Effect.succeed(false))),
 
           create: (createOpts: { name: StreamName }) =>
-            Effect.gen(function*() {
-              const filePath = getStreamPath(createOpts.name)
-              const exists = yield* fs.exists(filePath).pipe(
-                Effect.catchAll(() => Effect.succeed(false))
-              )
+            Effect.gen(function* () {
+              const filePath = getStreamPath(createOpts.name);
+              const exists = yield* fs
+                .exists(filePath)
+                .pipe(Effect.catchAll(() => Effect.succeed(false)));
 
               if (!exists) {
-                yield* writeStreamFile(createOpts.name, [])
+                yield* writeStreamFile(createOpts.name, []);
               }
             }),
 
           delete: (deleteOpts: { name: StreamName }) =>
             fs.remove(getStreamPath(deleteOpts.name)).pipe(
               Effect.catchAll(() => Effect.void),
-              Effect.asVoid
+              Effect.asVoid,
             ),
 
           list: () =>
-            Effect.gen(function*() {
-              const dirExists = yield* fs.exists(streamsDir).pipe(
-                Effect.catchAll(() => Effect.succeed(false))
-              )
+            Effect.gen(function* () {
+              const dirExists = yield* fs
+                .exists(streamsDir)
+                .pipe(Effect.catchAll(() => Effect.succeed(false)));
 
               if (!dirExists) {
-                return [] as ReadonlyArray<StreamName>
+                return [] as ReadonlyArray<StreamName>;
               }
 
-              const entries = yield* fs.readDirectory(streamsDir).pipe(
-                Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>))
-              )
+              const entries = yield* fs
+                .readDirectory(streamsDir)
+                .pipe(Effect.catchAll(() => Effect.succeed([] as ReadonlyArray<string>)));
 
               return entries
                 .filter((name) => name.endsWith(".json"))
-                .map((name) => name.slice(0, -5) as StreamName)
-            })
-        } as unknown as Storage
-      })
-    )
+                .map((name) => name.slice(0, -5) as StreamName);
+            }),
+        } as unknown as Storage;
+      }),
+    );
   }
 }

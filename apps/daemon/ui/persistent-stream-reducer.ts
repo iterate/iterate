@@ -43,18 +43,8 @@
  *    maintains the SSE connection; others receive state via BroadcastChannel.
  */
 
-import {
-  useReducer,
-  useEffect,
-  useRef,
-  useState,
-  useCallback,
-} from "react";
-import {
-  BroadcastChannel,
-  createLeaderElection,
-  type LeaderElector,
-} from "broadcast-channel";
+import { useReducer, useEffect, useRef, useState, useCallback } from "react";
+import { BroadcastChannel, createLeaderElection, type LeaderElector } from "broadcast-channel";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -147,8 +137,13 @@ function createSuspenseResource(key: string, promise: Promise<void>): SuspenseRe
   let error: unknown;
 
   const suspender = promise.then(
-    () => { status = "resolved"; },
-    (e) => { status = "rejected"; error = e; }
+    () => {
+      status = "resolved";
+    },
+    (e) => {
+      status = "rejected";
+      error = e;
+    },
   );
 
   return {
@@ -198,7 +193,10 @@ const storage = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function yieldToMain(): Promise<void> {
-  if ("scheduler" in globalThis && "yield" in (globalThis as { scheduler?: { yield?: unknown } }).scheduler!) {
+  if (
+    "scheduler" in globalThis &&
+    "yield" in (globalThis as { scheduler?: { yield?: unknown } }).scheduler!
+  ) {
     return (globalThis as { scheduler: { yield: () => Promise<void> } }).scheduler.yield();
   }
   return new Promise((resolve) => setTimeout(resolve, 0));
@@ -208,7 +206,7 @@ async function replayEventsInBatches<TState, TEvent>(
   events: TEvent[],
   reducer: (state: TState, event: TEvent) => TState,
   initialState: TState,
-  batchSize: number
+  batchSize: number,
 ): Promise<TState> {
   let state = initialState;
 
@@ -342,7 +340,11 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
 
             if (isControlEvent || data.headers?.control) {
               const controlType = isControlEvent
-                ? (data.upToDate ? "up-to-date" : data.streamNextOffset ? "offset-update" : null)
+                ? data.upToDate
+                  ? "up-to-date"
+                  : data.streamNextOffset
+                    ? "offset-update"
+                    : null
                 : data.headers.control;
 
               switch (controlType) {
@@ -385,7 +387,11 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
               if (event.type === "message_start") {
                 setIsStreaming(true);
                 channel?.postMessage({ type: "streaming", streaming: true });
-              } else if (event.type === "message_complete" || event.type === "message_end" || event.type === "agent_end") {
+              } else if (
+                event.type === "message_complete" ||
+                event.type === "message_end" ||
+                event.type === "agent_end"
+              ) {
                 setIsStreaming(false);
                 channel?.postMessage({ type: "streaming", streaming: false });
               }

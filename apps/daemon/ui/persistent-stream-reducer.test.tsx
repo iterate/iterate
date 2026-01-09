@@ -15,9 +15,15 @@ const localStorageMock = (() => {
   let store: Record<string, string> = {};
   return {
     getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-    clear: () => { store = {}; },
+    setItem: (key: string, value: string) => {
+      store[key] = value;
+    },
+    removeItem: (key: string) => {
+      delete store[key];
+    },
+    clear: () => {
+      store = {};
+    },
   };
 })();
 
@@ -144,7 +150,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -165,7 +171,7 @@ describe("usePersistentStream", () => {
 
     it("does not close and reopen connection when phase changes", async () => {
       const closeSpy = vi.fn();
-      
+
       renderHook(() =>
         usePersistentStream({
           url: "/test",
@@ -173,7 +179,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -202,7 +208,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -224,7 +230,7 @@ describe("usePersistentStream", () => {
     it("followers persist events received via BroadcastChannel", async () => {
       // This test verifies that followers also persist events to localStorage
       // so that when they become leader, they have the same event history
-      
+
       renderHook(() =>
         usePersistentStream({
           url: "/test",
@@ -232,7 +238,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -262,7 +268,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -284,7 +290,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       expect(result.current.state).toEqual(initialState);
@@ -301,7 +307,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -325,7 +331,7 @@ describe("usePersistentStream", () => {
           initialState,
           shouldPersist: (e) => e.type !== "item_chunk",
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -353,7 +359,7 @@ describe("usePersistentStream", () => {
         JSON.stringify([
           { type: "item_complete", content: "first" },
           { type: "item_complete", content: "second" },
-        ])
+        ]),
       );
 
       const { result } = renderHook(() =>
@@ -363,7 +369,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -385,7 +391,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -402,7 +408,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));
@@ -410,7 +416,7 @@ describe("usePersistentStream", () => {
       act(() => {
         MockEventSource.instances[0].emit(
           { type: "item_complete", content: "test" },
-          "new-offset-456"
+          "new-offset-456",
         );
       });
 
@@ -429,7 +435,7 @@ describe("usePersistentStream", () => {
           reducer: testReducer,
           initialState,
           suspense: false,
-        })
+        }),
       );
 
       await waitFor(() => expect(MockEventSource.instances.length).toBe(1));

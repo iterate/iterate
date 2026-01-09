@@ -61,6 +61,7 @@ subscribe │     │ append                                                    
 ```
 
 **Key properties:**
+
 - One durable stream per agent instance / session (identified by `eventStreamId`)
 - Action events are first-class stream events (Redux-like pattern) - adapters observe the actions and enact side effects (e.g. sending a prompt to opencode)
 - Harness events wrapped verbatim in `payload` (no lossy normalization)
@@ -69,14 +70,14 @@ subscribe │     │ append                                                    
 
 ## Terminology
 
-| Term | Definition |
-|------|------------|
-| **Agent Harness** | Standalone agent runtime (OpenCode, Claude Code, Pi, Iterate Agent). Handles LLM calls, tool execution, conversation state. |
-| **Harness Adapter** | Code that subscribes to a stream, appends events, and interacts with a harness SDK/CLI. |
-| **Durable Stream** | Append-only event log with offset-based resumption. One stream per agent instance. |
-| **Event Stream ID** | Unique identifier for a stream (e.g., `"stream-abc123"`). Used everywhere instead of "agent ID". |
-| **Action Event** | Event requesting a side effect (e.g., `action:prompt:called`). Uses `action:*:called` naming. |
-| **Renderer** | Bidirectional stream client (Web UI, Slack bot). Can read events and append new ones. |
+| Term                | Definition                                                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **Agent Harness**   | Standalone agent runtime (OpenCode, Claude Code, Pi, Iterate Agent). Handles LLM calls, tool execution, conversation state. |
+| **Harness Adapter** | Code that subscribes to a stream, appends events, and interacts with a harness SDK/CLI.                                     |
+| **Durable Stream**  | Append-only event log with offset-based resumption. One stream per agent instance.                                          |
+| **Event Stream ID** | Unique identifier for a stream (e.g., `"stream-abc123"`). Used everywhere instead of "agent ID".                            |
+| **Action Event**    | Event requesting a side effect (e.g., `action:prompt:called`). Uses `action:*:called` naming.                               |
+| **Renderer**        | Bidirectional stream client (Web UI, Slack bot). Can read events and append new ones.                                       |
 
 ## The Core Pattern: Durable Streams
 
@@ -87,6 +88,7 @@ subscribe │     │ append                                                    
 3. **Append** — add new events to the stream
 
 That's it. If you want to support a new agent harness, you need to:
+
 1. Subscribe to the stream
 2. Append events to the stream
 3. Interact with the harness SDK/CLI
@@ -120,6 +122,7 @@ Wrapped harness events (verbatim payload):
 ```
 
 **Naming conventions:**
+
 - External events: source-based (`slack:*`, `github:*`), past-tense verbs
 - Action events: `action:*:called` suffix (things we want to happen)
 - Wrapped harness: generic `event-received` type, native format in `payload`
@@ -130,19 +133,19 @@ Wrapped harness events (verbatim payload):
 ```typescript
 interface IterateEvent {
   // Protocol fields
-  offset: string                    // Assigned by durable-streams
+  offset: string; // Assigned by durable-streams
 
   // Envelope fields (always present)
-  type: string                      // e.g. "iterate:agent:harness:opencode:event-received"
-  version: number                   // Schema version (start at 1)
-  createdAt: string                 // ISO 8601 (e.g. "2024-01-15T10:15:00.000Z")
-  eventStreamId: string             // Stream this event belongs to
+  type: string; // e.g. "iterate:agent:harness:opencode:event-received"
+  version: number; // Schema version (start at 1)
+  createdAt: string; // ISO 8601 (e.g. "2024-01-15T10:15:00.000Z")
+  eventStreamId: string; // Stream this event belongs to
 
   // Type-specific fields
-  payload?: Record<string, unknown>
+  payload?: Record<string, unknown>;
 
   // Optional
-  metadata?: Record<string, unknown>  // Debug info, correlation IDs
+  metadata?: Record<string, unknown>; // Debug info, correlation IDs
 }
 ```
 
@@ -220,6 +223,7 @@ Flat structure at root for easy filtering/indexing. External payloads preserved 
 ## Harness Adapters: The Pattern
 
 A harness adapter is just code that:
+
 1. Subscribes to a durable stream
 2. Appends events to the stream
 3. Interacts with a harness SDK/CLI
@@ -230,42 +234,45 @@ No interfaces. No abstractions. Just the three stream operations + SDK calls.
 
 ```typescript
 // OpenCode adapter - the entire implementation pattern
-const runOpenCodeAdapter = (eventStreamId: string) => Effect.gen(function*() {
-  const stream = yield* DurableStream
-  const opencode = yield* OpenCodeClient
+const runOpenCodeAdapter = (eventStreamId: string) =>
+  Effect.gen(function* () {
+    const stream = yield* DurableStream;
+    const opencode = yield* OpenCodeClient;
 
-  // 1. Subscribe to stream events
-  yield* stream.subscribe(eventStreamId, { fromOffset: "latest" }).pipe(
-    Stream.runForEach((event) => Effect.gen(function*() {
-      // Handle action events by calling OpenCode API
-      if (event.type === "iterate:agent:harness:opencode:action:prompt:called") {
-        yield* opencode.sendPrompt(event.payload.sessionId, event.payload.content)
-      }
-      if (event.type === "iterate:agent:harness:opencode:action:session-create:called") {
-        yield* opencode.createSession(event.payload.config)
-      }
-      // Transform external events to action events
-      if (event.type === "slack:webhook-received") {
-        yield* stream.append(eventStreamId, {
-          type: "iterate:agent:harness:opencode:action:prompt:called",
+    // 1. Subscribe to stream events
+    yield* stream.subscribe(eventStreamId, { fromOffset: "latest" }).pipe(
+      Stream.runForEach((event) =>
+        Effect.gen(function* () {
+          // Handle action events by calling OpenCode API
+          if (event.type === "iterate:agent:harness:opencode:action:prompt:called") {
+            yield* opencode.sendPrompt(event.payload.sessionId, event.payload.content);
+          }
+          if (event.type === "iterate:agent:harness:opencode:action:session-create:called") {
+            yield* opencode.createSession(event.payload.config);
+          }
+          // Transform external events to action events
+          if (event.type === "slack:webhook-received") {
+            yield* stream.append(eventStreamId, {
+              type: "iterate:agent:harness:opencode:action:prompt:called",
+              eventStreamId,
+              payload: { content: event.payload.text },
+            });
+          }
+        }),
+      ),
+    );
+
+    // 2. Subscribe to OpenCode's native events, wrap and append
+    yield* opencode.subscribeEvents().pipe(
+      Stream.runForEach((nativeEvent) =>
+        stream.append(eventStreamId, {
+          type: "iterate:agent:harness:opencode:event-received",
           eventStreamId,
-          payload: { content: event.payload.text }
-        })
-      }
-    }))
-  )
-
-  // 2. Subscribe to OpenCode's native events, wrap and append
-  yield* opencode.subscribeEvents().pipe(
-    Stream.runForEach((nativeEvent) =>
-      stream.append(eventStreamId, {
-        type: "iterate:agent:harness:opencode:event-received",
-        eventStreamId,
-        payload: nativeEvent  // Verbatim, no transformation
-      })
-    )
-  )
-})
+          payload: nativeEvent, // Verbatim, no transformation
+        }),
+      ),
+    );
+  });
 ```
 
 **That's the whole pattern.** Subscribe to stream. Append to stream. Call SDK. Done.
@@ -317,15 +324,16 @@ HTTP/SSE server architecture. One server per sandbox, multiple sessions multiple
 opencode serve --port 4096
 ```
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/session` | List/create sessions |
-| `/session/:id/prompt` | Send message (sync) |
+| Endpoint                    | Purpose                   |
+| --------------------------- | ------------------------- |
+| `/session`                  | List/create sessions      |
+| `/session/:id/prompt`       | Send message (sync)       |
 | `/session/:id/prompt_async` | Send message (SSE stream) |
-| `/session/:id/abort` | Cancel operation |
-| `/event` | SSE event stream |
+| `/session/:id/abort`        | Cancel operation          |
+| `/event`                    | SSE event stream          |
 
 **Action handlers:**
+
 - `action:session-create:called` → `POST /session`
 - `action:prompt:called` → `POST /session/:id/prompt_async`
 - `action:abort:called` → `POST /session/:id/abort`
@@ -339,19 +347,19 @@ TUI attach: `opencode attach --hostname localhost --port 4096`
 CLI-per-invocation via SDK. SDK spawns CLI binary internally.
 
 ```typescript
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
 const response = query({
   prompt: "Hello",
   options: {
-    model: 'claude-sonnet-4-5',
+    model: "claude-sonnet-4-5",
     cwd: process.cwd(),
     resume: sessionId,
-    allowedTools: ['Read', 'Write', 'Edit', 'Bash'],
-    permissionMode: 'acceptEdits',
+    allowedTools: ["Read", "Write", "Edit", "Bash"],
+    permissionMode: "acceptEdits",
     abortController,
-  }
-})
+  },
+});
 
 for await (const message of response) {
   // Wrap as iterate:agent:harness:claude:event-received
@@ -373,6 +381,7 @@ Direct programmatic usage via `@mariozechner/pi-coding-agent` SDK. Eliminates su
 **Design philosophy**: "omit to discover, provide to override" — omit config options to use CLI-compatible auto-discovery, or provide explicit values.
 
 **Primary exports:**
+
 - `createAgentSession(options)` — Main factory returning `{ session }` for agent interaction
 - `SessionManager` — Session file persistence (JSONL format) with static factory methods
 - `discoverAuthStorage()` — Discovers credentials from `~/.pi/agent/auth.json` and env vars
@@ -381,25 +390,25 @@ Direct programmatic usage via `@mariozechner/pi-coding-agent` SDK. Eliminates su
 **Session creation (mirrors CLI):**
 
 ```typescript
-SessionManager.create()           // New session (auto-saves to ~/.pi/agent/sessions/)
-SessionManager.open(path)         // Open specific file (--session /path/to/file.jsonl)
-SessionManager.open("a8ec1c2a")   // Resume by partial UUID (--session a8ec1c2a)
-SessionManager.continueRecent()   // Most recent session (-c or --continue)
-SessionManager.inMemory()         // Ephemeral (--no-session)
-SessionManager.list()             // List available sessions (-r or --resume)
+SessionManager.create(); // New session (auto-saves to ~/.pi/agent/sessions/)
+SessionManager.open(path); // Open specific file (--session /path/to/file.jsonl)
+SessionManager.open("a8ec1c2a"); // Resume by partial UUID (--session a8ec1c2a)
+SessionManager.continueRecent(); // Most recent session (-c or --continue)
+SessionManager.inMemory(); // Ephemeral (--no-session)
+SessionManager.list(); // List available sessions (-r or --resume)
 ```
 
 **Event types (match RPC protocol):**
 
-| Event Type | Description |
-|------------|-------------|
-| `agent_start` | Agent processing begins |
-| `message_update` | Streaming text/thinking deltas; contains `assistantMessageEvent` |
-| `turn_start` / `turn_end` | Turn boundaries (turns repeat while LLM calls tools) |
-| `tool_call` | Tool about to execute |
-| `tool_result` | Tool execution completed |
-| `agent_end` | Agent processing complete |
-| `error` | Error occurred |
+| Event Type                | Description                                                      |
+| ------------------------- | ---------------------------------------------------------------- |
+| `agent_start`             | Agent processing begins                                          |
+| `message_update`          | Streaming text/thinking deltas; contains `assistantMessageEvent` |
+| `turn_start` / `turn_end` | Turn boundaries (turns repeat while LLM calls tools)             |
+| `tool_call`               | Tool about to execute                                            |
+| `tool_result`             | Tool execution completed                                         |
+| `agent_end`               | Agent processing complete                                        |
+| `error`                   | Error occurred                                                   |
 
 **Complete adapter example:**
 
@@ -409,24 +418,24 @@ import {
   discoverAuthStorage,
   discoverModels,
   SessionManager,
-} from "@mariozechner/pi-coding-agent"
+} from "@mariozechner/pi-coding-agent";
 
 // CLI-compatible configuration discovery
-const authStorage = discoverAuthStorage()
-const modelRegistry = discoverModels(authStorage)
+const authStorage = discoverAuthStorage();
+const modelRegistry = discoverModels(authStorage);
 
 // Create session with file persistence
-const sessionManager = SessionManager.create()
+const sessionManager = SessionManager.create();
 
 const { session } = await createAgentSession({
   sessionManager,
   authStorage,
   modelRegistry,
   // Optional overrides: cwd, model, thinkingLevel, systemPrompt, tools, extensions
-})
+});
 
 // Session file path for CLI interop (pi --session <path>)
-console.log("Session file:", sessionManager.sessionFile)
+console.log("Session file:", sessionManager.sessionFile);
 
 // Subscribe to events
 const unsubscribe = session.subscribe((event) => {
@@ -434,38 +443,38 @@ const unsubscribe = session.subscribe((event) => {
     case "message_update":
       if (event.assistantMessageEvent?.type === "text_delta") {
         // Stream text output, wrap as iterate:agent:harness:pi:event-received
-        process.stdout.write(event.assistantMessageEvent.delta ?? "")
+        process.stdout.write(event.assistantMessageEvent.delta ?? "");
       }
-      break
+      break;
     case "tool_call":
-      console.log(`[Tool: ${event.toolName}]`)
-      break
+      console.log(`[Tool: ${event.toolName}]`);
+      break;
     case "agent_end":
-      console.log("[Agent finished]")
-      break
+      console.log("[Agent finished]");
+      break;
   }
-})
+});
 
 // Send prompts (async, returns when agent finishes)
-await session.prompt("List TypeScript files")
-await session.prompt("What patterns do you see?")
+await session.prompt("List TypeScript files");
+await session.prompt("What patterns do you see?");
 
 // Session methods
-session.abort()           // Cancel current processing
-await session.waitForIdle()
-await session.branch()    // Fork conversation (like /branch)
-await session.reset()     // Reset session (like /new)
+session.abort(); // Cancel current processing
+await session.waitForIdle();
+await session.branch(); // Fork conversation (like /branch)
+await session.reset(); // Reset session (like /new)
 
-unsubscribe()
+unsubscribe();
 ```
 
 **Resuming existing session:**
 
 ```typescript
-const sessionManager = SessionManager.open(sessionPath)
-const { session } = await createAgentSession({ sessionManager, authStorage, modelRegistry })
+const sessionManager = SessionManager.open(sessionPath);
+const { session } = await createAgentSession({ sessionManager, authStorage, modelRegistry });
 // History loaded from JSONL file, continue conversation
-await session.prompt("Continue where we left off")
+await session.prompt("Continue where we left off");
 ```
 
 TUI resume: `pi --session /path/to/session.jsonl`
@@ -476,29 +485,30 @@ Our own agent implementation. Details TBD—Effect-based LLM adapter.
 
 ### Comparison
 
-| Aspect | OpenCode | Claude Code | Pi | Iterate Agent |
-|--------|----------|-------------|-----|---------------|
-| Architecture | HTTP/SSE server | CLI per query | Direct SDK | TBD |
-| Concurrent safe | Yes (server) | No (file-based) | No (file-based) | TBD |
-| Startup overhead | Server must run | ~12s per query | None (in-process) | TBD |
-| CLI capture | Built-in (same server) | Global hooks needed | Same session file | N/A |
+| Aspect           | OpenCode               | Claude Code         | Pi                | Iterate Agent |
+| ---------------- | ---------------------- | ------------------- | ----------------- | ------------- |
+| Architecture     | HTTP/SSE server        | CLI per query       | Direct SDK        | TBD           |
+| Concurrent safe  | Yes (server)           | No (file-based)     | No (file-based)   | TBD           |
+| Startup overhead | Server must run        | ~12s per query      | None (in-process) | TBD           |
+| CLI capture      | Built-in (same server) | Global hooks needed | Same session file | N/A           |
 
 ## Tool Injection
 
 Iterate tools registered in each harness using harness-specific mechanisms:
 
-| Harness | Registration |
-|---------|-------------|
-| OpenCode | Agent config or runtime SDK |
-| Claude Code | MCP servers, `--allowedTools` |
-| Pi | `extensions` option in `createAgentSession()` |
-| Iterate Agent | Effect Schema directly |
+| Harness       | Registration                                  |
+| ------------- | --------------------------------------------- |
+| OpenCode      | Agent config or runtime SDK                   |
+| Claude Code   | MCP servers, `--allowedTools`                 |
+| Pi            | `extensions` option in `createAgentSession()` |
+| Iterate Agent | Effect Schema directly                        |
 
 **Approach**: Define tools using Effect Schema, convert to harness-specific format. Long-term: MCP as canonical format where supported.
 
 ## TUI Compatibility
 
 Users can SSH into sandbox and use native TUI. When they do:
+
 - From agent's perspective, everything is normal
 - Adapter captures events → appear on SSE stream
 - Web UI sees same events
@@ -508,6 +518,7 @@ Users can SSH into sandbox and use native TUI. When they do:
 ## Renderers
 
 Renderers are **bidirectional** stream clients. They can:
+
 1. Subscribe to events via SSE (read)
 2. Append new events to the stream (write)
 
@@ -517,19 +528,19 @@ Examples: Web UI, Slack bot, CLI.
 // Reading events
 function handleStreamEvent(event: IterateEvent) {
   if (event.type === "iterate:agent:harness:opencode:event-received") {
-    return renderOpenCodeEvent(event.payload)
+    return renderOpenCodeEvent(event.payload);
   }
   if (event.type === "iterate:agent:harness:claude:event-received") {
-    return renderClaudeEvent(event.payload)
+    return renderClaudeEvent(event.payload);
   }
   if (event.type === "iterate:agent:harness:pi:event-received") {
-    return renderPiEvent(event.payload)
+    return renderPiEvent(event.payload);
   }
   if (event.type === "iterate:agent:harness:iterate:event-received") {
-    return renderIterateEvent(event.payload)
+    return renderIterateEvent(event.payload);
   }
   // Show raw event for unknown types
-  return renderRawEvent(event)
+  return renderRawEvent(event);
 }
 
 // Writing events (user sends message from Web UI)
@@ -537,8 +548,8 @@ async function onUserSubmit(eventStreamId: string, text: string) {
   await stream.append(eventStreamId, {
     type: "iterate:agent:harness:opencode:action:prompt:called",
     eventStreamId,
-    payload: { content: text }
-  })
+    payload: { content: text },
+  });
 }
 ```
 
@@ -568,6 +579,7 @@ Ignore for now
 - Iterate Agent: TBD
 
 **Health monitoring?**
+
 - Passive exit monitoring + periodic health checks
 
 ### Storage

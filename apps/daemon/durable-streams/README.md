@@ -5,6 +5,7 @@ Pure event streams with append/subscribe semantics. No LLM logic, no agent behav
 ## Design Philosophy
 
 **Streams are named, ordered event logs.** Each stream:
+
 - Has a unique name
 - Contains events with monotonically increasing offsets
 - Supports append (write) and subscribe (read)
@@ -82,58 +83,64 @@ Hooks allow intercepting stream operations without modifying the base `DurableSt
 ### Hook Types
 
 **Before hooks** run before append. Failure vetoes the operation:
+
 ```typescript
 const validateType: BeforeAppendHook = {
   id: "validate-type",
   run: ({ data }) => {
-    const obj = data as Record<string, unknown>
+    const obj = data as Record<string, unknown>;
     if (typeof obj._type !== "string") {
-      return Effect.fail(new HookError({
-        hookId: "validate-type",
-        message: "Data must have _type field"
-      }))
+      return Effect.fail(
+        new HookError({
+          hookId: "validate-type",
+          message: "Data must have _type field",
+        }),
+      );
     }
-    return Effect.void
-  }
-}
+    return Effect.void;
+  },
+};
 ```
 
 **After hooks** run after successful append. Errors are logged but don't fail:
+
 ```typescript
 const auditLog: AfterAppendHook = {
   id: "audit-log",
-  run: ({ name, event }) =>
-    Effect.log("Event appended", { stream: name, offset: event.offset })
-}
+  run: ({ name, event }) => Effect.log("Event appended", { stream: name, offset: event.offset }),
+};
 ```
 
 ### Using withHooks
 
 Wrap any `DurableStream` with hooks:
+
 ```typescript
-import { withHooks } from "./with-hooks.ts"
+import { withHooks } from "./with-hooks.ts";
 
 const hooked = withHooks(baseStream, {
   beforeAppend: [validateType, rateLimit],
-  afterAppend: [auditLog, notifyDownstream]
-})
+  afterAppend: [auditLog, notifyDownstream],
+});
 ```
 
 ### Swapping Implementations
 
 Edit `stream-factory.ts` to change `ActiveFactory`:
+
 ```typescript
 // Default: plain streams (no hooks)
-export const ActiveFactory = PlainFactory
+export const ActiveFactory = PlainFactory;
 
 // To test validation hooks:
-export const ActiveFactory = ValidatedFactory
+export const ActiveFactory = ValidatedFactory;
 
 // To test agent event hooks:
-export const ActiveFactory = EmbryonicAgentFactory
+export const ActiveFactory = EmbryonicAgentFactory;
 ```
 
 Pre-configured variants in `stream-factory.ts`:
+
 - `PlainFactory` - base DurableStream, no hooks
 - `ValidatedFactory` - requires `_type` field on all events
 - `EmbryonicAgentFactory` - validates agent events (`_type` starts with `agent:`) + logging
@@ -166,6 +173,7 @@ npx tsx src/durable-streams/main.ts server status
 ```
 
 **Storage options:**
+
 - `--storage fs` (default) - Persistent file-based storage in `.iterate/streams/`
 - `--storage memory` - Volatile in-memory storage (data lost on restart)
 
@@ -204,6 +212,7 @@ npx tsx src/durable-streams/main.ts stream delete -n my-stream
 ### Files Created
 
 Data files are stored in `.iterate/` in the working directory:
+
 - `.iterate/daemon.pid` - Process ID of running daemon
 - `.iterate/daemon.port` - Port the daemon is listening on
 - `.iterate/daemon.log` - Server stdout/stderr
@@ -233,6 +242,7 @@ tmux attach -t ds
 ```
 
 Then in pane 2, send messages:
+
 ```bash
 npx tsx src/durable-streams/main.ts stream append -n test -m "first message"
 npx tsx src/durable-streams/main.ts stream append -n test -m "second message"
@@ -252,8 +262,14 @@ curl -X POST http://localhost:3000/streams/my-stream \
 ```
 
 Response:
+
 ```json
-{"offset":"0000000000000000","eventStreamId":"my-stream","data":{"type":"message","text":"hello"},"createdAt":"2024-01-08T00:00:00.000Z"}
+{
+  "offset": "0000000000000000",
+  "eventStreamId": "my-stream",
+  "data": { "type": "message", "text": "hello" },
+  "createdAt": "2024-01-08T00:00:00.000Z"
+}
 ```
 
 ### Subscribe (SSE)
@@ -270,6 +286,7 @@ curl -N http://localhost:3000/streams/my-stream?offset=0000000000000005
 ```
 
 Output (SSE format):
+
 ```
 data: {"offset":"0000000000000000","eventStreamId":"my-stream","data":{"type":"message","text":"hello"},"createdAt":"2024-01-08T00:00:00.000Z"}
 
@@ -287,8 +304,18 @@ curl http://localhost:3000/streams/my-stream/events?offset=0000000000000005&limi
 ```
 
 Response:
+
 ```json
-{"events":[{"offset":"0000000000000005","eventStreamId":"my-stream","data":{"type":"message","text":"hello"},"createdAt":"2024-01-08T00:00:00.000Z"}]}
+{
+  "events": [
+    {
+      "offset": "0000000000000005",
+      "eventStreamId": "my-stream",
+      "data": { "type": "message", "text": "hello" },
+      "createdAt": "2024-01-08T00:00:00.000Z"
+    }
+  ]
+}
 ```
 
 ### List Streams
@@ -298,8 +325,9 @@ curl http://localhost:3000/streams
 ```
 
 Response:
+
 ```json
-{"streams":["my-stream","another-stream"]}
+{ "streams": ["my-stream", "another-stream"] }
 ```
 
 ### Delete Stream
@@ -312,10 +340,10 @@ curl -X DELETE http://localhost:3000/streams/my-stream
 
 ```typescript
 interface Event {
-  offset: string        // Zero-padded 16-char number ("0000000000000042")
-  eventStreamId: string // Name of the stream this event belongs to
-  data: unknown         // Your payload
-  createdAt: string     // ISO 8601 timestamp ("2024-01-08T00:00:00.000Z")
+  offset: string; // Zero-padded 16-char number ("0000000000000042")
+  eventStreamId: string; // Name of the stream this event belongs to
+  data: unknown; // Your payload
+  createdAt: string; // ISO 8601 timestamp ("2024-01-08T00:00:00.000Z")
 }
 ```
 
@@ -323,17 +351,17 @@ Offsets are lexicographically sortable strings. Special offset `-1` means "start
 
 ## Key Files
 
-| File | Purpose |
-|------|---------|
-| `cli.ts` | CLI command definitions |
-| `main.ts` | Entry point |
-| `daemon.ts` | Daemon management (start/stop/status) |
-| `client.ts` | HTTP client with auto-daemon |
-| `http-routes.ts` | HTTP route handlers (Layer 5) |
-| `stream-manager.ts` | Stream lifecycle management (Layer 4) |
-| `stream-factory.ts` | Factory service + ActiveFactory (Layer 3) |
-| `with-hooks.ts` | Hook wrapper function (Layer 2) |
-| `hooks.ts` | Hook types and HookError |
-| `stream.ts` | Core DurableStream implementation (Layer 1) |
-| `storage.ts` | Storage backend interface (Layer 0) |
-| `types.ts` | Type definitions |
+| File                | Purpose                                     |
+| ------------------- | ------------------------------------------- |
+| `cli.ts`            | CLI command definitions                     |
+| `main.ts`           | Entry point                                 |
+| `daemon.ts`         | Daemon management (start/stop/status)       |
+| `client.ts`         | HTTP client with auto-daemon                |
+| `http-routes.ts`    | HTTP route handlers (Layer 5)               |
+| `stream-manager.ts` | Stream lifecycle management (Layer 4)       |
+| `stream-factory.ts` | Factory service + ActiveFactory (Layer 3)   |
+| `with-hooks.ts`     | Hook wrapper function (Layer 2)             |
+| `hooks.ts`          | Hook types and HookError                    |
+| `stream.ts`         | Core DurableStream implementation (Layer 1) |
+| `storage.ts`        | Storage backend interface (Layer 0)         |
+| `types.ts`          | Type definitions                            |
