@@ -364,10 +364,7 @@ async function getGitHubEnvVars(
   });
 
   if (!projectRepo) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "GitHub connection exists but no repository is configured",
-    });
+    return {};
   }
 
   const installationToken = await getGitHubInstallationToken(
