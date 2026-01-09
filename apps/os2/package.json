@@ -40,6 +40,7 @@
     "@trpc/server": "^11.7.2",
     "@trpc/tanstack-react-query": "^11.7.2",
     "alchemy": "^0.79.0",
+    "arctic": "^3.7.0",
     "better-auth": "1.4.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
