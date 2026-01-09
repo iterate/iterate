@@ -94,7 +94,7 @@ export const machineRouter = router({
 
       // If there is no defined key, use the default one for now
       // TODO: very dangerous, remove this as soon as we have things setup
-      if (envVars["OPENAI_API_KEY"]) {
+      if (!envVars["OPENAI_API_KEY"]) {
         envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
       }
 
