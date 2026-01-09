@@ -32,12 +32,12 @@ difficulty: high | medium | low
 
 ### States
 
-| State         | Meaning                                      |
-| ------------- | -------------------------------------------- |
-| `todo`        | Captured, not yet prioritized for near-term  |
-| `next`     | Prioritized, ready to work on soon           |
-| `in-progress` | Currently being worked on                    |
-| `done`        | Completed                                    |
+| State         | Meaning                                     |
+| ------------- | ------------------------------------------- |
+| `todo`        | Captured, not yet prioritized for near-term |
+| `next`        | Prioritized, ready to work on soon          |
+| `in-progress` | Currently being worked on                   |
+| `done`        | Completed                                   |
 
 Paths in `dependsOn` are relative to repo root.
 

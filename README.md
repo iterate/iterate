@@ -5,6 +5,7 @@
 **`apps/os` is deprecated.** `apps/os2` is the new direction for development.
 
 In due course, `apps/os` will be removed entirely and `apps/os2` will take its place. Until then:
+
 - New features should be built in `apps/os2`
 - `apps/os` remains deployable but should not receive new development
 - See `apps/os2/` for setup and development instructions

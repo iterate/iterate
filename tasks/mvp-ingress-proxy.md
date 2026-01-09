@@ -18,6 +18,7 @@ Use the data structure in iterate config to decide what the ingress proxy does (
 ## Future
 
 Write custom code for routing logic, using either:
+
 - Dynamic worker loading
 - Cloudflare Workers for Platforms
 
