@@ -93,6 +93,7 @@ function ProjectSettingsPage() {
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 disabled={updateProject.isPending}
+                autoFocus
               />
             </Field>
             <Field>

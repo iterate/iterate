@@ -107,7 +107,12 @@ function EmailOtpSignIn() {
     setIsLoading(true);
     setError(null);
     try {
-      await signIn.emailOtp({ email, otp: value });
+      const result = await signIn.emailOtp({ email, otp: value });
+      if (result.error) {
+        setError(result.error.message || "Invalid verification code");
+        setOtp("");
+        return;
+      }
       toast.success("Signed in successfully");
       navigate({ to: "/" });
     } catch (err) {
@@ -198,6 +203,7 @@ function EmailOtpSignIn() {
         defaultValue={email}
         disabled={isDisabled}
         required
+        autoFocus
         data-testid="email-input"
       />
       {error && <p className="text-sm text-destructive">{error}</p>}

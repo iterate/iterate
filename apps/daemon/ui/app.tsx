@@ -26,6 +26,7 @@ import {
   type ContentBlock,
 } from "./messages-reducer.ts";
 import { usePersistentStream, excludeTypes } from "./persistent-stream-reducer.ts";
+import { GhosttyTerminal } from "./ghostty-terminal.tsx";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -338,6 +339,47 @@ function FeedItemRenderer({ item, isStreaming }: { item: FeedItem; isStreaming?:
   return <EventLine event={item} />;
 }
 
+type AgentTab = "webui" | "terminal";
+
+function AgentView({ agentPath }: { agentPath: string }) {
+  const [activeTab, setActiveTab] = useState<AgentTab>("webui");
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Tab Bar */}
+      <div className="flex border-b border-zinc-800 bg-zinc-900/50">
+        <button
+          onClick={() => setActiveTab("webui")}
+          data-testid="tab-webui"
+          className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "webui"
+              ? "border-indigo-500 text-indigo-400"
+              : "border-transparent text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          Web UI
+        </button>
+        <button
+          onClick={() => setActiveTab("terminal")}
+          data-testid="tab-terminal"
+          className={`px-6 py-3 text-sm font-medium transition-colors border-b-2 ${
+            activeTab === "terminal"
+              ? "border-indigo-500 text-indigo-400"
+              : "border-transparent text-zinc-500 hover:text-zinc-300"
+          }`}
+        >
+          Terminal
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 overflow-hidden">
+        {activeTab === "webui" ? <AgentChat agentPath={agentPath} /> : <GhosttyTerminal />}
+      </div>
+    </div>
+  );
+}
+
 function AgentChat({ agentPath }: { agentPath: string }) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
@@ -512,8 +554,8 @@ function App() {
     }
   }, [selectedAgent, agents, registryLoaded]);
 
-  // Only render AgentChat once the agent exists in the registry
-  const shouldShowChat = selectedAgent && agentReady;
+  // Only render AgentView once the agent exists in the registry
+  const shouldShowAgent = selectedAgent && agentReady;
 
   return (
     <div className="flex h-screen bg-zinc-950 text-zinc-100">
@@ -524,8 +566,8 @@ function App() {
         onCreate={setSelectedAgent}
       />
       <main className="flex-1 bg-zinc-900">
-        {shouldShowChat ? (
-          <AgentChat key={selectedAgent} agentPath={selectedAgent} />
+        {shouldShowAgent ? (
+          <AgentView key={selectedAgent} agentPath={selectedAgent} />
         ) : selectedAgent ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <div className="animate-pulse text-2xl">⏳</div>

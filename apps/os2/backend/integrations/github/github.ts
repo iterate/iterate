@@ -178,6 +178,7 @@ githubApp.get(
             .update(schema.projectRepo)
             .set({
               provider: "github",
+              externalId: repo.id.toString(),
               owner: repo.owner.login,
               name: repo.name,
               defaultBranch: repo.default_branch,
@@ -187,6 +188,7 @@ githubApp.get(
           await tx.insert(schema.projectRepo).values({
             projectId,
             provider: "github",
+            externalId: repo.id.toString(),
             owner: repo.owner.login,
             name: repo.name,
             defaultBranch: repo.default_branch,
@@ -210,14 +212,25 @@ githubApp.get(
 );
 
 async function generateGitHubAppJWT(env: CloudflareEnv): Promise<string> {
-  const privateKey = await jose.importPKCS8(env.GITHUB_APP_PRIVATE_KEY, "RS256");
+  const { createPrivateKey } = await import("node:crypto");
+
+  const keyString = env.GITHUB_APP_PRIVATE_KEY.replace(/\\n/g, "\n");
+  const privateKey = createPrivateKey({
+    key: keyString,
+    format: "pem",
+  }).export({
+    type: "pkcs8",
+    format: "pem",
+  }) as string;
+
+  const key = await jose.importPKCS8(privateKey, "RS256");
 
   const jwt = await new jose.SignJWT({})
     .setProtectedHeader({ alg: "RS256" })
     .setIssuer(env.GITHUB_APP_ID)
     .setIssuedAt()
     .setExpirationTime("10m")
-    .sign(privateKey);
+    .sign(key);
 
   return jwt;
 }
@@ -253,10 +266,37 @@ export async function deleteGitHubInstallation(
 }
 
 export async function getGitHubInstallationToken(
-  _env: CloudflareEnv,
-  _installationId: number,
+  env: CloudflareEnv,
+  installationId: number,
 ): Promise<string | null> {
-  return null;
+  try {
+    const jwt = await generateGitHubAppJWT(env);
+
+    const response = await fetch(
+      `https://api.github.com/app/installations/${installationId}/access_tokens`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${jwt}`,
+          Accept: "application/vnd.github.v3+json",
+          "User-Agent": "Iterate-OS2",
+        },
+      },
+    );
+
+    if (!response.ok) {
+      logger.error(
+        `Failed to get installation token for ${installationId}: ${response.status} ${await response.text()}`,
+      );
+      return null;
+    }
+
+    const data = (await response.json()) as { token: string; expires_at: string };
+    return data.token;
+  } catch (error) {
+    logger.error(`Error getting installation token for ${installationId}:`, error);
+    return null;
+  }
 }
 
 export type GitHubRepository = {
@@ -267,6 +307,47 @@ export type GitHubRepository = {
   defaultBranch: string;
   isPrivate: boolean;
 };
+
+export async function getRepositoryById(
+  accessToken: string,
+  repoId: string,
+): Promise<GitHubRepository | null> {
+  try {
+    const response = await fetch(`https://api.github.com/repositories/${repoId}`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: "application/vnd.github.v3+json",
+        "User-Agent": "Iterate-OS2",
+      },
+    });
+
+    if (!response.ok) {
+      logger.error(`Failed to fetch repository ${repoId}: ${response.status}`);
+      return null;
+    }
+
+    const repo = (await response.json()) as {
+      id: number;
+      name: string;
+      full_name: string;
+      owner: { login: string };
+      default_branch: string;
+      private: boolean;
+    };
+
+    return {
+      id: repo.id,
+      name: repo.name,
+      fullName: repo.full_name,
+      owner: repo.owner.login,
+      defaultBranch: repo.default_branch,
+      isPrivate: repo.private,
+    };
+  } catch (error) {
+    logger.error(`Error fetching repository ${repoId}:`, error);
+    return null;
+  }
+}
 
 export async function listInstallationRepositories(
   accessToken: string,

@@ -16,6 +16,7 @@ import {
   listInstallationRepositories,
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
+import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
@@ -165,6 +166,7 @@ export const projectRouter = router({
   setProjectRepo: projectProtectedMutation
     .input(
       z.object({
+        repoId: z.number(),
         owner: z.string(),
         name: z.string(),
         defaultBranch: z.string().default("main"),
@@ -180,6 +182,7 @@ export const projectRouter = router({
           .update(projectRepo)
           .set({
             provider: "github",
+            externalId: input.repoId.toString(),
             owner: input.owner,
             name: input.name,
             defaultBranch: input.defaultBranch,
@@ -189,6 +192,7 @@ export const projectRouter = router({
         await ctx.db.insert(projectRepo).values({
           projectId: ctx.project.id,
           provider: "github",
+          externalId: input.repoId.toString(),
           owner: input.owner,
           name: input.name,
           defaultBranch: input.defaultBranch,
@@ -239,6 +243,93 @@ export const projectRouter = router({
 
       await tx.delete(schema.projectRepo).where(eq(projectRepo.projectId, ctx.project.id));
     });
+
+    return { success: true };
+  }),
+
+  // Start Slack OAuth flow
+  startSlackOAuthFlow: projectProtectedMutation
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const state = arctic.generateState();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        projectId: ctx.project.id,
+        callbackURL: input.callbackURL,
+      });
+
+      await ctx.db.insert(verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      // Build Slack OAuth v2 URL manually
+      // arctic.Slack uses OpenID Connect endpoint which only supports user auth scopes
+      // For bot scopes, we need /oauth/v2/authorize
+      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
+      const authorizationUrl = new URL("https://slack.com/oauth/v2/authorize");
+      authorizationUrl.searchParams.set("client_id", ctx.env.SLACK_CLIENT_ID);
+      authorizationUrl.searchParams.set("redirect_uri", redirectUri);
+      authorizationUrl.searchParams.set("state", state);
+      authorizationUrl.searchParams.set("scope", SLACK_BOT_SCOPES.join(","));
+
+      return { authorizationUrl: authorizationUrl.toString() };
+    }),
+
+  // Get Slack connection status
+  getSlackConnection: projectProtectedProcedure.query(async ({ ctx }) => {
+    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+    const providerData = connection?.providerData as {
+      teamId?: string;
+      teamName?: string;
+      teamDomain?: string;
+    } | null;
+
+    return {
+      connected: !!connection,
+      teamId: providerData?.teamId ?? null,
+      teamName: providerData?.teamName ?? null,
+      teamDomain: providerData?.teamDomain ?? null,
+    };
+  }),
+
+  // Disconnect Slack
+  disconnectSlack: projectProtectedMutation.mutation(async ({ ctx }) => {
+    const connection = ctx.project.connections.find((c) => c.provider === "slack");
+
+    if (!connection) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Slack connection found for this project",
+      });
+    }
+
+    // Revoke the Slack token (best effort - don't fail disconnect if revocation fails)
+    const providerData = connection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        await revokeSlackToken(accessToken);
+      } catch {
+        // Token revocation failed, but we still delete the connection
+      }
+    }
+
+    await ctx.db
+      .delete(schema.projectConnection)
+      .where(
+        and(
+          eq(projectConnection.projectId, ctx.project.id),
+          eq(projectConnection.provider, "slack"),
+        ),
+      );
 
     return { success: true };
   }),
