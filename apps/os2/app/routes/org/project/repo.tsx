@@ -333,9 +333,9 @@ function RepoPicker({
               >
                 <span className="flex-1">{repo.fullName}</span>
                 {((selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name) ||
-                  (!selectedRepo && currentRepo?.owner === repo.owner && currentRepo?.name === repo.name)) && (
-                  <Check className="h-4 w-4" />
-                )}
+                  (!selectedRepo &&
+                    currentRepo?.owner === repo.owner &&
+                    currentRepo?.name === repo.name)) && <Check className="h-4 w-4" />}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
