@@ -170,47 +170,72 @@ slackApp.get(
 
     const encryptedAccessToken = await encrypt(accessToken);
 
-    const project = await c.var.db.transaction(async (tx) => {
-      const existingConnection = await tx.query.projectConnection.findFirst({
-        where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "slack")),
-      });
+    let project;
+    try {
+      project = await c.var.db.transaction(async (tx) => {
+        // Check if this project already has a Slack connection
+        const existingProjectConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.projectId, projectId), eq(pc.provider, "slack")),
+        });
 
-      if (existingConnection) {
-        await tx
-          .update(schema.projectConnection)
-          .set({
+        // Check if this Slack workspace is already connected to another project
+        const existingWorkspaceConnection = await tx.query.projectConnection.findFirst({
+          where: (pc, { eq, and }) => and(eq(pc.provider, "slack"), eq(pc.externalId, teamData.id)),
+          with: { project: true },
+        });
+
+        if (existingWorkspaceConnection && existingWorkspaceConnection.projectId !== projectId) {
+          throw new Error(
+            `workspace_already_connected:${existingWorkspaceConnection.project?.name || "another project"}`,
+          );
+        }
+
+        if (existingProjectConnection) {
+          await tx
+            .update(schema.projectConnection)
+            .set({
+              externalId: teamData.id,
+              providerData: {
+                teamId: teamData.id,
+                teamName: teamData.name,
+                teamDomain: teamData.domain,
+                encryptedAccessToken,
+              },
+            })
+            .where(eq(schema.projectConnection.id, existingProjectConnection.id));
+        } else {
+          await tx.insert(schema.projectConnection).values({
+            projectId,
+            provider: "slack",
             externalId: teamData.id,
+            scope: "project",
+            userId,
             providerData: {
               teamId: teamData.id,
               teamName: teamData.name,
               teamDomain: teamData.domain,
               encryptedAccessToken,
             },
-          })
-          .where(eq(schema.projectConnection.id, existingConnection.id));
-      } else {
-        await tx.insert(schema.projectConnection).values({
-          projectId,
-          provider: "slack",
-          externalId: teamData.id,
-          scope: "project",
-          userId,
-          providerData: {
-            teamId: teamData.id,
-            teamName: teamData.name,
-            teamDomain: teamData.domain,
-            encryptedAccessToken,
+          });
+        }
+
+        return tx.query.project.findFirst({
+          where: eq(schema.project.id, projectId),
+          with: {
+            organization: true,
           },
         });
-      }
-
-      return tx.query.project.findFirst({
-        where: eq(schema.project.id, projectId),
-        with: {
-          organization: true,
-        },
       });
-    });
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("workspace_already_connected:")) {
+        const projectName = error.message.split(":")[1];
+        const redirectPath = callbackURL || "/";
+        return c.redirect(
+          `${redirectPath}?error=slack_workspace_already_connected&project=${encodeURIComponent(projectName)}`,
+        );
+      }
+      throw error;
+    }
 
     const redirectPath =
       callbackURL ||
@@ -228,6 +253,8 @@ slackApp.get(
 slackApp.post("/webhook", async (c) => {
   const body = await c.req.text();
 
+  logger.info("[Slack Webhook] Received webhook request");
+
   // Verify Slack signature
   const isValid = await verifySlackSignature(
     c.env.SLACK_SIGNING_SECRET,
@@ -237,7 +264,7 @@ slackApp.post("/webhook", async (c) => {
   );
 
   if (!isValid) {
-    console.warn("Invalid Slack signature");
+    logger.warn("[Slack Webhook] Invalid signature");
     return c.json({ error: "Invalid signature" }, 401);
   }
 
@@ -245,17 +272,27 @@ slackApp.post("/webhook", async (c) => {
   try {
     payload = JSON.parse(body);
   } catch {
+    logger.warn("[Slack Webhook] Invalid JSON body");
     return c.json({ error: "Invalid JSON" }, 400);
   }
 
   if (typeof payload !== "object" || payload === null) {
+    logger.warn("[Slack Webhook] Invalid payload structure");
     return c.json({ error: "Invalid payload" }, 400);
   }
 
   const p = payload as Record<string, unknown>;
 
+  // Log the full payload for debugging
+  logger.info("[Slack Webhook] Payload received", {
+    type: p.type,
+    event_type: (p.event as Record<string, unknown>)?.type,
+    team_id: p.team_id,
+  });
+
   // Handle URL verification challenge
   if (p.type === "url_verification") {
+    logger.info("[Slack Webhook] URL verification challenge received");
     return c.json({ challenge: p.challenge });
   }
 
@@ -266,7 +303,7 @@ slackApp.post("/webhook", async (c) => {
     ((p.event as Record<string, unknown>)?.team as string);
 
   if (!teamId) {
-    console.warn("No team_id in Slack webhook payload");
+    logger.warn("[Slack Webhook] No team_id in payload");
     return c.text("ok");
   }
 
@@ -281,13 +318,13 @@ slackApp.post("/webhook", async (c) => {
   const projectId = connection?.projectId;
 
   if (!projectId) {
-    // Log but don't fail - the webhook might be from a workspace not yet linked
-    console.warn(`No project found for Slack team ${teamId}`);
+    logger.warn("[Slack Webhook] No project found for team", { teamId });
     return c.text("ok");
   }
 
   // Save event to database
   const eventType = getSlackEventType(payload);
+  logger.info("[Slack Webhook] Saving event", { eventType, projectId, teamId });
 
   try {
     await db.insert(schema.event).values({
@@ -295,9 +332,9 @@ slackApp.post("/webhook", async (c) => {
       payload: payload as Record<string, unknown>,
       projectId,
     });
+    logger.info("[Slack Webhook] Event saved successfully");
   } catch (error) {
-    console.error("Failed to save Slack event:", error);
-    // Don't fail the webhook - Slack might retry and cause duplicates
+    logger.error("[Slack Webhook] Failed to save event", error);
   }
 
   return c.text("ok");

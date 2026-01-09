@@ -1,17 +1,24 @@
-import { Suspense } from "react";
-import { createFileRoute, useParams } from "@tanstack/react-router";
+import { Suspense, useEffect } from "react";
+import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Mail, MessageSquare, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
+import { z } from "zod/v4";
 import { Button } from "../../../components/ui/button.tsx";
 import { Badge } from "../../../components/ui/badge.tsx";
 import { Spinner } from "../../../components/ui/spinner.tsx";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 
+const searchSchema = z.object({
+  error: z.string().optional(),
+  project: z.string().optional(),
+});
+
 export const Route = createFileRoute(
   "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
 )({
   component: ProjectConnectorsPage,
+  validateSearch: searchSchema,
 });
 
 function ProjectConnectorsPage() {
@@ -32,7 +39,20 @@ function ProjectConnectorsContent() {
   const params = useParams({
     from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
   });
+  const search = useSearch({
+    from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/connectors",
+  });
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (search.error === "slack_workspace_already_connected" && search.project) {
+      toast.error(
+        `This Slack workspace is already connected to "${search.project}". Each workspace can only be connected to one project.`,
+      );
+    } else if (search.error === "slack_oauth_denied") {
+      toast.error("Slack authorization was denied.");
+    }
+  }, [search.error, search.project]);
 
   const { data: slackConnection } = useSuspenseQuery(
     trpc.project.getSlackConnection.queryOptions({
