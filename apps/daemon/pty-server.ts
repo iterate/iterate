@@ -1,7 +1,8 @@
-import type { Server as HttpServer } from "http";
-import type { Server as HttpsServer } from "https";
-import type { Http2SecureServer, Http2Server } from "http2";
-import { homedir } from "os";
+import type { Server as HttpServer } from "node:http";
+import type { Server as HttpsServer } from "node:https";
+import type { Http2SecureServer, Http2Server } from "node:http2";
+import { homedir } from "node:os";
+
 import pty from "@lydell/node-pty";
 import { WebSocketServer, WebSocket } from "ws";
 
@@ -19,17 +20,27 @@ export function setupPtyWebSocket(server: ServerType): void {
     console.log(`[PTY] New connection: ${cols}x${rows}`);
 
     const shell = process.env.SHELL || "/bin/bash";
-    const ptyProcess = pty.spawn(shell, [], {
-      name: "xterm-256color",
-      cols,
-      rows,
-      cwd: homedir(),
-      env: {
-        ...process.env,
-        TERM: "xterm-256color",
-        COLORTERM: "truecolor",
-      } as Record<string, string>,
-    });
+
+    let ptyProcess;
+    try {
+      ptyProcess = pty.spawn(shell, [], {
+        name: "xterm-256color",
+        cols,
+        rows,
+        cwd: homedir(),
+        env: {
+          ...process.env,
+          TERM: "xterm-256color",
+          COLORTERM: "truecolor",
+        } as Record<string, string>,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`[PTY] Failed to spawn shell: ${message}`);
+      ws.send(`\r\n\x1b[31mError: Failed to spawn shell: ${message}\x1b[0m\r\n`);
+      ws.close();
+      return;
+    }
 
     // PTY -> WebSocket
     ptyProcess.onData((data) => {

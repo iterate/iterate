@@ -1,10 +1,16 @@
 // todo: consider deleting this/consolidating into apps/os2/vite.config.ts
-import { homedir } from "os";
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import devServer from "@hono/vite-dev-server";
+import react from "@vitejs/plugin-react";
+import { defineConfig } from "vite";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Dev plugin for PTY WebSocket (only runs in dev mode)
 // Based on: https://github.com/coder/ghostty-web/blob/main/demo/bin/demo.js
@@ -39,17 +45,27 @@ function ptyWebSocketPlugin() {
           console.log(`[PTY Dev] New connection: ${cols}x${rows}`);
 
           const shell = process.env.SHELL || "/bin/bash";
-          const ptyProcess = pty.spawn(shell, [], {
-            name: "xterm-256color",
-            cols,
-            rows,
-            cwd: homedir(),
-            env: {
-              ...process.env,
-              TERM: "xterm-256color",
-              COLORTERM: "truecolor",
-            } as Record<string, string>,
-          });
+
+          let ptyProcess;
+          try {
+            ptyProcess = pty.spawn(shell, [], {
+              name: "xterm-256color",
+              cols,
+              rows,
+              cwd: homedir(),
+              env: {
+                ...process.env,
+                TERM: "xterm-256color",
+                COLORTERM: "truecolor",
+              } as Record<string, string>,
+            });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[PTY Dev] Failed to spawn shell: ${message}`);
+            ws.send(`\r\n\x1b[31mError: Failed to spawn shell: ${message}\x1b[0m\r\n`);
+            ws.close();
+            return;
+          }
 
           // PTY -> WebSocket
           ptyProcess.onData((data) => {
@@ -120,9 +136,7 @@ export default defineConfig({
       configureServer(server: ViteDevServer) {
         server.middlewares.use("/pty", async (req, res, next) => {
           if (req.url === "/" || req.url === "") {
-            const fs = await import("fs");
-            const path = await import("path");
-            const html = fs.readFileSync(path.join(__dirname, "ui/pty.html"), "utf-8");
+            const html = readFileSync(join(__dirname, "ui/pty.html"), "utf-8");
             const transformed = await server.transformIndexHtml("/pty", html);
             res.setHeader("Content-Type", "text/html");
             res.end(transformed);

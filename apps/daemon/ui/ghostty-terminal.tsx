@@ -18,17 +18,20 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
   useEffect(() => {
     if (!containerRef.current) return;
 
+    let cancelled = false;
     let term: TerminalInstance;
     let fitAddon: FitAddonInstance;
     let ws: WebSocket;
     let reconnectTimeout: ReturnType<typeof setTimeout>;
 
     (async () => {
-      // Dynamic import for ghostty-web (FitAddon is exported from main module)
       const { init, Terminal, FitAddon } = await import("ghostty-web");
+      if (cancelled) return;
 
-      // Initialize WASM
       await init();
+      if (cancelled) return;
+
+      if (!containerRef.current) return;
 
       term = new Terminal({
         cursorBlink: true,
@@ -43,13 +46,15 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
 
       fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
-      term.open(containerRef.current!);
+      term.open(containerRef.current);
       fitAddon.fit();
       fitAddon.observeResize();
 
       termRef.current = term;
 
       function connectWebSocket() {
+        if (cancelled) return;
+
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const base = wsBase || `${protocol}//${window.location.host}`;
         const wsUrl = `${base}/ws/pty?cols=${term.cols}&rows=${term.rows}`;
@@ -58,26 +63,30 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
         wsRef.current = ws;
 
         ws.onopen = () => {
+          if (cancelled) return;
           console.log("[GhosttyTerminal] WebSocket connected");
           setConnectionStatus("connected");
           term.focus();
         };
 
         ws.onmessage = (event) => {
+          if (cancelled) return;
           term.write(event.data);
         };
 
         ws.onerror = (error) => {
+          if (cancelled) return;
           console.error("[GhosttyTerminal] WebSocket error:", error);
           setConnectionStatus("disconnected");
         };
 
         ws.onclose = () => {
+          if (cancelled) return;
           console.log("[GhosttyTerminal] WebSocket disconnected");
           setConnectionStatus("disconnected");
 
-          // Reconnect after 3 seconds
           reconnectTimeout = setTimeout(() => {
+            if (cancelled) return;
             if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
               setConnectionStatus("connecting");
               connectWebSocket();
@@ -86,15 +95,15 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
         };
       }
 
-      // Handle user input
       term.onData((data: string) => {
+        if (cancelled) return;
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(data);
         }
       });
 
-      // Handle resize
       term.onResize((size: { cols: number; rows: number }) => {
+        if (cancelled) return;
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(
             JSON.stringify({
@@ -110,6 +119,7 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
     })();
 
     return () => {
+      cancelled = true;
       clearTimeout(reconnectTimeout);
       wsRef.current?.close();
       if (termRef.current && typeof termRef.current.dispose === "function") {
