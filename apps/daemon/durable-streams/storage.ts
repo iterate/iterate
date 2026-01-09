@@ -101,7 +101,8 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
             const limited = opts.limit ? events.slice(0, opts.limit) : events;
             return limited.map((e) => new Event(e));
           }
-          const filtered = events.filter((e) => e.offset >= opts.offset);
+          // Use > (exclusive) so clients resuming from offset N get events after N
+          const filtered = events.filter((e) => e.offset > opts.offset);
           const limited = opts.limit ? filtered.slice(0, opts.limit) : filtered;
           return limited.map((e) => new Event(e));
         }),
@@ -277,7 +278,8 @@ export class Storage extends Effect.Service<Storage>()("@event-stream/Storage", 
               if (isStartOffset(getFromOpts.offset)) {
                 filtered = events;
               } else {
-                filtered = events.filter((e) => e.offset >= getFromOpts.offset);
+                // Use > (exclusive) so clients resuming from offset N get events after N
+                filtered = events.filter((e) => e.offset > getFromOpts.offset);
               }
 
               const limited = getFromOpts.limit ? filtered.slice(0, getFromOpts.limit) : filtered;

@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@effect/experimental": "^0.44.21",
     "@effect/platform": "^0.82.0",
     "@effect/platform-node": "^0.78.0",
     "@effect/vitest": "^0.27.0",

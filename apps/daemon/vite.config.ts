@@ -7,10 +7,11 @@ export default defineConfig({
   plugins: [
     react(),
     devServer({
-      entry: "./index.ts",
+      // Use the new agent-wrapper backend
+      entry: "./index-new.ts",
       exclude: [
-        // Only let Hono handle /agents, /platform, /edge - exclude everything else
-        /^\/(?!agents|platform|edge).*/,
+        // Only let Hono handle /agents, /platform, /edge, /streams - exclude everything else
+        /^\/(?!agents|platform|edge|streams).*/,
         /^\/@.+$/,
       ],
     }),

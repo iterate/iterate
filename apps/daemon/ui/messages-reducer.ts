@@ -98,6 +98,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   const e = event as Record<string, unknown>;
   const rawEvents = [...state.rawEvents, event];
   const timestamp = getTimestamp(e);
+  const eventType = typeof e.type === "string" ? e.type : "unknown";
 
   // Historical/stored events (legacy format)
   if (e.type === "user_prompt") {
@@ -107,7 +108,11 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
     }
     return {
       ...state,
-      feed: [...state.feed, createMessageItem("user", [{ type: "text", text }], timestamp)],
+      feed: [
+        ...state.feed,
+        createEventItem(eventType, timestamp, event),
+        createMessageItem("user", [{ type: "text", text }], timestamp),
+      ],
       rawEvents,
     };
   }
@@ -119,7 +124,11 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
     }
     return {
       ...state,
-      feed: [...state.feed, createMessageItem("assistant", [{ type: "text", text }], timestamp)],
+      feed: [
+        ...state.feed,
+        createEventItem(eventType, timestamp, event),
+        createMessageItem("assistant", [{ type: "text", text }], timestamp),
+      ],
       rawEvents,
     };
   }
@@ -128,7 +137,13 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   // Note: agent_end.messages only contains the CURRENT turn, not full history
   // so we don't use it to replace messages
   if (e.type === "agent_end") {
-    return { ...state, isStreaming: false, streamingMessage: undefined, rawEvents };
+    return {
+      ...state,
+      feed: [...state.feed, createEventItem(eventType, timestamp, event)],
+      isStreaming: false,
+      streamingMessage: undefined,
+      rawEvents,
+    };
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -140,16 +155,17 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
       | { role?: string; content?: ContentBlock[]; timestamp?: number }
       | undefined;
     if (msg?.role === "assistant") {
-      // Start streaming an assistant message
+      // Start streaming an assistant message - add raw event, start streaming
       return {
         ...state,
+        feed: [...state.feed, createEventItem(eventType, timestamp, event)],
         isStreaming: true,
         streamingMessage: createMessageItem("assistant", [], msg.timestamp ?? timestamp),
         rawEvents,
       };
     }
     if (msg?.role === "user" && Array.isArray(msg.content)) {
-      // User message - add to feed immediately
+      // User message - add raw event + rendered message to feed
       const userText = msg.content.find((c) => c.type === "text")?.text || "";
       const msgTimestamp = msg.timestamp ?? timestamp;
       if (hasDuplicateMessage(state.feed, "user", userText, msgTimestamp)) {
@@ -157,13 +173,23 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
       }
       return {
         ...state,
-        feed: [...state.feed, createMessageItem("user", msg.content, msgTimestamp)],
+        feed: [
+          ...state.feed,
+          createEventItem(eventType, timestamp, event),
+          createMessageItem("user", msg.content, msgTimestamp),
+        ],
         rawEvents,
       };
     }
-    return { ...state, rawEvents };
+    // Unknown role - just add raw event
+    return {
+      ...state,
+      feed: [...state.feed, createEventItem(eventType, timestamp, event)],
+      rawEvents,
+    };
   }
 
+  // message_update is a streaming chunk - don't add to feed, just update streaming state
   if (e.type === "message_update") {
     const assistantEvent = e.assistantMessageEvent as Record<string, unknown> | undefined;
     if (!assistantEvent) return { ...state, rawEvents };
@@ -194,7 +220,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   if (e.type === "message_end") {
     const msg = e.message as { role?: string; content?: unknown[]; timestamp?: number } | undefined;
     if (msg?.role === "assistant" && Array.isArray(msg.content)) {
-      // Finalize the assistant message - move from streaming to feed
+      // Finalize the assistant message - add raw event + rendered message to feed
       const content: ContentBlock[] = msg.content
         .filter((c: any) => c.type === "text")
         .map((c: any) => ({
@@ -202,32 +228,42 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
           text: c.text || "",
         }));
 
-      // Only add if there's actual text content
+      // Only add rendered message if there's actual text content
+      const newFeedItems: FeedItem[] = [createEventItem(eventType, timestamp, event)];
       if (content.some((c) => c.text.trim())) {
-        return {
-          ...state,
-          feed: [
-            ...state.feed,
-            createMessageItem("assistant", content, msg.timestamp ?? timestamp),
-          ],
-          isStreaming: false,
-          streamingMessage: undefined,
-          rawEvents,
-        };
+        newFeedItems.push(createMessageItem("assistant", content, msg.timestamp ?? timestamp));
       }
+
+      return {
+        ...state,
+        feed: [...state.feed, ...newFeedItems],
+        isStreaming: false,
+        streamingMessage: undefined,
+        rawEvents,
+      };
     }
-    // For user message_end or empty messages, just stop streaming
-    return { ...state, isStreaming: false, streamingMessage: undefined, rawEvents };
+    // For user message_end or empty messages, add raw event and stop streaming
+    return {
+      ...state,
+      feed: [...state.feed, createEventItem(eventType, timestamp, event)],
+      isStreaming: false,
+      streamingMessage: undefined,
+      rawEvents,
+    };
   }
 
   if (e.type === "turn_end") {
-    return { ...state, isStreaming: false, streamingMessage: undefined, rawEvents };
+    return {
+      ...state,
+      feed: [...state.feed, createEventItem(eventType, timestamp, event)],
+      isStreaming: false,
+      streamingMessage: undefined,
+      rawEvents,
+    };
   }
 
   // Pass through other events (turn_start, agent_start, tool events, etc.)
   // Add them as event feed items to display in the UI
-  const eventType = typeof e.type === "string" ? e.type : "unknown";
-
   return {
     ...state,
     feed: [...state.feed, createEventItem(eventType, timestamp, event)],

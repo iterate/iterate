@@ -20,7 +20,7 @@ import {
 import { Console, Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import type { ClientError } from "../durable-streams/client.ts";
 import { StreamClientService } from "../durable-streams/client.ts";
-import type { StreamName } from "../durable-streams/types.ts";
+import { makeOffset, type StreamName } from "../durable-streams/types.ts";
 import {
   type EventStreamId,
   makePiEventReceivedEvent,
@@ -166,10 +166,16 @@ export const runPiAdapter = (
         yield* Console.log("[Pi Adapter] Aborted");
       });
 
-    // Subscribe to stream and handle action events
+    // Subscribe to stream from the END (only new events)
+    // This prevents replaying historical prompts that have already been processed
     yield* Console.log(`[Pi Adapter] Subscribing to stream: ${streamName}`);
 
-    const eventStream = yield* client.subscribe({ name: streamName });
+    // Get current event count to subscribe from the end
+    const existingEvents = yield* client.get({ name: streamName });
+    const startOffset = makeOffset(existingEvents.length);
+    yield* Console.log(`[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`);
+
+    const eventStream = yield* client.subscribe({ name: streamName, offset: startOffset });
 
     // Process events in a forked fiber
     const processFiber = yield* Effect.fork(

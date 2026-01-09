@@ -351,6 +351,13 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
 
               switch (controlType) {
                 case "up-to-date":
+                  // Save the offset from the control event
+                  if (data.streamNextOffset) {
+                    offsetRef.current = data.streamNextOffset;
+                    storage.setOffset(storageKey, data.streamNextOffset);
+                    setOffset(data.streamNextOffset);
+                    channel?.postMessage({ type: "offset", offset: data.streamNextOffset });
+                  }
                   setPhase("ready");
                   readyResolverRef.current?.();
                   channel?.postMessage({ type: "ready" });
