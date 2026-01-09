@@ -293,7 +293,7 @@ slackApp.post("/webhook", async (c) => {
   // Handle URL verification challenge
   if (p.type === "url_verification") {
     logger.info("[Slack Webhook] URL verification challenge received");
-    return c.json({ challenge: p.challenge });
+    return c.text(p.challenge as string);
   }
 
   // Get team ID from payload
