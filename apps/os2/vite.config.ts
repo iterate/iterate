@@ -1,4 +1,4 @@
-import { defineConfig, type Plugin } from "vite";
+import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import alchemy from "alchemy/cloudflare/tanstack-start";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -36,7 +36,6 @@ export default defineConfig({
         })
       : null,
     devtools(),
-    // daemonPlugin(),
     {
       name: "os2:force-vite-public-url",
       configureServer(server) {
@@ -72,53 +71,3 @@ export default defineConfig({
     "import.meta.vitest": "undefined",
   },
 });
-
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- remove this when jonas does daemon changes
-function daemonPlugin(): Plugin {
-  return {
-    name: "os2:daemon",
-    apply: "serve",
-    async configureServer(server) {
-      const { getRequestListener } = await import("@hono/node-server");
-      const { default: daemonApp } = await import("./daemon/index.ts");
-
-      const honoListener = getRequestListener(daemonApp.fetch);
-
-      server.middlewares.use(async (req, res, next) => {
-        const url = req.url ?? "";
-
-        if (!url.startsWith("/daemon")) {
-          return next();
-        }
-
-        const rewrittenUrl = url.replace(/^\/daemon/, "") || "/";
-
-        const isDaemonUiRoute =
-          rewrittenUrl === "/" || rewrittenUrl === "/ui" || rewrittenUrl.startsWith("/ui/");
-
-        if (isDaemonUiRoute) {
-          const isStaticAsset = rewrittenUrl.match(/\.[jt]sx?$/);
-          if (isStaticAsset) {
-            req.url = "/daemon" + rewrittenUrl;
-            return next();
-          }
-          try {
-            const fs = await import("node:fs");
-            const html = await server.transformIndexHtml(
-              url,
-              fs.readFileSync(new URL("./daemon/index.html", import.meta.url), "utf-8"),
-            );
-            res.setHeader("Content-Type", "text/html");
-            res.end(html);
-            return;
-          } catch {
-            return next();
-          }
-        }
-
-        req.url = rewrittenUrl;
-        honoListener(req, res);
-      });
-    },
-  };
-}

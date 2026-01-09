@@ -195,9 +195,11 @@ const storage = {
 async function yieldToMain(): Promise<void> {
   if (
     "scheduler" in globalThis &&
-    "yield" in (globalThis as { scheduler?: { yield?: unknown } }).scheduler!
+    "yield" in (globalThis as unknown as { scheduler?: { yield?: unknown } }).scheduler!
   ) {
-    return (globalThis as { scheduler: { yield: () => Promise<void> } }).scheduler.yield();
+    return (
+      globalThis as unknown as { scheduler: { yield: () => Promise<void> } }
+    ).scheduler.yield();
   }
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
