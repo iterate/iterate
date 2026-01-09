@@ -359,10 +359,13 @@ function AgentChat({ agentPath }: { agentPath: string }) {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { data: { feed, isStreaming, streamingMessage, rawEvents } } = useStreamReducer<
-    MessagesState,
-    unknown
-  >(`${API_URL}/agents/${encodeURIComponent(agentPath)}`, messagesReducer, createInitialState());
+  const {
+    data: { feed, isStreaming, streamingMessage, rawEvents },
+  } = useStreamReducer<MessagesState, unknown>(
+    `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
+    messagesReducer,
+    createInitialState(),
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
