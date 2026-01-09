@@ -9,6 +9,9 @@ const snapshot = await daytona.snapshot.create(
   {
     name: `iterate-sandbox-0.0.2-dev`,
     image: Image.fromDockerfile(join(import.meta.dirname, "./Dockerfile")),
+    resources: {
+      disk: 10,
+    },
   },
   {
     onLogs: console.log,
