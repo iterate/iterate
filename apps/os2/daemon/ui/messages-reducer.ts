@@ -33,6 +33,7 @@ export interface MessagesState {
   isStreaming: boolean;
   streamingMessage?: MessageFeedItem;
   rawEvents: unknown[];
+  processedEventCount: number;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +46,7 @@ export function createInitialState(): MessagesState {
     isStreaming: false,
     streamingMessage: undefined,
     rawEvents: [],
+    processedEventCount: 0,
   };
 }
 
@@ -53,7 +55,12 @@ export function createInitialState(): MessagesState {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function getTimestamp(e: Record<string, unknown>): number {
-  return typeof e.timestamp === "number" ? e.timestamp : Date.now();
+  if (typeof e.timestamp === "number") return e.timestamp;
+  if (typeof e.timestamp === "string") {
+    const parsed = Date.parse(e.timestamp);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return Date.now();
 }
 
 function createMessageItem(
@@ -68,10 +75,18 @@ function createEventItem(eventType: string, timestamp: number, raw: unknown): Ev
   return { kind: "event", eventType, timestamp, raw };
 }
 
-function hasDuplicateMessage(feed: FeedItem[], role: "user" | "assistant", text: string): boolean {
+function hasDuplicateMessage(
+  feed: FeedItem[],
+  role: "user" | "assistant",
+  text: string,
+  timestamp: number,
+): boolean {
   return feed.some(
     (item) =>
-      item.kind === "message" && item.role === role && item.content.some((c) => c.text === text),
+      item.kind === "message" &&
+      item.role === role &&
+      item.timestamp === timestamp &&
+      item.content.some((c) => c.text === text),
   );
 }
 
@@ -87,7 +102,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
   // Historical/stored events (legacy format)
   if (e.type === "user_prompt") {
     const text = typeof e.text === "string" ? e.text : "";
-    if (hasDuplicateMessage(state.feed, "user", text)) {
+    if (hasDuplicateMessage(state.feed, "user", text, timestamp)) {
       return { ...state, rawEvents };
     }
     return {
@@ -99,7 +114,7 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
 
   if (e.type === "assistant_text") {
     const text = typeof e.text === "string" ? e.text : "";
-    if (hasDuplicateMessage(state.feed, "assistant", text)) {
+    if (hasDuplicateMessage(state.feed, "assistant", text, timestamp)) {
       return { ...state, rawEvents };
     }
     return {
@@ -136,12 +151,13 @@ export function messagesReducer(state: MessagesState, event: unknown): MessagesS
     if (msg?.role === "user" && Array.isArray(msg.content)) {
       // User message - add to feed immediately
       const userText = msg.content.find((c) => c.type === "text")?.text || "";
-      if (hasDuplicateMessage(state.feed, "user", userText)) {
+      const msgTimestamp = msg.timestamp ?? timestamp;
+      if (hasDuplicateMessage(state.feed, "user", userText, msgTimestamp)) {
         return { ...state, rawEvents };
       }
       return {
         ...state,
-        feed: [...state.feed, createMessageItem("user", msg.content, msg.timestamp ?? timestamp)],
+        feed: [...state.feed, createMessageItem("user", msg.content, msgTimestamp)],
         rawEvents,
       };
     }

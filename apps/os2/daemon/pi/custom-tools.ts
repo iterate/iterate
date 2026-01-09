@@ -57,15 +57,17 @@ function createMessageAgentTool(
     execute: async (_toolCallId: string, params: Static<typeof MessageAgentParams>) => {
       const { agentName, message } = params;
       try {
+        const promptText = `Message from agent "${currentAgentId}": ${message}`;
+
+        // Append a control event that will trigger the Pi session to process the prompt
         await appendMessage(
           agentName,
           {
-            type: "agent_message",
-            from: currentAgentId,
-            text: message,
-            timestamp: new Date().toISOString(),
+            type: "iterate:control",
+            action: "prompt",
+            payload: { text: promptText },
           },
-          "agent",
+          "agent:" + currentAgentId,
         );
 
         return {

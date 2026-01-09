@@ -8,6 +8,17 @@ export interface Message {
   metadata: Record<string, unknown>;
 }
 
+// Control events that trigger actions after being appended to the stream
+export type ControlEvent = { type: "iterate:control"; action: "prompt"; payload: { text: string } };
+
+export function isControlEvent(content: unknown): content is ControlEvent {
+  return (
+    typeof content === "object" &&
+    content !== null &&
+    (content as Record<string, unknown>).type === "iterate:control"
+  );
+}
+
 export interface Agent {
   id: string;
   contentType: string;
@@ -15,6 +26,7 @@ export interface Agent {
   messages: Message[];
   subscribers: Set<ReadableStreamDefaultController>;
   piSession?: AgentSession;
+  piSessionPending?: boolean;
   nextOffset: number;
 }
 

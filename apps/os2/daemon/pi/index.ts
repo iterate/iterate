@@ -112,15 +112,24 @@ function subscribeToEvents(streamId: string, session: AgentSession): void {
     console.log(`[Pi] Event for ${streamId}:`, event.type, JSON.stringify(event).substring(0, 200));
 
     if (appendMessageFn) {
+      const isUserMessage =
+        (event.type === "message_start" ||
+          event.type === "message_end" ||
+          event.type === "message_update") &&
+        (event as { message?: { role?: string } }).message?.role === "user";
+
+      // Skip user messages - they're already appended when the POST is received
+      if (isUserMessage) {
+        return;
+      }
+
       await appendMessageFn(
         streamId,
         event satisfies PiStreamMessage,
         event.type === "message_start" ||
           event.type === "message_end" ||
           event.type === "message_update"
-          ? (event as any).message?.role === "user"
-            ? "user"
-            : "assistant"
+          ? "assistant"
           : "system",
       );
     }
@@ -130,10 +139,12 @@ function subscribeToEvents(streamId: string, session: AgentSession): void {
 export async function promptPiSession(session: AgentSession, text: string): Promise<void> {
   console.log(`[Pi] Sending prompt: "${text.substring(0, 50)}..."`);
   try {
-    await session.prompt(text);
+    await session.prompt(text, {
+      streamingBehavior: "steer",
+    });
     console.log(`[Pi] Prompt completed successfully`);
   } catch (error) {
-    console.error(`[Pi] Prompt failed:`, error);
+    console.error(`[Pi] Prompt failed: ${error instanceof Error ? error.message : String(error)}`);
     throw error;
   }
 }

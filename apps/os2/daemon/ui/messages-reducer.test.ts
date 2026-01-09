@@ -35,6 +35,7 @@ messages:
     content:
       type: user_prompt
       text: hello
+      timestamp: 1234567890
     timestamp: 2026-01-05T20:00:01.000Z
     source: user
     metadata: {}
@@ -135,6 +136,7 @@ messages:
     content:
       type: user_prompt
       text: haha
+      timestamp: 1000
     timestamp: 2026-01-05T20:00:01.000Z
     source: user
     metadata: {}
@@ -206,6 +208,7 @@ messages:
     content:
       type: user_prompt
       text: why not laugh more?
+      timestamp: 2000
     timestamp: 2026-01-05T20:00:02.000Z
     source: user
     metadata: {}
@@ -411,17 +414,25 @@ describe("messagesReducer", () => {
   });
 
   describe("duplicate detection", () => {
-    it("should not add duplicate user messages from user_prompt", () => {
+    it("should not add duplicate user messages from user_prompt with same timestamp", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "user_prompt", text: "hello" });
-      state = messagesReducer(state, { type: "user_prompt", text: "hello" });
+      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 1000 });
+      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 1000 });
 
       expect(getMessages(state)).toHaveLength(1);
     });
 
-    it("should not add duplicate user messages from message_start", () => {
+    it("should allow repeated messages with different timestamps", () => {
       let state = createInitialState();
-      state = messagesReducer(state, { type: "user_prompt", text: "hello" });
+      state = messagesReducer(state, { type: "user_prompt", text: "yes", timestamp: 1000 });
+      state = messagesReducer(state, { type: "user_prompt", text: "yes", timestamp: 2000 });
+
+      expect(getMessages(state)).toHaveLength(2);
+    });
+
+    it("should not add duplicate user messages from message_start with same timestamp", () => {
+      let state = createInitialState();
+      state = messagesReducer(state, { type: "user_prompt", text: "hello", timestamp: 123 });
       state = messagesReducer(state, {
         type: "message_start",
         message: {

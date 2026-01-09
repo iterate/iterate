@@ -129,17 +129,24 @@ function registryReducer(state: AgentInfo[], event: RegistryEvent): AgentInfo[] 
 // Hooks
 // ─────────────────────────────────────────────────────────────────────────────
 
+interface StreamState<T> {
+  data: T;
+  isLoaded: boolean;
+}
+
 function useStreamReducer<T, E>(
   streamUrl: string | null,
   reducer: (state: T, event: E) => T,
   initialState: T,
-): T {
+): StreamState<T> {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [isLoaded, setIsLoaded] = useState(false);
   const offsetRef = useRef("-1");
 
   useEffect(() => {
     if (!streamUrl) return;
 
+    setIsLoaded(false);
     const url = new URL(streamUrl);
     url.searchParams.set("offset", offsetRef.current);
     url.searchParams.set("live", "sse");
@@ -150,6 +157,7 @@ function useStreamReducer<T, E>(
       try {
         const ctrl = JSON.parse(evt.data);
         if (ctrl.streamNextOffset) offsetRef.current = ctrl.streamNextOffset;
+        if (ctrl.upToDate) setIsLoaded(true);
       } catch {}
     });
 
@@ -171,7 +179,7 @@ function useStreamReducer<T, E>(
     return () => es.close();
   }, [streamUrl]);
 
-  return state;
+  return { data: state, isLoaded };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -351,10 +359,13 @@ function AgentChat({ agentPath }: { agentPath: string }) {
   const endRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const { feed, isStreaming, streamingMessage, rawEvents } = useStreamReducer<
-    MessagesState,
-    unknown
-  >(`${API_URL}/agents/${encodeURIComponent(agentPath)}`, messagesReducer, createInitialState());
+  const {
+    data: { feed, isStreaming, streamingMessage, rawEvents },
+  } = useStreamReducer<MessagesState, unknown>(
+    `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
+    messagesReducer,
+    createInitialState(),
+  );
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -466,7 +477,7 @@ function EmptyState() {
 function App() {
   const [selectedAgent, setSelectedAgent] = useRouter();
   const [agentReady, setAgentReady] = useState(false);
-  const agents = useStreamReducer<AgentInfo[], RegistryEvent>(
+  const { data: agents, isLoaded: registryLoaded } = useStreamReducer<AgentInfo[], RegistryEvent>(
     `${API_URL}/agents/__registry__`,
     registryReducer,
     [],
@@ -482,7 +493,7 @@ function App() {
     const exists = agents.some((a) => a.path === selectedAgent);
     if (exists) {
       setAgentReady(true);
-    } else if (agents.length > 0) {
+    } else if (registryLoaded) {
       // Registry is loaded but agent doesn't exist - create it first
       setAgentReady(false);
       createAgent(selectedAgent).then(() => {
@@ -490,7 +501,7 @@ function App() {
         // The next render cycle will set agentReady to true when registry updates
       });
     }
-  }, [selectedAgent, agents]);
+  }, [selectedAgent, agents, registryLoaded]);
 
   const handleDelete = async (path: string) => {
     if (!confirm(`Delete agent "${path}"?`)) return;
