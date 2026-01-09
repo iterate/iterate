@@ -36,3 +36,6 @@ evalite-export
 test-results/
 playwright-report/
 .last-run.json
+
+*.db
+.output
