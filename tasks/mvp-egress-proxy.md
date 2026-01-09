@@ -16,5 +16,4 @@ For anything that supports HTTPS proxy env vars, see if we can route traffic thr
 - Intercepts outbound requests
 - Substitutes secrets/API keys
 - Logs/observes traffic
-
-This is the MVP of the broader egress proxy vision (full MITM comes later).
+  This is the MVP of the broader egress proxy vision (full MITM comes later).
