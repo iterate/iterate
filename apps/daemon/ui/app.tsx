@@ -9,7 +9,7 @@ window.addEventListener("unhandledrejection", (e) => {
 });
 
 import { createRoot } from "react-dom/client";
-import { useState, useReducer, useEffect, useRef, useCallback } from "react";
+import { useState, useReducer, useEffect, useRef, useCallback, Suspense } from "react";
 
 const IS_STANDALONE = !window.location.pathname.startsWith("/daemon");
 const BASE_PATH = IS_STANDALONE ? "" : "/daemon";
@@ -25,6 +25,7 @@ import {
   type EventFeedItem,
   type ContentBlock,
 } from "./messages-reducer.ts";
+import { usePersistentStream, excludeTypes } from "./persistent-stream-reducer.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -360,12 +361,21 @@ function AgentChat({ agentPath }: { agentPath: string }) {
   const inputRef = useRef<HTMLInputElement>(null);
 
   const {
-    data: { feed, isStreaming, streamingMessage, rawEvents },
-  } = useStreamReducer<MessagesState, unknown>(
-    `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
-    messagesReducer,
-    createInitialState(),
-  );
+    state: { feed, isStreaming: stateIsStreaming, streamingMessage, rawEvents },
+    isStreaming: hookIsStreaming,
+    isLeader,
+    reset,
+    offset,
+  } = usePersistentStream<MessagesState, { type: string; [key: string]: unknown }>({
+    url: `${API_URL}/agents/${encodeURIComponent(agentPath)}`,
+    storageKey: `agent:${agentPath}`,
+    reducer: messagesReducer,
+    initialState: createInitialState(),
+    shouldPersist: excludeTypes("message_update"),
+    suspense: false,
+  });
+
+  const isStreaming = stateIsStreaming || hookIsStreaming;
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -394,6 +404,16 @@ function AgentChat({ agentPath }: { agentPath: string }) {
           {isStreaming && (
             <span className="text-xs text-indigo-400 animate-pulse">● Streaming</span>
           )}
+          <span className="text-xs text-zinc-600" title={`Offset: ${offset}`}>
+            {isLeader ? "👑" : "📡"}
+          </span>
+          <button
+            onClick={reset}
+            className="text-xs px-2 py-1 rounded-md bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Clear persisted data"
+          >
+            Reset
+          </button>
           <button
             onClick={() => setShowRaw(!showRaw)}
             className={`text-xs px-2.5 py-1 rounded-md transition-colors ${
@@ -493,12 +513,16 @@ function App() {
     const exists = agents.some((a) => a.path === selectedAgent);
     if (exists) {
       setAgentReady(true);
-    } else if (registryLoaded) {
-      // Registry is loaded but agent doesn't exist - create it first
+    } else {
+      // Create the agent if it doesn't exist
+      // (even if registry isn't loaded - handles 404 case)
       setAgentReady(false);
-      createAgent(selectedAgent).then(() => {
-        // Agent is now created, wait for registry update
-        // The next render cycle will set agentReady to true when registry updates
+      createAgent(selectedAgent).then((ok) => {
+        // Show chat even if creation failed (e.g., 404 registry)
+        // The chat will handle its own SSE connection
+        if (ok || !registryLoaded) {
+          setAgentReady(true);
+        }
       });
     }
   }, [selectedAgent, agents, registryLoaded]);

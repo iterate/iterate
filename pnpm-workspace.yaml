@@ -1,6 +1,5 @@
 packages:
   - apps/*
-  - apps/os2/daemon
   - packages/*
   - estates/*
   - estates/*/apps/*
@@ -18,6 +17,10 @@ minimumReleaseAgeExclude:
   - alchemy
   - '@mmkal/jsonata'
   - '@mmkal/json-schema-to-typescript'
+  - '@mariozechner/pi-ai'
+  - '@mariozechner/pi-coding-agent'
+  - '@mariozechner/pi-agent-core'
+  - '@mariozechner/pi-tui'
 
 onlyBuiltDependencies:
   - '@tailwindcss/oxide'
