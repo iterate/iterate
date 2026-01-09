@@ -1,36 +1,61 @@
-import { createServer, type IncomingMessage } from "node:http";
+import { spawn, execSync } from "node:child_process";
+import { existsSync } from "node:fs";
 
-const checkAuth = (req: IncomingMessage) => {
-  const authHeader = req.headers["authorization"];
-  if (!authHeader) return false;
-  const token = authHeader.split(" ")[1] ?? authHeader;
-  console.log({ token, machineAuthToken: process.env.MACHINE_AUTH_TOKEN });
-  return token === process.env.MACHINE_AUTH_TOKEN;
+const REPO_PATH = "/repos/iterate";
+const REPO_URL = "https://github.com/iterate/iterate.git";
+const DAEMON_PATH = `${REPO_PATH}/apps/os2/daemon`;
+
+const cloneAndSetupRepo = () => {
+  if (existsSync(REPO_PATH)) {
+    console.log(`Repository already exists at ${REPO_PATH}, pulling latest...`);
+    execSync("git pull", { cwd: REPO_PATH, stdio: "inherit" });
+  } else {
+    console.log(`Cloning ${REPO_URL} to ${REPO_PATH}...`);
+    execSync(`git clone ${REPO_URL} ${REPO_PATH}`, { stdio: "inherit" });
+  }
+
+  console.log("Running pnpm install...");
+  execSync("pnpm install", { cwd: REPO_PATH, stdio: "inherit" });
 };
 
-const server = createServer((req, res) => {
-  console.log({ url: req.url, method: req.method });
-  if (req.url?.endsWith("/command/ping") && req.method === "POST") {
-    if (!checkAuth(req)) {
-      res.statusCode = 401;
-      res.end("Unauthorized");
-      return;
-    }
-    res.statusCode = 200;
-    res.end("pong");
-    return;
-  }
-  res.statusCode = 404;
-  res.end("Not found");
-});
+const startDaemon = () => {
+  console.log(`Starting daemon with vite in ${DAEMON_PATH}...`);
 
-server.listen(3000, () => {
-  console.log("Server is running on port 3000");
-});
-
-process.on("SIGINT", () => {
-  server.close(() => {
-    console.log("Server closed");
-    process.exit(0);
+  const daemon = spawn("pnpm", ["dev"], {
+    cwd: DAEMON_PATH,
+    stdio: "inherit",
+    env: {
+      ...process.env,
+      PORT: "3000",
+    },
   });
-});
+
+  daemon.on("error", (err) => {
+    console.error("Failed to start daemon:", err);
+    process.exit(1);
+  });
+
+  daemon.on("exit", (code) => {
+    console.log(`Daemon exited with code ${code}`);
+    process.exit(code ?? 1);
+  });
+
+  return daemon;
+};
+
+const main = () => {
+  cloneAndSetupRepo();
+  const daemon = startDaemon();
+
+  process.on("SIGINT", () => {
+    console.log("Received SIGINT, shutting down...");
+    daemon.kill("SIGINT");
+  });
+
+  process.on("SIGTERM", () => {
+    console.log("Received SIGTERM, shutting down...");
+    daemon.kill("SIGTERM");
+  });
+};
+
+main();
