@@ -7,7 +7,7 @@ const daytona = new Daytona({
 
 const snapshot = await daytona.snapshot.create(
   {
-    name: `iterate-sandbox-0.0.1-dev`,
+    name: `iterate-sandbox-0.0.2-dev`,
     image: Image.fromDockerfile(join(import.meta.dirname, "./Dockerfile")),
   },
   {
