@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useSuspenseQuery } from "@tanstack/react-query";
+import { useMutation, useSuspenseQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Server, Plus } from "lucide-react";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
@@ -28,8 +28,15 @@ function ProjectMachinesPage() {
   const params = useParams({
     from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines",
   });
+  const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");
+
+  const machineListQueryKey = trpc.machine.list.queryKey({
+    organizationSlug: params.organizationSlug,
+    projectSlug: params.projectSlug,
+    includeArchived: false,
+  });
 
   const { data: machines } = useSuspenseQuery(
     trpc.machine.list.queryOptions({
@@ -59,6 +66,7 @@ function ProjectMachinesPage() {
       setCreateDialogOpen(false);
       setNewMachineName("");
       toast.success("Machine created!");
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
     onError: (error) => {
       toast.error("Failed to create machine: " + error.message);
@@ -75,6 +83,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine archived!");
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
     onError: (error) => {
       toast.error("Failed to archive machine: " + error.message);
@@ -91,6 +100,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine restored!");
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
     onError: (error) => {
       toast.error("Failed to restore machine: " + error.message);
@@ -107,6 +117,7 @@ function ProjectMachinesPage() {
     },
     onSuccess: () => {
       toast.success("Machine deleted!");
+      queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
     onError: (error) => {
       toast.error("Failed to delete machine: " + error.message);

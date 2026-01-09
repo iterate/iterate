@@ -216,10 +216,11 @@ function RepoPicker({
 }) {
   const queryClient = useQueryClient();
   const [selectedRepo, setSelectedRepo] = useState<{
+    id: number;
     owner: string;
     name: string;
     defaultBranch: string;
-  } | null>(currentRepo ?? null);
+  } | null>(null);
 
   const { data: reposData } = useSuspenseQuery(
     trpc.project.listAvailableGithubRepos.queryOptions({
@@ -229,10 +230,11 @@ function RepoPicker({
   );
 
   const setProjectRepo = useMutation({
-    mutationFn: (repo: { owner: string; name: string; defaultBranch: string }) =>
+    mutationFn: (repo: { id: number; owner: string; name: string; defaultBranch: string }) =>
       trpcClient.project.setProjectRepo.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
+        repoId: repo.id,
         owner: repo.owner,
         name: repo.name,
         defaultBranch: repo.defaultBranch,
@@ -308,7 +310,11 @@ function RepoPicker({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="w-full justify-between">
-              {selectedRepo ? `${selectedRepo.owner}/${selectedRepo.name}` : "Select repository..."}
+              {selectedRepo
+                ? `${selectedRepo.owner}/${selectedRepo.name}`
+                : currentRepo
+                  ? `${currentRepo.owner}/${currentRepo.name}`
+                  : "Select repository..."}
               <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
@@ -318,6 +324,7 @@ function RepoPicker({
                 key={repo.id}
                 onClick={() =>
                   setSelectedRepo({
+                    id: repo.id,
                     owner: repo.owner,
                     name: repo.name,
                     defaultBranch: repo.defaultBranch,
@@ -325,9 +332,10 @@ function RepoPicker({
                 }
               >
                 <span className="flex-1">{repo.fullName}</span>
-                {selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name && (
-                  <Check className="h-4 w-4" />
-                )}
+                {((selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name) ||
+                  (!selectedRepo &&
+                    currentRepo?.owner === repo.owner &&
+                    currentRepo?.name === repo.name)) && <Check className="h-4 w-4" />}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>

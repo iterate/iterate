@@ -5,9 +5,10 @@ import { Daytona } from "@daytonaio/sdk";
 import { typeid } from "typeid-js";
 import { router, projectProtectedProcedure, projectProtectedMutation, t } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { env } from "../../../env.ts";
+import { env, type CloudflareEnv } from "../../../env.ts";
 import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
+import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
 import { generateToken } from "./access-token.ts";
 
 const daytonaMiddleware = t.middleware(async ({ ctx, next }) => {
@@ -98,12 +99,15 @@ export const machineRouter = router({
         envVars["OPENAI_API_KEY"] = env.OPENAI_API_KEY;
       }
 
+      const githubEnvVars = await getGitHubEnvVars(ctx.db, ctx.project.id, ctx.env);
+
       const sandbox = await ctx.daytona
         .create({
           name: machineId,
           snapshot: ctx.env.DAYTONA_SNAPSHOT_NAME,
           envVars: {
             ...envVars,
+            ...githubEnvVars,
             MACHINE_AUTH_TOKEN: machineAuthToken,
           },
           autoStopInterval: 0,
@@ -325,5 +329,68 @@ export async function getMachinePreviewInfo({
   return {
     url: previewUrl,
     headers,
+  };
+}
+
+async function getGitHubEnvVars(
+  db: DB,
+  projectId: string,
+  cloudflareEnv: CloudflareEnv,
+): Promise<Record<string, string>> {
+  const githubConnection = await db.query.projectConnection.findFirst({
+    where: and(
+      eq(schema.projectConnection.projectId, projectId),
+      eq(schema.projectConnection.provider, "github-app"),
+    ),
+  });
+
+  if (!githubConnection) {
+    return {};
+  }
+
+  const providerData = githubConnection.providerData as {
+    installationId?: number;
+  };
+
+  if (!providerData.installationId) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "GitHub connection exists but has no installation ID",
+    });
+  }
+
+  const projectRepo = await db.query.projectRepo.findFirst({
+    where: eq(schema.projectRepo.projectId, projectId),
+  });
+
+  if (!projectRepo) {
+    return {};
+  }
+
+  const installationToken = await getGitHubInstallationToken(
+    cloudflareEnv,
+    providerData.installationId,
+  );
+
+  if (!installationToken) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to get GitHub installation token",
+    });
+  }
+
+  const repoInfo = await getRepositoryById(installationToken, projectRepo.externalId);
+
+  if (!repoInfo) {
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Failed to fetch repository from GitHub - it may have been deleted",
+    });
+  }
+
+  return {
+    GITHUB_ACCESS_TOKEN: installationToken,
+    GITHUB_REPO_FULL_NAME: repoInfo.fullName,
+    GITHUB_REPO_DEFAULT_BRANCH: repoInfo.defaultBranch,
   };
 }

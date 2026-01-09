@@ -165,6 +165,7 @@ export const projectRouter = router({
   setProjectRepo: projectProtectedMutation
     .input(
       z.object({
+        repoId: z.number(),
         owner: z.string(),
         name: z.string(),
         defaultBranch: z.string().default("main"),
@@ -180,6 +181,7 @@ export const projectRouter = router({
           .update(projectRepo)
           .set({
             provider: "github",
+            externalId: input.repoId.toString(),
             owner: input.owner,
             name: input.name,
             defaultBranch: input.defaultBranch,
@@ -189,6 +191,7 @@ export const projectRouter = router({
         await ctx.db.insert(projectRepo).values({
           projectId: ctx.project.id,
           provider: "github",
+          externalId: input.repoId.toString(),
           owner: input.owner,
           name: input.name,
           defaultBranch: input.defaultBranch,

@@ -336,6 +336,7 @@ export const projectRepo = pgTable("project_repo", (t) => ({
     .unique()
     .references(() => project.id, { onDelete: "cascade" }),
   provider: t.text().notNull(),
+  externalId: t.text().notNull(),
   owner: t.text().notNull(),
   name: t.text().notNull(),
   defaultBranch: t.text().notNull().default("main"),

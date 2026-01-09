@@ -15,6 +15,13 @@
       "when": 1767887145939,
       "tag": "0001_rare_omega_sentinel",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1767971589234,
+      "tag": "0002_wooden_arachne",
+      "breakpoints": true
     }
   ]
 }
