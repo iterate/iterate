@@ -29,30 +29,26 @@ const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
 
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
-  try {
-    const dopplerConfig = z
-      .object({ environment: z.string() })
-      .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
+  const dopplerConfig = z
+    .object({ environment: z.string() })
+    .parse(JSON.parse(execSync("doppler configs get --json", { encoding: "utf-8" })));
 
-    if (isProduction && dopplerConfig.environment !== "prd") {
-      throw new Error(
-        `You are trying to deploy to production, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
+  if (isProduction && !dopplerConfig.environment.startsWith("prd")) {
+    throw new Error(
+      `You are trying to deploy to production, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
+  }
 
-    if (isStaging && dopplerConfig.environment !== "stg") {
-      throw new Error(
-        `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
+  if (isStaging && !dopplerConfig.environment.startsWith("stg")) {
+    throw new Error(
+      `You are trying to deploy to staging, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
+  }
 
-    if (isDevelopment && !dopplerConfig.environment.startsWith("dev")) {
-      throw new Error(
-        `You are trying to develop locally, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
-      );
-    }
-  } catch (e) {
-    throw new Error("Failed to determine doppler environment", { cause: e });
+  if (isDevelopment && !dopplerConfig.environment.startsWith("dev")) {
+    throw new Error(
+      `You are trying to develop locally, but the doppler environment is set to ${dopplerConfig.environment}, exiting...`,
+    );
   }
 }
 
@@ -67,6 +63,11 @@ const Env = z.object({
   SLACK_CLIENT_ID: Required,
   SLACK_CLIENT_SECRET: Required,
   SLACK_SIGNING_SECRET: Required,
+  GITHUB_APP_CLIENT_ID: Required,
+  GITHUB_APP_CLIENT_SECRET: Required,
+  GITHUB_APP_SLUG: Required,
+  GITHUB_APP_ID: Required,
+  GITHUB_APP_PRIVATE_KEY: Required,
   SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
@@ -74,7 +75,9 @@ const Env = z.object({
   ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
-} satisfies Record<string, typeof Required | typeof Optional>);
+  SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
+} satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
@@ -156,7 +159,7 @@ async function setupDatabase() {
       delete: false,
     });
 
-    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+    await migrate(role.connectionUrl.unencrypted);
 
     return {
       DATABASE_URL: role.connectionUrlPooled.unencrypted,
@@ -164,9 +167,25 @@ async function setupDatabase() {
   }
 
   if (isProduction) {
-    await migrate(process.env.DRIZZLE_ADMIN_POSTGRES_CONNECTION_STRING!);
+    const planetscaleDb = await Database("planetscale-db", {
+      name: "os2-production",
+      clusterSize: "PS_10",
+      adopt: true,
+      arch: "x86",
+      kind: "postgresql",
+      delete: false,
+    });
+
+    const role = await Role("db-role", {
+      database: planetscaleDb,
+      inheritedRoles: ["postgres"],
+      delete: false,
+    });
+
+    await migrate(role.connectionUrl.unencrypted);
+
     return {
-      DATABASE_URL: process.env.DRIZZLE_RW_POSTGRES_CONNECTION_STRING!,
+      DATABASE_URL: role.connectionUrlPooled.unencrypted,
     };
   }
 
@@ -195,7 +214,7 @@ async function deployWorker() {
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
-      DAYTONA_SNAPSHOT_NAME: `iterate-sandbox-0.0.1-dev`,
+      DAYTONA_SNAPSHOT_NAME: `iterate-sandbox-0.0.2-dev`,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
     assets: {
