@@ -2,9 +2,11 @@
 globs: ["**/*.tsx"]
 ---
 
+We use shadcn/ui components. You can install additional shadcn components as needed using `npx shadcn@latest add <component>`.
+
 We like using vanilla shadcn style.
 
-Don't add unnecessary tailwind classes all over the place with random colours of even gradients.
+Don't add unnecessary tailwind classes all over the place with random colours or even gradients.
 
 We rely on tailwind's builtin theming, so any colours you do use must come from the theme.
 
@@ -12,9 +14,9 @@ Make sure NEVER to repeat the same bland copy in two places just to "fill the sp
 
 # Notable components
 
-### We really like using the new `Item` component from shadcn/ui.
+### We really like using the `Item` component from shadcn/ui.
 
-You can find the docs here: https://ui.shadcn.com/docs/components/item or just read apps/os/app/components/ui/item.tsx
+You can find the docs here: https://ui.shadcn.com/docs/components/item
 
 Whenever you would otherwise use a bunch of `<div>`s in a grid or table or whatever with some gap and padding etc, just use `<Item>`.
 
@@ -22,7 +24,7 @@ Whenever you would otherwise use a bunch of `<div>`s in a grid or table or whate
 
 ### Forms
 
-Use the `Field` components from apps/os/app/components/ui/field.tsx for consistent form layouts and proper accessibility. Check out the docs at https://ui.shadcn.com/docs/components/field for more details.
+Use the `Field` components for consistent form layouts and proper accessibility. Check out the docs at https://ui.shadcn.com/docs/components/field for more details.
 
 For advanced or optional fields, use `Accordion` to hide them by default. Accordion also works well for multi-stage forms where you want to break up complex flows into collapsible sections.
 
@@ -82,11 +84,11 @@ export function ContactForm() {
 
 ### Use the `Card` component with `variant="muted"` for structuring content in grids.
 
-When laying out content in grids or multi-column layouts, prefer using `<Card variant="muted">` for a clean, borderless, muted background card. This provides visual grouping without heavy borders:
+When laying out content in grids or multi-column layouts, prefer using `<Card variant="muted">` for a clean, borderless, muted background card. This provides visual grouping without heavy borders.
 
-### We use the `Empty` component for empty states, which is a newer shadcn/ui component.
+### We use the `Empty` component for empty states.
 
-You can find it at apps/os/app/components/ui/empty.tsx and use it for clean, consistent empty state presentations.
+This is a shadcn/ui component for clean, consistent empty state presentations.
 
 ### We use Sonner for toast notifications.
 
@@ -94,7 +96,7 @@ Import and use `toast` from "sonner" for user feedback and notifications. The To
 
 ### We use the `Tabs` component for tabbed interfaces.
 
-Use the `Tabs`, `TabsList`, `TabsTrigger`, and `TabsContent` components from `apps/os/app/components/ui/tabs.tsx` for clean, accessible tabbed interfaces.
+Use the `Tabs`, `TabsList`, `TabsTrigger`, and `TabsContent` components for clean, accessible tabbed interfaces.
 
 **Prefer toast notifications over transient inline messages.** Instead of showing temporary success/error messages inline within forms or components, use toast notifications for a cleaner, less intrusive user experience:
 
@@ -112,8 +114,8 @@ const [successMessage, setSuccessMessage] = useState(null);
 
 ### We use the `Spinner` component for loading states.
 
-Use the `Spinner` component from `apps/os/app/components/ui/spinner.tsx` for all loading spinners. It provides consistent styling, proper accessibility with `role="status"` and `aria-label="Loading"`, and uses the Loader2Icon from Lucide React with smooth animation.
+Use the `Spinner` component for all loading spinners. It provides consistent styling, proper accessibility with `role="status"` and `aria-label="Loading"`, and uses the Loader2Icon from Lucide React with smooth animation.
 
 ### We use the `Tooltip` component for contextual help.
 
-Use the `Tooltip` components from `apps/os/app/components/ui/tooltip.tsx` to provide helpful hints and additional information on hover.
+Use the `Tooltip` components to provide helpful hints and additional information on hover.
