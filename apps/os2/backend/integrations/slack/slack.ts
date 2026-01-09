@@ -13,13 +13,49 @@ import { verifySlackSignature, getSlackEventType } from "./slack-utils.ts";
 export type SlackOAuthStateData = {
   projectId: string;
   userId: string;
-  redirectUri: string;
   callbackURL?: string;
 };
 
 export function createSlackClient(env: CloudflareEnv) {
   const redirectURI = `${env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
   return new arctic.Slack(env.SLACK_CLIENT_ID, env.SLACK_CLIENT_SECRET, redirectURI);
+}
+
+/**
+ * Revoke a Slack access token using auth.revoke API
+ * Returns true if revocation succeeded or token was already invalid
+ */
+export async function revokeSlackToken(accessToken: string): Promise<boolean> {
+  try {
+    const response = await fetch("https://slack.com/api/auth.revoke", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+    });
+
+    if (!response.ok) {
+      logger.warn("Slack auth.revoke HTTP error", { status: response.status });
+      return false;
+    }
+
+    const data = (await response.json()) as { ok: boolean; revoked?: boolean; error?: string };
+
+    if (!data.ok) {
+      // Token might already be invalid/revoked - that's fine
+      if (data.error === "invalid_auth" || data.error === "token_revoked") {
+        return true;
+      }
+      logger.warn("Slack auth.revoke API error", { error: data.error });
+      return false;
+    }
+
+    return true;
+  } catch (error) {
+    logger.error("Failed to revoke Slack token", error);
+    return false;
+  }
 }
 
 export const slackApp = new Hono<{ Bindings: CloudflareEnv; Variables: Variables }>();
@@ -34,16 +70,23 @@ slackApp.get(
     "query",
     z.object({
       state: z.string().optional(),
-      code: z.string(),
+      code: z.string().optional(),
+      error: z.string().optional(),
     }),
   ),
   async (c) => {
     if (!c.var.session) return c.json({ error: "Unauthorized" }, 401);
 
-    const { state, code } = c.req.valid("query");
+    const { state, code, error } = c.req.valid("query");
 
-    if (!state) {
-      logger.warn("Slack callback received without state");
+    // Handle OAuth denial/error from Slack
+    if (error) {
+      logger.warn("Slack OAuth error", { error });
+      return c.redirect("/?error=slack_oauth_denied");
+    }
+
+    if (!state || !code) {
+      logger.warn("Slack callback received without state or code");
       return c.redirect("/");
     }
 
@@ -61,7 +104,6 @@ slackApp.get(
       .object({
         projectId: z.string(),
         userId: z.string(),
-        redirectUri: z.string(),
         callbackURL: z.string().optional(),
       })
       .parse(JSON.parse(verification.value));

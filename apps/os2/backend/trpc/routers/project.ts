@@ -16,6 +16,7 @@ import {
   listInstallationRepositories,
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
+import { revokeSlackToken } from "../../integrations/slack/slack.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
@@ -254,11 +255,9 @@ export const projectRouter = router({
       const state = arctic.generateState();
       const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
-      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
       const data = JSON.stringify({
         userId: ctx.user.id,
         projectId: ctx.project.id,
-        redirectUri,
         callbackURL: input.callbackURL,
       });
 
@@ -270,6 +269,7 @@ export const projectRouter = router({
 
       // Create Slack OAuth URL with bot scopes
       // These scopes allow the bot to read team info, channels, and send messages
+      const redirectUri = `${ctx.env.VITE_PUBLIC_URL}/api/integrations/slack/callback`;
       const slack = new arctic.Slack(
         ctx.env.SLACK_CLIENT_ID,
         ctx.env.SLACK_CLIENT_SECRET,
@@ -307,6 +307,17 @@ export const projectRouter = router({
         code: "NOT_FOUND",
         message: "No Slack connection found for this project",
       });
+    }
+
+    // Revoke the Slack token (best effort - don't fail disconnect if revocation fails)
+    const providerData = connection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        await revokeSlackToken(accessToken);
+      } catch {
+        // Token revocation failed, but we still delete the connection
+      }
     }
 
     await ctx.db
