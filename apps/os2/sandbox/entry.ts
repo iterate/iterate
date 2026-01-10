@@ -73,9 +73,11 @@ const cloneAndSetupIterateRepo = () => {
 };
 
 const startDaemon = () => {
-  console.log(`Starting daemon with vite in ${DAEMON_PATH}...`);
+  console.log(`Building daemon in ${DAEMON_PATH}...`);
+  execSync("pnpm build", { cwd: DAEMON_PATH, stdio: "inherit" });
 
-  const daemon = spawn("pnpm", ["vite"], {
+  console.log(`Starting daemon server in ${DAEMON_PATH}...`);
+  const daemon = spawn("node", ["dist/server/index.mjs"], {
     cwd: DAEMON_PATH,
     stdio: "inherit",
     env: {
