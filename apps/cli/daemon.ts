@@ -117,6 +117,7 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
         env: {
           ...process.env,
           PORT: String(config.port),
+          DAEMON_STORAGE: config.storage,
         },
       });
       child.unref();

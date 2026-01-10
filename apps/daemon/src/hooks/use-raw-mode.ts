@@ -3,6 +3,8 @@ import { createContext, useContext } from "react";
 export interface RawModeContextValue {
   rawMode: boolean;
   setRawMode: (value: boolean) => void;
+  rawEventsCount: number;
+  setRawEventsCount: (count: number) => void;
 }
 
 export const RawModeContext = createContext<RawModeContextValue | null>(null);

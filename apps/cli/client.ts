@@ -30,6 +30,33 @@ export class ClientError extends Error {
   }
 }
 
+const HEALTH_CHECK_INTERVAL_MS = 200;
+const HEALTH_CHECK_TIMEOUT_MS = 10_000;
+
+/** Poll health endpoint until server is ready or timeout */
+const waitForServerReady = (
+  serverUrl: string,
+  httpClient: HttpClient.HttpClient,
+): Effect.Effect<void, ClientError> =>
+  Effect.gen(function* () {
+    const startTime = Date.now();
+
+    while (Date.now() - startTime < HEALTH_CHECK_TIMEOUT_MS) {
+      const request = HttpClientRequest.get(`${serverUrl}/api/health`);
+      const result = yield* httpClient.execute(request).pipe(Effect.scoped, Effect.either);
+
+      if (result._tag === "Right" && result.right.status === 200) {
+        return;
+      }
+
+      yield* Effect.sleep(`${HEALTH_CHECK_INTERVAL_MS} millis`);
+    }
+
+    return yield* Effect.fail(
+      new ClientError(`Daemon failed to become ready within ${HEALTH_CHECK_TIMEOUT_MS}ms`),
+    );
+  });
+
 // Branded types for stream operations
 export const StreamName = Schema.String.pipe(Schema.nonEmptyString(), Schema.brand("StreamName"));
 export type StreamName = typeof StreamName.Type;
@@ -292,9 +319,7 @@ export class StreamClientService extends Effect.Service<StreamClientService>()(
 
         const serverUrl = `http://localhost:${defaultDaemonConfig.port}`;
 
-        // Wait a bit for server to come up
-        yield* Effect.sleep("1 second");
-
+        yield* waitForServerReady(serverUrl, httpClient);
         yield* Effect.log("Daemon ready");
 
         return serverUrl;
@@ -358,7 +383,7 @@ export const StreamClientLive: Layer.Layer<
 
       const serverUrl = `http://localhost:${defaultDaemonConfig.port}`;
 
-      yield* Effect.sleep("1 second");
+      yield* waitForServerReady(serverUrl, httpClient);
       yield* Effect.log("Daemon ready");
 
       return serverUrl;

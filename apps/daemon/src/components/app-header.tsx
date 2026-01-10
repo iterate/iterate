@@ -20,7 +20,7 @@ interface AppHeaderProps {
 
 export function AppHeader({ agentId }: AppHeaderProps) {
   const location = useLocation();
-  const { rawMode, setRawMode } = useRawMode();
+  const { rawMode, setRawMode, rawEventsCount } = useRawMode();
 
   const isPtyRoute = agentId && location.pathname.endsWith("/pty");
   const isChatRoute = agentId && !isPtyRoute;
@@ -96,6 +96,9 @@ export function AppHeader({ agentId }: AppHeaderProps) {
             <Switch id="raw-mode" checked={rawMode} onCheckedChange={setRawMode} />
             <Label htmlFor="raw-mode" className="text-sm text-muted-foreground cursor-pointer">
               Raw
+              {rawEventsCount > 0 && (
+                <span className="ml-1 text-muted-foreground/60">({rawEventsCount})</span>
+              )}
             </Label>
           </div>
         </div>

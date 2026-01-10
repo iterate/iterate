@@ -20,7 +20,7 @@ import {
 import { Console, Deferred, Effect, Fiber, Queue, Scope, Stream } from "effect";
 import { StreamManagerService } from "../../event-stream/stream-manager.ts";
 import {
-  makeOffset,
+  OFFSET_START,
   type StreamName,
   type StorageError,
   type InvalidOffsetError,
@@ -211,9 +211,11 @@ export const runPiAdapter = (
     // This prevents replaying historical prompts that have already been processed
     yield* Console.log(`[Pi Adapter] Subscribing to stream: ${streamName}`);
 
-    // Get current event count to subscribe from the end
+    // Get current events and subscribe from after the last one
+    // Uses the last event's actual offset for correct exclusive filtering (offset > lastOffset)
     const existingEvents = yield* manager.getFrom({ name: streamName });
-    const startOffset = makeOffset(existingEvents.length);
+    const startOffset =
+      existingEvents.length > 0 ? existingEvents[existingEvents.length - 1].offset : OFFSET_START;
     yield* Console.log(
       `[Pi Adapter] Starting from offset ${startOffset} (${existingEvents.length} existing events)`,
     );

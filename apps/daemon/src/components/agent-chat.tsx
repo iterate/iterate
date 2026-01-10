@@ -52,7 +52,7 @@ export function AgentChat({ agentPath, apiURL }: { agentPath: string; apiURL: st
   const isHydrated = useHydrated();
   const [sending, setSending] = useState(false);
   const [selectedRawEventIndex, setSelectedRawEventIndex] = useState<number | null>(null);
-  const { rawMode } = useRawMode();
+  const { rawMode, setRawEventsCount } = useRawMode();
 
   const isDisabled = !isHydrated || sending;
 
@@ -74,6 +74,8 @@ export function AgentChat({ agentPath, apiURL }: { agentPath: string; apiURL: st
   const selectedRawEvent =
     selectedRawEventIndex !== null ? (rawEvents[selectedRawEventIndex] as unknown) : null;
   const filteredFeed = rawMode ? feed : feed.filter((item) => item.kind !== "event");
+
+  setRawEventsCount(rawEvents.length);
 
   const handleSubmit = async ({ text }: { text: string }) => {
     const trimmedText = text.trim();

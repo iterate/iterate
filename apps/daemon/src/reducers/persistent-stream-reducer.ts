@@ -158,6 +158,9 @@ function createSuspenseResource(_key: string, promise: Promise<void>): SuspenseR
 // Storage
 // ─────────────────────────────────────────────────────────────────────────────
 
+const MAX_STORED_EVENTS = 1000;
+const TRIM_TO_EVENTS = 500;
+
 const storage = {
   getEvents<E>(key: string): E[] {
     try {
@@ -169,22 +172,52 @@ const storage = {
   },
 
   getOffset(key: string): string {
-    return localStorage.getItem(`${key}:offset`) ?? "-1";
+    try {
+      return localStorage.getItem(`${key}:offset`) ?? "-1";
+    } catch {
+      return "-1";
+    }
   },
 
   appendEvent<E>(key: string, event: E): void {
-    const events = this.getEvents<E>(key);
-    events.push(event);
-    localStorage.setItem(`${key}:events`, JSON.stringify(events));
+    try {
+      let events = this.getEvents<E>(key);
+      events.push(event);
+
+      if (events.length > MAX_STORED_EVENTS) {
+        events = events.slice(-TRIM_TO_EVENTS);
+      }
+
+      localStorage.setItem(`${key}:events`, JSON.stringify(events));
+    } catch (e) {
+      if (e instanceof DOMException && e.name === "QuotaExceededError") {
+        try {
+          const events = this.getEvents<E>(key);
+          const trimmed = events.slice(-TRIM_TO_EVENTS);
+          trimmed.push(event);
+          localStorage.setItem(`${key}:events`, JSON.stringify(trimmed));
+        } catch {
+          this.clear(key);
+        }
+      }
+    }
   },
 
   setOffset(key: string, offset: string): void {
-    localStorage.setItem(`${key}:offset`, offset);
+    try {
+      localStorage.setItem(`${key}:offset`, offset);
+    } catch {
+      // Ignore quota errors for offset - it's small and we'll recover on reconnect
+    }
   },
 
   clear(key: string): void {
-    localStorage.removeItem(`${key}:events`);
-    localStorage.removeItem(`${key}:offset`);
+    try {
+      localStorage.removeItem(`${key}:events`);
+      localStorage.removeItem(`${key}:offset`);
+    } catch {
+      // Ignore errors during cleanup
+    }
   },
 };
 

@@ -1,3 +1,4 @@
+import { useState, useEffect } from "react";
 import { Check, Sun, Moon, Monitor } from "lucide-react";
 import { useTheme } from "next-themes";
 import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "./ui/sidebar.tsx";
@@ -15,8 +16,15 @@ const themes = [
 ];
 
 export function ThemeSwitcher() {
+  const [mounted, setMounted] = useState(false);
   const { theme, setTheme } = useTheme();
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
   const currentTheme = themes.find((t) => t.value === theme) || themes[2];
+  const ThemeIcon = mounted ? currentTheme.icon : Monitor;
 
   return (
     <SidebarMenu>
@@ -24,7 +32,7 @@ export function ThemeSwitcher() {
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground">
-              <currentTheme.icon className="size-4" />
+              <ThemeIcon className="size-4" />
               <span className="truncate">Theme</span>
             </SidebarMenuButton>
           </DropdownMenuTrigger>

@@ -11,7 +11,7 @@ import {
   type EventStreamId,
   PiEventTypes,
 } from "./agents/pi/types.ts";
-import { runtime, runEffect, runScopedEffect } from "./runtime.ts";
+import { runtime, runEffect } from "./runtime.ts";
 
 interface AdapterInfo {
   streamName: StreamName;
@@ -320,55 +320,53 @@ daemonApp.get("/agents/*", (c) => {
   return streamSSE(c, async (stream) => {
     let lastOffset = "0";
 
-    try {
-      const effect = Effect.gen(function* () {
-        const manager = yield* StreamManagerService;
+    const effect = Effect.gen(function* () {
+      const manager = yield* StreamManagerService;
 
-        const parsedOffset: Offset | undefined =
-          offset === "-1" ? OFFSET_START : (offset as Offset);
+      const parsedOffset: Offset | undefined = offset === "-1" ? OFFSET_START : (offset as Offset);
 
-        const eventStreamResult = yield* manager
-          .subscribe({
-            name: streamPath as StreamName,
-            offset: parsedOffset,
-          })
-          .pipe(Effect.either);
+      const eventStreamResult = yield* manager
+        .subscribe({
+          name: streamPath as StreamName,
+          offset: parsedOffset,
+        })
+        .pipe(Effect.either);
 
-        if (eventStreamResult._tag === "Left") {
-          yield* Effect.sync(() => {
+      if (eventStreamResult._tag === "Left") {
+        yield* Effect.sync(() => {
+          stream.writeSSE({
+            event: "control",
+            data: JSON.stringify({ streamNextOffset: "0", upToDate: true }),
+          });
+        });
+        return;
+      }
+
+      const eventStream = eventStreamResult.right;
+
+      yield* eventStream.pipe(
+        Stream.runForEach((event) =>
+          Effect.sync(() => {
+            lastOffset = event.offset;
+
+            stream.writeSSE({ event: "data", data: JSON.stringify([event.data]) });
+
             stream.writeSSE({
               event: "control",
-              data: JSON.stringify({ streamNextOffset: "0", upToDate: true }),
+              data: JSON.stringify({ streamNextOffset: lastOffset, upToDate: true }),
             });
-          });
-          return;
-        }
+          }),
+        ),
+      );
+    });
 
-        const eventStream = eventStreamResult.right;
-
-        yield* eventStream.pipe(
-          Stream.runForEach((event) =>
-            Effect.sync(() => {
-              lastOffset = event.offset;
-
-              stream.writeSSE({ event: "data", data: JSON.stringify([event.data]) });
-
-              stream.writeSSE({
-                event: "control",
-                data: JSON.stringify({ streamNextOffset: lastOffset, upToDate: true }),
-              });
-            }),
-          ),
-        );
-      });
-
-      await runScopedEffect(effect);
-    } catch (error) {
-      console.error(`[Daemon] SSE error for ${streamPath}:`, error);
-    }
+    const fiber = runtime.runFork(Effect.scoped(effect));
 
     await new Promise<void>((resolve) => {
-      c.req.raw.signal.addEventListener("abort", () => resolve());
+      c.req.raw.signal.addEventListener("abort", () => {
+        Effect.runFork(Fiber.interrupt(fiber));
+        resolve();
+      });
     });
   });
 });
@@ -378,16 +376,16 @@ daemonApp.delete("/agents/*", async (c) => {
 
   const stopped = await stopAdapter(streamPath);
 
+  if (!stopped) {
+    return c.text("Agent not found", 404);
+  }
+
   await runEffect(
     Effect.gen(function* () {
       const manager = yield* StreamManagerService;
       yield* manager.delete({ name: streamPath as StreamName }).pipe(Effect.ignore);
     }),
   );
-
-  if (!stopped) {
-    return c.text("Agent not found", 404);
-  }
 
   return new Response(null, { status: 204 });
 });

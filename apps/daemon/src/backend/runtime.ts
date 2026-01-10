@@ -13,9 +13,12 @@ export const STORAGE_DIR = path.join(process.cwd(), DATA_DIR);
 
 fs.mkdirSync(STORAGE_DIR, { recursive: true });
 
-const storageLayer = Storage.FileSystem({ dataDir: STORAGE_DIR }).pipe(
-  Layer.provide(NodeContext.layer),
-);
+const storageBackend = process.env.DAEMON_STORAGE ?? "fs";
+
+const storageLayer =
+  storageBackend === "memory"
+    ? Storage.InMemory
+    : Storage.FileSystem({ dataDir: STORAGE_DIR }).pipe(Layer.provide(NodeContext.layer));
 
 const streamManagerLayer = StreamManagerService.Live.pipe(
   Layer.provide(ActiveFactory),
