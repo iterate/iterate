@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState } from "react";
 import { useHydrated } from "@tanstack/react-router";
 import { RadioIcon, MessageSquareIcon } from "lucide-react";
 import { FeedItemRenderer } from "./event-line.tsx";
@@ -7,6 +7,7 @@ import {
   messagesReducer,
   createInitialState,
   type MessagesState,
+  type FeedItem,
 } from "@/reducers/messages-reducer.ts";
 import { usePersistentStream, excludeTypes } from "@/reducers/persistent-stream-reducer.ts";
 import { useRawMode } from "@/hooks/use-raw-mode.ts";
@@ -37,11 +38,20 @@ async function sendMessage(apiURL: string, agentPath: string, text: string): Pro
   return res.ok;
 }
 
+function getFeedItemKey(item: FeedItem): string {
+  if (item.kind === "message") {
+    return `msg-${item.role}-${item.timestamp}`;
+  }
+  if (item.kind === "error") {
+    return `err-${item.timestamp}`;
+  }
+  return `evt-${item.eventType}-${item.timestamp}`;
+}
+
 export function AgentChat({ agentPath, apiURL }: { agentPath: string; apiURL: string }) {
   const isHydrated = useHydrated();
   const [sending, setSending] = useState(false);
   const [selectedRawEventIndex, setSelectedRawEventIndex] = useState<number | null>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const { rawMode } = useRawMode();
 
   const isDisabled = !isHydrated || sending;
@@ -71,7 +81,6 @@ export function AgentChat({ agentPath, apiURL }: { agentPath: string; apiURL: st
     setSending(true);
     await sendMessage(apiURL, agentPath, trimmedText);
     setSending(false);
-    setTimeout(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
   };
 
   const isEmpty = filteredFeed.length === 0 && !streamingMessage;
@@ -88,13 +97,14 @@ export function AgentChat({ agentPath, apiURL }: { agentPath: string; apiURL: st
             />
           ) : (
             <>
-              {filteredFeed.map((item, i) => (
-                <FeedItemRenderer key={i} item={item} />
+              {filteredFeed.map((item) => (
+                <FeedItemRenderer key={getFeedItemKey(item)} item={item} />
               ))}
-              {streamingMessage && <FeedItemRenderer item={streamingMessage} isStreaming />}
+              {streamingMessage && (
+                <FeedItemRenderer key="streaming" item={streamingMessage} isStreaming />
+              )}
             </>
           )}
-          <div ref={endRef} />
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>

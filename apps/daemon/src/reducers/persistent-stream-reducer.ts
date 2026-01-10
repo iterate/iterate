@@ -226,6 +226,28 @@ async function replayEventsInBatches<TState, TEvent>(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Batch initialization action type
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BATCH_INIT_TYPE = "__PERSISTENT_STREAM_BATCH_INIT__";
+
+interface BatchInitAction<TState> {
+  type: typeof BATCH_INIT_TYPE;
+  state: TState;
+}
+
+function wrapReducer<TState, TEvent extends StreamEvent>(
+  reducer: (state: TState, event: TEvent) => TState,
+) {
+  return (state: TState, action: TEvent | BatchInitAction<TState>): TState => {
+    if (action.type === BATCH_INIT_TYPE) {
+      return (action as BatchInitAction<TState>).state;
+    }
+    return reducer(state, action as TEvent);
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Hook
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -240,7 +262,8 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
   onMustRefetch,
   suspense = true,
 }: PersistentStreamConfig<TState, TEvent>): PersistentStreamResult<TState> {
-  const [state, dispatch] = useReducer(reducer, initialState);
+  const wrappedReducer = wrapReducer(reducer);
+  const [state, dispatch] = useReducer(wrappedReducer, initialState);
   const [phase, setPhase] = useState<"idle" | "replaying" | "catching-up" | "ready">("idle");
   const [isStreaming, setIsStreaming] = useState(false);
   const [isLeader, setIsLeader] = useState(false);
@@ -427,14 +450,14 @@ export function usePersistentStream<TState, TEvent extends StreamEvent>({
       setPhase("catching-up");
       startSSE();
     } else {
-      replayEventsInBatches(events, reducer, initialState, replayBatchSize).then(() => {
-        if (cancelled) return;
-        for (const event of events) {
-          dispatch(event);
-        }
-        setPhase("catching-up");
-        startSSE();
-      });
+      replayEventsInBatches(events, reducer, initialState, replayBatchSize).then(
+        (replayedState) => {
+          if (cancelled) return;
+          dispatch({ type: BATCH_INIT_TYPE, state: replayedState });
+          setPhase("catching-up");
+          startSSE();
+        },
+      );
     }
 
     return () => {
