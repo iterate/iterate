@@ -15,14 +15,7 @@
 import { Args, Command, Options } from "@effect/cli";
 import { NodeContext, NodeHttpClient } from "@effect/platform-node";
 import { Console, Effect, Layer, Option, Schema, Stream } from "effect";
-import {
-  StreamClientService,
-  StreamClientLive,
-  type StreamName,
-  Event,
-  OFFSET_START,
-  type Offset,
-} from "./client.ts";
+import { StreamClientService, StreamClientLive, type StreamName, Event } from "./client.ts";
 import { DaemonService, DATA_DIR } from "./daemon.ts";
 
 // ─── Pi Event Types (for prompt/abort commands) ─────────────────────────────
@@ -73,7 +66,7 @@ const storageOption = Options.choice("storage", ["memory", "fs"]).pipe(
   Options.withDefault("fs" as const),
 );
 
-const serverUrlOption = Options.text("server").pipe(
+const _serverUrlOption = Options.text("server").pipe(
   Options.withAlias("s"),
   Options.withDescription("Server URL (overrides auto-daemon behavior)"),
   Options.optional,

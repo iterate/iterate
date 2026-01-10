@@ -9,13 +9,8 @@ import * as HttpBody from "@effect/platform/HttpBody";
 import * as HttpClient from "@effect/platform/HttpClient";
 import type * as HttpClientError from "@effect/platform/HttpClientError";
 import * as HttpClientRequest from "@effect/platform/HttpClientRequest";
-import { Duration, Effect, Layer, Option, Schedule, Schema, Stream } from "effect";
+import { Effect, Layer, Option, Schema, Stream } from "effect";
 import { DaemonService, defaultDaemonConfig } from "./daemon.ts";
-
-/** Max time to wait for daemon to become ready */
-const DAEMON_READY_TIMEOUT = Duration.seconds(10);
-/** Interval between health check attempts */
-const HEALTH_CHECK_INTERVAL = Duration.millis(200);
 
 /** Client configuration */
 export interface ClientConfig {
@@ -85,36 +80,6 @@ export interface StreamClient {
   /** Delete a stream */
   readonly delete: (opts: { name: StreamName }) => Effect.Effect<void, ClientError>;
 }
-
-/** Poll server until it responds (or timeout) */
-const waitForServerReady = (
-  serverUrl: string,
-  httpClient: HttpClient.HttpClient,
-): Effect.Effect<void, ClientError> => {
-  const healthCheck = HttpClientRequest.get(`${serverUrl}/streams`).pipe(
-    httpClient.execute,
-    Effect.scoped,
-    Effect.asVoid,
-    Effect.mapError(() => new ClientError("Server not ready")),
-  );
-
-  return healthCheck.pipe(
-    Effect.retry(
-      Schedule.spaced(HEALTH_CHECK_INTERVAL).pipe(
-        Schedule.compose(Schedule.elapsed),
-        Schedule.whileOutput(Duration.lessThan(DAEMON_READY_TIMEOUT)),
-      ),
-    ),
-    Effect.mapError(
-      () =>
-        new ClientError(
-          `Daemon failed to become ready within ${Duration.toSeconds(
-            DAEMON_READY_TIMEOUT,
-          )}s. Check ${defaultDaemonConfig.logFile} for errors.`,
-        ),
-    ),
-  );
-};
 
 /** Create client with explicit server URL */
 export const makeStreamClient = (
