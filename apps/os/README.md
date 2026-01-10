@@ -1,3 +1,7 @@
+> ⚠️ **DEPRECATED**: This application (`apps/os`) is deprecated. All new development should happen in `apps/os2`. This directory will be removed in the future.
+
+---
+
 # Welcome to React Router!
 
 A modern, production-ready template for building full-stack React applications using React Router.

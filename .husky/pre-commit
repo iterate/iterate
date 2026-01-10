@@ -1,1 +1,2 @@
 (cd .github/ts-workflows && node cli.ts from-ts) && git add .github/workflows
+pnpm lint-staged

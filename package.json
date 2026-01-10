@@ -59,6 +59,7 @@
     "globals": "^16.5.0",
     "husky": "9.1.7",
     "is-ci": "4.1.0",
+    "lint-staged": "^16.2.7",
     "prettier": "^3.7.3",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
@@ -66,5 +67,13 @@
   "dependencies": {
     "vibe-rules": "^0.3.91"
   },
-  "packageManager": "pnpm@10.24.0"
+  "packageManager": "pnpm@10.24.0",
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,mjs,cjs}": [
+      "eslint --fix --max-warnings=-1"
+    ],
+    "*": [
+      "prettier --write --ignore-unknown"
+    ]
+  }
 }
