@@ -1,184 +1,15 @@
 import { Hono } from "hono";
 import { streamSSE } from "hono/streaming";
-import { Effect, Stream, Fiber, Deferred } from "effect";
+import { Effect, Stream, Fiber } from "effect";
+import { eq } from "drizzle-orm";
 
+import { db } from "../db/index.ts";
+import * as schema from "../db/schema.ts";
 import { StreamManagerService } from "./event-stream/stream-manager.ts";
 import { type StreamName, type Offset, OFFSET_START } from "./event-stream/types.ts";
-import { runPiAdapter } from "./agents/pi/adapter.ts";
-import {
-  makePromptEvent,
-  makeSessionCreateEvent,
-  type EventStreamId,
-  PiEventTypes,
-} from "./agents/pi/types.ts";
+import { makePromptEvent, type EventStreamId } from "./agents/pi/types.ts";
 import { runtime, runEffect } from "./runtime.ts";
-
-interface AdapterInfo {
-  streamName: StreamName;
-  eventStreamId: EventStreamId;
-  fiber: Fiber.RuntimeFiber<void, unknown> | null;
-  createdAt: Date;
-}
-
-// Use global storage to survive HMR
-declare global {
-  var __daemon_adapters: Map<string, AdapterInfo> | undefined;
-
-  var __daemon_pending:
-    | Map<string, Promise<{ streamName: StreamName; eventStreamId: EventStreamId }>>
-    | undefined;
-
-  var __daemon_registry_subscribers: Set<RegistrySubscriber> | undefined;
-}
-
-const adapters = globalThis.__daemon_adapters ?? new Map<string, AdapterInfo>();
-globalThis.__daemon_adapters = adapters;
-
-const pendingSessionCreations =
-  globalThis.__daemon_pending ??
-  new Map<string, Promise<{ streamName: StreamName; eventStreamId: EventStreamId }>>();
-globalThis.__daemon_pending = pendingSessionCreations;
-
-type RegistrySubscriber = (event: {
-  type: "stream";
-  key: string;
-  value: { path: string; contentType: string; createdAt: number };
-  headers: { operation: "insert" | "delete" };
-}) => Promise<void>;
-
-const registrySubscribers =
-  globalThis.__daemon_registry_subscribers ?? new Set<RegistrySubscriber>();
-globalThis.__daemon_registry_subscribers = registrySubscribers;
-
-function broadcastToRegistry(event: Parameters<RegistrySubscriber>[0]): void {
-  for (const subscriber of registrySubscribers) {
-    subscriber(event).catch(() => {
-      registrySubscribers.delete(subscriber);
-    });
-  }
-}
-
-function generateId(): string {
-  return Math.random().toString(36).substring(2, 10);
-}
-
-async function startPiSession(
-  streamName?: string,
-): Promise<{ streamName: StreamName; eventStreamId: EventStreamId }> {
-  const name = (streamName ?? `pi-${generateId()}`) as StreamName;
-  const eventStreamId = name as unknown as EventStreamId;
-
-  if (adapters.has(name)) {
-    return { streamName: name, eventStreamId };
-  }
-
-  const pending = pendingSessionCreations.get(name);
-  if (pending) {
-    return pending;
-  }
-
-  console.log(`[Daemon] Starting Pi session: ${name}`);
-
-  const creationPromise = (async () => {
-    adapters.set(name, {
-      streamName: name,
-      eventStreamId,
-      fiber: null,
-      createdAt: new Date(),
-    });
-
-    const adapterReady = await Effect.runPromise(Deferred.make<void, never>());
-
-    const adapterEffect = Effect.scoped(runPiAdapter(name, eventStreamId, adapterReady));
-
-    const fiber = runtime.runFork(adapterEffect);
-
-    const info = adapters.get(name);
-    if (info) {
-      info.fiber = fiber as unknown as Fiber.RuntimeFiber<void, unknown>;
-    }
-
-    await Effect.runPromise(Deferred.await(adapterReady));
-
-    const existingEvents = await runEffect(
-      Effect.gen(function* () {
-        const manager = yield* StreamManagerService;
-        return yield* manager.getFrom({ name });
-      }),
-    );
-
-    const hasSessionCreate = existingEvents.some((e) => {
-      const data = e.data as { type?: string } | null;
-      return data?.type === PiEventTypes.SESSION_CREATE;
-    });
-
-    if (!hasSessionCreate) {
-      const createEvent = makeSessionCreateEvent(eventStreamId, {
-        cwd: process.env.INIT_CWD ?? process.cwd(),
-      });
-
-      await runEffect(
-        Effect.gen(function* () {
-          const manager = yield* StreamManagerService;
-          yield* manager.append({
-            name,
-            data: createEvent,
-          });
-        }),
-      );
-    }
-
-    console.log(`[Daemon] Pi session started: ${name}${hasSessionCreate ? " (reattached)" : ""}`);
-
-    const adapterInfo = adapters.get(name);
-    if (adapterInfo) {
-      broadcastToRegistry({
-        type: "stream",
-        key: name,
-        value: {
-          path: name,
-          contentType: "application/json",
-          createdAt: adapterInfo.createdAt.getTime(),
-        },
-        headers: { operation: "insert" },
-      });
-    }
-
-    return { streamName: name, eventStreamId };
-  })();
-
-  pendingSessionCreations.set(name, creationPromise);
-
-  try {
-    return await creationPromise;
-  } finally {
-    pendingSessionCreations.delete(name);
-  }
-}
-
-async function stopAdapter(streamName: string): Promise<boolean> {
-  const adapter = adapters.get(streamName);
-  if (!adapter) return false;
-
-  if (adapter.fiber) {
-    await Effect.runPromise(Fiber.interrupt(adapter.fiber));
-  }
-
-  adapters.delete(streamName);
-
-  broadcastToRegistry({
-    type: "stream",
-    key: streamName,
-    value: {
-      path: streamName,
-      contentType: "application/json",
-      createdAt: adapter.createdAt.getTime(),
-    },
-    headers: { operation: "delete" },
-  });
-
-  return true;
-}
+import { startPiSession, stopPiSession, hasFiber } from "./agent-runtime.ts";
 
 const STREAM_OFFSET_HEADER = "Stream-Next-Offset";
 
@@ -199,10 +30,21 @@ daemonApp.put("/agents/*", async (c) => {
     return new Response(null, { status: 200 });
   }
 
-  const existing = adapters.has(streamPath);
+  const [existing] = await db
+    .select()
+    .from(schema.agents)
+    .where(eq(schema.agents.slug, streamPath));
 
   if (!existing) {
     await startPiSession(streamPath);
+    await db.insert(schema.agents).values({
+      slug: streamPath,
+      harnessType: "pi",
+      harnessAgentId: streamPath,
+      harnessData: {},
+    });
+  } else if (existing.harnessType === "pi" && !hasFiber(existing.harnessAgentId)) {
+    await startPiSession(existing.harnessAgentId);
   }
 
   return new Response(null, {
@@ -235,13 +77,19 @@ daemonApp.post("/agents/*", async (c) => {
     messageText = String(body);
   }
 
-  let adapter = adapters.get(streamPath);
-  if (!adapter) {
-    await startPiSession(streamPath);
-    adapter = adapters.get(streamPath)!;
+  const [agent] = await db.select().from(schema.agents).where(eq(schema.agents.slug, streamPath));
+  if (!agent) {
+    return c.text("Agent not found", 404);
   }
 
-  const promptEvent = makePromptEvent(adapter.eventStreamId, messageText);
+  if (agent.harnessType === "pi" && !hasFiber(agent.harnessAgentId)) {
+    await startPiSession(agent.harnessAgentId);
+  }
+
+  const promptEvent = makePromptEvent(
+    agent.harnessAgentId as unknown as EventStreamId,
+    messageText,
+  );
 
   await runEffect(
     Effect.gen(function* () {
@@ -259,55 +107,10 @@ daemonApp.post("/agents/*", async (c) => {
   });
 });
 
-daemonApp.get("/agents/__registry__", (c) => {
-  const live = c.req.query("live");
-
-  if (live !== "sse") {
-    return c.text("Registry requires live=sse", 400);
-  }
-
-  return streamSSE(c, async (stream) => {
-    for (const adapter of adapters.values()) {
-      const event = {
-        type: "stream",
-        key: adapter.streamName,
-        value: {
-          path: adapter.streamName,
-          contentType: "application/json",
-          createdAt: adapter.createdAt.getTime(),
-        },
-        headers: { operation: "insert" },
-      };
-      await stream.writeSSE({ event: "data", data: JSON.stringify([event]) });
-    }
-
-    await stream.writeSSE({
-      event: "control",
-      data: JSON.stringify({ streamNextOffset: "0", upToDate: true }),
-    });
-
-    const subscriber: RegistrySubscriber = async (event) => {
-      await stream.writeSSE({ event: "data", data: JSON.stringify([event]) });
-    };
-    registrySubscribers.add(subscriber);
-
-    await new Promise<void>((resolve) => {
-      c.req.raw.signal.addEventListener("abort", () => {
-        registrySubscribers.delete(subscriber);
-        resolve();
-      });
-    });
-  });
-});
-
 daemonApp.get("/agents/*", (c) => {
   const streamPath = getStreamPathFromRequest(c);
   const offset = c.req.query("offset") ?? "-1";
   const live = c.req.query("live");
-
-  if (streamPath === "__registry__") {
-    return c.text("Use registry endpoint", 400);
-  }
 
   if (live === "sse" && !c.req.query("offset")) {
     return c.text("SSE requires offset parameter", 400);
@@ -318,8 +121,6 @@ daemonApp.get("/agents/*", (c) => {
   }
 
   return streamSSE(c, async (stream) => {
-    let lastOffset = "0";
-
     const effect = Effect.gen(function* () {
       const manager = yield* StreamManagerService;
 
@@ -347,13 +148,11 @@ daemonApp.get("/agents/*", (c) => {
       yield* eventStream.pipe(
         Stream.runForEach((event) =>
           Effect.sync(() => {
-            lastOffset = event.offset;
-
             stream.writeSSE({ event: "data", data: JSON.stringify([event.data]) });
 
             stream.writeSSE({
               event: "control",
-              data: JSON.stringify({ streamNextOffset: lastOffset, upToDate: true }),
+              data: JSON.stringify({ streamNextOffset: event.offset, upToDate: true }),
             });
           }),
         ),
@@ -374,11 +173,16 @@ daemonApp.get("/agents/*", (c) => {
 daemonApp.delete("/agents/*", async (c) => {
   const streamPath = getStreamPathFromRequest(c);
 
-  const stopped = await stopAdapter(streamPath);
-
-  if (!stopped) {
+  const [agent] = await db.select().from(schema.agents).where(eq(schema.agents.slug, streamPath));
+  if (!agent) {
     return c.text("Agent not found", 404);
   }
+
+  if (agent.harnessType === "pi") {
+    await stopPiSession(agent.harnessAgentId);
+  }
+
+  await db.delete(schema.agents).where(eq(schema.agents.id, agent.id));
 
   await runEffect(
     Effect.gen(function* () {
@@ -390,10 +194,11 @@ daemonApp.delete("/agents/*", async (c) => {
   return new Response(null, { status: 204 });
 });
 
-daemonApp.on("HEAD", "/agents/*", (c) => {
+daemonApp.on("HEAD", "/agents/*", async (c) => {
   const streamPath = getStreamPathFromRequest(c);
 
-  if (!adapters.has(streamPath)) {
+  const [agent] = await db.select().from(schema.agents).where(eq(schema.agents.slug, streamPath));
+  if (!agent) {
     return new Response("Agent not found", { status: 404 });
   }
 

@@ -3,34 +3,26 @@ import { useNavigate } from "@tanstack/react-router";
 import { Button } from "@/components/ui/button.tsx";
 import { Input } from "@/components/ui/input.tsx";
 import { Label } from "@/components/ui/label.tsx";
-
-const API_URL = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";
-
-async function createAgent(name: string): Promise<boolean> {
-  const res = await fetch(`${API_URL}/agents/${encodeURIComponent(name)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-  });
-  return res.ok;
-}
+import { useCreateAgent } from "@/hooks/use-agents.ts";
 
 export function NewAgentForm() {
   const navigate = useNavigate();
   const [name, setName] = useState("");
-  const [creating, setCreating] = useState(false);
+  const createAgent = useCreateAgent();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || creating) return;
+    if (!trimmed || createAgent.isPending) return;
 
-    setCreating(true);
-    const ok = await createAgent(trimmed);
-    setCreating(false);
-
-    if (ok) {
-      navigate({ to: "/agents/$agentId", params: { agentId: trimmed } });
-    }
+    createAgent.mutate(
+      { slug: trimmed, harnessType: "pi" },
+      {
+        onSuccess: () => {
+          navigate({ to: "/agents/$agentId", params: { agentId: trimmed } });
+        },
+      },
+    );
   };
 
   return (
@@ -45,12 +37,12 @@ export function NewAgentForm() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="Enter agent name..."
-          disabled={creating}
+          disabled={createAgent.isPending}
           autoFocus
         />
       </div>
-      <Button type="submit" disabled={creating || !name.trim()}>
-        {creating ? "Creating..." : "Create Agent"}
+      <Button type="submit" disabled={createAgent.isPending || !name.trim()}>
+        {createAgent.isPending ? "Creating..." : "Create Agent"}
       </Button>
     </form>
   );
