@@ -1,155 +1,201 @@
-import { useEffect, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 
 interface GhosttyTerminalProps {
   wsBase?: string;
   tmuxSessionName?: string;
 }
 
-type TerminalInstance = any;
-type FitAddonInstance = any;
+export interface GhosttyTerminalHandle {
+  sendText: (text: string) => void;
+  focus: () => void;
+}
 
-export function GhosttyTerminal({ wsBase, tmuxSessionName }: GhosttyTerminalProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [connectionStatus, setConnectionStatus] = useState<
-    "connecting" | "connected" | "disconnected"
-  >("connecting");
-  const termRef = useRef<TerminalInstance>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+interface TerminalLike {
+  cols: number;
+  rows: number;
+  focus: () => void;
+  dispose: () => void;
+  scrollLines: (amount: number) => void;
+  attachCustomWheelEventHandler: (handler: (event: WheelEvent) => boolean) => void;
+}
 
-  useEffect(() => {
-    if (!containerRef.current) return;
+export const GhosttyTerminal = forwardRef<GhosttyTerminalHandle, GhosttyTerminalProps>(
+  function GhosttyTerminal({ wsBase, tmuxSessionName }, ref) {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [connectionStatus, setConnectionStatus] = useState<
+      "connecting" | "connected" | "disconnected"
+    >("connecting");
+    const termRef = useRef<TerminalLike | null>(null);
+    const wsRef = useRef<WebSocket | null>(null);
 
-    let cancelled = false;
-    let term: TerminalInstance;
-    let fitAddon: FitAddonInstance;
-    let ws: WebSocket;
-    let reconnectTimeout: ReturnType<typeof setTimeout>;
+    useImperativeHandle(ref, () => ({
+      sendText: (text: string) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(text);
+        }
+      },
+      focus: () => {
+        termRef.current?.focus();
+      },
+    }));
 
-    (async () => {
-      const { init, Terminal, FitAddon } = await import("ghostty-web");
-      if (cancelled) return;
-
-      await init();
-      if (cancelled) return;
-
+    useEffect(() => {
       if (!containerRef.current) return;
 
-      term = new Terminal({
-        cursorBlink: true,
-        fontSize: 14,
-        fontFamily: 'Monaco, Menlo, "Courier New", monospace',
-        theme: {
-          background: "#1e1e1e",
-          foreground: "#d4d4d4",
-        },
-        scrollback: 10000,
-      });
+      let cancelled = false;
+      let term: TerminalLike | undefined;
+      let ws: WebSocket | undefined;
+      let reconnectTimeout: ReturnType<typeof setTimeout> | undefined;
 
-      fitAddon = new FitAddon();
-      term.loadAddon(fitAddon);
-      term.open(containerRef.current);
-      fitAddon.fit();
-      fitAddon.observeResize();
-
-      termRef.current = term;
-
-      function connectWebSocket() {
+      (async () => {
+        const { init, Terminal, FitAddon } = await import("ghostty-web");
         if (cancelled) return;
 
-        const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-        const base = wsBase || `${protocol}//${window.location.host}`;
+        await init();
+        if (cancelled) return;
 
-        // Build WebSocket URL with tmux session name if provided
-        const params = new URLSearchParams({
-          cols: String(term.cols),
-          rows: String(term.rows),
+        if (!containerRef.current) return;
+
+        const terminal = new Terminal({
+          cursorBlink: true,
+          fontSize: 14,
+          fontFamily: 'Monaco, Menlo, "Courier New", monospace',
+          theme: {
+            background: "#1e1e1e",
+            foreground: "#d4d4d4",
+          },
+          scrollback: 10000,
         });
-        if (tmuxSessionName) {
-          params.set("tmuxSession", tmuxSessionName);
+        term = terminal;
+
+        const fit = new FitAddon();
+        terminal.loadAddon(fit);
+        terminal.open(containerRef.current);
+        fit.fit();
+        fit.observeResize();
+
+        // For tmux sessions: let tmux handle scrolling (tmux mouse mode will be enabled)
+        // For plain shells: use local scrollback buffer via custom wheel handler
+        if (!tmuxSessionName) {
+          terminal.attachCustomWheelEventHandler((event: WheelEvent) => {
+            const linesToScroll = Math.sign(event.deltaY) * Math.ceil(Math.abs(event.deltaY) / 50);
+            terminal.scrollLines(linesToScroll);
+            return true;
+          });
         }
 
-        const wsUrl = `${base}/ws/pty?${params.toString()}`;
+        termRef.current = term;
 
-        ws = new WebSocket(wsUrl);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
+        function connectWebSocket() {
           if (cancelled) return;
-          setConnectionStatus("connected");
-          term.focus();
-        };
 
-        ws.onmessage = (event) => {
-          if (cancelled) return;
-          term.write(event.data);
-        };
+          const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+          const base = wsBase || `${protocol}//${window.location.host}`;
 
-        ws.onerror = () => {
-          if (cancelled) return;
-          setConnectionStatus("disconnected");
-        };
+          const params = new URLSearchParams({
+            cols: String(terminal.cols),
+            rows: String(terminal.rows),
+          });
+          if (tmuxSessionName) {
+            params.set("tmuxSession", tmuxSessionName);
+          }
 
-        ws.onclose = () => {
-          if (cancelled) return;
-          setConnectionStatus("disconnected");
+          const wsUrl = `${base}/ws/pty?${params.toString()}`;
 
-          reconnectTimeout = setTimeout(() => {
+          ws = new WebSocket(wsUrl);
+          wsRef.current = ws;
+
+          ws.onopen = () => {
             if (cancelled) return;
-            if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-              setConnectionStatus("connecting");
-              connectWebSocket();
-            }
-          }, 3000);
-        };
-      }
+            setConnectionStatus("connected");
+            terminal.focus();
+          };
 
-      term.onData((data: string) => {
-        if (cancelled) return;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(data);
+          ws.onmessage = (event) => {
+            if (cancelled) return;
+            terminal.write(event.data);
+          };
+
+          ws.onerror = () => {
+            if (cancelled) return;
+            setConnectionStatus("disconnected");
+          };
+
+          ws.onclose = () => {
+            if (cancelled) return;
+            setConnectionStatus("disconnected");
+
+            reconnectTimeout = setTimeout(() => {
+              if (cancelled) return;
+              if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+                setConnectionStatus("connecting");
+                connectWebSocket();
+              }
+            }, 3000);
+          };
         }
-      });
 
-      term.onResize((size: { cols: number; rows: number }) => {
-        if (cancelled) return;
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(
-            JSON.stringify({
-              type: "resize",
-              cols: size.cols,
-              rows: size.rows,
-            }),
-          );
+        terminal.onData((data: string) => {
+          if (cancelled) return;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(data);
+          }
+        });
+
+        terminal.onResize((size: { cols: number; rows: number }) => {
+          if (cancelled) return;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: "resize",
+                cols: size.cols,
+                rows: size.rows,
+              }),
+            );
+          }
+        });
+
+        connectWebSocket();
+      })();
+
+      return () => {
+        cancelled = true;
+        clearTimeout(reconnectTimeout);
+        wsRef.current?.close();
+        if (termRef.current && typeof termRef.current.dispose === "function") {
+          termRef.current.dispose();
         }
-      });
+      };
+    }, [wsBase, tmuxSessionName]);
 
-      connectWebSocket();
-    })();
+    useEffect(() => {
+      const handleSendCommand = (event: CustomEvent<string>) => {
+        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          wsRef.current.send(event.detail);
+        }
+      };
 
-    return () => {
-      cancelled = true;
-      clearTimeout(reconnectTimeout);
-      wsRef.current?.close();
-      if (termRef.current && typeof termRef.current.dispose === "function") {
-        termRef.current.dispose();
-      }
+      window.addEventListener("terminal:send", handleSendCommand as EventListener);
+      return () => {
+        window.removeEventListener("terminal:send", handleSendCommand as EventListener);
+      };
+    }, []);
+
+    const handleContainerClick = () => {
+      termRef.current?.focus();
     };
-  }, [wsBase, tmuxSessionName]);
 
-  const handleContainerClick = () => {
-    termRef.current?.focus();
-  };
-
-  return (
-    <div className="flex flex-col h-full bg-[#1e1e1e]">
-      <div
-        ref={containerRef}
-        data-testid="terminal-container"
-        data-connection-status={connectionStatus}
-        data-tmux-session={tmuxSessionName}
-        className="relative flex-1 p-4 overflow-hidden"
-        onClick={handleContainerClick}
-      />
-    </div>
-  );
-}
+    return (
+      <div className="flex flex-col h-full bg-[#1e1e1e]">
+        <div
+          ref={containerRef}
+          data-testid="terminal-container"
+          data-connection-status={connectionStatus}
+          data-tmux-session={tmuxSessionName}
+          className="relative flex-1 p-4 overflow-hidden"
+          onClick={handleContainerClick}
+        />
+      </div>
+    );
+  },
+);

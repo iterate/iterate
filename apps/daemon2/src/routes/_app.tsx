@@ -12,20 +12,18 @@ export const Route = createFileRoute("/_app")({
 
 function AppLayout() {
   const params = useParams({ strict: false });
-  const tmuxSessionName =
-    "tmuxSessionName" in params ? (params.tmuxSessionName as string) : undefined;
+  const agentSlug = "slug" in params ? (params.slug as string) : undefined;
 
   const trpc = useTRPC();
-  const { data: tmuxSessions = [] } = useQuery({
-    ...trpc.listTmuxSessions.queryOptions(),
-    refetchInterval: 1000, // Poll every second
-  });
+  const { data: agents = [] } = useQuery(trpc.listAgents.queryOptions());
+
+  const currentAgent = agents.find((a) => a.slug === agentSlug);
 
   return (
     <SidebarProvider defaultOpen={true}>
-      <AppSidebar tmuxSessions={tmuxSessions} />
+      <AppSidebar agents={agents} />
       <SidebarInset className="max-h-svh">
-        <AppHeader tmuxSessionName={tmuxSessionName} />
+        <AppHeader agent={currentAgent} />
         <div className="flex-1 min-h-0">
           <Outlet />
         </div>

@@ -68,6 +68,11 @@
     "vibe-rules": "^0.3.91"
   },
   "packageManager": "pnpm@10.24.0",
+  "pnpm": {
+    "overrides": {
+      "baseline-browser-mapping": "^2.9.14"
+    }
+  },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs,cjs}": [
       "eslint --fix --max-warnings=-1"

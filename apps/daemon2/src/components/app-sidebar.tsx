@@ -1,121 +1,178 @@
-import { Link, useParams, useNavigate } from "@tanstack/react-router";
-import { BotIcon, Plus, TerminalIcon } from "lucide-react";
+import { Link, useParams, useNavigate, useLocation } from "@tanstack/react-router";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  Plus,
+  MoreHorizontal,
+  Trash2Icon,
+  ArchiveIcon,
+  TerminalIcon,
+  ActivityIcon,
+} from "lucide-react";
 
 import { ThemeSwitcher } from "./theme-switcher.tsx";
+import { useTRPC } from "@/integrations/trpc/react.ts";
+
 import {
   Sidebar,
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupLabel,
+  SidebarGroupAction,
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
-  SidebarRail,
 } from "@/components/ui/sidebar.tsx";
-import type { TmuxSession } from "@/backend/tmux-control.ts";
-import { useTRPC } from "@/integrations/trpc/react.ts";
-import { trpcClient } from "@/integrations/tanstack-query/trpc-client.ts";
+import { AgentTypeIcon } from "@/components/agent-type-icons.tsx";
+import type { Agent } from "@/db/schema.ts";
 
-export function AppSidebar({ tmuxSessions }: { tmuxSessions: TmuxSession[] }) {
+const MAX_SIDEBAR_AGENTS = 10;
+
+export function AppSidebar({ agents }: { agents: Agent[] }) {
   const params = useParams({ strict: false });
   const navigate = useNavigate();
-  const selectedTmuxSession =
-    "tmuxSessionName" in params ? (params.tmuxSessionName as string) : null;
-
+  const location = useLocation();
+  const selectedSlug = "slug" in params ? (params.slug as string) : null;
+  const currentPath = location.pathname;
   const trpc = useTRPC();
   const queryClient = useQueryClient();
-
-  const createSession = useMutation({
-    mutationFn: () => trpcClient.createTmuxSession.mutate({}),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: trpc.listTmuxSessions.queryKey() });
-      navigate({
-        to: "/tmux-sessions/$tmuxSessionName/pty",
-        params: { tmuxSessionName: result.name },
-      });
-    },
-  });
-
-  const sortedTmuxSessions = [...tmuxSessions].sort(
-    (a, b) => new Date(b.created).getTime() - new Date(a.created).getTime(),
+  const clearAllMutation = useMutation(
+    trpc.clearAllAgents.mutationOptions({
+      onSuccess: () => {
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        navigate({ to: "/" });
+      },
+    }),
   );
 
+  const archiveAgentMutation = useMutation(
+    trpc.archiveAgent.mutationOptions({
+      onSuccess: (_data, variables) => {
+        queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+        if (variables.slug === selectedSlug) {
+          navigate({ to: "/agents" });
+        }
+      },
+    }),
+  );
+
+  const sortedAgents = [...agents].sort((a, b) => {
+    const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return bTime - aTime;
+  });
+
+  const visibleAgents = sortedAgents.slice(0, MAX_SIDEBAR_AGENTS);
+  const hasMore = sortedAgents.length > MAX_SIDEBAR_AGENTS;
+
   return (
-    <Sidebar collapsible="icon">
-      <SidebarHeader>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" asChild>
-              <Link to="/">
-                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <img src="/logo.svg" alt="𝑖" className="size-4" />
-                </div>
-                <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-semibold">iterate</span>
-                  <span className="truncate text-xs">daemon</span>
-                </div>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
+    <>
+      <Sidebar className="border-r-0">
+        <SidebarHeader>
           <SidebarMenu>
             <SidebarMenuItem>
-              <SidebarMenuButton tooltip="Agents" asChild>
+              <SidebarMenuButton size="lg" asChild>
                 <Link to="/">
-                  <BotIcon />
-                  <span>Agents</span>
+                  <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-black">
+                    <img src="/logo.svg" alt="𝑖" className="size-6 text-white" />
+                  </div>
+                  <div className="grid flex-1 text-left text-sm leading-tight">
+                    <span className="truncate font-semibold">iterate</span>
+                    <span className="truncate text-xs">daemon</span>
+                  </div>
                 </Link>
               </SidebarMenuButton>
-              <SidebarMenuAction
-                onClick={() => createSession.mutate()}
-                disabled={createSession.isPending}
-              >
-                <Plus />
-                <span className="sr-only">New Agent</span>
-              </SidebarMenuAction>
-              <SidebarMenuSub>
-                {sortedTmuxSessions.map((tmuxSession) => (
-                  <SidebarMenuSubItem key={tmuxSession.name}>
-                    <SidebarMenuSubButton
-                      asChild
-                      isActive={selectedTmuxSession === tmuxSession.name}
-                    >
-                      <Link
-                        to="/tmux-sessions/$tmuxSessionName/pty"
-                        params={{ tmuxSessionName: tmuxSession.name }}
-                      >
-                        <TerminalIcon className="size-3" />
-                        <span>{tmuxSession.name}</span>
-                        {tmuxSession.attached && (
-                          <span className="ml-auto text-xs text-muted-foreground">attached</span>
-                        )}
-                      </Link>
-                    </SidebarMenuSubButton>
-                  </SidebarMenuSubItem>
-                ))}
-                {sortedTmuxSessions.length === 0 && (
-                  <SidebarMenuSubItem>
-                    <span className="text-xs text-muted-foreground px-2 py-1">No agents yet</span>
-                  </SidebarMenuSubItem>
-                )}
-              </SidebarMenuSub>
             </SidebarMenuItem>
           </SidebarMenu>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <ThemeSwitcher />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>Agents</SidebarGroupLabel>
+            <SidebarGroupAction asChild title="New Agent">
+              <Link to="/agents/new" search={{ name: undefined }}>
+                <Plus />
+                <span className="sr-only">New Agent</span>
+              </Link>
+            </SidebarGroupAction>
+            <SidebarMenu>
+              {visibleAgents.map((agent) => (
+                <SidebarMenuItem key={agent.id}>
+                  <SidebarMenuButton asChild isActive={selectedSlug === agent.slug}>
+                    <Link to="/agents/$slug" params={{ slug: agent.slug }}>
+                      <AgentTypeIcon type={agent.harnessType} className="size-4 shrink-0" />
+                      <span className="flex-1 truncate">{agent.slug}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                  <SidebarMenuAction
+                    showOnHover
+                    onClick={(e) => {
+                      e.preventDefault();
+                      archiveAgentMutation.mutate({ slug: agent.slug });
+                    }}
+                    disabled={archiveAgentMutation.isPending}
+                    title="Archive agent"
+                  >
+                    <ArchiveIcon className="size-3" />
+                  </SidebarMenuAction>
+                </SidebarMenuItem>
+              ))}
+              {visibleAgents.length === 0 && (
+                <SidebarMenuItem>
+                  <span className="text-xs text-muted-foreground px-2 py-1">No agents yet</span>
+                </SidebarMenuItem>
+              )}
+              {hasMore && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild className="text-sidebar-foreground/70">
+                    <Link to="/agents">
+                      <MoreHorizontal className="text-sidebar-foreground/70" />
+                      <span>View all</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              {visibleAgents.length > 0 && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    className="text-sidebar-foreground/70"
+                    onClick={() => clearAllMutation.mutate()}
+                    disabled={clearAllMutation.isPending}
+                  >
+                    <Trash2Icon className="text-sidebar-foreground/70" />
+                    <span>Clear all</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+            </SidebarMenu>
+          </SidebarGroup>
+          <SidebarGroup>
+            <SidebarGroupLabel>Tools</SidebarGroupLabel>
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={currentPath === "/terminal"}>
+                  <Link to="/terminal">
+                    <TerminalIcon className="size-4" />
+                    <span>Terminal</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={currentPath === "/btop"}>
+                  <Link to="/btop">
+                    <ActivityIcon className="size-4" />
+                    <span>System Utilisation (btop)</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
+          <ThemeSwitcher />
+        </SidebarFooter>
+      </Sidebar>
+    </>
   );
 }

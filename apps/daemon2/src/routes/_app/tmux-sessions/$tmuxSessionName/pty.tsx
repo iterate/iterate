@@ -9,5 +9,5 @@ export const Route = createFileRoute("/_app/tmux-sessions/$tmuxSessionName/pty")
 function TmuxSessionPtyPage() {
   const { tmuxSessionName } = Route.useParams();
 
-  return <GhosttyTerminal tmuxSessionName={tmuxSessionName} />;
+  return <GhosttyTerminal key={tmuxSessionName} tmuxSessionName={tmuxSessionName} />;
 }

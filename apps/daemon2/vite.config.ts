@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { defineConfig } from "vite";
 import { devtools } from "@tanstack/devtools-vite";
@@ -9,6 +10,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 import type { ViteDevServer } from "vite";
 import { WebSocketServer } from "ws";
+
+const TMUX_SOCKET = join(process.cwd(), ".iterate", "tmux.sock");
 
 function ptyWebSocketPlugin() {
   return {
@@ -42,21 +45,40 @@ function ptyWebSocketPlugin() {
           let ptyProcess;
           try {
             if (tmuxSessionName) {
-              // Disable tmux status bar before attaching
-              spawnSync("tmux", ["set-option", "-t", tmuxSessionName, "status", "off"]);
+              spawnSync("tmux", [
+                "-S",
+                TMUX_SOCKET,
+                "set-option",
+                "-t",
+                tmuxSessionName,
+                "status",
+                "off",
+              ]);
+              spawnSync("tmux", [
+                "-S",
+                TMUX_SOCKET,
+                "set-option",
+                "-t",
+                tmuxSessionName,
+                "mouse",
+                "on",
+              ]);
 
-              // Attach to existing tmux session
-              ptyProcess = pty.spawn("tmux", ["attach-session", "-t", tmuxSessionName], {
-                name: "xterm-256color",
-                cols,
-                rows,
-                cwd: homedir(),
-                env: {
-                  ...process.env,
-                  TERM: "xterm-256color",
-                  COLORTERM: "truecolor",
-                } as Record<string, string>,
-              });
+              ptyProcess = pty.spawn(
+                "tmux",
+                ["-S", TMUX_SOCKET, "attach-session", "-t", tmuxSessionName],
+                {
+                  name: "xterm-256color",
+                  cols,
+                  rows,
+                  cwd: homedir(),
+                  env: {
+                    ...process.env,
+                    TERM: "xterm-256color",
+                    COLORTERM: "truecolor",
+                  } as Record<string, string>,
+                },
+              );
             } else {
               // Fallback to default shell
               const shell = process.env.SHELL || "/bin/bash";
