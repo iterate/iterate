@@ -21,7 +21,6 @@ function AgentsListPage() {
 
       {agents.length === 0 ? (
         <div className="flex flex-col items-center justify-center h-48 text-muted-foreground">
-          <div className="text-4xl mb-2">🤖</div>
           <p>No agents yet</p>
         </div>
       ) : (

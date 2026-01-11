@@ -1,5 +1,4 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { useState, useEffect } from "react";
 import { Loader2Icon } from "lucide-react";
 
 import { useAgents, useCreateAgent } from "@/hooks/use-agents.ts";
@@ -13,32 +12,29 @@ export const Route = createFileRoute("/_app/agents/$agentId")({
 
 function AgentLayout() {
   const { agentId } = Route.useParams();
-  const [agentReady, setAgentReady] = useState(false);
+  return <AgentEnsureExists key={agentId} agentId={agentId} />;
+}
 
+function AgentEnsureExists({ agentId }: { agentId: string }) {
   const { data: agents = [], isLoading } = useAgents();
   const createAgent = useCreateAgent();
 
-  useEffect(() => {
-    if (!agentId || isLoading) {
-      return;
-    }
+  const exists = agents.some((a) => a.slug === agentId);
 
-    const exists = agents.some((a) => a.slug === agentId);
-    if (exists) {
-      setAgentReady(true);
-    } else {
-      setAgentReady(false);
-      createAgent.mutate(
-        { slug: agentId, harnessType: "pi" },
-        {
-          onSuccess: () => setAgentReady(true),
-          onError: () => setAgentReady(true),
-        },
-      );
-    }
-  }, [agentId, agents, isLoading, createAgent]);
+  if (isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        <Loader2Icon className="size-6 animate-spin mb-2" />
+        <p>Loading...</p>
+      </div>
+    );
+  }
 
-  if (!agentReady) {
+  if (!exists && !createAgent.isPending && !createAgent.isSuccess && !createAgent.isError) {
+    createAgent.mutate({ slug: agentId, harnessType: "pi" });
+  }
+
+  if (!exists && !createAgent.isSuccess) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
         <Loader2Icon className="size-6 animate-spin mb-2" />
