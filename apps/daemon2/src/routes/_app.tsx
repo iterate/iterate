@@ -22,7 +22,7 @@ function AppLayout() {
   });
 
   return (
-    <SidebarProvider defaultOpen={false}>
+    <SidebarProvider defaultOpen={true}>
       <AppSidebar tmuxSessions={tmuxSessions} />
       <SidebarInset className="max-h-svh">
         <AppHeader tmuxSessionName={tmuxSessionName} />

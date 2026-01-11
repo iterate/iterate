@@ -1,4 +1,4 @@
-import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 
 export interface TmuxSession {
@@ -17,20 +17,16 @@ interface PendingCommand {
 }
 
 function isTmuxInstalled(): boolean {
-  try {
-    execSync("which tmux", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
+  const result = spawnSync("which", ["tmux"]);
+  return result.status === 0;
 }
 
 function runTmuxCommand(args: string[]): string {
-  try {
-    return execSync(["tmux", ...args].join(" "), { encoding: "utf8" }).trim();
-  } catch {
+  const result = spawnSync("tmux", args, { encoding: "utf8" });
+  if (result.status !== 0) {
     return "";
   }
+  return (result.stdout || "").trim();
 }
 
 /**
@@ -54,22 +50,17 @@ export class TmuxControlMode extends EventEmitter {
   private static instance: TmuxControlMode | null = null;
 
   static async getInstance(): Promise<TmuxControlMode> {
+    // Always create a fresh instance for direct command mode since it's cheap
+    // and this avoids HMR issues with cached instances
+    const instance = new TmuxControlMode();
+    await instance.connect();
+    return instance;
+  }
+
+  static clearCache(): void {
     const globalKey = "__tmux_control_mode__";
-    const globalInstance = (globalThis as unknown as Record<string, TmuxControlMode | undefined>)[
-      globalKey
-    ];
-
-    if (globalInstance && globalInstance.isConnected()) {
-      return globalInstance;
-    }
-
-    if (!this.instance || !this.instance.isConnected()) {
-      this.instance = new TmuxControlMode();
-      await this.instance.connect();
-      (globalThis as unknown as Record<string, TmuxControlMode>)[globalKey] = this.instance;
-    }
-
-    return this.instance;
+    delete (globalThis as unknown as Record<string, TmuxControlMode | undefined>)[globalKey];
+    this.instance = null;
   }
 
   isConnected(): boolean {
@@ -85,23 +76,15 @@ export class TmuxControlMode extends EventEmitter {
     }
 
     if (!isTmuxInstalled()) {
-      console.log("[TmuxControl] tmux not installed, using stub mode");
       this.useDirectCommands = true;
       this.isReady = true;
       return;
     }
 
-    console.log("[TmuxControl] Using direct command mode for tmux");
     this.useDirectCommands = true;
     this.isReady = true;
 
     await this.refreshTmuxSessions();
-
-    this.refreshInterval = setInterval(() => {
-      this.refreshTmuxSessions().catch(() => {});
-    }, 2000);
-
-    console.log("[TmuxControl] Connected and ready");
   }
 
   private async waitForReady(): Promise<void> {
@@ -302,8 +285,10 @@ export class TmuxControlMode extends EventEmitter {
 
     if (this.useDirectCommands) {
       runTmuxCommand(["new-session", "-d", "-s", sessionName]);
+      runTmuxCommand(["set-option", "-t", sessionName, "status", "off"]);
     } else {
       await this.sendCommand(`new-session -d -s "${sessionName}"`);
+      await this.sendCommand(`set-option -t "${sessionName}" status off`);
     }
 
     await this.refreshTmuxSessions();

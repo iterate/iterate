@@ -1,4 +1,5 @@
 import { homedir } from "node:os";
+import { spawnSync } from "node:child_process";
 import { defineConfig } from "vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -41,6 +42,9 @@ function ptyWebSocketPlugin() {
           let ptyProcess;
           try {
             if (tmuxSessionName) {
+              // Disable tmux status bar before attaching
+              spawnSync("tmux", ["set-option", "-t", tmuxSessionName, "status", "off"]);
+
               // Attach to existing tmux session
               ptyProcess = pty.spawn("tmux", ["attach-session", "-t", tmuxSessionName], {
                 name: "xterm-256color",
