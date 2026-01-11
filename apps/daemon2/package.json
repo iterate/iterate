@@ -76,7 +76,7 @@
     "motion": "^12.24.12",
     "nanoid": "^5.1.6",
     "next-themes": "^0.4.6",
-    "nitro": "latest",
+    "nitro": "^3.0.1-alpha.1",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "shiki": "^3.21.0",

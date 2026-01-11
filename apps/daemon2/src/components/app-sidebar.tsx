@@ -80,7 +80,7 @@ export function AppSidebar({ agents }: { agents: Agent[] }) {
                   </div>
                   <div className="grid flex-1 text-left text-sm leading-tight">
                     <span className="truncate font-semibold">iterate</span>
-                    <span className="truncate text-xs">daemon</span>
+                    <span className="truncate text-xs">agents</span>
                   </div>
                 </Link>
               </SidebarMenuButton>

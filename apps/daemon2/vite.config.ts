@@ -6,7 +6,7 @@ import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 
-const config = defineConfig({
+const config = defineConfig(({ mode }) => ({
   server: {
     hmr: {
       path: "vite-hmr",
@@ -31,6 +31,6 @@ const config = defineConfig({
     tanstackStart(),
     viteReact(),
   ],
-});
+}));
 
 export default config;
