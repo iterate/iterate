@@ -1,4 +1,3 @@
-import { homedir } from "node:os";
 import { defineConfig } from "vite";
 import { devtools } from "@tanstack/devtools-vite";
 import { tanstackStart } from "@tanstack/react-start/plugin/vite";
@@ -32,8 +31,11 @@ function ptyWebSocketPlugin() {
           const url = new URL(req.url!, `http://${req.headers.host}`);
           const cols = parseInt(url.searchParams.get("cols") || "80");
           const rows = parseInt(url.searchParams.get("rows") || "24");
+          const initialCommand = url.searchParams.get("initialCommand");
 
-          console.log(`[PTY Dev] New connection: ${cols}x${rows}`);
+          console.log(
+            `[PTY Dev] New connection: ${cols}x${rows}${initialCommand ? ` (cmd: ${initialCommand})` : ""}`,
+          );
 
           const shell = process.env.SHELL || "/bin/bash";
 
@@ -43,7 +45,7 @@ function ptyWebSocketPlugin() {
               name: "xterm-256color",
               cols,
               rows,
-              cwd: homedir(),
+              cwd: process.cwd(),
               env: {
                 ...process.env,
                 TERM: "xterm-256color",
@@ -58,9 +60,16 @@ function ptyWebSocketPlugin() {
             return;
           }
 
+          let hasSentInitialCommand = false;
           ptyProcess.onData((data) => {
             if (ws.readyState === ws.OPEN) {
               ws.send(data);
+            }
+            if (!hasSentInitialCommand && initialCommand) {
+              hasSentInitialCommand = true;
+              setTimeout(() => {
+                ptyProcess.write(initialCommand + "\n");
+              }, 100);
             }
           });
 
@@ -106,8 +115,15 @@ function ptyWebSocketPlugin() {
 }
 
 const config = defineConfig({
+  server: {
+    strictPort: false,
+  },
   plugins: [
-    devtools(),
+    devtools({
+      eventBusConfig: {
+        port: 42069,
+      },
+    }),
     nitro({
       preset: "node_server",
       output: {

@@ -32,6 +32,9 @@ export const PiEventTypes = {
   PROMPT: "iterate:agent:harness:pi:action:prompt:called",
   ABORT: "iterate:agent:harness:pi:action:abort:called",
 
+  // Response events (adapter-generated)
+  SESSION_READY: "iterate:agent:harness:pi:session-ready",
+
   // Wrapped harness events (verbatim payload)
   EVENT_RECEIVED: "iterate:agent:harness:pi:event-received",
 
@@ -61,6 +64,11 @@ export class PromptPayload extends Schema.Class<PromptPayload>("PromptPayload")(
 }) {}
 
 export class AbortPayload extends Schema.Class<AbortPayload>("AbortPayload")({}) {}
+
+export class SessionReadyPayload extends Schema.Class<SessionReadyPayload>("SessionReadyPayload")({
+  sessionFile: Schema.NullOr(Schema.String),
+  cwd: Schema.String,
+}) {}
 
 /**
  * Wrapped Pi SDK event payload.
@@ -104,6 +112,15 @@ export class AbortEvent extends Schema.Class<AbortEvent>("AbortEvent")({
   metadata: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
 }) {}
 
+export class SessionReadyEvent extends Schema.Class<SessionReadyEvent>("SessionReadyEvent")({
+  type: Schema.Literal(PiEventTypes.SESSION_READY),
+  version: Schema.Number,
+  createdAt: Schema.String,
+  eventStreamId: EventStreamId,
+  payload: SessionReadyPayload,
+  metadata: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
+}) {}
+
 export class PiEventReceivedEvent extends Schema.Class<PiEventReceivedEvent>(
   "PiEventReceivedEvent",
 )({
@@ -122,6 +139,7 @@ export const PiIterateEvent = Schema.Union(
   SessionCreateEvent,
   PromptEvent,
   AbortEvent,
+  SessionReadyEvent,
   PiEventReceivedEvent,
 );
 export type PiIterateEvent = typeof PiIterateEvent.Type;
@@ -193,6 +211,22 @@ export const makeAbortEvent = (eventStreamId: EventStreamId): AbortEvent =>
     createdAt: new Date().toISOString(),
     eventStreamId,
     payload: new AbortPayload({}),
+  });
+
+/**
+ * Helper to create a session ready event
+ */
+export const makeSessionReadyEvent = (
+  eventStreamId: EventStreamId,
+  sessionFile: string | null,
+  cwd: string,
+): SessionReadyEvent =>
+  new SessionReadyEvent({
+    type: PiEventTypes.SESSION_READY,
+    version: 1,
+    createdAt: new Date().toISOString(),
+    eventStreamId,
+    payload: new SessionReadyPayload({ sessionFile, cwd }),
   });
 
 /**

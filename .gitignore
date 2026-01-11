@@ -38,4 +38,5 @@ playwright-report/
 .last-run.json
 
 *.db
+*.sqlite
 .output

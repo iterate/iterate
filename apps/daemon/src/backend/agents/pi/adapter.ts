@@ -29,6 +29,7 @@ import {
   type EventStreamId,
   makePiErrorEvent,
   makePiEventReceivedEvent,
+  makeSessionReadyEvent,
   PiEventTypes,
   type SessionCreatePayload,
 } from "./types.ts";
@@ -116,12 +117,12 @@ export const runPiAdapter = (
       Effect.gen(function* () {
         yield* Console.log("[Pi Adapter] Creating session...");
 
+        const cwd = payload.cwd ?? process.env.INIT_CWD ?? process.cwd();
+
         yield* Effect.tryPromise({
           try: async () => {
             const authStorage = discoverAuthStorage();
             const modelRegistry = discoverModels(authStorage);
-            // Use INIT_CWD (set by pnpm to original shell dir) if available, else process.cwd()
-            const cwd = payload.cwd ?? process.env.INIT_CWD ?? process.cwd();
 
             // Use file-based session (same behavior as pi CLI)
             const sessionManager = payload.sessionFile
@@ -139,15 +140,21 @@ export const runPiAdapter = (
             state.sessionManager = sessionManager;
             subscribeToPiEvents(session);
 
-            const sessionFile = sessionManager.getSessionFile();
+            const sessionFile = sessionManager.getSessionFile() ?? null;
             return sessionFile;
           },
           catch: (error) => error,
         }).pipe(
           Effect.flatMap((sessionFile) =>
-            Console.log(
-              `[Pi Adapter] Session created${sessionFile ? ` (file: ${sessionFile})` : " (in-memory)"}`,
-            ),
+            Effect.gen(function* () {
+              yield* Console.log(
+                `[Pi Adapter] Session created${sessionFile ? ` (file: ${sessionFile})` : " (in-memory)"}`,
+              );
+              yield* manager.append({
+                name: streamName,
+                data: makeSessionReadyEvent(eventStreamId, sessionFile, cwd),
+              });
+            }),
           ),
           Effect.catchAll((error) =>
             Effect.gen(function* () {

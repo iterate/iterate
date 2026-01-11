@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from "react";
 
 interface GhosttyTerminalProps {
   wsBase?: string;
+  initialCommand?: string;
 }
 
 type TerminalInstance = any;
 type FitAddonInstance = any;
 
-export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
+export function GhosttyTerminal({ wsBase, initialCommand }: GhosttyTerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [connectionStatus, setConnectionStatus] = useState<
     "connecting" | "connected" | "disconnected"
@@ -17,6 +18,9 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
 
   useEffect(() => {
     if (!containerRef.current) return;
+
+    // Clear any previous terminal content immediately
+    containerRef.current.innerHTML = "";
 
     let cancelled = false;
     let term: TerminalInstance;
@@ -32,6 +36,9 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
       if (cancelled) return;
 
       if (!containerRef.current) return;
+
+      // Clear again in case anything rendered during async init
+      containerRef.current.innerHTML = "";
 
       term = new Terminal({
         cursorBlink: true,
@@ -57,7 +64,14 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
 
         const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         const base = wsBase || `${protocol}//${window.location.host}`;
-        const wsUrl = `${base}/ws/pty?cols=${term.cols}&rows=${term.rows}`;
+        const params = new URLSearchParams({
+          cols: String(term.cols),
+          rows: String(term.rows),
+        });
+        if (initialCommand) {
+          params.set("initialCommand", initialCommand);
+        }
+        const wsUrl = `${base}/ws/pty?${params.toString()}`;
 
         ws = new WebSocket(wsUrl);
         wsRef.current = ws;
@@ -115,6 +129,8 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
       connectWebSocket();
     })();
 
+    const container = containerRef.current;
+
     return () => {
       cancelled = true;
       clearTimeout(reconnectTimeout);
@@ -122,8 +138,13 @@ export function GhosttyTerminal({ wsBase }: GhosttyTerminalProps) {
       if (termRef.current && typeof termRef.current.dispose === "function") {
         termRef.current.dispose();
       }
+      termRef.current = null;
+      wsRef.current = null;
+      if (container) {
+        container.innerHTML = "";
+      }
     };
-  }, [wsBase]);
+  }, [wsBase, initialCommand]);
 
   const handleContainerClick = () => {
     termRef.current?.focus();

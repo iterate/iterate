@@ -55,27 +55,4 @@ export function useStreamReducer<T, E>(
   return { data: state, isLoaded };
 }
 
-export interface AgentInfo {
-  path: string;
-  contentType: string;
-  createdAt: string;
-}
-
-export interface RegistryEvent {
-  type: string;
-  key: string;
-  value?: AgentInfo;
-  headers?: { operation: string };
-}
-
-export function registryReducer(state: AgentInfo[], event: RegistryEvent): AgentInfo[] {
-  if (event.headers?.operation === "insert" && event.value) {
-    return state.some((a) => a.path === event.value!.path) ? state : [...state, event.value];
-  }
-  if (event.headers?.operation === "delete") {
-    return state.filter((a) => a.path !== event.key);
-  }
-  return state;
-}
-
 export const API_URL = typeof window !== "undefined" ? `${window.location.origin}/api` : "/api";

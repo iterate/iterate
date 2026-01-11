@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "doppler run -- vite dev --port 3000",
+    "dev": "doppler run -- vite dev",
     "build": "doppler run -- vite build",
     "preview": "doppler run -- vite preview",
     "test": "vitest run",
@@ -84,6 +84,7 @@
     "tailwind-merge": "^3.4.0",
     "tailwindcss": "^4.0.6",
     "tokenlens": "^1.3.1",
+    "typeid-js": "^1.2.0",
     "use-stick-to-bottom": "^1.1.1",
     "vite-tsconfig-paths": "^6.0.2",
     "ws": "^8.18.0",

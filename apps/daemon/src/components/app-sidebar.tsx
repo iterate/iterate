@@ -17,7 +17,12 @@ import {
   SidebarMenuSubItem,
   SidebarRail,
 } from "@/components/ui/sidebar.tsx";
-import type { AgentInfo } from "@/hooks/use-stream-reducer.tsx";
+
+interface AgentInfo {
+  path: string;
+  contentType: string;
+  createdAt: string;
+}
 
 export function AppSidebar({ agents }: { agents: AgentInfo[] }) {
   const params = useParams({ strict: false });
@@ -34,8 +39,8 @@ export function AppSidebar({ agents }: { agents: AgentInfo[] }) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link to="/">
-                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <img src="/logo.svg" alt="𝑖" className="size-4" />
+                <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-black">
+                  <img src="/logo.svg" alt="𝑖" className="size-6" />
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-semibold">iterate</span>
