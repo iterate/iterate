@@ -25,10 +25,29 @@ let cachedSnapshot: { name: string; prefix: string; timestamp: number } | null =
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
+ * Fetches a single page of snapshots from the Daytona API.
+ */
+async function fetchSnapshotsPage(
+  baseUrl: string,
+  page: number,
+  headers: Record<string, string>,
+): Promise<PaginatedSnapshots> {
+  const url = new URL(`${baseUrl}/snapshots?limit=100&page=${page}`);
+  const response = await fetch(url.toString(), { headers });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
+  }
+
+  return (await response.json()) as PaginatedSnapshots;
+}
+
+/**
  * Resolves the latest Daytona snapshot matching a given prefix.
  *
- * Fetches all snapshots from the Daytona API, filters by prefix, and returns
- * the most recently created match (sorted by createdAt descending).
+ * Fetches all snapshots from the Daytona API (paginating through all pages),
+ * filters by prefix, and returns the most recently created match.
  *
  * Results are cached for 5 minutes to reduce API calls during machine creation bursts.
  */
@@ -49,7 +68,6 @@ export async function resolveLatestSnapshot(
   }
 
   const baseUrl = config.baseUrl ?? "https://app.daytona.io/api";
-  const url = new URL(`${baseUrl}/snapshots?limit=100`);
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${config.apiKey}`,
@@ -62,28 +80,36 @@ export async function resolveLatestSnapshot(
 
   logger.info("Fetching snapshots from Daytona API", { prefix });
 
-  const response = await fetch(url.toString(), { headers });
+  // Fetch all pages of snapshots
+  const allSnapshots: DaytonaSnapshot[] = [];
+  let currentPage = 1;
+  let totalPages = 1;
 
-  if (!response.ok) {
-    const errorText = await response.text();
+  try {
+    do {
+      const data = await fetchSnapshotsPage(baseUrl, currentPage, headers);
+      allSnapshots.push(...data.items);
+      totalPages = data.totalPages;
+      currentPage++;
+    } while (currentPage <= totalPages);
+  } catch (err) {
     logger.error("Failed to fetch snapshots from Daytona API", {
-      status: response.status,
-      error: errorText,
+      error: err instanceof Error ? err.message : String(err),
     });
-    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
+    throw err;
   }
 
-  const data = (await response.json()) as PaginatedSnapshots;
+  logger.debug("Fetched all snapshots", { total: allSnapshots.length, pages: totalPages });
 
-  // Filter by prefix and sort by createdAt descending (client-side)
-  const matchingSnapshots = data.items
+  // Filter by prefix and sort by createdAt descending
+  const matchingSnapshots = allSnapshots
     .filter((s) => s.name.startsWith(prefix))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   if (matchingSnapshots.length === 0) {
     logger.error("No snapshot found matching prefix", {
       prefix,
-      totalSnapshots: data.items.length,
+      totalSnapshots: allSnapshots.length,
     });
     throw new Error(`No snapshot found matching prefix: ${prefix}`);
   }
