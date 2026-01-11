@@ -43,11 +43,14 @@ async function fetchSnapshotsPage(
   return (await response.json()) as PaginatedSnapshots;
 }
 
+// Only consider snapshots in these states as usable
+const USABLE_SNAPSHOT_STATES = ["ready", "active"];
+
 /**
  * Resolves the latest Daytona snapshot matching a given prefix.
  *
  * Fetches all snapshots from the Daytona API (paginating through all pages),
- * filters by prefix, and returns the most recently created match.
+ * filters by prefix and usable state (ready/active), and returns the most recently created match.
  *
  * Results are cached for 5 minutes to reduce API calls during machine creation bursts.
  */
@@ -101,17 +104,18 @@ export async function resolveLatestSnapshot(
 
   logger.debug("Fetched all snapshots", { total: allSnapshots.length, pages: totalPages });
 
-  // Filter by prefix and sort by createdAt descending
+  // Filter by prefix and usable state, then sort by createdAt descending
   const matchingSnapshots = allSnapshots
-    .filter((s) => s.name.startsWith(prefix))
+    .filter((s) => s.name.startsWith(prefix) && USABLE_SNAPSHOT_STATES.includes(s.state))
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   if (matchingSnapshots.length === 0) {
-    logger.error("No snapshot found matching prefix", {
+    logger.error("No usable snapshot found matching prefix", {
       prefix,
       totalSnapshots: allSnapshots.length,
+      usableStates: USABLE_SNAPSHOT_STATES,
     });
-    throw new Error(`No snapshot found matching prefix: ${prefix}`);
+    throw new Error(`No usable snapshot found matching prefix: ${prefix}`);
   }
 
   const latestSnapshot = matchingSnapshots[0];
@@ -122,6 +126,7 @@ export async function resolveLatestSnapshot(
   logger.info("Resolved latest snapshot", {
     prefix,
     snapshotName: latestSnapshot.name,
+    snapshotState: latestSnapshot.state,
     createdAt: latestSnapshot.createdAt,
     matchCount: matchingSnapshots.length,
   });
