@@ -57,6 +57,7 @@ const Optional = z.string().optional();
 const Env = z.object({
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
+  DAYTONA_SNAPSHOT_PREFIX: Required,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -214,7 +215,6 @@ async function deployWorker() {
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
       REALTIME_PUSHER,
-      DAYTONA_SNAPSHOT_NAME: `iterate-sandbox-0.0.3-dev`,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
     assets: {

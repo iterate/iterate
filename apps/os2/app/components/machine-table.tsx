@@ -36,6 +36,7 @@ interface Machine {
   type: string;
   state: "started" | "archived";
   createdAt: Date;
+  metadata: { snapshotName?: string } & Record<string, unknown>;
 }
 
 interface MachineTableProps {
@@ -77,6 +78,7 @@ export function MachineTable({
         <TableHeader>
           <TableRow>
             <TableHead>Name</TableHead>
+            <TableHead>Snapshot</TableHead>
             <TableHead>Type</TableHead>
             <TableHead>State</TableHead>
             <TableHead>Created</TableHead>
@@ -87,6 +89,9 @@ export function MachineTable({
           {machines.map((machine) => (
             <TableRow key={machine.id}>
               <TableCell className="font-medium">{machine.name}</TableCell>
+              <TableCell className="text-muted-foreground text-xs font-mono">
+                {machine.metadata?.snapshotName ?? "-"}
+              </TableCell>
               <TableCell>
                 <Badge variant="outline">{machine.type}</Badge>
               </TableCell>

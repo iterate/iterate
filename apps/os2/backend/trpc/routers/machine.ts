@@ -9,6 +9,7 @@ import { env, type CloudflareEnv } from "../../../env.ts";
 import { decrypt, encrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
+import { resolveLatestSnapshot } from "../../integrations/daytona/snapshot-resolver.ts";
 import { generateToken } from "./access-token.ts";
 
 const daytonaMiddleware = t.middleware(async ({ ctx, next }) => {
@@ -101,10 +102,20 @@ export const machineRouter = router({
 
       const githubEnvVars = await getGitHubEnvVars(ctx.db, ctx.project.id, ctx.env);
 
+      // Resolve the latest snapshot matching the configured prefix
+      const snapshotName = await resolveLatestSnapshot(ctx.env.DAYTONA_SNAPSHOT_PREFIX, {
+        apiKey: env.DAYTONA_API_KEY,
+      }).catch((err) => {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to resolve snapshot: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      });
+
       const sandbox = await ctx.daytona
         .create({
           name: machineId,
-          snapshot: ctx.env.DAYTONA_SNAPSHOT_NAME,
+          snapshot: snapshotName,
           envVars: {
             ...envVars,
             ...githubEnvVars,
@@ -130,7 +141,7 @@ export const machineRouter = router({
               type: input.type,
               projectId: ctx.project.id,
               state: "started",
-              metadata: input.metadata ?? {},
+              metadata: { ...input.metadata, snapshotName },
               externalId: sandbox.id,
             })
             .returning();
