@@ -13,7 +13,8 @@ const config = defineConfig({
   plugins: [
     devtools({
       eventBusConfig: {
-        port: 42071,
+        // Port 0 enables auto-assigned port (default behavior)
+        port: 0,
       },
     }),
     nitro({

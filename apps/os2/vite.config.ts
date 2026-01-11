@@ -38,7 +38,8 @@ export default defineConfig({
       : null,
     devtools({
       eventBusConfig: {
-        port: 42070,
+        // Port 0 enables auto-assigned port (default behavior)
+        port: 0,
       },
     }),
     {
