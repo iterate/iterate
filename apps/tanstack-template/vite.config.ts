@@ -7,8 +7,15 @@ import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 
 const config = defineConfig({
+  server: {
+    strictPort: false,
+  },
   plugins: [
-    devtools(),
+    devtools({
+      eventBusConfig: {
+        port: 42071,
+      },
+    }),
     nitro({
       preset: "node_server",
       output: {

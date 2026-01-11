@@ -22,6 +22,7 @@ export default defineConfig({
   server: {
     allowedHosts: [".dev.iterate.com"],
     cors: false,
+    strictPort: false,
   },
   preview: {
     port: 5174,
@@ -35,7 +36,11 @@ export default defineConfig({
           tunnelName: `os2-${tunnelHost.split(".")[0]}`,
         })
       : null,
-    devtools(),
+    devtools({
+      eventBusConfig: {
+        port: 42070,
+      },
+    }),
     {
       name: "os2:force-vite-public-url",
       configureServer(server) {

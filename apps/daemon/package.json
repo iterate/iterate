@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "doppler run -- vite dev --port 3000",
+    "dev": "doppler run -- vite dev",
     "build": "doppler run -- vite build",
     "preview": "doppler run -- vite preview",
     "test": "vitest run",
