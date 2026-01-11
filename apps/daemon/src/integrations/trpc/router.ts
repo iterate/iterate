@@ -1,10 +1,14 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
+import { Effect } from "effect";
 import { TRPCError } from "@trpc/server";
 
 import { db } from "../../db/index.ts";
 import * as schema from "../../db/schema.ts";
 import { startPiSession, stopPiSession } from "../../backend/agent-runtime.ts";
+import { StreamManagerService } from "../../backend/event-stream/stream-manager.ts";
+import { runEffect } from "../../backend/runtime.ts";
+import type { StreamName } from "../../backend/event-stream/types.ts";
 import { createTRPCRouter, publicProcedure } from "./init.ts";
 
 const CreateAgentInput = z.object({
@@ -80,6 +84,14 @@ export const trpcRouter = createTRPCRouter({
     }
 
     await db.delete(schema.agents).where(eq(schema.agents.id, input.id));
+
+    await runEffect(
+      Effect.gen(function* () {
+        const manager = yield* StreamManagerService;
+        yield* manager.delete({ name: agent.slug as StreamName }).pipe(Effect.ignore);
+      }),
+    );
+
     return { success: true };
   }),
 });

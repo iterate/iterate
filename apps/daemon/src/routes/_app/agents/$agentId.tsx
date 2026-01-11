@@ -1,5 +1,5 @@
 import { createFileRoute, Outlet } from "@tanstack/react-router";
-import { Loader2Icon } from "lucide-react";
+import { Loader2Icon, AlertCircleIcon } from "lucide-react";
 
 import { useAgents, useCreateAgent } from "@/hooks/use-agents.ts";
 
@@ -32,6 +32,15 @@ function AgentEnsureExists({ agentId }: { agentId: string }) {
 
   if (!exists && !createAgent.isPending && !createAgent.isSuccess && !createAgent.isError) {
     createAgent.mutate({ slug: agentId, harnessType: "pi" });
+  }
+
+  if (createAgent.isError) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+        <AlertCircleIcon className="size-6 mb-2 text-destructive" />
+        <p>Failed to create agent</p>
+      </div>
+    );
   }
 
   if (!exists && !createAgent.isSuccess) {

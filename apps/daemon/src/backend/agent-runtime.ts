@@ -56,37 +56,43 @@ export async function startPiSession(
       fiber: fiber as unknown as Fiber.RuntimeFiber<void, unknown>,
     });
 
-    await Effect.runPromise(Deferred.await(adapterReady));
+    try {
+      await Effect.runPromise(Deferred.await(adapterReady));
 
-    const existingEvents = await runEffect(
-      Effect.gen(function* () {
-        const manager = yield* StreamManagerService;
-        return yield* manager.getFrom({ name });
-      }),
-    );
-
-    const hasSessionCreate = existingEvents.some((e) => {
-      const data = e.data as { type?: string } | null;
-      return data?.type === PiEventTypes.SESSION_CREATE;
-    });
-
-    if (!hasSessionCreate) {
-      const createEvent = makeSessionCreateEvent(eventStreamId, {
-        cwd: process.env.INIT_CWD ?? process.cwd(),
-      });
-
-      await runEffect(
+      const existingEvents = await runEffect(
         Effect.gen(function* () {
           const manager = yield* StreamManagerService;
-          yield* manager.append({ name, data: createEvent });
+          return yield* manager.getFrom({ name });
         }),
       );
-    }
 
-    console.log(
-      `[AgentRuntime] Pi session started: ${name}${hasSessionCreate ? " (reattached)" : ""}`,
-    );
-    return { streamName: name, eventStreamId };
+      const hasSessionCreate = existingEvents.some((e) => {
+        const data = e.data as { type?: string } | null;
+        return data?.type === PiEventTypes.SESSION_CREATE;
+      });
+
+      if (!hasSessionCreate) {
+        const createEvent = makeSessionCreateEvent(eventStreamId, {
+          cwd: process.env.INIT_CWD ?? process.cwd(),
+        });
+
+        await runEffect(
+          Effect.gen(function* () {
+            const manager = yield* StreamManagerService;
+            yield* manager.append({ name, data: createEvent });
+          }),
+        );
+      }
+
+      console.log(
+        `[AgentRuntime] Pi session started: ${name}${hasSessionCreate ? " (reattached)" : ""}`,
+      );
+      return { streamName: name, eventStreamId };
+    } catch (error) {
+      fibers.delete(name);
+      await Effect.runPromise(Fiber.interrupt(fiber)).catch(() => {});
+      throw error;
+    }
   })();
 
   pendingSessionCreations.set(name, creationPromise);
