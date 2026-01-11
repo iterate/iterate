@@ -129,6 +129,8 @@ export function GhosttyTerminal({ wsBase, initialCommand }: GhosttyTerminalProps
       connectWebSocket();
     })();
 
+    const container = containerRef.current;
+
     return () => {
       cancelled = true;
       clearTimeout(reconnectTimeout);
@@ -138,9 +140,8 @@ export function GhosttyTerminal({ wsBase, initialCommand }: GhosttyTerminalProps
       }
       termRef.current = null;
       wsRef.current = null;
-      // Clear the container DOM to remove any leftover canvas/elements
-      if (containerRef.current) {
-        containerRef.current.innerHTML = "";
+      if (container) {
+        container.innerHTML = "";
       }
     };
   }, [wsBase, initialCommand]);
