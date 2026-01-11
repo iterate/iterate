@@ -1,0 +1,29 @@
+{
+  "name": "@iterate-com/cli2",
+  "version": "0.0.1",
+  "type": "module",
+  "private": true,
+  "description": "Terminal over WebSocket - PTY proxy for interactive terminal sessions",
+  "scripts": {
+    "dev:server": "tsx server.ts",
+    "dev:client": "tsx main.ts",
+    "cli": "tsx main.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.3",
+    "@hono/node-ws": "^1.0.4",
+    "hono": "^4.7.9",
+    "node-pty": "^1.2.0-beta.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.21",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}

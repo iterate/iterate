@@ -68,6 +68,11 @@
     "vibe-rules": "^0.3.91"
   },
   "packageManager": "pnpm@10.24.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "node-pty"
+    ]
+  },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs,cjs}": [
       "eslint --fix --max-warnings=-1"
