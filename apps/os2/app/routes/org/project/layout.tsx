@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { trpc } from "../../../lib/trpc.tsx";
 import { useSessionUser } from "../../../hooks/use-session-user.ts";
+import { usePostHogIdentity } from "../../../hooks/use-posthog-identity.tsx";
 import { SidebarShell } from "../../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../../components/org-sidebar-nav.tsx";
@@ -67,6 +68,23 @@ function ProjectLayout() {
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
+
+  // Identify user, organization, and project in PostHog
+  usePostHogIdentity({
+    user: user ?? null,
+    organization: {
+      id: currentOrg.id,
+      name: currentOrg.name,
+      slug: currentOrg.slug,
+    },
+    project: currentProject
+      ? {
+          id: currentProject.id,
+          name: currentProject.name,
+          slug: currentProject.slug,
+        }
+      : null,
+  });
 
   const orgSlug = currentOrg.slug;
 

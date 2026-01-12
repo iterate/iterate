@@ -24,8 +24,8 @@ pnpm os2 dev
 - `apps/os2/` - Primary application (React + Cloudflare Workers)
 - `apps/daemon2/` - Local daemon for durable streams and agent orchestration
 - `apps/os/` - **DEPRECATED** - Legacy application
-- `estates/` - Example configurations and customizations
-- `vibe-rules/` - Coding agent rules (generates AGENTS.md, CLAUDE.md)
+- `apps/iterate-com` - iterate.com website
+- `docs/` - Detailed documentation and patterns
 
 ## Development Commands
 

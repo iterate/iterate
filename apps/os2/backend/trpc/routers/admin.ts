@@ -1,7 +1,8 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { and, eq, ilike } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
+import * as schema from "../../db/schema.ts";
 import { user, billingAccount } from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 
@@ -165,6 +166,92 @@ export const adminRouter = router({
         costCents: input.units,
         meterEventId: meterEvent.identifier,
         stripeCustomerId: account.stripeCustomerId,
+      };
+    }),
+
+  impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
+    const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
+    const isAdmin = ctx?.user?.role === "admin" || undefined;
+    return { impersonatedBy, isAdmin };
+  }),
+
+  searchUsersByEmail: adminProcedure
+    .input(z.object({ searchEmail: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const users = await ctx.db.query.user.findMany({
+        where: ilike(schema.user.email, `%${input.searchEmail}%`),
+        columns: { id: true, email: true, name: true },
+        limit: 10,
+      });
+      return users;
+    }),
+
+  findUserByEmail: adminProcedure
+    .input(z.object({ email: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const foundUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email.toLowerCase()),
+      });
+      return foundUser;
+    }),
+
+  getProjectOwner: adminProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.query.project.findFirst({
+        where: eq(schema.project.id, input.projectId),
+      });
+
+      if (!project) {
+        throw new Error("Project not found");
+      }
+
+      const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(schema.organizationUserMembership.organizationId, project.organizationId),
+          eq(schema.organizationUserMembership.role, "owner"),
+        ),
+        with: { user: true },
+      });
+
+      if (!ownerMembership) {
+        throw new Error("Organization owner not found");
+      }
+
+      return {
+        userId: ownerMembership.user.id,
+        email: ownerMembership.user.email,
+        name: ownerMembership.user.name,
+      };
+    }),
+
+  setUserRole: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        role: z.enum(["user", "admin"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.userId === ctx.user.id && input.role !== "admin") {
+        throw new Error("You cannot remove your own admin role");
+      }
+
+      const targetUser = await ctx.db.query.user.findFirst({
+        where: eq(user.id, input.userId),
+      });
+
+      if (!targetUser) {
+        throw new Error("User not found");
+      }
+
+      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
+
+      return {
+        userId: input.userId,
+        email: targetUser.email,
+        name: targetUser.name,
+        role: input.role,
       };
     }),
 });

@@ -11,11 +11,21 @@ import { logger } from "../tag-logger.ts";
 const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
-function createAuth(db: DB, envParam: CloudflareEnv) {
-  const signupAllowlist = (envParam.SIGNUP_ALLOWLIST ?? "*@nustom.com")
+function parseEmailPatterns(value: string) {
+  return value
     .split(",")
     .map((p) => p.trim().toLowerCase())
     .filter((p) => p.length > 0);
+}
+
+function matchesEmailPattern(email: string, patterns: string[]) {
+  return patterns.some((pattern) => minimatch(email, pattern));
+}
+
+function createAuth(db: DB, envParam: CloudflareEnv) {
+  const allowSignupFromEmails = parseEmailPatterns(
+    envParam.ALLOW_SIGNUP_FROM_EMAILS ?? "*@example.com",
+  );
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -36,8 +46,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
         create: {
           before: async (user) => {
             const email = user.email.trim().toLowerCase();
-            const allowed = signupAllowlist.some((pattern) => minimatch(email, pattern));
-            if (!allowed) {
+            if (!matchesEmailPattern(email, allowSignupFromEmails)) {
               throw new APIError("FORBIDDEN", {
                 message: "Sign up is not available for this email address",
               });

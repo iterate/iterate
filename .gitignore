@@ -23,8 +23,6 @@ dist
 .cursor/rules
 .rules
 .clinerules/
-AGENTS.md
-CLAUDE.md
 
 .cache
 
