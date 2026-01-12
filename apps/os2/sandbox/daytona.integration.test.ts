@@ -70,6 +70,7 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona sandbox integration", () => {
     if (!preview) {
       throw new Error("Preview URL not initialized");
     }
+    const previewTarget = preview;
 
     await expect
       .poll(
@@ -77,11 +78,11 @@ describe.runIf(RUN_DAYTONA_TESTS)("Daytona sandbox integration", () => {
           const headers: Record<string, string> = {
             "X-Daytona-Skip-Preview-Warning": "true",
           };
-          if (preview.token) {
-            headers["X-Daytona-Preview-Token"] = preview.token;
+          if (previewTarget.token) {
+            headers["X-Daytona-Preview-Token"] = previewTarget.token;
           }
 
-          const response = await fetch(`${preview.url}/api/health`, { headers });
+          const response = await fetch(`${previewTarget.url}/api/health`, { headers });
           if (!response.ok) return false;
           const text = await response.text();
           return text.includes("ok") || text.includes("healthy");
