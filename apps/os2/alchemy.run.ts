@@ -116,6 +116,9 @@ const Env = z.object({
   POSTHOG_KEY: Optional,
   ALLOW_SIGNUP_FROM_EMAILS: z.string().default("*@example.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
+  STRIPE_SECRET_KEY: Required,
+  STRIPE_WEBHOOK_SECRET: Required,
+  STRIPE_METERED_PRICE_ID: Required,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {

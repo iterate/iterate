@@ -13,7 +13,8 @@
     "db:reset": "doppler run -- tsx -e \"(async () => { const postgres = (await import('postgres')).default; const sql = postgres('postgres://postgres:postgres@localhost:5432/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os2'); await sql.unsafe('CREATE DATABASE os2'); await sql.end(); })()\" && pnpm db:migrate",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",
@@ -71,6 +72,7 @@
     "react-hook-form": "^7.67.0",
     "remeda": "^2.32.0",
     "sonner": "^2.0.7",
+    "stripe": "^20.1.2",
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.4.0",
     "tiny-invariant": "^1.3.3",
