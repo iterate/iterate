@@ -1,5 +1,5 @@
 import { spawn, execSync, type ExecSyncOptions, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -83,6 +83,13 @@ const cloneAndSetupIterateRepo = () => {
     console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
     execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
     execSync("git reset --hard origin/main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+
+    // Delete daemon2 dist/ to force rebuild after source updates
+    const distPath = join(DAEMON2_PATH, "dist");
+    if (existsSync(distPath)) {
+      console.log("Source updated, removing stale dist/ to trigger rebuild...");
+      rmSync(distPath, { recursive: true, force: true });
+    }
   } else {
     // Fallback for local dev without baked repo
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
