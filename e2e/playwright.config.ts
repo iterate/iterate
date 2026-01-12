@@ -1,10 +1,9 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const port = process.env.TEST_PORT || "3000";
-const baseURL = `http://localhost:${port}`;
+const baseURL = process.env.APP_URL || "http://localhost:5173";
 
 export default defineConfig({
-  testDir: "./e2e",
+  testDir: ".",
   testMatch: "**/*.e2e.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
@@ -13,7 +12,7 @@ export default defineConfig({
   reporter: "list",
   timeout: 120_000,
   use: {
-    actionTimeout: 10000,
+    actionTimeout: 10_000,
     baseURL,
     trace: "on-first-retry",
   },
@@ -23,10 +22,4 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
-  webServer: {
-    command: "pnpm dev",
-    url: baseURL,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
 });

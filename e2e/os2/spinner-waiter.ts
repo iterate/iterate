@@ -1,4 +1,4 @@
-import { AsyncLocalStorage } from "async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { Locator, type Page } from "@playwright/test";
 
 export namespace spinnerWaiter {
@@ -39,11 +39,9 @@ type LocatorWithOriginal = Locator & {
 };
 
 function setup(page: Page) {
-  // get a dummy locator so we can mess with the Locator class prototype (playwright doesn't expose the class directly just the interface)
   const dummyLocator = page.locator("body");
   const locatorPrototype = dummyLocator.constructor.prototype;
 
-  // override the `.click` method on the prototype, not just this instance:
   for (const method of overrideableMethods) {
     if (locatorPrototype[`${method}_original`]) continue;
 
@@ -73,7 +71,7 @@ function setup(page: Page) {
 
         settings.log(`waiting for union ${union}`);
 
-        await union.waitFor_original().catch((e) => {
+        await union.waitFor_original().catch((e: Error) => {
           adjustError(e, [
             `If this is a slow operation, update the product code to add a spinner while it's running.`,
             `This will improve the user experience and buy you more time for this assertion.`,
@@ -86,7 +84,6 @@ function setup(page: Page) {
         settings.log(`union gotten. ${this}.isVisible(): ${await this.isVisible()}`);
 
         if (await this.isVisible()) {
-          // seems it's ready, just do the original operation
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, []);
             throw e;
@@ -98,7 +95,6 @@ function setup(page: Page) {
         );
 
         const race = await Promise.race([
-          // the original operation might have side effects (e.g. click), and we give it one last chance if the spinner disappears first - so make give the original operation a bit less time to complete.
           callOriginal([
             ...args.slice(0, -1),
             { ..._options, timeout: settings.spinnerTimeout - 1000 },
@@ -107,8 +103,8 @@ function setup(page: Page) {
             .catch((e) => ({ outcome: "error" as const, error: e })),
           spinnerLocator
             .waitFor_original({ timeout: settings.spinnerTimeout, state: "hidden" })
-            .then((result) => ({ outcome: "spinner-hidden" as const, result }))
-            .catch((e) => ({ outcome: "error" as const, error: e })),
+            .then((result: void) => ({ outcome: "spinner-hidden" as const, result }))
+            .catch((e: Error) => ({ outcome: "error" as const, error: e })),
         ]);
 
         settings.log(`race result: ${JSON.stringify(race)}`);
@@ -125,7 +121,6 @@ function setup(page: Page) {
         }
 
         if (race.outcome === "spinner-hidden") {
-          // spinner was hidden before the operation completed, give it one last chance
           return await callOriginal(args).catch((e) => {
             adjustError(e as Error, [
               `The loading spinner is no longer visible but ${this}.${method} didn't succeed, make sure the spinner stays visible until the operation is complete.`,
@@ -134,17 +129,12 @@ function setup(page: Page) {
           });
         }
 
-        race satisfies never;
         throw new Error(`Unknown race outcome: ${JSON.stringify(race)}`);
       },
     });
   }
 }
 
-/**
- * modifies an error's message and stack to include additional information, and exclude call stack frames from this file
- * (playwright shows a mini source code preview based on the top of the stack trace)
- */
 function adjustError(e: Error, info: string[] = []) {
   if (!e?.message) return;
   Object.assign(e, { originalMessage: e.message, originalStack: e.stack });
