@@ -12,7 +12,6 @@ export const stripeWebhookApp = new Hono<{ Bindings: CloudflareEnv }>();
 
 stripeWebhookApp.post("/", async (c) => {
   const stripe = getStripe();
-  const db = getDb();
 
   const signature = c.req.header("stripe-signature");
   if (!signature) {
@@ -28,19 +27,6 @@ stripeWebhookApp.post("/", async (c) => {
     return c.json({ error: "Invalid signature" }, 400);
   }
 
-  const existingEvent = await db.query.stripeEvent.findFirst({
-    where: eq(schema.stripeEvent.eventId, event.id),
-  });
-
-  if (existingEvent) {
-    return c.json({ received: true, status: "already_processed" });
-  }
-
-  await db.insert(schema.stripeEvent).values({
-    eventId: event.id,
-    type: event.type,
-  });
-
   try {
     switch (event.type) {
       case "customer.subscription.created":
@@ -53,6 +39,35 @@ stripeWebhookApp.post("/", async (c) => {
       case "customer.subscription.deleted": {
         const subscription = event.data.object as Stripe.Subscription;
         await handleSubscriptionDeleted(subscription);
+        break;
+      }
+
+      case "customer.subscription.paused": {
+        const subscription = event.data.object as Stripe.Subscription;
+        logger.info("Subscription paused", { subscriptionId: subscription.id });
+        await handleSubscriptionUpdate(subscription);
+        break;
+      }
+
+      case "customer.subscription.resumed": {
+        const subscription = event.data.object as Stripe.Subscription;
+        logger.info("Subscription resumed", { subscriptionId: subscription.id });
+        await handleSubscriptionUpdate(subscription);
+        break;
+      }
+
+      case "customer.subscription.trial_will_end": {
+        const subscription = event.data.object as Stripe.Subscription;
+        logger.info("Subscription trial will end", {
+          subscriptionId: subscription.id,
+          trialEnd: subscription.trial_end,
+        });
+        break;
+      }
+
+      case "checkout.session.completed": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        logger.info("Checkout session completed", { sessionId: session.id });
         break;
       }
 
@@ -84,36 +99,28 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription): Prom
   const customerId =
     typeof subscription.customer === "string" ? subscription.customer : subscription.customer.id;
 
-  const subscriptionItemId = subscription.items.data[0]?.id;
+  const subscriptionItem = subscription.items.data[0];
+  const subscriptionItemId = subscriptionItem?.id;
+  const currentPeriodStart = subscriptionItem?.current_period_start;
+  const currentPeriodEnd = subscriptionItem?.current_period_end;
 
-  const existing = await db.query.billingAccount.findFirst({
-    where: eq(schema.billingAccount.stripeCustomerId, customerId),
+  await db
+    .update(schema.billingAccount)
+    .set({
+      stripeSubscriptionId: subscription.id,
+      stripeSubscriptionItemId: subscriptionItemId,
+      subscriptionStatus: subscription.status as SubscriptionStatus,
+      currentPeriodStart: currentPeriodStart ? new Date(currentPeriodStart * 1000) : null,
+      currentPeriodEnd: currentPeriodEnd ? new Date(currentPeriodEnd * 1000) : null,
+      cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    })
+    .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+
+  logger.info("Updated billing account", {
+    customerId,
+    status: subscription.status,
+    subscriptionId: subscription.id,
   });
-
-  const sub = subscription as Stripe.Subscription & {
-    current_period_start?: number;
-    current_period_end?: number;
-  };
-
-  if (existing) {
-    await db
-      .update(schema.billingAccount)
-      .set({
-        stripeSubscriptionId: subscription.id,
-        stripeSubscriptionItemId: subscriptionItemId,
-        subscriptionStatus: subscription.status as SubscriptionStatus,
-        currentPeriodStart: sub.current_period_start
-          ? new Date(sub.current_period_start * 1000)
-          : null,
-        currentPeriodEnd: sub.current_period_end ? new Date(sub.current_period_end * 1000) : null,
-        cancelAtPeriodEnd: subscription.cancel_at_period_end,
-      })
-      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
-
-    logger.info(`Updated billing account for customer ${customerId}: ${subscription.status}`);
-  } else {
-    logger.info(`No billing account found for customer ${customerId}`);
-  }
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Promise<void> {
@@ -130,23 +137,50 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription): Pro
     })
     .where(eq(schema.billingAccount.stripeCustomerId, customerId));
 
-  logger.info(`Subscription deleted for customer ${customerId}`);
+  logger.info("Subscription deleted", { customerId, subscriptionId: subscription.id });
 }
 
 async function handleInvoicePaid(invoice: Stripe.Invoice): Promise<void> {
+  const db = getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;
 
-  logger.info(
-    `Invoice paid for customer ${customerId}: ${invoice.amount_paid / 100} ${invoice.currency}`,
-  );
+  const subscriptionDetails = invoice.parent?.subscription_details;
+  if (subscriptionDetails) {
+    await db
+      .update(schema.billingAccount)
+      .set({
+        subscriptionStatus: "active",
+      })
+      .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+  }
+
+  logger.info("Invoice paid", {
+    customerId,
+    invoiceId: invoice.id,
+    amountPaid: invoice.amount_paid,
+    currency: invoice.currency,
+  });
 }
 
 async function handlePaymentFailed(invoice: Stripe.Invoice): Promise<void> {
+  const db = getDb();
   const customerId = typeof invoice.customer === "string" ? invoice.customer : invoice.customer?.id;
 
   if (!customerId) return;
 
-  logger.info(`Payment failed for customer ${customerId}`);
+  await db
+    .update(schema.billingAccount)
+    .set({
+      subscriptionStatus: "past_due",
+    })
+    .where(eq(schema.billingAccount.stripeCustomerId, customerId));
+
+  logger.info("Payment failed", {
+    customerId,
+    invoiceId: invoice.id,
+    amountDue: invoice.amount_due,
+    currency: invoice.currency,
+  });
 }

@@ -5,9 +5,9 @@ import { getStripe } from "./stripe.ts";
 export interface UsageReport {
   meterKey: string;
   quantity: number;
-  subscriptionItemId: string;
-  idempotencyKey: string;
-  timestamp?: number;
+  stripeCustomerId: string;
+  idempotencyKey?: string;
+  timestamp?: string;
 }
 
 export async function reportUsage(report: UsageReport): Promise<void> {
@@ -15,40 +15,36 @@ export async function reportUsage(report: UsageReport): Promise<void> {
   const meter = getMeter(report.meterKey);
 
   if (!meter) {
-    logger.error(`Unknown meter key: ${report.meterKey}`);
-    return;
+    throw new Error(`Unknown meter key: ${report.meterKey}`);
   }
 
-  if (!meter.stripePriceId) {
-    logger.error(`Meter ${report.meterKey} has no Stripe price ID - run billing:sync first`);
-    return;
-  }
+  const meterEvent = await stripe.v2.billing.meterEvents.create({
+    event_name: meter.key,
+    payload: {
+      stripe_customer_id: report.stripeCustomerId,
+      value: String(report.quantity),
+    },
+    identifier: report.idempotencyKey,
+    timestamp: report.timestamp ?? new Date().toISOString(),
+  });
 
-  try {
-    await (stripe.subscriptionItems as any).createUsageRecord(
-      report.subscriptionItemId,
-      {
-        quantity: report.quantity,
-        timestamp: report.timestamp ?? Math.floor(Date.now() / 1000),
-        action: "increment",
-      },
-      { idempotencyKey: report.idempotencyKey },
-    );
-  } catch (error) {
-    logger.error(`Failed to report usage for ${report.meterKey}`, error);
-    throw error;
-  }
+  logger.info("Reported usage", {
+    meterKey: report.meterKey,
+    quantity: report.quantity,
+    customerId: report.stripeCustomerId,
+    eventId: meterEvent.identifier,
+  });
 }
 
 export async function reportLLMUsage(params: {
-  subscriptionItemId: string;
+  stripeCustomerId: string;
   provider: string;
   model: string;
   inputTokens: number;
   outputTokens: number;
   requestId: string;
 }): Promise<void> {
-  const { subscriptionItemId, provider, model, inputTokens, outputTokens, requestId } = params;
+  const { stripeCustomerId, provider, model, inputTokens, outputTokens, requestId } = params;
 
   const inputMeterKey = `llm:${provider}:${model}:input`;
   const outputMeterKey = `llm:${provider}:${model}:output`;
@@ -56,51 +52,61 @@ export async function reportLLMUsage(params: {
   const inputMeter = getMeter(inputMeterKey);
   const outputMeter = getMeter(outputMeterKey);
 
-  if (!inputMeter || !outputMeter) {
-    logger.info(`No meters found for ${provider}/${model}, using aggregate meters`);
-    return;
+  if (inputTokens > 0 && !inputMeter) {
+    throw new Error(`No input meter found for ${provider}/${model}`);
   }
 
-  if (inputTokens > 0) {
-    await reportUsage({
-      meterKey: inputMeterKey,
-      quantity: inputTokens,
-      subscriptionItemId,
-      idempotencyKey: `${requestId}-input`,
-    });
+  if (outputTokens > 0 && !outputMeter) {
+    throw new Error(`No output meter found for ${provider}/${model}`);
   }
 
-  if (outputTokens > 0) {
-    await reportUsage({
-      meterKey: outputMeterKey,
-      quantity: outputTokens,
-      subscriptionItemId,
-      idempotencyKey: `${requestId}-output`,
-    });
+  const reports: Promise<void>[] = [];
+
+  if (inputTokens > 0 && inputMeter) {
+    reports.push(
+      reportUsage({
+        meterKey: inputMeterKey,
+        quantity: inputTokens,
+        stripeCustomerId,
+        idempotencyKey: `${requestId}-input`,
+      }),
+    );
   }
+
+  if (outputTokens > 0 && outputMeter) {
+    reports.push(
+      reportUsage({
+        meterKey: outputMeterKey,
+        quantity: outputTokens,
+        stripeCustomerId,
+        idempotencyKey: `${requestId}-output`,
+      }),
+    );
+  }
+
+  await Promise.all(reports);
 }
 
 export async function reportSandboxUsage(params: {
-  subscriptionItemId: string;
+  stripeCustomerId: string;
   provider: string;
   cpuSeconds: number;
   sessionId: string;
 }): Promise<void> {
-  const { subscriptionItemId, provider, cpuSeconds, sessionId } = params;
+  const { stripeCustomerId, provider, cpuSeconds, sessionId } = params;
 
   const meterKey = `sandbox:${provider}`;
   const meter = getMeter(meterKey);
 
   if (!meter) {
-    logger.info(`No meter found for sandbox provider ${provider}`);
-    return;
+    throw new Error(`No meter found for sandbox provider ${provider}`);
   }
 
   if (cpuSeconds > 0) {
     await reportUsage({
       meterKey,
       quantity: Math.ceil(cpuSeconds),
-      subscriptionItemId,
+      stripeCustomerId,
       idempotencyKey: `sandbox-${sessionId}`,
     });
   }

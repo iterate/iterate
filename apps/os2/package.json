@@ -14,8 +14,7 @@
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "billing:generate": "tsx backend/billing/scripts/generate-billing-meters.ts",
-    "billing:sync": "doppler run -- tsx backend/billing/scripts/sync-billing-meters-to-stripe.ts"
+    "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",

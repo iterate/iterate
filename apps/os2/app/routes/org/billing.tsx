@@ -1,9 +1,10 @@
-import { useEffect } from "react";
-import { createFileRoute, useParams } from "@tanstack/react-router";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { Suspense, useEffect } from "react";
+import { createFileRoute, useParams, useSearch } from "@tanstack/react-router";
+import { useSuspenseQuery, useMutation } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { format } from "date-fns";
 import { CreditCard, ExternalLink, Zap } from "lucide-react";
+import { z } from "zod/v4";
 import { trpc, trpcClient } from "../../lib/trpc.tsx";
 import { Button } from "../../components/ui/button.tsx";
 import {
@@ -16,30 +17,47 @@ import {
 import { Badge } from "../../components/ui/badge.tsx";
 import { Spinner } from "../../components/ui/spinner.tsx";
 
+const Search = z.object({
+  success: z.string().optional(),
+  canceled: z.string().optional(),
+});
+
 export const Route = createFileRoute("/_auth.layout/orgs/$organizationSlug/billing")({
   component: BillingPage,
+  validateSearch: Search,
 });
 
 function BillingPage() {
-  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/billing" });
-  const urlParams = new URLSearchParams(
-    typeof window !== "undefined" ? window.location.search : "",
+  return (
+    <Suspense
+      fallback={
+        <div className="flex items-center justify-center p-8">
+          <Spinner />
+        </div>
+      }
+    >
+      <BillingContent />
+    </Suspense>
   );
-  const success = urlParams.get("success") === "true";
+}
+
+function BillingContent() {
+  const params = useParams({ from: "/_auth.layout/orgs/$organizationSlug/billing" });
+  const search = useSearch({ from: "/_auth.layout/orgs/$organizationSlug/billing" });
 
   useEffect(() => {
-    if (success) {
+    if (search.success === "true") {
       toast.success("Subscription activated successfully!");
     }
-  }, [success]);
+  }, [search.success]);
 
-  const { data: billingAccount, isLoading: billingLoading } = useQuery(
+  const { data: billingAccount } = useSuspenseQuery(
     trpc.billing.getBillingAccount.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
   );
 
-  const { data: usageSummary, isLoading: usageLoading } = useQuery(
+  const { data: usageSummary } = useSuspenseQuery(
     trpc.billing.getUsageSummary.queryOptions({
       organizationSlug: params.organizationSlug,
     }),
@@ -75,14 +93,6 @@ function BillingPage() {
       toast.error("Failed to open billing portal: " + error.message);
     },
   });
-
-  if (billingLoading || usageLoading) {
-    return (
-      <div className="flex items-center justify-center p-8">
-        <Spinner />
-      </div>
-    );
-  }
 
   const subscriptionStatus = billingAccount?.subscriptionStatus;
   const hasActiveSubscription =

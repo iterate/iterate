@@ -5,11 +5,15 @@ let stripeInstance: Stripe | null = null;
 
 export function getStripe(): Stripe {
   if (!stripeInstance) {
-    stripeInstance = new Stripe(env.STRIPE_SECRET_KEY);
+    stripeInstance = new Stripe(env.STRIPE_SECRET_KEY, {
+      apiVersion: "2025-12-15.clover",
+    });
   }
   return stripeInstance;
 }
 
 export function getStripeWithKey(secretKey: string): Stripe {
-  return new Stripe(secretKey);
+  return new Stripe(secretKey, {
+    apiVersion: "2025-12-15.clover",
+  });
 }

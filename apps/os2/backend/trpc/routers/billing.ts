@@ -2,7 +2,7 @@ import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
 import { router, orgProtectedProcedure, orgAdminMutation } from "../trpc.ts";
-import { billingAccount } from "../../db/schema.ts";
+import * as schema from "../../db/schema.ts";
 import { getStripe } from "../../integrations/stripe/stripe.ts";
 import { BILLING_METERS } from "../../billing/meters.generated.ts";
 import { env } from "../../../env.ts";
@@ -10,7 +10,7 @@ import { env } from "../../../env.ts";
 export const billingRouter = router({
   getBillingAccount: orgProtectedProcedure.query(async ({ ctx }) => {
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
     });
 
     return account ?? null;
@@ -26,52 +26,55 @@ export const billingRouter = router({
     .mutation(async ({ ctx, input }) => {
       const stripe = getStripe();
 
-      let account = await ctx.db.query.billingAccount.findFirst({
-        where: eq(billingAccount.organizationId, ctx.organization.id),
+      const account = await ctx.db.transaction(async (tx) => {
+        let existing = await tx.query.billingAccount.findFirst({
+          where: eq(schema.billingAccount.organizationId, ctx.organization.id),
+        });
+
+        if (!existing) {
+          const [newAccount] = await tx
+            .insert(schema.billingAccount)
+            .values({
+              organizationId: ctx.organization.id,
+            })
+            .returning();
+          existing = newAccount;
+        }
+
+        if (!existing) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: "Failed to create billing account",
+          });
+        }
+
+        if (!existing.stripeCustomerId) {
+          const customer = await stripe.customers.create({
+            name: ctx.organization.name,
+            metadata: {
+              organizationId: ctx.organization.id,
+              organizationSlug: ctx.organization.slug,
+            },
+          });
+
+          await tx
+            .update(schema.billingAccount)
+            .set({ stripeCustomerId: customer.id })
+            .where(eq(schema.billingAccount.id, existing.id));
+
+          existing = { ...existing, stripeCustomerId: customer.id };
+        }
+
+        return existing;
       });
 
-      if (!account) {
-        const [newAccount] = await ctx.db
-          .insert(billingAccount)
-          .values({
-            organizationId: ctx.organization.id,
-          })
-          .returning();
-        account = newAccount;
-      }
-
-      if (!account) {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: "Failed to create billing account",
-        });
-      }
-
-      let customerId = account.stripeCustomerId;
-
-      if (!customerId) {
-        const customer = await stripe.customers.create({
-          name: ctx.organization.name,
-          metadata: {
-            organizationId: ctx.organization.id,
-            organizationSlug: ctx.organization.slug,
-          },
-        });
-        customerId = customer.id;
-
-        await ctx.db
-          .update(billingAccount)
-          .set({ stripeCustomerId: customerId })
-          .where(eq(billingAccount.id, account.id));
-      }
-
       const baseUrl = env.VITE_PUBLIC_URL;
-      const defaultSuccessUrl = `${baseUrl}/${ctx.organization.slug}/settings/billing?success=true`;
-      const defaultCancelUrl = `${baseUrl}/${ctx.organization.slug}/settings/billing?canceled=true`;
+      const defaultSuccessUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?success=true`;
+      const defaultCancelUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing?canceled=true`;
 
       const session = await stripe.checkout.sessions.create({
         mode: "subscription",
-        customer: customerId,
+        customer: account.stripeCustomerId!,
         line_items: [
           {
             price: env.STRIPE_METERED_PRICE_ID,
@@ -102,7 +105,7 @@ export const billingRouter = router({
     const stripe = getStripe();
 
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
     });
 
     if (!account?.stripeCustomerId) {
@@ -113,7 +116,7 @@ export const billingRouter = router({
     }
 
     const baseUrl = env.VITE_PUBLIC_URL;
-    const returnUrl = `${baseUrl}/${ctx.organization.slug}/settings/billing`;
+    const returnUrl = `${baseUrl}/orgs/${ctx.organization.slug}/billing`;
 
     const session = await stripe.billingPortal.sessions.create({
       customer: account.stripeCustomerId,
@@ -124,38 +127,20 @@ export const billingRouter = router({
   }),
 
   getUsageSummary: orgProtectedProcedure.query(async ({ ctx }) => {
-    const stripe = getStripe();
-
     const account = await ctx.db.query.billingAccount.findFirst({
-      where: eq(billingAccount.organizationId, ctx.organization.id),
+      where: eq(schema.billingAccount.organizationId, ctx.organization.id),
     });
 
-    if (!account?.stripeSubscriptionItemId) {
+    if (!account?.stripeSubscriptionId) {
       return null;
     }
 
-    try {
-      const usageRecordSummaries = await (stripe.subscriptionItems as any).listUsageRecordSummaries(
-        account.stripeSubscriptionItemId,
-        { limit: 1 },
-      );
-
-      const currentUsage = usageRecordSummaries.data[0];
-
-      return {
-        totalUsage: currentUsage?.total_usage ?? 0,
-        periodStart: account.currentPeriodStart,
-        periodEnd: account.currentPeriodEnd,
-        subscriptionStatus: account.subscriptionStatus,
-      };
-    } catch {
-      return {
-        totalUsage: 0,
-        periodStart: account.currentPeriodStart,
-        periodEnd: account.currentPeriodEnd,
-        subscriptionStatus: account.subscriptionStatus,
-      };
-    }
+    return {
+      totalUsage: 0,
+      periodStart: account.currentPeriodStart,
+      periodEnd: account.currentPeriodEnd,
+      subscriptionStatus: account.subscriptionStatus,
+    };
   }),
 
   getAvailableMeters: orgProtectedProcedure.query(() => {

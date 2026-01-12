@@ -403,7 +403,7 @@ export const billingAccount = pgTable(
       .unique()
       .references(() => organization.id, { onDelete: "cascade" }),
     stripeCustomerId: t.text().unique(),
-    stripeSubscriptionId: t.text(),
+    stripeSubscriptionId: t.text().unique(),
     stripeSubscriptionItemId: t.text(),
     subscriptionStatus: t.text({ enum: [...SubscriptionStatus] }),
     currentPeriodStart: t.timestamp(),
@@ -421,9 +421,4 @@ export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
   }),
 }));
 
-export const stripeEvent = pgTable("stripe_event", (t) => ({
-  eventId: t.text().primaryKey(),
-  type: t.text().notNull(),
-  processedAt: timestamp().defaultNow().notNull(),
-}));
 // #endregion ========== Billing ==========
