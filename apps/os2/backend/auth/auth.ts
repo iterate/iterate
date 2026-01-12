@@ -26,7 +26,6 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
   const allowSignupFromEmails = parseEmailPatterns(
     envParam.ALLOW_SIGNUP_FROM_EMAILS ?? "*@example.com",
   );
-  const adminEmailPatterns = parseEmailPatterns(envParam.ADMIN_EMAIL_HOSTS ?? "*@example.com");
 
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
@@ -52,15 +51,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 message: "Sign up is not available for this email address",
               });
             }
-
-            const isAdminEmail = matchesEmailPattern(email, adminEmailPatterns);
-
-            return {
-              data: {
-                ...user,
-                ...(isAdminEmail ? { role: "admin" } : {}),
-              },
-            };
+            return { data: user };
           },
         },
       },
