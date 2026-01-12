@@ -20,9 +20,27 @@ type ResolverConfig = {
   organizationId?: string;
 };
 
-// Simple in-memory cache with TTL
-let cachedSnapshot: { name: string; prefix: string; timestamp: number } | null = null;
 const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Encapsulated cache to avoid global mutable state pollution in tests
+const snapshotCache = (() => {
+  let cached: { name: string; prefix: string; timestamp: number } | null = null;
+
+  return {
+    get(prefix: string, now: number, ttlMs: number): string | null {
+      if (!cached || cached.prefix !== prefix || now - cached.timestamp >= ttlMs) {
+        return null;
+      }
+      return cached.name;
+    },
+    set(name: string, prefix: string, timestamp: number): void {
+      cached = { name, prefix, timestamp };
+    },
+    clear(): void {
+      cached = null;
+    },
+  };
+})();
 
 // Only consider snapshots in these states as usable
 const USABLE_SNAPSHOT_STATES = ["ready", "active"];
@@ -40,18 +58,13 @@ export async function resolveLatestSnapshot(
   config: ResolverConfig,
 ): Promise<string> {
   const now = Date.now();
-
-  // Check cache - must match the same prefix
   const cacheTtlMs = getCacheTtlMs(prefix);
 
-  if (
-    cacheTtlMs > 0 &&
-    cachedSnapshot &&
-    cachedSnapshot.prefix === prefix &&
-    now - cachedSnapshot.timestamp < cacheTtlMs
-  ) {
-    logger.debug("Using cached snapshot", { name: cachedSnapshot.name });
-    return cachedSnapshot.name;
+  // Check cache - must match the same prefix and be within TTL
+  const cachedName = cacheTtlMs > 0 ? snapshotCache.get(prefix, now, cacheTtlMs) : null;
+  if (cachedName) {
+    logger.debug("Using cached snapshot", { name: cachedName });
+    return cachedName;
   }
 
   const baseUrl = config.baseUrl ?? "https://app.daytona.io/api";
@@ -106,7 +119,7 @@ export async function resolveLatestSnapshot(
 
   // Update cache
   if (cacheTtlMs > 0) {
-    cachedSnapshot = { name: latestSnapshot.name, prefix, timestamp: now };
+    snapshotCache.set(latestSnapshot.name, prefix, now);
   }
 
   logger.info("Resolved latest snapshot", {
@@ -124,7 +137,7 @@ export async function resolveLatestSnapshot(
  * Clears the snapshot cache. Useful for testing or manual refresh.
  */
 export function clearSnapshotCache(): void {
-  cachedSnapshot = null;
+  snapshotCache.clear();
 }
 
 function getCacheTtlMs(prefix: string): number {

@@ -70,13 +70,19 @@ For local development, each developer gets their own namespace based on `ITERATE
 
 ### Creating a New Snapshot
 
-To create a new Daytona snapshot, run from the repo root or `apps/os2` for the default Doppler config:
+To create a new Daytona snapshot from `apps/os2`:
 
 ```bash
 pnpm snapshot:daytona
 ```
 
-To target a specific Doppler config from the repo root or `apps/os2`:
+Or from the repo root using the filter flag:
+
+```bash
+pnpm --filter os2 snapshot:daytona
+```
+
+To target a specific Doppler config from the repo root:
 
 ```bash
 # For development snapshots
@@ -129,4 +135,6 @@ The snapshot (`apps/os2/sandbox/Dockerfile`) includes:
 - OpenCode CLI
 - Git (configured for iterate-bot)
 
-The entry point (`sandbox/entry.ts`) runs `pnpm install` and starts the daemon server on port 3000.
+The entry point (`apps/os2/sandbox/entry.ts`) runs `pnpm install` and starts the daemon server on port 3000.
+
+For detailed documentation on the s6 process supervision setup, see [`apps/os2/sandbox/README.md`](./sandbox/README.md).

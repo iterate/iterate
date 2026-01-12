@@ -65,7 +65,8 @@ for (const relativePath of files) {
   }
 
   copyFileSync(sourcePath, targetPath);
-  chmodSync(targetPath, stats.mode);
+  // Mask out setuid/setgid bits (04000/02000) to prevent privilege escalation
+  chmodSync(targetPath, stats.mode & 0o777);
 }
 
 writeFileSync(dockerfileTargetPath, readFileSync(dockerfileSourcePath, "utf-8"));

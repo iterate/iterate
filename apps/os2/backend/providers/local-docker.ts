@@ -1,8 +1,8 @@
 import type { MachineProvider, CreateMachineConfig, MachineProviderResult } from "./types.ts";
 
-const DOCKER_API_URL = "http://127.0.0.1:2375";
+export const DOCKER_API_URL = "http://127.0.0.1:2375";
 
-async function dockerApi<T>(
+export async function dockerApi<T>(
   method: string,
   endpoint: string,
   body?: Record<string, unknown>,
@@ -39,9 +39,17 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const port = await findAvailablePort();
 
-      const envArray = Object.entries(machineConfig.envVars).map(
-        ([key, value]) => `${key}=${value}`,
-      );
+      // Sanitize env vars to prevent injection attacks
+      const envArray = Object.entries(machineConfig.envVars).map(([key, value]) => {
+        // Validate key contains only safe characters
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+          throw new Error(`Invalid environment variable name: ${key}`);
+        }
+        // Remove control characters (ASCII 0-31) from values to prevent injection
+        // eslint-disable-next-line no-control-regex -- intentionally matching control chars to sanitize
+        const sanitizedValue = String(value).replace(/[\u0000-\u001f]/g, "");
+        return `${key}=${sanitizedValue}`;
+      });
 
       const hostConfig: Record<string, unknown> = {
         PortBindings: {

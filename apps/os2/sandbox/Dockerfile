@@ -8,11 +8,17 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | tee /etc/apt/sources.list.d/github-cli.list > /dev/null && \
     apt-get update && \
-    apt-get install -y gh s6
+    apt-get install -y gh s6 && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL https://opencode.ai/install | bash
 
 RUN curl -fsSL https://claude.ai/install.sh | bash
+
+# Ensure /var/log is writable by node user (node:24 already has uid 1000 user)
+RUN mkdir -p /var/log && \
+    chown -R node:node /var/log
 
 RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
@@ -24,6 +30,15 @@ WORKDIR /iterate-repo
 COPY . /iterate-repo
 
 RUN pnpm install
+
+# Set ownership for runtime user
+RUN chown -R node:node /iterate-repo
+
+USER node
+
+# Health check polls the iterate-server health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD curl -sf http://localhost:3000/api/health || exit 1
 
 # entry.ts sets up the Go-style checkout path at ~/src/github.com/iterate/iterate by
 # symlinking it to /iterate-repo (the build-time checkout). The image build doesn't

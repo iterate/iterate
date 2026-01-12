@@ -8,7 +8,7 @@ import {
   readdirSync,
   readFileSync,
   writeFileSync,
-  chmodSync,
+  renameSync,
 } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
@@ -34,31 +34,35 @@ const isDevMode = () => process.env.ITERATE_DEV === "true";
 const getRepoPath = (owner: string, name: string) => join(SRC_BASE, owner, name);
 
 const setupGoStyleSymlink = () => {
-  if (existsSync(GO_STYLE_ITERATE_PATH)) {
-    try {
-      const stats = lstatSync(GO_STYLE_ITERATE_PATH);
-      if (stats.isSymbolicLink()) {
+  // Atomically check and create symlink to avoid TOCTOU race
+  const parentDir = dirname(GO_STYLE_ITERATE_PATH);
+  mkdirSync(parentDir, { recursive: true });
+
+  try {
+    // Try to create symlink atomically - if it exists, this will throw EEXIST
+    symlinkSync(ITERATE_REPO_PATH, GO_STYLE_ITERATE_PATH);
+    console.log(`Created symlink: ${GO_STYLE_ITERATE_PATH} -> ${ITERATE_REPO_PATH}`);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+      // Path exists - check if it's already the correct symlink
+      try {
+        const stats = lstatSync(GO_STYLE_ITERATE_PATH);
+        if (stats.isSymbolicLink()) {
+          console.log(
+            `Go-style symlink already exists: ${GO_STYLE_ITERATE_PATH} -> ${ITERATE_REPO_PATH}`,
+          );
+          return;
+        }
         console.log(
-          `Go-style symlink already exists: ${GO_STYLE_ITERATE_PATH} -> ${ITERATE_REPO_PATH}`,
+          `Warning: ${GO_STYLE_ITERATE_PATH} exists but is not a symlink, skipping symlink creation`,
         );
-        return;
+      } catch (lstatErr) {
+        console.error(`Failed to check existing path: ${(lstatErr as Error).message}`);
       }
-      console.log(
-        `Warning: ${GO_STYLE_ITERATE_PATH} exists but is not a symlink, skipping symlink creation`,
-      );
-      return;
-    } catch {
-      // lstatSync failed, path doesn't exist
+    } else {
+      throw err;
     }
   }
-
-  const parentDir = dirname(GO_STYLE_ITERATE_PATH);
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
-  }
-
-  console.log(`Creating symlink: ${GO_STYLE_ITERATE_PATH} -> ${ITERATE_REPO_PATH}`);
-  symlinkSync(ITERATE_REPO_PATH, GO_STYLE_ITERATE_PATH);
 };
 
 const getGitEnvWithToken = (owners: string[]): ExecSyncOptions["env"] => {
@@ -147,15 +151,25 @@ const cloneAndSetupIterateRepo = () => {
     if (!existsSync(parentDir)) {
       mkdirSync(parentDir, { recursive: true });
     }
-    execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
+    try {
+      execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
+    } catch (err) {
+      console.error(`Failed to clone repository: ${(err as Error).message}`);
+      throw new Error(`Git clone failed for ${ITERATE_REPO_URL}`);
+    }
   }
 
   console.log("Running pnpm install...");
-  execSync("pnpm install", {
-    cwd: ITERATE_REPO_PATH,
-    stdio: "inherit",
-    env: { ...process.env, CI: "true" },
-  });
+  try {
+    execSync("pnpm install", {
+      cwd: ITERATE_REPO_PATH,
+      stdio: "inherit",
+      env: { ...process.env, CI: "true" },
+    });
+  } catch (err) {
+    console.error(`Failed to install dependencies: ${(err as Error).message}`);
+    throw new Error("pnpm install failed");
+  }
 };
 
 const buildDaemonIfNeeded = () => {
@@ -192,11 +206,27 @@ const ensureIterateServerRunScript = () => {
     "",
   ].join("\n");
 
-  const current = readFileSync(runPath, "utf-8");
-  if (current === desired) return;
+  try {
+    const current = readFileSync(runPath, "utf-8");
+    if (current === desired) return;
+  } catch {
+    // File doesn't exist or can't be read, continue to write
+  }
 
-  writeFileSync(runPath, desired);
-  chmodSync(runPath, 0o755);
+  // Use atomic write: write to temp file then rename to avoid race with s6 reading
+  const tempPath = `${runPath}.tmp.${process.pid}`;
+  try {
+    writeFileSync(tempPath, desired, { mode: 0o755 });
+    renameSync(tempPath, runPath);
+  } catch (err) {
+    // Clean up temp file on error
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // ignore cleanup errors
+    }
+    throw err;
+  }
 };
 
 const cleanupS6RuntimeState = () => {
@@ -235,6 +265,8 @@ const startS6Svscan = (): ChildProcess => {
   return svscan;
 };
 
+const SHUTDOWN_TIMEOUT_MS = 10000; // 10 seconds for graceful shutdown
+
 const main = () => {
   setupGoStyleSymlink();
   cloneAndSetupIterateRepo();
@@ -245,16 +277,37 @@ const main = () => {
 
   const svscan = startS6Svscan();
 
-  // Forward signals to s6-svscan for clean shutdown
-  process.on("SIGINT", () => {
-    console.log("Received SIGINT, shutting down s6-svscan...");
-    svscan.kill("SIGINT");
+  let shuttingDown = false;
+  let shutdownTimer: NodeJS.Timeout | null = null;
+
+  const initiateShutdown = (signal: string) => {
+    if (shuttingDown) {
+      console.log(`Already shutting down, ignoring ${signal}`);
+      return;
+    }
+    shuttingDown = true;
+
+    console.log(`Received ${signal}, shutting down s6-svscan...`);
+    svscan.kill("SIGTERM");
+
+    // Force exit after timeout if graceful shutdown doesn't complete
+    shutdownTimer = setTimeout(() => {
+      console.error(`Shutdown timeout after ${SHUTDOWN_TIMEOUT_MS}ms, forcing exit`);
+      svscan.kill("SIGKILL");
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+  };
+
+  // Clear timeout when s6-svscan exits naturally
+  svscan.on("exit", () => {
+    if (shutdownTimer) {
+      clearTimeout(shutdownTimer);
+    }
   });
 
-  process.on("SIGTERM", () => {
-    console.log("Received SIGTERM, shutting down s6-svscan...");
-    svscan.kill("SIGTERM");
-  });
+  // Forward signals to s6-svscan for clean shutdown
+  process.on("SIGINT", () => initiateShutdown("SIGINT"));
+  process.on("SIGTERM", () => initiateShutdown("SIGTERM"));
 };
 
 main();

@@ -62,8 +62,8 @@ function ensureLocalDockerImage() {
     );
 
     if (buildResult.status !== 0) {
-      console.warn(
-        `Warning: Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Local Docker machines won't work.`,
+      throw new Error(
+        `Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Check Docker is running and try again.`,
       );
     } else {
       console.log(`Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);

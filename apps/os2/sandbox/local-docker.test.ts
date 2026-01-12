@@ -14,7 +14,7 @@
  * - Set RUN_LOCAL_DOCKER_TESTS=true to run these tests
  *
  * RUN WITH:
- *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.integration.test.ts
+ *   RUN_LOCAL_DOCKER_TESTS=true pnpm vitest run sandbox/local-docker.test.ts
  */
 
 import { execSync } from "node:child_process";
@@ -22,36 +22,16 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { dockerApi, DOCKER_API_URL } from "../backend/providers/local-docker.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "../../..");
 
-const DOCKER_API_URL = "http://127.0.0.1:2375";
 const IMAGE_NAME = "iterate-sandbox-test";
 const CONTAINER_NAME = `sandbox-integration-test-${Date.now()}`;
 const ITERATE_SERVER_HOST_PORT = 13000 + Math.floor(Math.random() * 1000);
 
 const RUN_LOCAL_DOCKER_TESTS = process.env.RUN_LOCAL_DOCKER_TESTS === "true";
-
-async function dockerApi<T>(
-  method: string,
-  endpoint: string,
-  body?: Record<string, unknown>,
-): Promise<T> {
-  const response = await fetch(`${DOCKER_API_URL}${endpoint}`, {
-    method,
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({ message: response.statusText }));
-    throw new Error(`Docker API error: ${(error as { message?: string }).message}`);
-  }
-
-  const text = await response.text();
-  return text ? JSON.parse(text) : ({} as T);
-}
 
 async function getContainerLogs(containerId: string): Promise<string> {
   const response = await fetch(
