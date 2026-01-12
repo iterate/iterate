@@ -1,87 +1,94 @@
-# Daemon
+# Daemon2
 
-A Hono-based HTTP server that provides real-time event streaming and agent management. The daemon manages Pi coding agent sessions and persists events to the filesystem.
+A local daemon for managing coding agents with a web UI. Built with Hono (server) and React + TanStack Router (client).
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                           Daemon Server                              │
-│  ┌─────────────────────┐   ┌────────────────────────────────────┐   │
-│  │   Hono HTTP Server  │   │      StreamManagerService          │   │
-│  │                     │   │  ┌─────────────┐  ┌─────────────┐  │   │
-│  │  /agents/* routes   │◄──│  │ EventStream │  │   Storage   │  │   │
-│  │  /streams/* routes  │   │  │   (Effect)  │  │  (FileSystem)│  │   │
-│  └─────────────────────┘   │  └─────────────┘  └─────────────┘  │   │
-│           │                └────────────────────────────────────┘   │
-│           │ SSE                          │                          │
-│           ▼                              ▼                          │
-│  ┌─────────────────────┐   ┌────────────────────────────────────┐   │
-│  │    Web UI (React)   │   │         Pi Adapter                  │   │
-│  │  /ui/* static files │   │  - Subscribes to stream events      │   │
-│  └─────────────────────┘   │  - Manages Pi SDK sessions          │   │
-│                            │  - Wraps Pi events → stream events  │   │
-│                            └────────────────────────────────────┘   │
+│                         Development Mode                             │
+│                                                                      │
+│  ┌────────────────────────┐      ┌─────────────────────────────┐    │
+│  │   Vite Dev Server      │      │    Hono API Server          │    │
+│  │   (port 3000)          │      │    (port 3001)              │    │
+│  │                        │      │                             │    │
+│  │  - React SPA (HMR)     │ ───► │  - /api/trpc/*              │    │
+│  │  - Proxies /api/*      │ ws   │  - /api/health              │    │
+│  │                        │      │  - /api/pty (WebSocket)     │    │
+│  └────────────────────────┘      └─────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-                        ┌──────────────────────┐
-                        │    .iterate/streams/ │
-                        │    (JSON files)      │
-                        └──────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Production Mode                              │
+│                                                                      │
+│  ┌──────────────────────────────────────────────────────────────┐   │
+│  │                    Hono Server (port 3001)                    │   │
+│  │                                                               │   │
+│  │  - Serves static SPA from ./dist                              │   │
+│  │  - /api/trpc/*                                                │   │
+│  │  - /api/health                                                │   │
+│  │  - /api/pty (WebSocket for terminal)                          │   │
+│  └──────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Scripts
 
-| Script           | Description                      |
-| ---------------- | -------------------------------- |
-| `pnpm dev`       | Start dev server with hot reload |
-| `pnpm start`     | Start production server          |
-| `pnpm build`     | Build static UI assets           |
-| `pnpm test`      | Run tests                        |
-| `pnpm typecheck` | Type check without emitting      |
-
-## API Endpoints
-
-### Agent Routes (`/agents/*`)
-
-| Method | Path                   | Description                     |
-| ------ | ---------------------- | ------------------------------- |
-| PUT    | `/agents/:name`        | Create agent session            |
-| POST   | `/agents/:name`        | Send message to agent           |
-| GET    | `/agents/:name`        | Subscribe to agent events (SSE) |
-| DELETE | `/agents/:name`        | Delete agent session            |
-| HEAD   | `/agents/:name`        | Check if agent exists           |
-| GET    | `/agents/__registry__` | Subscribe to agent registry     |
-
-### Stream Routes (`/streams/*`)
-
-| Method | Path       | Description      |
-| ------ | ---------- | ---------------- |
-| GET    | `/streams` | List all streams |
-
-### Other
-
-| Method | Path             | Description       |
-| ------ | ---------------- | ----------------- |
-| GET    | `/`              | Redirect to `/ui` |
-| GET    | `/platform/ping` | Health check      |
+| Script              | Description                                       |
+| ------------------- | ------------------------------------------------- |
+| `pnpm dev`          | Start both client (Vite) and server concurrently  |
+| `pnpm dev:client`   | Start Vite dev server only                        |
+| `pnpm dev:server`   | Start Hono API server with watch mode             |
+| `pnpm build:client` | Build static SPA to ./dist                        |
+| `pnpm start`        | Start production server (serves API + static SPA) |
+| `pnpm test`         | Run tests                                         |
+| `pnpm typecheck`    | Type check without emitting                       |
 
 ## Directory Structure
 
 ```
 apps/daemon2/
-├── src/
-│   ├── backend/         # Server-side code
-│   ├── app/             # React UI components
-│   └── server.ts        # HTTP server entry point
-└── vite.config.ts       # Vite dev server config
+├── client/              # React SPA (TanStack Router)
+│   ├── components/      # UI components
+│   ├── hooks/           # React hooks
+│   ├── integrations/    # tRPC and TanStack Query setup
+│   ├── routes/          # File-based routes
+│   ├── main.tsx         # Client entry point
+│   └── router.tsx       # Router configuration
+├── server/              # Hono API server
+│   ├── routers/         # API route handlers
+│   ├── trpc/            # tRPC router and procedures
+│   ├── db/              # Database schema and client
+│   ├── utils/           # Shared utilities (Hono app, WebSocket)
+│   └── app.ts           # Main Hono app with middleware
+├── server.ts            # Production server entry point
+├── index.html           # SPA HTML template
+└── vite.config.ts       # Vite configuration
 ```
+
+## API Endpoints
+
+### tRPC (`/api/trpc/*`)
+
+All application data is accessed via tRPC procedures.
+
+### WebSocket (`/api/pty`)
+
+PTY terminal WebSocket endpoint for interactive terminal sessions.
+
+| Query Param   | Description                          |
+| ------------- | ------------------------------------ |
+| `cols`        | Terminal columns (default: 80)       |
+| `rows`        | Terminal rows (default: 24)          |
+| `tmuxSession` | Optional tmux session name to attach |
+
+### Health Check
+
+| Method | Path          | Description  |
+| ------ | ------------- | ------------ |
+| GET    | `/api/health` | Health check |
 
 ## Data Storage
 
-Events are persisted to `.iterate/streams/` as JSON files, one file per stream. The storage layer uses Effect's FileSystem service for cross-platform compatibility.
-
-## Related
-
-- [`apps/cli`](../cli) - CLI that manages daemon lifecycle
+- SQLite database at `./db.sqlite`
+- Tmux socket at `./.iterate/tmux.sock`
