@@ -7,9 +7,7 @@ test.describe("realtime pusher", () => {
 
     page.on("websocket", (ws) => {
       if (ws.url().includes("/api/ws/realtime")) {
-        console.log("[TEST] Realtime WebSocket opened:", ws.url());
         ws.on("framereceived", (frame) => {
-          console.log("[TEST] Realtime WS frame:", frame.payload?.toString());
           realtimeMessages.push(frame.payload?.toString() || "");
         });
       }
@@ -31,7 +29,6 @@ test.describe("realtime pusher", () => {
         return { ok: res.ok, status: res.status, text: await res.text() };
       });
     await expect.poll(() => triggerResult()).toMatchObject({ ok: true });
-    console.log("[TEST] Mutation result:", await triggerResult());
 
     await expect
       .poll(() => realtimeMessages)
