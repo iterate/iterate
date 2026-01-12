@@ -14,8 +14,18 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../../components/ui/dialog.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../../../components/ui/select.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
 import { MachineTable } from "../../../components/machine-table.tsx";
+import { isNonProd } from "../../../../env-client.ts";
+
+type MachineType = "daytona" | "local-docker";
 
 export const Route = createFileRoute(
   "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/machines",
@@ -30,6 +40,7 @@ function ProjectMachinesPage() {
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [newMachineName, setNewMachineName] = useState("");
+  const [newMachineType, setNewMachineType] = useState<MachineType>("daytona");
 
   const machineListQueryKey = trpc.machine.list.queryKey({
     organizationSlug: params.organizationSlug,
@@ -46,17 +57,18 @@ function ProjectMachinesPage() {
   );
 
   const createMachine = useMutation({
-    mutationFn: async (name: string) => {
+    mutationFn: async ({ name, type }: { name: string; type: MachineType }) => {
       return trpcClient.machine.create.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         name,
-        type: "daytona",
+        type,
       });
     },
     onSuccess: () => {
       setCreateDialogOpen(false);
       setNewMachineName("");
+      setNewMachineType("daytona");
       toast.success("Machine created!");
       queryClient.invalidateQueries({ queryKey: machineListQueryKey });
     },
@@ -119,7 +131,7 @@ function ProjectMachinesPage() {
   const handleCreateMachine = (e: FormEvent) => {
     e.preventDefault();
     if (newMachineName.trim()) {
-      createMachine.mutate(newMachineName.trim());
+      createMachine.mutate({ name: newMachineName.trim(), type: newMachineType });
     }
   };
 
@@ -131,14 +143,37 @@ function ProjectMachinesPage() {
             <DialogTitle>Create Machine</DialogTitle>
             <DialogDescription>Create a new machine in this project.</DialogDescription>
           </DialogHeader>
-          <div className="py-4">
-            <Input
-              placeholder="Machine name"
-              value={newMachineName}
-              onChange={(e) => setNewMachineName(e.target.value)}
-              disabled={createMachine.isPending}
-              autoFocus
-            />
+          <div className="py-4 space-y-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                placeholder="Machine name"
+                value={newMachineName}
+                onChange={(e) => setNewMachineName(e.target.value)}
+                disabled={createMachine.isPending}
+                autoFocus
+                autoComplete="off"
+                data-1p-ignore
+              />
+            </div>
+            {isNonProd && (
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Machine Type</label>
+                <Select
+                  value={newMachineType}
+                  onValueChange={(v) => setNewMachineType(v as MachineType)}
+                  disabled={createMachine.isPending}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daytona">Daytona (Cloud)</SelectItem>
+                    <SelectItem value="local-docker">Local Docker</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button

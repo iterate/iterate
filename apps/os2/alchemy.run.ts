@@ -1,5 +1,7 @@
-import { execSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
 import { Database, Branch, Role } from "alchemy/planetscale";
@@ -8,6 +10,8 @@ import { CloudflareStateStore, SQLiteStateStore } from "alchemy/state";
 import { Exec } from "alchemy/os";
 import { z } from "zod/v4";
 import dedent from "dedent";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -26,6 +30,39 @@ const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
 const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
+
+const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
+
+function ensureLocalDockerImage() {
+  const result = spawnSync("docker", ["images", "-q", LOCAL_DOCKER_IMAGE_NAME], {
+    encoding: "utf-8",
+  });
+
+  if (result.status !== 0) {
+    console.log("Docker not available, skipping local sandbox image build");
+    return;
+  }
+
+  const imageExists = result.stdout.trim().length > 0;
+
+  if (!imageExists) {
+    console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME}...`);
+    const buildResult = spawnSync("docker", ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "./sandbox"], {
+      cwd: __dirname,
+      stdio: "inherit",
+    });
+
+    if (buildResult.status !== 0) {
+      console.warn(
+        `Warning: Failed to build ${LOCAL_DOCKER_IMAGE_NAME}. Local Docker machines won't work.`,
+      );
+    } else {
+      console.log(`Successfully built ${LOCAL_DOCKER_IMAGE_NAME}`);
+    }
+  } else {
+    console.log(`Local Docker image ${LOCAL_DOCKER_IMAGE_NAME} already exists`);
+  }
+}
 
 async function verifyDopplerEnvironment() {
   if (process.env.SKIP_DOPPLER_CHECK) return;
@@ -247,6 +284,11 @@ if (process.env.GITHUB_OUTPUT) {
 }
 
 await verifyDopplerEnvironment();
+
+if (isDevelopment) {
+  ensureLocalDockerImage();
+}
+
 export const worker = await deployWorker();
 
 await app.finalize();

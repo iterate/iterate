@@ -17,6 +17,11 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
 
+# Clone iterate repo and install dependencies (baked into image for faster startup)
+RUN git clone https://github.com/iterate/iterate.git /repos/iterate && \
+    cd /repos/iterate && \
+    pnpm install
+
 COPY entry.ts /app/entry.ts
 
 ENTRYPOINT [ "tsx", "entry.ts" ]

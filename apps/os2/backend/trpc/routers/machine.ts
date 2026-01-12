@@ -1,26 +1,61 @@
 import { z } from "zod/v4";
 import { eq, and, isNull } from "drizzle-orm";
 import { TRPCError } from "@trpc/server";
-import { Daytona } from "@daytonaio/sdk";
 import { typeid } from "typeid-js";
-import { router, projectProtectedProcedure, projectProtectedMutation, t } from "../trpc.ts";
+import { router, projectProtectedProcedure, projectProtectedMutation } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { env, type CloudflareEnv } from "../../../env.ts";
-import { decrypt, encrypt } from "../../utils/encryption.ts";
+import { decrypt } from "../../utils/encryption.ts";
 import type { DB } from "../../db/client.ts";
 import { getGitHubInstallationToken, getRepositoryById } from "../../integrations/github/github.ts";
-import { resolveLatestSnapshot } from "../../integrations/daytona/snapshot-resolver.ts";
-import { generateToken } from "./access-token.ts";
+import { createMachineProvider, type MachineProvider } from "../../providers/index.ts";
 
-const daytonaMiddleware = t.middleware(async ({ ctx, next }) => {
-  const daytona = new Daytona({ apiKey: env.DAYTONA_API_KEY });
-  return next({ ctx: { ...ctx, daytona } });
-});
+// Helper to find an available port for local-docker machines
+async function findAvailablePort(db: DB): Promise<number> {
+  const machines = await db.query.machine.findMany({
+    where: eq(schema.machine.type, "local-docker"),
+  });
+
+  const usedPorts = new Set(
+    machines
+      .map((m) => (m.metadata as { port?: number })?.port)
+      .filter((p): p is number => p !== undefined),
+  );
+
+  for (let port = 10000; port <= 11000; port++) {
+    if (!usedPorts.has(port)) return port;
+  }
+  throw new Error("No available ports in range 10000-11000");
+}
+
+// Helper to get provider for a machine by looking up its type from the database
+async function getProviderForMachine(
+  db: DB,
+  projectId: string,
+  machineId: string,
+  cloudflareEnv: CloudflareEnv,
+): Promise<{ provider: MachineProvider; machine: typeof schema.machine.$inferSelect }> {
+  const machine = await db.query.machine.findFirst({
+    where: and(eq(schema.machine.id, machineId), eq(schema.machine.projectId, projectId)),
+  });
+
+  if (!machine) {
+    throw new TRPCError({
+      code: "NOT_FOUND",
+      message: "Machine not found",
+    });
+  }
+
+  const provider = createMachineProvider(machine.type, cloudflareEnv, {
+    findAvailablePort: () => findAvailablePort(db),
+  });
+
+  return { provider, machine };
+}
 
 export const machineRouter = router({
   // List machines in project
   list: projectProtectedProcedure
-    .use(daytonaMiddleware)
     .input(
       z.object({
         includeArchived: z.boolean().default(false).optional(),
@@ -41,7 +76,6 @@ export const machineRouter = router({
 
   // Get machine by ID
   byId: projectProtectedProcedure
-    .use(daytonaMiddleware)
     .input(
       z.object({
         machineId: z.string(),
@@ -67,7 +101,6 @@ export const machineRouter = router({
 
   // Create a new machine
   create: projectProtectedMutation
-    .use(daytonaMiddleware)
     .input(
       z.object({
         name: z.string().min(1).max(100),
@@ -76,8 +109,12 @@ export const machineRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const machineAuthToken = generateToken();
       const machineId = typeid("mach").toString();
+
+      // Create provider for the specified type
+      const provider = createMachineProvider(input.type, ctx.env, {
+        findAvailablePort: () => findAvailablePort(ctx.db),
+      });
 
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
         where: and(
@@ -102,32 +139,19 @@ export const machineRouter = router({
 
       const githubEnvVars = await getGitHubEnvVars(ctx.db, ctx.project.id, ctx.env);
 
-      // Resolve the latest snapshot matching the configured prefix
-      const snapshotName = await resolveLatestSnapshot(ctx.env.DAYTONA_SNAPSHOT_PREFIX, {
-        apiKey: env.DAYTONA_API_KEY,
-      }).catch((err) => {
-        throw new TRPCError({
-          code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to resolve snapshot: ${err instanceof Error ? err.message : String(err)}`,
-        });
-      });
-
-      const sandbox = await ctx.daytona
+      const result = await provider
         .create({
-          name: machineId,
-          snapshot: snapshotName,
+          machineId,
+          name: input.name,
           envVars: {
             ...envVars,
             ...githubEnvVars,
-            MACHINE_AUTH_TOKEN: machineAuthToken,
           },
-          autoStopInterval: 0,
-          public: true,
         })
         .catch((err) => {
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
-            message: `Failed to create sandbox: ${err instanceof Error ? err.message : String(err)}`,
+            message: `Failed to create machine: ${err instanceof Error ? err.message : String(err)}`,
           });
         });
 
@@ -141,23 +165,20 @@ export const machineRouter = router({
               type: input.type,
               projectId: ctx.project.id,
               state: "started",
-              metadata: { ...input.metadata, snapshotName },
-              externalId: sandbox.id,
+              metadata: { ...(input.metadata ?? {}), ...(result.metadata ?? {}) },
+              externalId: result.externalId,
             })
             .returning();
-
-          await tx.insert(schema.projectEnvVar).values({
-            projectId: ctx.project.id,
-            machineId,
-            key: "MACHINE_AUTH_TOKEN",
-            encryptedValue: await encrypt(machineAuthToken),
-            type: "system",
-          });
 
           return newMachine;
         })
         .catch(async (err) => {
-          if (sandbox) await sandbox.delete();
+          // Cleanup: delete the created machine if DB transaction fails
+          try {
+            await provider.delete(result.externalId);
+          } catch {
+            // Ignore cleanup errors
+          }
           throw err;
         });
 
@@ -173,13 +194,19 @@ export const machineRouter = router({
 
   // Archive a machine
   archive: projectProtectedMutation
-    .use(daytonaMiddleware)
     .input(
       z.object({
         machineId: z.string(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
       const [updated] = await ctx.db
         .update(schema.machine)
         .set({ state: "archived" })
@@ -195,28 +222,31 @@ export const machineRouter = router({
         });
       }
 
-      const sandbox = await ctx.daytona.get(input.machineId).catch((err) => {
+      await provider.archive(machine.externalId).catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to get sandbox: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to archive machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
-
-      if (sandbox.state === "started") await sandbox.stop();
-      await sandbox.archive();
 
       return updated;
     }),
 
   // Unarchive a machine (restore)
   unarchive: projectProtectedMutation
-    .use(daytonaMiddleware)
     .input(
       z.object({
         machineId: z.string(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
       const [updated] = await ctx.db
         .update(schema.machine)
         .set({ state: "started" })
@@ -232,34 +262,31 @@ export const machineRouter = router({
         });
       }
 
-      const sandbox = await ctx.daytona.get(input.machineId).catch((err) => {
+      await provider.start(machine.externalId).catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to get sandbox: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to unarchive machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
-
-      if (sandbox.state === "archived") {
-        await sandbox.start();
-      } else {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Machine is not archived",
-        });
-      }
 
       return updated;
     }),
 
   // Delete a machine permanently
   delete: projectProtectedMutation
-    .use(daytonaMiddleware)
     .input(
       z.object({
         machineId: z.string(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const { provider, machine } = await getProviderForMachine(
+        ctx.db,
+        ctx.project.id,
+        input.machineId,
+        ctx.env,
+      );
+
       const result = await ctx.db
         .delete(schema.machine)
         .where(
@@ -274,15 +301,12 @@ export const machineRouter = router({
         });
       }
 
-      const sandbox = await ctx.daytona.get(input.machineId).catch((err) => {
+      await provider.delete(machine.externalId).catch((err) => {
         throw new TRPCError({
           code: "INTERNAL_SERVER_ERROR",
-          message: `Failed to get sandbox: ${err instanceof Error ? err.message : String(err)}`,
+          message: `Failed to delete machine: ${err instanceof Error ? err.message : String(err)}`,
         });
       });
-
-      if (sandbox.state === "started") await sandbox.stop();
-      await sandbox.delete();
 
       return { success: true };
     }),
@@ -294,54 +318,34 @@ export const machineRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
-      return getMachinePreviewInfo({
-        db: ctx.db,
-        projectId: ctx.project.id,
-        machineId: input.machineId,
+      const machineRecord = await ctx.db.query.machine.findFirst({
+        where: and(
+          eq(schema.machine.id, input.machineId),
+          eq(schema.machine.projectId, ctx.project.id),
+        ),
       });
+      if (!machineRecord) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Machine not found",
+        });
+      }
+
+      const buildProxyUrl = (port: number) =>
+        `/org/${ctx.organization.slug}/proj/${ctx.project.slug}/${machineRecord.id}/proxy/${port}/`;
+
+      const metadata = machineRecord.metadata as { containerId?: string; port?: number };
+
+      return {
+        url: buildProxyUrl(3000),
+        daemon1Url: buildProxyUrl(3000),
+        daemon2Url: buildProxyUrl(3001),
+        terminalUrl: buildProxyUrl(22222),
+        machineType: machineRecord.type,
+        containerId: metadata.containerId,
+      };
     }),
 });
-
-export async function getMachinePreviewInfo({
-  db,
-  projectId,
-  machineId,
-}: {
-  db: DB;
-  projectId: string;
-  machineId: string;
-}) {
-  const machineRecord = await db.query.machine.findFirst({
-    where: and(eq(schema.machine.id, machineId), eq(schema.machine.projectId, projectId)),
-  });
-  if (!machineRecord) {
-    throw new TRPCError({
-      code: "NOT_FOUND",
-      message: "Machine not found",
-    });
-  }
-
-  const tokenEnvVar = await db.query.projectEnvVar.findFirst({
-    where: and(
-      eq(schema.projectEnvVar.projectId, projectId),
-      eq(schema.projectEnvVar.machineId, machineId),
-      eq(schema.projectEnvVar.key, "MACHINE_AUTH_TOKEN"),
-    ),
-  });
-  if (!tokenEnvVar) throw new Error("Machine auth token not found");
-
-  const machineAuthToken = await decrypt(tokenEnvVar.encryptedValue);
-  const previewUrl = `https://3000-${machineRecord.externalId}.proxy.daytona.works`;
-  const headers = {
-    Authorization: `${machineAuthToken}`,
-    "X-Daytona-Skip-Preview-Warning": "true",
-  };
-
-  return {
-    url: previewUrl,
-    headers,
-  };
-}
 
 async function getGitHubEnvVars(
   db: DB,

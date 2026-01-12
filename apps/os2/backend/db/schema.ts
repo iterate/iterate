@@ -12,7 +12,7 @@ export const MachineState = ["started", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona"] as const;
+export const MachineType = ["daytona", "local-docker"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 export const withTimestamps = {
@@ -298,13 +298,38 @@ export const machine = pgTable(
   (t) => [index().on(t.projectId), index().on(t.state)],
 );
 
-export const machineRelations = relations(machine, ({ one }) => ({
+export const machineRelations = relations(machine, ({ one, many }) => ({
   project: one(project, {
     fields: [machine.projectId],
     references: [project.id],
   }),
+  previewTokens: many(daytonaPreviewToken),
 }));
 // #endregion ========== Machine ==========
+
+// #region ========== Daytona Preview Tokens ==========
+export const daytonaPreviewToken = pgTable(
+  "daytona_preview_token",
+  (t) => ({
+    id: iterateId("dtpv"),
+    machineId: t
+      .text()
+      .notNull()
+      .references(() => machine.id, { onDelete: "cascade" }),
+    port: t.text().notNull(),
+    encryptedToken: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.machineId, t.port), index().on(t.machineId)],
+);
+
+export const daytonaPreviewTokenRelations = relations(daytonaPreviewToken, ({ one }) => ({
+  machine: one(machine, {
+    fields: [daytonaPreviewToken.machineId],
+    references: [machine.id],
+  }),
+}));
+// #endregion ========== Daytona Preview Tokens ==========
 
 // #region ========== Events (unified) ==========
 export const event = pgTable(
