@@ -1,7 +1,9 @@
 import { z } from "zod/v4";
 import { eq } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
-import { user } from "../../db/schema.ts";
+import { user, billingAccount } from "../../db/schema.ts";
+import { getStripe } from "../../integrations/stripe/stripe.ts";
 
 export const adminRouter = router({
   // Impersonate a user (creates a session as that user)
@@ -127,4 +129,42 @@ export const adminRouter = router({
         : null,
     };
   }),
+
+  chargeUsage: adminProcedure
+    .input(
+      z.object({
+        organizationId: z.string(),
+        units: z.number().int().positive(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const account = await ctx.db.query.billingAccount.findFirst({
+        where: eq(billingAccount.organizationId, input.organizationId),
+      });
+
+      if (!account?.stripeCustomerId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Organization has no billing account or Stripe customer",
+        });
+      }
+
+      const stripe = getStripe();
+
+      const meterEvent = await stripe.v2.billing.meterEvents.create({
+        event_name: "test_usage_units",
+        payload: {
+          stripe_customer_id: account.stripeCustomerId,
+          value: String(input.units),
+        },
+      });
+
+      return {
+        success: true,
+        units: input.units,
+        costCents: input.units,
+        meterEventId: meterEvent.identifier,
+        stripeCustomerId: account.stripeCustomerId,
+      };
+    }),
 });
