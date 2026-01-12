@@ -2,7 +2,7 @@ import { createFileRoute, Outlet, redirect, useLocation, useParams } from "@tans
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
-import { usePostHogIdentity } from "../../hooks/use-posthog-identity.ts";
+import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
