@@ -3,6 +3,7 @@ import { Locator, type Page } from "@playwright/test";
 
 export namespace spinnerWaiter {
   export type Settings = {
+    spinnerSelector: string;
     spinnerTimeout: number;
     disabled: boolean;
     log: (message: string) => void;
@@ -11,7 +12,12 @@ export namespace spinnerWaiter {
 
 const settings = new AsyncLocalStorage<Partial<spinnerWaiter.Settings>>();
 
-const defaults: spinnerWaiter.Settings = { spinnerTimeout: 30_000, disabled: false, log: () => {} };
+const defaults: spinnerWaiter.Settings = {
+  spinnerSelector: `[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
+  spinnerTimeout: 30_000,
+  disabled: false,
+  log: () => {},
+};
 
 export const spinnerWaiter = { setup, settings, defaults };
 
@@ -34,7 +40,7 @@ const overrideableMethods = [
 ] satisfies (keyof Locator)[];
 type OverrideableMethod = (typeof overrideableMethods)[number];
 
-type LocatorWithOriginal = Locator & {
+export type LocatorWithOriginal = Locator & {
   [K in OverrideableMethod as `${K}_original`]: Locator[K];
 };
 
@@ -64,9 +70,7 @@ function setup(page: Page) {
           });
         }
 
-        const spinnerLocator = this.page().locator(
-          `[data-spinner],[data-spinner='true'],:text-matches("(loading|pending|creating)\\.\\.\\.$", "i")`,
-        ) as LocatorWithOriginal;
+        const spinnerLocator = this.page().locator(settings.spinnerSelector) as LocatorWithOriginal;
         const union = this.or(spinnerLocator) as LocatorWithOriginal;
 
         settings.log(`waiting for union ${union}`);
