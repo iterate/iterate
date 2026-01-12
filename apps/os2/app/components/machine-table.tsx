@@ -6,7 +6,6 @@ import {
   Trash2,
   RotateCcw,
   Monitor,
-  Terminal,
   ScrollText,
   Copy,
   Check,
@@ -74,13 +73,13 @@ export function MachineTable({
     return null;
   }
 
-  const openDaemon = async (machineId: string, daemonKey: "daemon1Url" | "daemon2Url") => {
+  const openDaemon = async (machineId: string) => {
     const result = await trpcClient.machine.getPreviewInfo.query({
       organizationSlug,
       projectSlug,
       machineId,
     });
-    window.open(result[daemonKey], "_blank");
+    window.open(result.daemonUrl, "_blank");
   };
 
   const openTerminal = async (machineId: string) => {
@@ -140,13 +139,9 @@ export function MachineTable({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => openDaemon(machine.id, "daemon1Url")}>
+                    <DropdownMenuItem onClick={() => openDaemon(machine.id)}>
                       <Monitor className="h-4 w-4 mr-2" />
-                      Open Daemon 1 (Fancy)
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openDaemon(machine.id, "daemon2Url")}>
-                      <Terminal className="h-4 w-4 mr-2" />
-                      Open Daemon 2 (Just tmux)
+                      Open Daemon
                     </DropdownMenuItem>
                     {machine.type === "local-docker" && (
                       <DropdownMenuItem onClick={() => setLogsDialogMachine(machine)}>

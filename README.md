@@ -22,7 +22,7 @@ pnpm os2 dev
 ## Repository Structure
 
 - `apps/os2/` - Primary application (React + Cloudflare Workers)
-- `apps/daemon/` - Local daemon for durable streams and agent orchestration
+- `apps/daemon2/` - Local daemon for durable streams and agent orchestration
 - `apps/os/` - **DEPRECATED** - Legacy application
 - `estates/` - Example configurations and customizations
 - `vibe-rules/` - Coding agent rules (generates AGENTS.md, CLAUDE.md)
@@ -32,7 +32,7 @@ pnpm os2 dev
 ```bash
 pnpm dev          # Run all apps in parallel
 pnpm os2 dev      # Run apps/os2 only
-pnpm daemon dev   # Run apps/daemon only
+pnpm daemon2 dev  # Run apps/daemon2 only
 pnpm test         # Run all tests
 pnpm typecheck    # Type check all packages
 pnpm lint         # Lint and fix

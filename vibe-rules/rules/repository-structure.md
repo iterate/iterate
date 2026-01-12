@@ -9,7 +9,7 @@ alwaysApply: true
 
 ---
 
-This monorepo uses pnpm workspaces and is organized around the primary app (`apps/os2`), a local daemon (`apps/daemon`), reusable packages, example estates, and shared rules. Paths below are relative to the repo root.
+This monorepo uses pnpm workspaces and is organized around the primary app (`apps/os2`), a local daemon (`apps/daemon2`), reusable packages, example estates, and shared rules. Paths below are relative to the repo root.
 
 ### Top-level directories
 
@@ -19,10 +19,7 @@ This monorepo uses pnpm workspaces and is organized around the primary app (`app
     - **`backend/`**: Cloudflare Worker backend with nodejs-compat. Uses Drizzle ORM against Postgres.
       - Logging via `backend/tag-logger.ts` (do not use `console`).
     - Notable root files: `env.ts` (Cloudflare env import), `vite.config.ts`, `vitest.config.ts`, `tsconfig.json`.
-  - **`apps/daemon/`**: Local daemon for durable streams and agent orchestration.
-    - **`durable-streams/`**: Event stream implementation with append/subscribe semantics.
-    - **`agent-wrapper/`**: Harness adapters for various AI coding agents.
-    - **`ui/`**: Local development UI components.
+  - **`apps/daemon2/`**: Local daemon for durable streams and agent orchestration (Hono-based).
   - **`apps/os/`**: **DEPRECATED** - Legacy application. Do not use for new development.
 - **`packages/`**: Reusable packages published/consumed within the workspace.
 - **`estates/`**: Example estates/templates demonstrating brand- or deployment-specific customizations.
@@ -32,7 +29,7 @@ This monorepo uses pnpm workspaces and is organized around the primary app (`app
   - **`rules/`**: Markdown rule files with YAML frontmatter.
   - **`llms.ts`**: Loads rules from `vibe-rules/rules/**.md`.
 - **`scripts/`**: Developer scripts and setup helpers.
-- **`docs/`**: Documentation including task system and daemon architecture.
+- **`tasks/`**: Task planning documents and architecture notes.
 
 ### Root-level configuration and tooling
 

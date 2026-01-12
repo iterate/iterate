@@ -338,8 +338,7 @@ export const machineRouter = router({
 
       return {
         url: buildProxyUrl(3000),
-        daemon1Url: buildProxyUrl(3000),
-        daemon2Url: buildProxyUrl(3001),
+        daemonUrl: buildProxyUrl(3000),
         terminalUrl: buildProxyUrl(22222),
         machineType: machineRecord.type,
         containerId: metadata.containerId,

@@ -1,12 +1,17 @@
+/**
+ * Standalone HTTP server for CLI auto-daemon feature.
+ * This can be run directly with `npx tsx` without requiring a full Vite build.
+ * It exposes the essential API endpoints (health check, tRPC) without the React frontend.
+ */
+import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { secureHeaders } from "hono/secure-headers";
 import { logger } from "hono/logger";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
 import { getHTTPStatusCodeFromError } from "@trpc/server/http";
-import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { trpcRouter } from "./integrations/trpc/router.ts";
-import { daemonApp } from "./backend/daemon-app.ts";
+
+const port = parseInt(process.env.PORT || "3000", 10);
 
 const app = new Hono();
 
@@ -14,36 +19,21 @@ app.use("*", logger());
 app.use(
   "*",
   cors({
-    origin: (origin) => {
-      if (import.meta.env.DEV) return origin;
-      return null;
-    },
+    origin: "*",
     credentials: true,
     allowMethods: ["GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS"],
-    allowHeaders: [
-      "Content-Type",
-      "Authorization",
-      "Stream-Seq",
-      "Stream-TTL",
-      "Stream-Expires-At",
-    ],
-    exposeHeaders: [
-      "Stream-Next-Offset",
-      "Stream-Cursor",
-      "Stream-Up-To-Date",
-      "ETag",
-      "Content-Type",
-      "Content-Encoding",
-      "Vary",
-      "Location",
-    ],
+    allowHeaders: ["Content-Type", "Authorization"],
+    exposeHeaders: ["Content-Type"],
     maxAge: 600,
   }),
-  secureHeaders(),
 );
 
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
+app.get("/platform/ping", (c) => {
+  return c.text("pong");
 });
 
 app.all("/api/trpc/*", (c) => {
@@ -64,12 +54,21 @@ app.all("/api/trpc/*", (c) => {
   });
 });
 
-app.route("/api", daemonApp);
-
 app.all("*", (c) => {
-  return handler.fetch(c.req.raw);
+  return c.json(
+    {
+      error: "Not Found",
+      message: "This is the standalone API server. Use the full daemon2 app for the UI.",
+    },
+    404,
+  );
 });
 
-export default createServerEntry({
+console.log(`Starting standalone daemon server on port ${port}...`);
+
+serve({
   fetch: app.fetch,
+  port,
 });
+
+console.log(`Daemon server running at http://localhost:${port}`);
