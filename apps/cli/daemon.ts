@@ -105,10 +105,10 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
       const logPath = resolvePath(config.logFile);
       const out = openSync(logPath, "a");
 
-      // Launch the daemon server from the daemon package
-      // The daemon server is in apps/daemon/server.ts
-      const daemonPackagePath = join(__dirname, "..", "daemon");
-      const serverScript = join(daemonPackagePath, "server.ts");
+      // Launch the daemon server from the daemon2 package
+      // The daemon server is in apps/daemon2/src/server.ts
+      const daemonPackagePath = join(__dirname, "..", "daemon2");
+      const serverScript = join(daemonPackagePath, "src", "server.ts");
 
       const child = spawn("npx", ["tsx", serverScript], {
         detached: true,

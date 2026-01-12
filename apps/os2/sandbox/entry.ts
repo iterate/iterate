@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 
 const ITERATE_REPO_PATH = "/repos/iterate";
 const ITERATE_REPO_URL = "https://github.com/iterate/iterate.git";
-const DAEMON_PATH = `${ITERATE_REPO_PATH}/apps/daemon`;
+const DAEMON_PATH = `${ITERATE_REPO_PATH}/apps/daemon2`;
 
 const USER_REPO_PATH = "/repos/user";
 

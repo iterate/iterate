@@ -19,7 +19,7 @@ import { StreamClientService, StreamClientLive, type StreamName, Event } from ".
 import { DaemonService, DATA_DIR } from "./daemon.ts";
 
 // ─── Pi Event Types (for prompt/abort commands) ─────────────────────────────
-// These match the types in apps/daemon/agents/pi/types.ts
+// These match the types in apps/daemon2
 
 const PiEventTypes = {
   SESSION_CREATE: "pi:session-create",
