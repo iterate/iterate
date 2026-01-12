@@ -25,7 +25,6 @@ test.describe("login page", () => {
     await emailInput.fill(email);
     await submitButton.click();
 
-    // Wait for the OTP verification screen to appear
     await expect(page.getByText("Enter verification code")).toBeVisible({ timeout: 15000 });
 
     const firstOtpInput = page.locator('input[inputmode="numeric"]').first();

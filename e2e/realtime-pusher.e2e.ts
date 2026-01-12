@@ -6,7 +6,6 @@ test.describe("realtime pusher", () => {
     const realtimeMessages: string[] = [];
 
     page.on("websocket", (ws) => {
-      // Only track messages from our realtime WebSocket
       if (ws.url().includes("/api/ws/realtime")) {
         console.log("[TEST] Realtime WebSocket opened:", ws.url());
         ws.on("framereceived", (frame) => {
@@ -18,14 +17,11 @@ test.describe("realtime pusher", () => {
 
     await page.goto(`${baseURL}/login`);
 
-    // Wait for WebSocket to connect
     await page.waitForTimeout(3000);
 
     console.log("[TEST] Messages so far:", realtimeMessages);
-    // Check we got CONNECTED message (our DO sends uppercase CONNECTED)
     expect(realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);
 
-    // Trigger a mutation
     const triggerResult = await page.evaluate(async () => {
       const res = await fetch("/api/trpc/testing.triggerInvalidation", {
         method: "POST",
@@ -37,7 +33,6 @@ test.describe("realtime pusher", () => {
     console.log("[TEST] Mutation result:", triggerResult);
     expect(triggerResult.ok).toBe(true);
 
-    // Wait for broadcast
     await page.waitForTimeout(2000);
 
     console.log("[TEST] All messages:", realtimeMessages);
@@ -63,14 +58,12 @@ test.describe("realtime pusher", () => {
 
     await Promise.all([page1.goto(`${baseURL}/login`), page2.goto(`${baseURL}/login`)]);
 
-    // Wait for WebSocket connections
     await page1.waitForTimeout(3000);
     await page2.waitForTimeout(1000);
 
     console.log("[TEST] Page2 messages after connect:", page2Messages);
     expect(page2Messages.some((msg) => msg.includes("CONNECTED"))).toBe(true);
 
-    // Trigger mutation from page1
     await page1.evaluate(async () => {
       await fetch("/api/trpc/testing.triggerInvalidation", {
         method: "POST",

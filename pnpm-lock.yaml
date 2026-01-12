@@ -391,9 +391,6 @@ importers:
       '@hono/vite-dev-server':
         specifier: ^0.24.0
         version: 0.24.0(hono@4.11.3)(miniflare@4.20251125.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(wrangler@4.51.0(@cloudflare/workers-types@4.20251128.0)(bufferutil@4.0.9)(utf-8-validate@5.0.10))
-      '@playwright/test':
-        specifier: ^1.57.0
-        version: 1.57.0
       '@tanstack/devtools-vite':
         specifier: ^0.3.11
         version: 0.3.11(bufferutil@4.0.9)(utf-8-validate@5.0.10)(vite@7.3.1(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
@@ -1130,9 +1127,6 @@ importers:
       '@effect/vitest':
         specifier: ^0.22.0
         version: 0.22.5(effect@3.19.14)(vitest@4.0.15)
-      '@playwright/test':
-        specifier: ^1.57.0
-        version: 1.57.0
       '@tailwindcss/vite':
         specifier: ^4.1.17
         version: 4.1.17(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
@@ -1169,9 +1163,6 @@ importers:
       drizzle-kit:
         specifier: ^0.31.7
         version: 0.31.7
-      playwright:
-        specifier: ^1.57.0
-        version: 1.57.0
       tailwindcss:
         specifier: ^4.1.17
         version: 4.1.17
@@ -1335,6 +1326,21 @@ importers:
       web-vitals:
         specifier: ^5.1.0
         version: 5.1.0
+
+  e2e:
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.57.0
+        version: 1.57.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.1
+      playwright:
+        specifier: ^1.57.0
+        version: 1.57.0
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
 
   estates/garple:
     dependencies:

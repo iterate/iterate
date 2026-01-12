@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "./test-helpers.ts";
 
 function uniqueSlug(base: string): string {
   return `${base}-${Date.now()}`;
@@ -86,10 +87,8 @@ test.describe("agent management", () => {
     await expect(page.getByRole("dialog")).not.toBeVisible({ timeout: 5000 });
     await expect(page.url()).toContain(`/agents/${slug}`);
 
-    // Wait for agent page content to load (loading spinner or terminal)
     await page.waitForTimeout(1000);
 
-    // Check that we're still on the agent page (didn't redirect to error)
     expect(page.url()).toContain(`/agents/${slug}`);
   });
 
