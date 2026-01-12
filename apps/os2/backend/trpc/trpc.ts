@@ -7,6 +7,7 @@ import { organizationUserMembership, organization, project as projectTable } fro
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
 import { captureServerEvent } from "../lib/posthog.ts";
+import { waitUntil } from "../../env.ts";
 import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 
@@ -260,14 +261,16 @@ const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawI
     groups.project = proj.id;
   }
 
-  // Capture the event
+  // Capture the event using waitUntil to ensure delivery
   const eventName = config.eventName || `trpc.${path}`;
-  captureServerEvent(ctx.env, {
-    distinctId: userId,
-    event: eventName,
-    properties,
-    groups: Object.keys(groups).length > 0 ? groups : undefined,
-  });
+  waitUntil(
+    captureServerEvent(ctx.env, {
+      distinctId: userId,
+      event: eventName,
+      properties,
+      groups: Object.keys(groups).length > 0 ? groups : undefined,
+    }),
+  );
 
   return result;
 });
