@@ -25,4 +25,8 @@ COPY . /iterate-repo
 
 RUN pnpm install
 
+# entry.ts sets up the Go-style checkout path at ~/src/github.com/iterate/iterate by
+# symlinking it to /iterate-repo (the build-time checkout). The image build doesn't
+# know the runtime home dir, so we standardize on /iterate-repo here and fix up the
+# home-based path at container start.
 ENTRYPOINT [ "tsx", "apps/os2/sandbox/entry.ts" ]
