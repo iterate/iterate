@@ -1,0 +1,7 @@
+{
+  "displayName": "Example Service B",
+  "description": "Test daemon that proxies to service-a (demonstrates dependencies and log rotation)",
+  "port": 3002,
+  "healthEndpoint": "/health",
+  "hasWebUI": false
+}

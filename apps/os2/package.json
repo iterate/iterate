@@ -4,8 +4,8 @@
   "version": "0.0.1",
   "scripts": {
     "build": "doppler run -- vite build",
-    "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${USER}}\"",
-    "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$USER",
+    "deploy": "doppler run -- tsx ./alchemy.run.ts cli deploy --stage \"${STAGE:-local-${ITERATE_USER}}\"",
+    "dev": "doppler run -- tsx ./alchemy.run.ts cli --dev --stage local-$ITERATE_USER",
     "dev:vite": "vite",
     "preview": "pnpm run build && vite preview",
     "test": "vitest",
@@ -14,7 +14,10 @@
     "db:reset": "doppler run -- tsx -e \"(async () => { const postgres = (await import('postgres')).default; const sql = postgres('postgres://postgres:postgres@localhost:5432/postgres'); await sql.unsafe('DROP DATABASE IF EXISTS os2'); await sql.unsafe('CREATE DATABASE os2'); await sql.end(); })()\" && pnpm db:migrate",
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "billing:generate": "tsx backend/billing/scripts/generate-billing-meters.ts",
+    "billing:sync": "doppler run -- tsx backend/billing/scripts/sync-billing-meters-to-stripe.ts",
+    "sandbox:snapshot": "doppler run -- tsx sandbox/snapshot.ts"
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",
@@ -68,6 +71,7 @@
     "react-hook-form": "^7.67.0",
     "remeda": "^2.32.0",
     "sonner": "^2.0.7",
+    "stripe": "^20.1.2",
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.4.0",
     "tiny-invariant": "^1.3.3",
@@ -82,9 +86,9 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
-    "@effect/vitest": "^0.22.0",
     "@cloudflare/vite-plugin": "^1.15.3",
     "@cloudflare/workers-types": "^4.20251128.0",
+    "@effect/vitest": "^0.22.0",
     "@playwright/test": "^1.57.0",
     "@tailwindcss/vite": "^4.1.17",
     "@tanstack/devtools-vite": "^0.3.11",

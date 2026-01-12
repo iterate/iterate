@@ -8,12 +8,12 @@ The sandbox uses [s6](https://skarnet.org/software/s6/) as a process supervisor.
 
 ## Service Structure
 
-### Minimal Service (pingpong example)
+### Minimal Service (example-service-a)
 
 A minimal s6 service needs only one file:
 
 ```
-s6-daemons/pingpong/
+s6-daemons/example-service-a/
 └── run                  # Executable script that starts the service
 ```
 
@@ -34,11 +34,11 @@ s6-daemons/iterate-server/
 
 ## Current Services
 
-| Service        | Port | Description                                                    |
-| -------------- | ---- | -------------------------------------------------------------- |
-| iterate-server | 3000 | Main daemon with web UI (full setup with logs/readiness)       |
-| pingpong       | 3001 | Test daemon with 2s startup delay                              |
-| pinger         | 3002 | Test daemon that proxies to pingpong (demonstrates dependency) |
+| Service                        | Port | Log Rotation | Description                                         |
+| ------------------------------ | ---- | ------------ | --------------------------------------------------- |
+| iterate-server                 | 3000 | Yes          | Main daemon with web UI (full setup)                |
+| example-service-a              | 3001 | No           | Test daemon with 2s startup delay (stdout logs)     |
+| example-service-b-depends-on-a | 3002 | Yes          | Test daemon proxying to service-a (file-based logs) |
 
 ## Environment Variables
 
@@ -120,29 +120,44 @@ s6-svwait -U -t 5000 $S6DIR/iterate-server
 
 ## Viewing Logs
 
-### Tail Service Logs
+### Where Logs Go
 
-Logs are written to `/var/log/{service-name}/current` with ISO 8601 timestamps:
+| Service                        | Has `log/run`? | Logs to                              | Access from outside |
+| ------------------------------ | -------------- | ------------------------------------ | ------------------- |
+| iterate-server                 | Yes            | `/var/log/iterate-server/current`    | `docker exec`       |
+| example-service-a              | No             | stdout                               | `docker logs`       |
+| example-service-b-depends-on-a | Yes            | `/var/log/example-service-b/current` | `docker exec`       |
+
+Services with a `log/` subdirectory write to files (with rotation). Services without one write to stdout, which is captured by `docker logs`.
+
+### From Outside the Container
 
 ```bash
-# iterate-server logs
-tail -f /var/log/iterate-server/current
+# Container stdout (service-a, s6-svscan messages)
+docker logs <container-id>
+docker logs -f <container-id>  # follow
 
-# pingpong logs
-tail -f /var/log/pingpong/current
+# File-based logs (iterate-server, service-b)
+docker exec <container-id> tail -f /var/log/iterate-server/current
+docker exec <container-id> tail -f /var/log/example-service-b/current
+
+# Copy logs out
+docker cp <container-id>:/var/log/iterate-server/current ./server.log
 ```
 
-### View All Container Output
-
-Via Docker (captures s6-svscan stdout):
+### From Inside the Container
 
 ```bash
-docker logs -f <container-id>
+# iterate-server (with timestamps)
+tail -f /var/log/iterate-server/current
+
+# Check all service status
+s6-svstat $ITERATE_REPO/s6-daemons/*
 ```
 
 ### Log Rotation
 
-Logs are automatically rotated by s6-log:
+Services with `log/run` (iterate-server, example-service-b) have automatic log rotation via s6-log:
 
 - **Max files**: 20 archived log files
 - **Max file size**: 1MB per file
@@ -152,7 +167,7 @@ Logs are automatically rotated by s6-log:
 Log files:
 
 ```
-/var/log/{service}/
+/var/log/<service-name>/
 ├── current             # Active log file
 └── @timestamp.s        # Rotated archives
 ```
@@ -165,8 +180,11 @@ Each service has a health endpoint defined in `metadata.json`:
 # iterate-server
 curl http://localhost:3000/api/health
 
-# pingpong
+# example-service-a
 curl http://localhost:3001/health
+
+# example-service-b-depends-on-a
+curl http://localhost:3002/health
 ```
 
 ## How Services Integrate with s6
@@ -180,10 +198,10 @@ The `run` script pattern:
 ```bash
 #!/bin/sh
 exec 2>&1
-cd "$HOME/src/github.com/iterate/iterate/apps/daemon2"
+cd "$ITERATE_REPO/apps/daemon2"
 
 # Health checker in background - polls endpoint, notifies s6, then exits
-"$HOME/src/github.com/iterate/iterate/scripts/s6-healthcheck-notify.sh" \
+"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" \
   http://localhost:3000/api/health &
 
 # Run the service (receives signals directly)

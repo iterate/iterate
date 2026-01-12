@@ -57,7 +57,15 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
       };
 
       if (devMode) {
-        hostConfig.Binds = [`${devMode.iterateRepoPath}:/iterate-repo`];
+        // Selective bind mount: mount source code but shadow node_modules with anonymous volumes
+        // This lets us use host's source code while container uses its own Linux-compiled native modules
+        // Note: dist/ is NOT shadowed - it gets rebuilt inside container with Linux binaries
+        hostConfig.Binds = [
+          `${devMode.iterateRepoPath}:/iterate-repo`,
+          "/iterate-repo/node_modules",
+          "/iterate-repo/apps/daemon2/node_modules",
+          "/iterate-repo/apps/os2/node_modules",
+        ];
       }
 
       const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {

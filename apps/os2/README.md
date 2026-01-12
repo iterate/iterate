@@ -43,26 +43,28 @@ The os2 app uses Daytona sandboxes for machine execution. Snapshots are Docker i
 
 ### Naming Convention
 
-Snapshots follow the naming pattern: `<prefix><timestamp>`
+Snapshots follow the naming pattern: `<stage>--<timestamp>`
 
-- **Prefix**: Environment-specific, ending with `--` (double hyphen delimiter)
+- **Stage**: Matches the alchemy stage (e.g., `local-jonas`, `stg`, `prd`)
 - **Timestamp**: UTC time in `YYYYMMDD-HHMMSS` format
 
 Examples:
 
-- `iterate-sandbox-dev--20260111-193045`
-- `iterate-sandbox-stg--20260111-193045`
-- `iterate-sandbox-prd--20260111-193045`
+- `local-jonas--20260111-193045` (dev, user-specific)
+- `stg--20260111-193045`
+- `prd--20260111-193045`
 
 ### Environment Configuration
 
-The `DAYTONA_SNAPSHOT_PREFIX` environment variable is configured in Doppler for each environment:
+The snapshot prefix is derived from the stage, which is constructed from environment variables:
 
-| Environment | Doppler Config | Prefix                  |
-| ----------- | -------------- | ----------------------- |
-| Development | `dev`          | `iterate-sandbox-dev--` |
-| Staging     | `stg`          | `iterate-sandbox-stg--` |
-| Production  | `prd`          | `iterate-sandbox-prd--` |
+| Environment | Doppler Config | Stage Construction         | Example Prefix  |
+| ----------- | -------------- | -------------------------- | --------------- |
+| Development | `dev`          | `local-${ITERATE_USER}`    | `local-jonas--` |
+| Staging     | `stg`          | `APP_STAGE` (set to `stg`) | `stg--`         |
+| Production  | `prd`          | `APP_STAGE` (set to `prd`) | `prd--`         |
+
+For local development, each developer gets their own namespace based on `ITERATE_USER`.
 
 ### Creating a New Snapshot
 
@@ -74,7 +76,7 @@ doppler run -- tsx apps/os2/sandbox/snapshot.ts
 
 This will:
 
-1. Read the prefix from `DAYTONA_SNAPSHOT_PREFIX`
+1. Construct the stage from `ITERATE_USER` (dev) or `APP_STAGE` (stg/prd)
 2. Generate a timestamp-based snapshot name
 3. Build the Docker image from `sandbox/Dockerfile`
 4. Push the snapshot to Daytona

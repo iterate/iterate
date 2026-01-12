@@ -1,9 +1,26 @@
 import { join } from "node:path";
 import { Daytona, Image } from "@daytonaio/sdk";
 
-const prefix = process.env.DAYTONA_SNAPSHOT_PREFIX;
-if (!prefix) {
-  throw new Error("DAYTONA_SNAPSHOT_PREFIX environment variable is required");
+/**
+ * Constructs the stage/prefix the same way alchemy does:
+ * - For dev: `local-${ITERATE_USER}` (mirrors `--stage local-$USER` in package.json)
+ * - For stg/prd: Uses APP_STAGE directly
+ */
+function getStage(): string {
+  const iterateUser = process.env.ITERATE_USER;
+  const appStage = process.env.APP_STAGE;
+
+  // For local dev with ITERATE_USER set
+  if (iterateUser && iterateUser !== "unknown") {
+    return `local-${iterateUser}`;
+  }
+
+  // For stg/prd, APP_STAGE should be set in Doppler
+  if (appStage) {
+    return appStage;
+  }
+
+  throw new Error("Cannot determine stage: set ITERATE_USER for dev or APP_STAGE for stg/prd");
 }
 
 /**
@@ -20,9 +37,10 @@ function generateTimestamp(): string {
   return `${year}${month}${day}-${hours}${minutes}${seconds}`;
 }
 
-// Generate snapshot name: <prefix><timestamp>
-// e.g., "iterate-sandbox-dev--20260111-193045"
-const snapshotName = `${prefix}${generateTimestamp()}`;
+const stage = getStage();
+// Generate snapshot name: <stage>--<timestamp>
+// e.g., "local-jonas--20260111-193045", "stg--20260111-193045"
+const snapshotName = `${stage}--${generateTimestamp()}`;
 
 console.log(`Creating snapshot: ${snapshotName}`);
 
@@ -30,10 +48,11 @@ const daytona = new Daytona({
   apiKey: process.env.DAYTONA_API_KEY,
 });
 
+// Dockerfile only needs entry.ts from the sandbox directory
 const snapshot = await daytona.snapshot.create(
   {
     name: snapshotName,
-    image: Image.fromDockerfile(join(import.meta.dirname, "./Dockerfile")),
+    image: Image.fromDockerfile(join(import.meta.dirname, "Dockerfile")),
     resources: {
       disk: 10,
     },

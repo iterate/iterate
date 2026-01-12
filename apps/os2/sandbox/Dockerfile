@@ -23,11 +23,8 @@ RUN git clone https://github.com/iterate/iterate.git /iterate-repo && \
     cd /iterate-repo && \
     pnpm install
 
-# Copy s6 service definitions and scripts (until these are merged to main)
-COPY s6-daemons /iterate-repo/s6-daemons
-COPY scripts /iterate-repo/scripts
-
-COPY apps/os2/sandbox/entry.ts /app/entry.ts
+# Copy entry script (only file needed from build context)
+COPY entry.ts /app/entry.ts
 
 # Development: Mount local iterate repo to override the baked-in clone:
 #   docker run -v /path/to/local/iterate:/iterate-repo -e ITERATE_DEV=true ...

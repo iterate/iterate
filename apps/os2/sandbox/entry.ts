@@ -1,5 +1,5 @@
 import { spawn, execSync, type ExecSyncOptions, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, symlinkSync, lstatSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, lstatSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -86,7 +86,7 @@ const cloneUserRepo = () => {
   const gitEnv = getGitEnvWithToken();
 
   // Ensure parent directory exists
-  const parentDir = join(userRepoPath, "..");
+  const parentDir = dirname(userRepoPath);
   if (!existsSync(parentDir)) {
     mkdirSync(parentDir, { recursive: true });
   }
@@ -110,6 +110,13 @@ const cloneUserRepo = () => {
   console.log(`User repository ${repoFullName} ready at ${userRepoPath}`);
 };
 
+const isNodeModulesEmpty = (path: string): boolean => {
+  const nodeModulesPath = join(path, "node_modules");
+  if (!existsSync(nodeModulesPath)) return true;
+  const contents = readdirSync(nodeModulesPath);
+  return contents.length === 0;
+};
+
 const cloneAndSetupIterateRepo = () => {
   if (!existsSync(ITERATE_REPO_PATH)) {
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
@@ -121,9 +128,16 @@ const cloneAndSetupIterateRepo = () => {
     console.log("Running pnpm install...");
     execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
   } else if (isDevMode()) {
-    console.log(
-      `Dev mode: using local iterate repo at ${ITERATE_REPO_PATH} (skipping git operations and pnpm install)`,
-    );
+    console.log(`Dev mode: using local iterate repo at ${ITERATE_REPO_PATH}`);
+
+    // With selective bind mount, node_modules is shadowed by anonymous volumes
+    // Check if empty and run pnpm install to get Linux-compiled native modules
+    if (isNodeModulesEmpty(ITERATE_REPO_PATH)) {
+      console.log("Dev mode: node_modules empty (selective bind mount), running pnpm install...");
+      execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+    } else {
+      console.log("Dev mode: node_modules already populated, skipping pnpm install");
+    }
   } else {
     console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
     execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
@@ -141,12 +155,16 @@ const cloneAndSetupIterateRepo = () => {
 };
 
 const buildDaemonIfNeeded = () => {
+  const distPath = join(DAEMON2_PATH, "dist");
+
+  // In dev mode with selective bind mount, node_modules is shadowed with Linux modules
+  // but dist/ is bind-mounted. We rebuild to get Linux-compiled native modules in dist.
   if (isDevMode()) {
-    console.log("Dev mode: skipping daemon2 build (using host's build)");
+    console.log("Dev mode: rebuilding daemon2 with Linux native modules...");
+    execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
     return;
   }
 
-  const distPath = join(DAEMON2_PATH, "dist");
   if (existsSync(distPath)) {
     console.log(`Daemon2 already built at ${distPath}, skipping build`);
     return;

@@ -94,7 +94,6 @@ const Optional = z.string().optional();
 const Env = z.object({
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
-  DAYTONA_SNAPSHOT_PREFIX: Required,
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
@@ -115,6 +114,10 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URI: Optional,
   SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
+  STRIPE_SECRET_KEY: Required,
+  STRIPE_WEBHOOK_SECRET: Required,
+  STRIPE_METERED_PRICE_ID: Required,
+  STRIPE_PRODUCT_ID: Required,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {
@@ -251,6 +254,7 @@ async function deployWorker() {
       ...(await setupEnvironmentVariables()),
       WORKER_LOADER: WorkerLoader(),
       ALLOWED_DOMAINS: domains.join(","),
+      DAYTONA_SNAPSHOT_PREFIX: `${app.stage}--`,
       REALTIME_PUSHER,
     },
     name: isProduction ? "os2" : isStaging ? "os2-staging" : undefined,
