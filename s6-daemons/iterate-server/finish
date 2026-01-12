@@ -1,0 +1,9 @@
+#!/bin/sh
+# $1 = exit code (256 if killed by signal)
+# $2 = signal number (if killed)
+# $4 = process group ID
+
+# Kill any orphaned child processes if crashed
+if test "$1" -gt 255; then
+    kill -TERM -- -"$4" 2>/dev/null
+fi

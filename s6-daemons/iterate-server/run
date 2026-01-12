@@ -1,0 +1,9 @@
+#!/bin/sh
+exec 2>&1
+cd "$ITERATE_REPO/apps/daemon2"
+
+# Health checker in background - polls endpoint, notifies s6, then exits
+"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3000/api/health &
+
+# Run the service
+exec env PORT=3000 node dist/server/index.mjs

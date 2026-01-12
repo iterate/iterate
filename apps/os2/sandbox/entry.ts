@@ -1,11 +1,22 @@
-import { spawn, execSync, type ExecSyncOptions } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, execSync, type ExecSyncOptions, type ChildProcess } from "node:child_process";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 
-const ITERATE_REPO_PATH = "/repos/iterate";
+// Go-style paths: $HOME/src/github.com/{owner}/{repo}
+const SRC_BASE = join(homedir(), "src", "github.com");
+const ITERATE_REPO_PATH = join(SRC_BASE, "iterate", "iterate");
 const ITERATE_REPO_URL = "https://github.com/iterate/iterate.git";
-const DAEMON_PATH = `${ITERATE_REPO_PATH}/apps/daemon2`;
+const DAEMON2_PATH = join(ITERATE_REPO_PATH, "apps", "daemon2");
+const S6_DAEMONS_PATH = join(ITERATE_REPO_PATH, "s6-daemons");
 
-const USER_REPO_PATH = "/repos/user";
+const getUserRepoPath = (): string | null => {
+  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
+  if (!repoFullName) return null;
+  const [owner, repo] = repoFullName.split("/");
+  if (!owner || !repo) return null;
+  return join(SRC_BASE, owner, repo);
+};
 
 const getGitEnvWithToken = (): ExecSyncOptions["env"] => {
   const token = process.env.GITHUB_ACCESS_TOKEN;
@@ -24,12 +35,13 @@ const getGitEnvWithToken = (): ExecSyncOptions["env"] => {
 };
 
 const cloneUserRepo = () => {
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
-  if (!repoFullName) {
+  const userRepoPath = getUserRepoPath();
+  if (!userRepoPath) {
     console.log("No GITHUB_REPO_FULL_NAME found, skipping user repository clone");
     return;
   }
 
+  const repoFullName = process.env.GITHUB_REPO_FULL_NAME!;
   const token = process.env.GITHUB_ACCESS_TOKEN;
   if (!token) {
     console.log("No GITHUB_ACCESS_TOKEN found, skipping user repository clone");
@@ -40,23 +52,29 @@ const cloneUserRepo = () => {
   const repoUrl = `https://github.com/${repoFullName}.git`;
   const gitEnv = getGitEnvWithToken();
 
-  if (existsSync(USER_REPO_PATH)) {
-    console.log(`User repository already exists at ${USER_REPO_PATH}, pulling latest...`);
+  // Ensure parent directory exists
+  const parentDir = join(userRepoPath, "..");
+  if (!existsSync(parentDir)) {
+    mkdirSync(parentDir, { recursive: true });
+  }
+
+  if (existsSync(userRepoPath)) {
+    console.log(`User repository already exists at ${userRepoPath}, pulling latest...`);
     execSync(`git fetch origin ${defaultBranch}`, {
-      cwd: USER_REPO_PATH,
+      cwd: userRepoPath,
       stdio: "inherit",
       env: gitEnv,
     });
-    execSync(`git reset --hard origin/${defaultBranch}`, { cwd: USER_REPO_PATH, stdio: "inherit" });
+    execSync(`git reset --hard origin/${defaultBranch}`, { cwd: userRepoPath, stdio: "inherit" });
   } else {
-    console.log(`Cloning ${repoFullName} to ${USER_REPO_PATH}...`);
-    execSync(`git clone --branch ${defaultBranch} ${repoUrl} ${USER_REPO_PATH}`, {
+    console.log(`Cloning ${repoFullName} to ${userRepoPath}...`);
+    execSync(`git clone --branch ${defaultBranch} ${repoUrl} ${userRepoPath}`, {
       stdio: "inherit",
       env: gitEnv,
     });
   }
 
-  console.log(`User repository ${repoFullName} ready at ${USER_REPO_PATH}`);
+  console.log(`User repository ${repoFullName} ready at ${userRepoPath}`);
 };
 
 const cloneAndSetupIterateRepo = () => {
@@ -68,6 +86,10 @@ const cloneAndSetupIterateRepo = () => {
   } else {
     // Fallback for local dev without baked repo
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
+    const parentDir = join(ITERATE_REPO_PATH, "..");
+    if (!existsSync(parentDir)) {
+      mkdirSync(parentDir, { recursive: true });
+    }
     execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
   }
 
@@ -76,46 +98,58 @@ const cloneAndSetupIterateRepo = () => {
   execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
 };
 
-const startDaemon = () => {
-  console.log(`Building daemon in ${DAEMON_PATH}...`);
-  execSync("npx vite build", { cwd: DAEMON_PATH, stdio: "inherit" });
+const buildDaemonIfNeeded = () => {
+  const distPath = join(DAEMON2_PATH, "dist");
+  if (existsSync(distPath)) {
+    console.log(`Daemon2 already built at ${distPath}, skipping build`);
+    return;
+  }
 
-  console.log(`Starting daemon server in ${DAEMON_PATH}...`);
-  const daemon = spawn("node", ["dist/server/index.mjs"], {
-    cwd: DAEMON_PATH,
+  console.log(`Building daemon2 in ${DAEMON2_PATH}...`);
+  execSync("npx vite build", { cwd: DAEMON2_PATH, stdio: "inherit" });
+};
+
+const startS6Svscan = (): ChildProcess => {
+  console.log(`Starting s6-svscan on ${S6_DAEMONS_PATH}...`);
+
+  const svscan = spawn("s6-svscan", [S6_DAEMONS_PATH], {
     stdio: "inherit",
     env: {
       ...process.env,
-      PORT: "3000",
+      // Make iterate repo path available to run scripts (avoids hardcoding paths)
+      ITERATE_REPO: ITERATE_REPO_PATH,
     },
   });
 
-  daemon.on("error", (err) => {
-    console.error("Failed to start daemon:", err);
+  svscan.on("error", (err) => {
+    console.error("Failed to start s6-svscan:", err);
     process.exit(1);
   });
 
-  daemon.on("exit", (code) => {
-    console.log(`Daemon exited with code ${code}`);
+  svscan.on("exit", (code, signal) => {
+    console.log(`s6-svscan exited with code ${code}, signal ${signal}`);
     process.exit(code ?? 1);
   });
 
-  return daemon;
+  return svscan;
 };
 
 const main = () => {
   cloneAndSetupIterateRepo();
   cloneUserRepo();
-  const daemon = startDaemon();
+  buildDaemonIfNeeded();
 
+  const svscan = startS6Svscan();
+
+  // Forward signals to s6-svscan for clean shutdown
   process.on("SIGINT", () => {
-    console.log("Received SIGINT, shutting down...");
-    daemon.kill("SIGINT");
+    console.log("Received SIGINT, shutting down s6-svscan...");
+    svscan.kill("SIGINT");
   });
 
   process.on("SIGTERM", () => {
-    console.log("Received SIGTERM, shutting down...");
-    daemon.kill("SIGTERM");
+    console.log("Received SIGTERM, shutting down s6-svscan...");
+    svscan.kill("SIGTERM");
   });
 };
 

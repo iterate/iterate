@@ -1,0 +1,14 @@
+#!/bin/sh
+exec 2>&1
+cd "$ITERATE_REPO/scripts"
+
+# Health checker in background
+"$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3002/health &
+
+# Fast-starting proxy that depends on pingpong (upstream)
+# Health check will fail until pingpong is ready
+exec node --experimental-strip-types test-daemon.ts \
+  --name pinger \
+  --port 3002 \
+  --startup-delay 0 \
+  --upstream http://localhost:3001/ping
