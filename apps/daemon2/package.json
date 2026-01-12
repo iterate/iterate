@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "doppler run -- vite dev",
+    "dev": "doppler run -- drizzle-kit migrate && doppler run -- vite dev",
     "build": "doppler run -- vite build && node scripts/copy-node-pty-binary.js",
     "start": "doppler run -- node dist/server/index.mjs",
     "preview": "doppler run -- vite preview",

@@ -49,6 +49,15 @@ app.all("/api/trpc/*", (c) => {
 });
 
 app.all("*", (c) => {
+  // Skip Vite's internal paths during development - let Vite handle them
+  if (import.meta.env.DEV) {
+    const url = new URL(c.req.url);
+    const skipPaths = ["/@vite", "/@fs", "/node_modules/.vite", "/__vite_ping"];
+    if (skipPaths.some((p) => url.pathname.startsWith(p))) {
+      return new Response(null, { status: 404 });
+    }
+  }
+
   return handler.fetch(c.req.raw);
 });
 
