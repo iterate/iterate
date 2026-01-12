@@ -101,14 +101,14 @@ const makeDaemonImpl = (fs: FileSystem.FileSystem, path: Path.Path): Daemon => {
       const out = openSync(logPath, "a");
 
       // Launch the standalone daemon server from the daemon2 package
-      // This is a simple Hono server that can be run directly with tsx
+      // Run from daemon2 directory so TypeScript path aliases resolve correctly
       const daemonPackagePath = join(__dirname, "..", "daemon2");
-      const serverScript = join(daemonPackagePath, "src", "standalone-server.ts");
+      const serverScript = join("src", "standalone-server.ts");
 
       const child = spawn("npx", ["tsx", serverScript], {
         detached: true,
         stdio: ["ignore", out, out],
-        cwd,
+        cwd: daemonPackagePath,
         env: {
           ...process.env,
           PORT: String(config.port),
