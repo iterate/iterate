@@ -177,13 +177,11 @@ registerTrackedMutation("router.mutationName", {
 
 1. Create a PostHog account at https://eu.posthog.com (EU data residency)
 2. Create a single project named "OS2"
-3. Configure Group Analytics:
-   - Go to Settings > Group Analytics
-   - Create group type: `organization` (display name: "Organization")
-   - Create group type: `project` (display name: "Project")
-4. Get API key from Settings > Project API Key
-5. Enable Session Replay in settings
-6. Add environment variables to Doppler for each environment (dev, stg, prd)
+3. Get API key from Settings > Project API Key
+4. Enable Session Replay in settings
+5. Add environment variables to Doppler for each environment (dev, stg, prd)
+
+**Note:** Group types (`organization` and `project`) are automatically created when the first event with a group is sent. You'll see them appear in Settings > Group Analytics after deploying and using the app.
 
 ### Privacy Considerations
 
