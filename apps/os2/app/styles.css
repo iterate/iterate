@@ -79,6 +79,7 @@
   --sidebar-accent-foreground: oklch(20.5% 0 0);
   --sidebar-border: oklch(91.5% 0 0);
   --sidebar-ring: oklch(14.5% 0 0);
+  --sidebar: hsl(0 0% 98%);
 }
 
 .dark {
@@ -114,6 +115,7 @@
   --sidebar-accent-foreground: oklch(90.9% 0 0);
   --sidebar-border: oklch(26.5% 0 0);
   --sidebar-ring: oklch(83.9% 0 0);
+  --sidebar: hsl(240 5.9% 10%);
 }
 
 @layer base {
@@ -140,5 +142,14 @@
 @layer utilities {
   .animate-progress {
     animation: progress 2s ease-in-out infinite;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
   }
 }

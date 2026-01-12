@@ -11,13 +11,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from "./ui/breadcrumb.tsx";
-import { OrgBreadcrumbDropdown, ProjectBreadcrumbDropdown } from "./breadcrumb-dropdown.tsx";
-
-interface Organization {
-  id: string;
-  name: string;
-  slug: string;
-}
+import { ProjectBreadcrumbDropdown } from "./breadcrumb-dropdown.tsx";
 
 interface Project {
   id: string;
@@ -32,7 +26,6 @@ interface AppHeaderProps {
   organizationSlug?: string;
   /** Project slug from route params (type-safe, passed from parent) */
   projectSlug?: string;
-  organizations?: Organization[];
   projects?: Project[];
 }
 
@@ -54,7 +47,6 @@ export function AppHeader({
   projectName,
   organizationSlug,
   projectSlug,
-  organizations = [],
   projects = [],
 }: AppHeaderProps) {
   const location = useLocation();
@@ -75,8 +67,7 @@ export function AppHeader({
   // Get the current page name
   const currentPageName = PAGE_NAMES[lastPart] || null;
 
-  // Find current org/project IDs for aria-current
-  const currentOrgId = organizations.find((o) => o.slug === organizationSlug)?.id ?? "";
+  // Find current project ID for aria-current
   const currentProjectId = projects.find((p) => p.slug === projectSlug)?.id ?? "";
 
   // Determine display name for mobile
@@ -109,38 +100,19 @@ export function AppHeader({
         {/* Desktop breadcrumbs */}
         <Breadcrumb className="hidden md:flex">
           <BreadcrumbList>
-            {/* Root: iterate */}
-            <BreadcrumbItem>
-              <BreadcrumbLink asChild>
-                <Link to="/">iterate</Link>
-              </BreadcrumbLink>
-            </BreadcrumbItem>
-
-            {/* Organization level with dropdown */}
+            {/* Organization level - simple link, no dropdown */}
             {organizationSlug && (
-              <>
-                <BreadcrumbSeparator />
-                {organizations.length > 0 ? (
-                  <OrgBreadcrumbDropdown
-                    currentName={orgName || organizationSlug}
-                    currentId={currentOrgId}
-                    items={organizations}
-                    isCurrentPage={isOrgHome && !currentPageName}
-                  />
+              <BreadcrumbItem>
+                {isOrgHome && !currentPageName ? (
+                  <BreadcrumbPage>{orgName || organizationSlug}</BreadcrumbPage>
                 ) : (
-                  <BreadcrumbItem>
-                    {isOrgHome && !currentPageName ? (
-                      <BreadcrumbPage>{orgName || organizationSlug}</BreadcrumbPage>
-                    ) : (
-                      <BreadcrumbLink asChild>
-                        <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
-                          {orgName || organizationSlug}
-                        </Link>
-                      </BreadcrumbLink>
-                    )}
-                  </BreadcrumbItem>
+                  <BreadcrumbLink asChild>
+                    <Link to="/orgs/$organizationSlug" params={{ organizationSlug }}>
+                      {orgName || organizationSlug}
+                    </Link>
+                  </BreadcrumbLink>
                 )}
-              </>
+              </BreadcrumbItem>
             )}
 
             {/* Org-level page (settings, team, new-project) */}

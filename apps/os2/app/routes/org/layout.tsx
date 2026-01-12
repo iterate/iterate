@@ -96,13 +96,12 @@ function OrgLayout() {
           header={<OrgSwitcher organizations={orgsList} currentOrg={currentOrgData} />}
           user={userProps}
         >
-          <OrgSidebarNav orgSlug={currentOrg.slug} orgName={currentOrg.name} projects={projects} />
+          <OrgSidebarNav orgSlug={currentOrg.slug} projects={projects} />
         </SidebarShell>
         <SidebarInset>
           <AppHeader
             orgName={currentOrg.name}
             organizationSlug={params.organizationSlug}
-            organizations={orgsList}
             projects={projects}
           />
           <main className="flex-1 overflow-auto">

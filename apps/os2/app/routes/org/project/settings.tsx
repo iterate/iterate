@@ -113,13 +113,6 @@ function ProjectSettingsPage() {
       </form>
 
       <div className="space-y-3">
-        <div className="text-sm font-medium">Repository</div>
-        <Button variant="outline" onClick={() => toast("Repo management is coming soon.")}>
-          Connect repo
-        </Button>
-      </div>
-
-      <div className="space-y-3">
         <div className="text-sm font-medium">Delete project</div>
         <Button variant="destructive" onClick={handleDelete} disabled={deleteProject.isPending}>
           {deleteProject.isPending ? "Deleting..." : "Delete project"}

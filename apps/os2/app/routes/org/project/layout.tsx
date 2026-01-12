@@ -207,7 +207,7 @@ function ProjectLayout() {
             </SidebarGroupContent>
           </SidebarGroup>
 
-          <OrgSidebarNav orgSlug={currentOrg.slug} orgName={currentOrg.name} projects={projects} />
+          <OrgSidebarNav orgSlug={currentOrg.slug} />
         </SidebarShell>
         <SidebarInset>
           <AppHeader
@@ -215,7 +215,6 @@ function ProjectLayout() {
             projectName={currentProject?.name}
             organizationSlug={params.organizationSlug}
             projectSlug={params.projectSlug}
-            organizations={orgsList}
             projects={projects}
           />
           <main className="flex-1 overflow-auto">
