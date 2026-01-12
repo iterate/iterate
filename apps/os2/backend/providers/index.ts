@@ -8,7 +8,6 @@ export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from
 
 export interface CreateProviderOptions {
   findAvailablePort?: () => Promise<number>;
-  iterateRepoPath?: string;
 }
 
 export function createMachineProvider(
@@ -25,10 +24,8 @@ export function createMachineProvider(
         throw new Error("findAvailablePort function required for local-docker provider");
       }
       return createLocalDockerProvider({
-        sandboxPath: "./sandbox",
         imageName: "iterate-sandbox:local",
         findAvailablePort: options.findAvailablePort,
-        devMode: options.iterateRepoPath ? { iterateRepoPath: options.iterateRepoPath } : undefined,
       });
 
     default: {

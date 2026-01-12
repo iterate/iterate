@@ -22,26 +22,7 @@ type ResolverConfig = {
 
 // Simple in-memory cache with TTL
 let cachedSnapshot: { name: string; prefix: string; timestamp: number } | null = null;
-const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-/**
- * Fetches a single page of snapshots from the Daytona API.
- */
-async function fetchSnapshotsPage(
-  baseUrl: string,
-  page: number,
-  headers: Record<string, string>,
-): Promise<PaginatedSnapshots> {
-  const url = new URL(`${baseUrl}/snapshots?limit=100&page=${page}`);
-  const response = await fetch(url.toString(), { headers });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
-  }
-
-  return (await response.json()) as PaginatedSnapshots;
-}
+const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
 
 // Only consider snapshots in these states as usable
 const USABLE_SNAPSHOT_STATES = ["ready", "active"];
@@ -61,10 +42,13 @@ export async function resolveLatestSnapshot(
   const now = Date.now();
 
   // Check cache - must match the same prefix
+  const cacheTtlMs = getCacheTtlMs(prefix);
+
   if (
+    cacheTtlMs > 0 &&
     cachedSnapshot &&
     cachedSnapshot.prefix === prefix &&
-    now - cachedSnapshot.timestamp < CACHE_TTL_MS
+    now - cachedSnapshot.timestamp < cacheTtlMs
   ) {
     logger.debug("Using cached snapshot", { name: cachedSnapshot.name });
     return cachedSnapshot.name;
@@ -121,7 +105,9 @@ export async function resolveLatestSnapshot(
   const latestSnapshot = matchingSnapshots[0];
 
   // Update cache
-  cachedSnapshot = { name: latestSnapshot.name, prefix, timestamp: now };
+  if (cacheTtlMs > 0) {
+    cachedSnapshot = { name: latestSnapshot.name, prefix, timestamp: now };
+  }
 
   logger.info("Resolved latest snapshot", {
     prefix,
@@ -139,4 +125,35 @@ export async function resolveLatestSnapshot(
  */
 export function clearSnapshotCache(): void {
   cachedSnapshot = null;
+}
+
+function getCacheTtlMs(prefix: string): number {
+  const normalized = prefix.toLowerCase();
+  if (
+    normalized.startsWith("dev-") ||
+    normalized.includes("-dev--") ||
+    normalized.startsWith("local-")
+  ) {
+    return 0;
+  }
+  return DEFAULT_CACHE_TTL_MS;
+}
+
+/**
+ * Fetches a single page of snapshots from the Daytona API.
+ */
+async function fetchSnapshotsPage(
+  baseUrl: string,
+  page: number,
+  headers: Record<string, string>,
+): Promise<PaginatedSnapshots> {
+  const url = new URL(`${baseUrl}/snapshots?limit=100&page=${page}`);
+  const response = await fetch(url.toString(), { headers });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Daytona API error: ${response.status} - ${errorText}`);
+  }
+
+  return (await response.json()) as PaginatedSnapshots;
 }

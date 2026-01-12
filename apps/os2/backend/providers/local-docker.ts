@@ -26,16 +26,12 @@ async function dockerApi<T>(
 }
 
 export interface LocalDockerConfig {
-  sandboxPath: string;
   imageName: string;
   findAvailablePort: () => Promise<number>;
-  devMode?: {
-    iterateRepoPath: string;
-  };
 }
 
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
-  const { imageName, findAvailablePort, devMode } = config;
+  const { imageName, findAvailablePort } = config;
 
   return {
     type: "local-docker",
@@ -43,30 +39,15 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const port = await findAvailablePort();
 
-      const envVars = { ...machineConfig.envVars };
-      if (devMode) {
-        envVars.ITERATE_DEV = "true";
-      }
-
-      const envArray = Object.entries(envVars).map(([key, value]) => `${key}=${value}`);
+      const envArray = Object.entries(machineConfig.envVars).map(
+        ([key, value]) => `${key}=${value}`,
+      );
 
       const hostConfig: Record<string, unknown> = {
         PortBindings: {
           "3000/tcp": [{ HostPort: String(port) }],
         },
       };
-
-      if (devMode) {
-        // Selective bind mount: mount source code but shadow node_modules with anonymous volumes
-        // This lets us use host's source code while container uses its own Linux-compiled native modules
-        // Note: dist/ is NOT shadowed - it gets rebuilt inside container with Linux binaries
-        hostConfig.Binds = [
-          `${devMode.iterateRepoPath}:/iterate-repo`,
-          "/iterate-repo/node_modules",
-          "/iterate-repo/apps/daemon2/node_modules",
-          "/iterate-repo/apps/os2/node_modules",
-        ];
-      }
 
       const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
         Image: imageName,

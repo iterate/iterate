@@ -2,8 +2,7 @@
  * Local Docker + s6 Integration Tests
  *
  * These tests verify the sandbox container setup with s6 process supervision.
- * They use selective bind mounts: source code from host, but node_modules
- * shadowed by anonymous volumes so the container uses Linux-compiled native modules.
+ * The image is rebuilt from the local repo and runs without bind mounts.
  *
  * EXPECTED DURATION:
  * - Fast MacBook Pro (M-series, cached layers): ~30 seconds
@@ -19,7 +18,7 @@
  */
 
 import { execSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
@@ -151,22 +150,12 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
       stdio: "inherit",
     });
 
-    console.log("Creating container with selective bind mount (source only, not node_modules)...");
+    console.log("Creating container without bind mounts...");
     const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
       Image: IMAGE_NAME,
       name: CONTAINER_NAME,
-      Env: ["ITERATE_DEV=true"],
       ExposedPorts: { "3000/tcp": {} },
       HostConfig: {
-        // Selective bind mount: mount source code but shadow node_modules with anonymous volumes
-        // This lets us use host's source code while container uses its own Linux-compiled native modules
-        // Note: dist/ is NOT shadowed - it gets rebuilt inside container with Linux binaries
-        Binds: [
-          `${REPO_ROOT}:/iterate-repo`,
-          "/iterate-repo/node_modules",
-          "/iterate-repo/apps/daemon2/node_modules",
-          "/iterate-repo/apps/os2/node_modules",
-        ],
         PortBindings: {
           "3000/tcp": [{ HostPort: String(ITERATE_SERVER_HOST_PORT) }],
         },
@@ -196,6 +185,15 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
     const logs = await waitForLogPattern(containerId, /Starting s6-svscan/);
     expect(logs).toContain("Starting s6-svscan");
   }, 60000);
+
+  test("container uses image filesystem without bind mounts", async () => {
+    const inspect = await dockerApi<{ HostConfig?: { Binds?: string[] } }>(
+      "GET",
+      `/containers/${containerId}/json`,
+    );
+    const binds = inspect.HostConfig?.Binds ?? [];
+    expect(binds).toMatchInlineSnapshot("[]");
+  });
 
   test("service-a starts (slow starter, 2s delay)", async () => {
     const logs = await waitForLogPattern(containerId, /\[service-a\] Listening on port 3001/);
@@ -288,7 +286,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
             "cat",
             "/var/log/iterate-server/current",
           ]);
-          return logs.includes("Listening") || logs.includes("localhost:3000");
+          return /Server running at http:\/\/.+:3000/.test(logs);
         },
         { timeout: 120000, interval: 3000 },
       )
@@ -296,7 +294,7 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
 
     const logs = await execInContainer(containerId, ["cat", "/var/log/iterate-server/current"]);
     expect(logs.length).toBeGreaterThan(0);
-    expect(logs).toContain("Listening");
+    expect(logs).toMatch(/Server running at http:\/\/.+:3000/);
   }, 130000);
 
   test("iterate-server health check responds OK from inside container", async () => {
@@ -332,38 +330,9 @@ describe.runIf(RUN_LOCAL_DOCKER_TESTS)("Local Docker + s6 Integration", () => {
       .toBe(true);
   }, 40000);
 
-  test("bind mount reflects local file changes", async () => {
-    const runFilePath = join(REPO_ROOT, "s6-daemons/example-service-a/run");
-    const originalContent = readFileSync(runFilePath, "utf-8");
-
-    try {
-      const modifiedContent = originalContent.replace(
-        "--name service-a",
-        "--name service-a-modified",
-      );
-      writeFileSync(runFilePath, modifiedContent);
-
-      await execInContainer(containerId, [
-        "s6-svc",
-        "-r",
-        "/iterate-repo/s6-daemons/example-service-a",
-      ]);
-
-      const logs = await waitForLogPattern(
-        containerId,
-        /\[service-a-modified\] Listening on port 3001/,
-        15000,
-      );
-      expect(logs).toContain("[service-a-modified] Listening on port 3001");
-    } finally {
-      writeFileSync(runFilePath, originalContent);
-
-      await execInContainer(containerId, [
-        "s6-svc",
-        "-r",
-        "/iterate-repo/s6-daemons/example-service-a",
-      ]);
-      await waitForLogPattern(containerId, /\[service-a\] Listening on port 3001/, 15000);
-    }
-  }, 30000);
+  test("repo matches image content", async () => {
+    const repoRootReadme = await execInContainer(containerId, ["cat", "/iterate-repo/README.md"]);
+    const hostRootReadme = readFileSync(join(REPO_ROOT, "README.md"), "utf-8");
+    expect(repoRootReadme).toBe(hostRootReadme);
+  });
 });

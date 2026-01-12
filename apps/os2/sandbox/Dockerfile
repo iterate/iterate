@@ -17,17 +17,12 @@ RUN curl -fsSL https://claude.ai/install.sh | bash
 RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
 
-# Clone iterate repo and install dependencies (baked into image for faster startup)
-# Uses user-agnostic path; entry.ts creates symlink to Go-style path at runtime
-RUN git clone https://github.com/iterate/iterate.git /iterate-repo && \
-    cd /iterate-repo && \
-    pnpm install
+RUN git clone https://github.com/iterate/iterate.git /iterate-repo
 
-# Copy entry script (only file needed from build context)
-COPY entry.ts /app/entry.ts
+WORKDIR /iterate-repo
 
-# Development: Mount local iterate repo to override the baked-in clone:
-#   docker run -v /path/to/local/iterate:/iterate-repo -e ITERATE_DEV=true ...
-# Set ITERATE_DEV=true to skip git fetch/reset (preserves your local changes).
+COPY . /iterate-repo
 
-ENTRYPOINT [ "tsx", "entry.ts" ]
+RUN pnpm install
+
+ENTRYPOINT [ "tsx", "apps/os2/sandbox/entry.ts" ]

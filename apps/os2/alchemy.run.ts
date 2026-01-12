@@ -1,6 +1,6 @@
 import { execSync, spawnSync } from "node:child_process";
 import * as fs from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import alchemy, { type Scope } from "alchemy";
 import { DurableObjectNamespace, TanStackStart, WorkerLoader } from "alchemy/cloudflare";
@@ -12,6 +12,7 @@ import { z } from "zod/v4";
 import dedent from "dedent";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const repoRoot = join(__dirname, "..", "..");
 
 const stateStore = (scope: Scope) =>
   scope.local ? new SQLiteStateStore(scope, { engine: "libsql" }) : new CloudflareStateStore(scope);
@@ -29,7 +30,11 @@ if (!/^[\w-]+$/.test(app.stage)) {
 const isProduction = app.stage === "prd";
 const isStaging = app.stage === "stg";
 const isDevelopment = app.local;
-const isPreview = app.stage.startsWith("pr-") || app.stage.startsWith("local-");
+const isPreview =
+  app.stage.startsWith("pr-") ||
+  app.stage === "dev" ||
+  app.stage.startsWith("dev-") ||
+  app.stage.startsWith("local-");
 
 const LOCAL_DOCKER_IMAGE_NAME = "iterate-sandbox:local";
 
@@ -47,10 +52,14 @@ function ensureLocalDockerImage() {
 
   if (!imageExists) {
     console.log(`Building local Docker image ${LOCAL_DOCKER_IMAGE_NAME}...`);
-    const buildResult = spawnSync("docker", ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "./sandbox"], {
-      cwd: __dirname,
-      stdio: "inherit",
-    });
+    const buildResult = spawnSync(
+      "docker",
+      ["build", "-t", LOCAL_DOCKER_IMAGE_NAME, "-f", "apps/os2/sandbox/Dockerfile", "."],
+      {
+        cwd: repoRoot,
+        stdio: "inherit",
+      },
+    );
 
     if (buildResult.status !== 0) {
       console.warn(
@@ -117,7 +126,6 @@ const Env = z.object({
   STRIPE_SECRET_KEY: Required,
   STRIPE_WEBHOOK_SECRET: Required,
   STRIPE_METERED_PRICE_ID: Required,
-  STRIPE_PRODUCT_ID: Required,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {

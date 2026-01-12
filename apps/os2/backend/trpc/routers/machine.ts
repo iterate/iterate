@@ -48,7 +48,6 @@ async function getProviderForMachine(
 
   const provider = createMachineProvider(machine.type, cloudflareEnv, {
     findAvailablePort: () => findAvailablePort(db),
-    iterateRepoPath: machine.type === "local-docker" ? process.cwd() : undefined,
   });
 
   return { provider, machine };
@@ -115,7 +114,6 @@ export const machineRouter = router({
       // Create provider for the specified type
       const provider = createMachineProvider(input.type, ctx.env, {
         findAvailablePort: () => findAvailablePort(ctx.db),
-        iterateRepoPath: input.type === "local-docker" ? process.cwd() : undefined,
       });
 
       const globalEnvVars = await ctx.db.query.projectEnvVar.findMany({
