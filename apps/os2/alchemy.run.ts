@@ -115,10 +115,21 @@ const Env = z.object({
   VITE_POSTHOG_PROXY_URI: Optional,
   SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
+  HOST_ITERATE_REPO_PATH: Optional,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
 async function setupEnvironmentVariables() {
-  const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
+  const envOverrides: Record<string, string> = {
+    VITE_APP_STAGE: app.stage,
+    APP_STAGE: app.stage,
+  };
+
+  if (isDevelopment) {
+    const repoRoot = dirname(dirname(__dirname));
+    envOverrides.HOST_ITERATE_REPO_PATH = repoRoot;
+  }
+
+  const parsed = Env.safeParse({ ...process.env, ...envOverrides });
   if (!parsed.success) {
     throw new Error(`Invalid environment variables:\n${z.prettifyError(parsed.error)}`);
   }

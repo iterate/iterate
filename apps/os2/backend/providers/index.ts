@@ -8,6 +8,7 @@ export type { MachineProvider, CreateMachineConfig, MachineProviderResult } from
 
 export interface CreateProviderOptions {
   findAvailablePort?: () => Promise<number>;
+  hostIterateRepoPath?: string;
 }
 
 export function createMachineProvider(
@@ -27,6 +28,7 @@ export function createMachineProvider(
         sandboxPath: "./sandbox",
         imageName: "iterate-sandbox:local",
         findAvailablePort: options.findAvailablePort,
+        hostIterateRepoPath: options.hostIterateRepoPath ?? env.HOST_ITERATE_REPO_PATH,
       });
 
     default: {

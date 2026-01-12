@@ -60,20 +60,24 @@ const cloneUserRepo = () => {
 };
 
 const cloneAndSetupIterateRepo = () => {
-  if (existsSync(ITERATE_REPO_PATH)) {
-    // Repo already exists (baked into image), just pull latest
+  const isMounted = process.env.ITERATE_REPO_MOUNTED === "1";
+
+  if (isMounted) {
+    console.log(`Iterate repository is mounted from host at ${ITERATE_REPO_PATH}`);
+    console.log("Skipping git operations - using host repo state directly");
+  } else if (existsSync(ITERATE_REPO_PATH)) {
     console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
     execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
     execSync("git reset --hard origin/main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
   } else {
-    // Fallback for local dev without baked repo
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
     execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
   }
 
-  // pnpm install will be fast if lockfile matches cached node_modules
-  console.log("Running pnpm install (should be fast if lockfile unchanged)...");
-  execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+  if (!isMounted) {
+    console.log("Running pnpm install (should be fast if lockfile unchanged)...");
+    execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+  }
 };
 
 const startDaemon = () => {

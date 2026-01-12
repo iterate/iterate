@@ -29,10 +29,11 @@ export interface LocalDockerConfig {
   sandboxPath: string;
   imageName: string;
   findAvailablePort: () => Promise<number>;
+  hostIterateRepoPath?: string;
 }
 
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
-  const { imageName, findAvailablePort } = config;
+  const { imageName, findAvailablePort, hostIterateRepoPath } = config;
 
   return {
     type: "local-docker",
@@ -44,6 +45,15 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
         ([key, value]) => `${key}=${value}`,
       );
 
+      if (hostIterateRepoPath) {
+        envArray.push("ITERATE_REPO_MOUNTED=1");
+      }
+
+      const binds: string[] = [];
+      if (hostIterateRepoPath) {
+        binds.push(`${hostIterateRepoPath}:/repos/iterate:cached`);
+      }
+
       const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
         Image: imageName,
         name: machineConfig.machineId,
@@ -53,6 +63,7 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
           PortBindings: {
             "3000/tcp": [{ HostPort: String(port) }],
           },
+          Binds: binds.length > 0 ? binds : undefined,
         },
       });
 
@@ -62,7 +73,7 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
 
       return {
         externalId: containerId,
-        metadata: { port, containerId },
+        metadata: { port, containerId, hostIterateRepoPath },
       };
     },
 
