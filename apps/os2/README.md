@@ -157,7 +157,7 @@ Two group types are configured:
 - **organization**: Tracks organization-level metrics
 - **project**: Tracks project-level metrics
 
-Users are identified on login, and groups are set when navigating to org/project routes.
+Users are identified in the auth-required layout (covering all authenticated routes), and groups are set when navigating to org/project routes. PostHog is reset on logout to prevent session linking.
 
 ### Adding New Tracked Mutations
 
