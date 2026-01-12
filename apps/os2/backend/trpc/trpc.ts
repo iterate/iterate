@@ -218,59 +218,64 @@ const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawI
     return result;
   }
 
-  // Get user ID for distinct_id
-  const userId = ctx.user?.id;
-  if (!userId) {
-    return result;
-  }
-
-  // Get raw input for property extraction
-  const rawInput = await getRawInput();
-
-  // Extract properties
-  let properties: Record<string, unknown> = {
-    procedure: path,
-    success: true,
-  };
-
-  if (config.extractProperties) {
-    const extracted = config.extractProperties(rawInput);
-    if (extracted === undefined) {
-      // Skip tracking this specific call
+  // Wrap analytics in try-catch to prevent analytics errors from affecting the mutation response
+  try {
+    // Get user ID for distinct_id
+    const userId = ctx.user?.id;
+    if (!userId) {
       return result;
     }
-    properties = { ...properties, ...extracted };
-  } else if (config.includeFullInput) {
-    properties.input = rawInput;
+
+    // Get raw input for property extraction
+    const rawInput = await getRawInput();
+
+    // Extract properties
+    let properties: Record<string, unknown> = {
+      procedure: path,
+      success: true,
+    };
+
+    if (config.extractProperties) {
+      const extracted = config.extractProperties(rawInput);
+      if (extracted === undefined) {
+        // Skip tracking this specific call
+        return result;
+      }
+      properties = { ...properties, ...extracted };
+    } else if (config.includeFullInput) {
+      properties.input = rawInput;
+    }
+
+    if (config.staticProperties) {
+      properties = { ...properties, ...config.staticProperties };
+    }
+
+    // Build groups
+    const groups: Record<string, string> = {};
+
+    if ("organization" in ctx && ctx.organization) {
+      const org = ctx.organization as { id: string };
+      groups.organization = org.id;
+    }
+
+    if ("project" in ctx && ctx.project) {
+      const proj = ctx.project as { id: string };
+      groups.project = proj.id;
+    }
+
+    // Capture the event using waitUntil to ensure delivery
+    const eventName = config.eventName || `trpc.${path}`;
+    waitUntil(
+      captureServerEvent(ctx.env, {
+        distinctId: userId,
+        event: eventName,
+        properties,
+        groups: Object.keys(groups).length > 0 ? groups : undefined,
+      }),
+    );
+  } catch (error) {
+    logger.error("PostHog tracking error (mutation succeeded, analytics failed):", error);
   }
-
-  if (config.staticProperties) {
-    properties = { ...properties, ...config.staticProperties };
-  }
-
-  // Build groups
-  const groups: Record<string, string> = {};
-
-  if ("organization" in ctx && ctx.organization) {
-    const org = ctx.organization as { id: string };
-    groups.organization = org.id;
-  }
-
-  if ("project" in ctx && ctx.project) {
-    const proj = ctx.project as { id: string };
-    groups.project = proj.id;
-  }
-
-  // Capture the event using waitUntil to ensure delivery
-  const eventName = config.eventName || `trpc.${path}`;
-  waitUntil(
-    captureServerEvent(ctx.env, {
-      distinctId: userId,
-      event: eventName,
-      properties,
-      groups: Object.keys(groups).length > 0 ? groups : undefined,
-    }),
-  );
 
   return result;
 });
