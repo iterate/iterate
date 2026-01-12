@@ -383,11 +383,10 @@ async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): P
 }
 
 /**
- * Rewrite absolute URLs in HTML responses to include the proxy base path.
- * This fixes issues where proxied pages reference assets with absolute paths
- * (e.g., /xterm.js) that would otherwise resolve to the wrong domain.
- *
- * Also injects a <base> tag and WebSocket interceptor to handle JavaScript-constructed URLs.
+ * Rewrite HTML responses to work behind the proxy.
+ * Strategy: Override window.location so client-side JS sees the stripped path.
+ * The proxy strips the prefix when forwarding, so the backend sees "/" paths.
+ * We just need to make the frontend think it's at "/" too.
  */
 async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
@@ -395,168 +394,78 @@ async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promi
     return response;
   }
 
-  // Do string replacement on the entire HTML to fix all absolute paths
-  // This is simpler and more reliable than HTMLRewriter for complex cases
   let html = await response.text();
 
-  // Replace all /assets/ paths with the proxy base path
-  // But only if they're not already prefixed with the proxy base
-  html = html.replace(new RegExp(`(["'(])(/assets/)`, "g"), `$1${proxyBasePath}/assets/`);
+  // Replace absolute /assets/ paths with the proxy base path
+  html = html.replace(/(["'(])\/assets\//g, `$1${proxyBasePath}/assets/`);
+  html = html.replace(/(["'(])\/logo\.svg/g, `$1${proxyBasePath}/logo.svg`);
+  html = html.replace(/(["'(])\/favicon/g, `$1${proxyBasePath}/favicon`);
 
-  // Also replace /logo.svg and other root-level assets
-  html = html.replace(new RegExp(`(["'(])(/logo\\.svg)`, "g"), `$1${proxyBasePath}/logo.svg`);
+  // Inject location override script at the very start of <head>
+  // This MUST run before any other scripts to fool the router
+  const script = `<script>
+(function() {
+  var proxyBase = ${JSON.stringify(proxyBasePath)};
+  var realLocation = window.location;
+  
+  // Override location.pathname to strip the proxy base
+  var locationProxy = new Proxy(realLocation, {
+    get: function(target, prop) {
+      if (prop === 'pathname') {
+        var path = target.pathname;
+        return path.startsWith(proxyBase) ? (path.slice(proxyBase.length) || '/') : path;
+      }
+      if (prop === 'href') {
+        var url = new URL(target.href);
+        if (url.pathname.startsWith(proxyBase)) url.pathname = url.pathname.slice(proxyBase.length) || '/';
+        return url.toString();
+      }
+      if (prop === 'toString') return function() { return locationProxy.href; };
+      var value = target[prop];
+      return typeof value === 'function' ? value.bind(target) : value;
+    }
+  });
+  
+  try { Object.defineProperty(window, 'location', { get: function() { return locationProxy; }, configurable: true }); } catch(e) {}
+  
+  // Override history to add proxy base back when navigating
+  var pushState = history.pushState.bind(history);
+  var replaceState = history.replaceState.bind(history);
+  function addBase(url) { return url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(proxyBase) ? proxyBase + url : url; }
+  history.pushState = function(s,t,u) { return pushState(s,t,addBase(u)); };
+  history.replaceState = function(s,t,u) { return replaceState(s,t,addBase(u)); };
+  
+  // Override fetch to add proxy base
+  var origFetch = window.fetch;
+  window.fetch = function(input, init) {
+    if (typeof input === 'string' && input.startsWith('/') && !input.startsWith(proxyBase)) input = proxyBase + input;
+    return origFetch.call(this, input, init);
+  };
+  
+  // Override WebSocket to add proxy base
+  var WS = window.WebSocket;
+  window.WebSocket = function(url, protocols) {
+    if (typeof url === 'string') {
+      try {
+        var parsed = new URL(url, realLocation.origin);
+        if (!parsed.pathname.startsWith(proxyBase)) { parsed.pathname = proxyBase + parsed.pathname; url = parsed.toString(); }
+      } catch(e) {
+        if (url.startsWith('/') && !url.startsWith(proxyBase)) url = (realLocation.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + realLocation.host + proxyBase + url;
+      }
+    }
+    return new WS(url, protocols);
+  };
+  window.WebSocket.prototype = WS.prototype;
+  window.WebSocket.CONNECTING = 0; window.WebSocket.OPEN = 1; window.WebSocket.CLOSING = 2; window.WebSocket.CLOSED = 3;
+  window.__PROXY_BASE_PATH__ = proxyBase;
+})();
+</script><base href="${proxyBasePath}/">`;
 
-  // Create a new response with the modified HTML for further processing
-  response = new Response(html, {
+  html = html.replace(/<head([^>]*)>/i, `<head$1>${script}`);
+
+  return new Response(html, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers,
   });
-
-  class URLRewriter {
-    private attr: string;
-    constructor(attr: string) {
-      this.attr = attr;
-    }
-
-    element(element: Element) {
-      const value = element.getAttribute(this.attr);
-      if (value && value.startsWith("/") && !value.startsWith("//")) {
-        element.setAttribute(this.attr, `${proxyBasePath}${value}`);
-      }
-    }
-  }
-
-  class BaseRewriter {
-    element(element: Element) {
-      // Rewrite <base href="/"> to use the proxy base path
-      const href = element.getAttribute("href");
-      if (href === "/" || href === "./") {
-        element.setAttribute("href", `${proxyBasePath}/`);
-      }
-    }
-  }
-
-  class HeadInjector {
-    element(element: Element) {
-      // Inject a base tag at the start of head
-      // This helps with relative URL resolution when the page is served under a proxy path
-      element.prepend(`<base href="${proxyBasePath}/">`, { html: true });
-
-      // Inject a script that sets up the base path for the router BEFORE the main app loads
-      // This must run before any other scripts
-      element.prepend(
-        `<script>
-// Set up proxy base path for TanStack Router and other libraries
-window.__PROXY_BASE_PATH__ = ${JSON.stringify(proxyBasePath)};
-
-// Override history methods to strip the proxy base path when the app reads location
-// and add it back when the app navigates
-(function() {
-  const proxyBase = ${JSON.stringify(proxyBasePath)};
-  
-  // Store original methods
-  const originalPushState = history.pushState.bind(history);
-  const originalReplaceState = history.replaceState.bind(history);
-  
-  // Helper to ensure URL has the proxy base
-  function ensureProxyBase(url) {
-    if (!url) return url;
-    if (typeof url !== 'string') return url;
-    
-    // If it's a relative path that doesn't start with the proxy base, add it
-    if (url.startsWith('/') && !url.startsWith(proxyBase)) {
-      return proxyBase + url;
-    }
-    return url;
-  }
-  
-  // Override pushState
-  history.pushState = function(state, title, url) {
-    return originalPushState(state, title, ensureProxyBase(url));
-  };
-  
-  // Override replaceState
-  history.replaceState = function(state, title, url) {
-    return originalReplaceState(state, title, ensureProxyBase(url));
-  };
-})();
-</script>`,
-        { html: true },
-      );
-
-      // Inject a WebSocket interceptor to rewrite WebSocket URLs
-      // This handles cases where JS constructs WebSocket URLs with absolute paths
-      element.append(
-        `<script>
-(function() {
-  const proxyBase = ${JSON.stringify(proxyBasePath)};
-  const OriginalWebSocket = window.WebSocket;
-  window.WebSocket = function(url, protocols) {
-    let newUrl = url;
-    if (typeof url === 'string') {
-      try {
-        const parsed = new URL(url, window.location.origin);
-        // If the WebSocket path doesn't start with the proxy base, prepend it
-        if (!parsed.pathname.startsWith(proxyBase)) {
-          parsed.pathname = proxyBase + parsed.pathname;
-          newUrl = parsed.toString();
-        }
-      } catch (e) {
-        // If URL parsing fails, try simple string manipulation
-        if (url.startsWith('/') && !url.startsWith('//') && !url.startsWith(proxyBase)) {
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          newUrl = protocol + '//' + window.location.host + proxyBase + url;
-        }
-      }
-    }
-    return new OriginalWebSocket(newUrl, protocols);
-  };
-  window.WebSocket.prototype = OriginalWebSocket.prototype;
-  window.WebSocket.CONNECTING = OriginalWebSocket.CONNECTING;
-  window.WebSocket.OPEN = OriginalWebSocket.OPEN;
-  window.WebSocket.CLOSING = OriginalWebSocket.CLOSING;
-  window.WebSocket.CLOSED = OriginalWebSocket.CLOSED;
-})();
-</script>`,
-        { html: true },
-      );
-    }
-  }
-
-  // Rewrite inline script content to fix /assets/ paths in import() calls
-  // Only rewrites import('/assets/...) and preload patterns
-  class InlineScriptRewriter {
-    private chunks: string[] = [];
-
-    text(text: Text) {
-      // Accumulate all text chunks
-      this.chunks.push(text.text);
-
-      if (text.lastInTextNode) {
-        // Join all chunks and rewrite
-        const original = this.chunks.join("");
-        const rewritten = original
-          // import('/assets/...) -> import('${proxyBasePath}/assets/...)
-          .replace(/import\(\s*(['"])\/assets\//g, `import($1${proxyBasePath}/assets/`)
-          // preloads: ["/assets/..."] -> preloads: ["${proxyBasePath}/assets/..."]
-          .replace(/"\/assets\//g, `"${proxyBasePath}/assets/`);
-
-        // Only replace if actually changed
-        if (rewritten !== original) {
-          text.replace(rewritten, { html: false });
-          // Remove all prior chunks since we're replacing the last one with everything
-          // Actually we need to handle this differently...
-        }
-        this.chunks = [];
-      }
-    }
-  }
-
-  // Only use HTMLRewriter for things that string replacement can't handle well
-  // (like injecting scripts). Asset URLs are already handled by string replacement above.
-  return new HTMLRewriter()
-    .on("base[href]", new BaseRewriter())
-    .on("head", new HeadInjector())
-    .transform(response);
 }
