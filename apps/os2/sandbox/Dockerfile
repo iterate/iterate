@@ -18,16 +18,19 @@ RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
 
 # Clone iterate repo and install dependencies (baked into image for faster startup)
-# Using Go-style path: $HOME/src/github.com/{owner}/{repo}
-RUN mkdir -p /root/src/github.com/iterate && \
-    git clone https://github.com/iterate/iterate.git /root/src/github.com/iterate/iterate && \
-    cd /root/src/github.com/iterate/iterate && \
+# Uses user-agnostic path; entry.ts creates symlink to Go-style path at runtime
+RUN git clone https://github.com/iterate/iterate.git /iterate-repo && \
+    cd /iterate-repo && \
     pnpm install
 
 # Copy s6 service definitions and scripts (until these are merged to main)
-COPY s6-daemons /root/src/github.com/iterate/iterate/s6-daemons
-COPY scripts /root/src/github.com/iterate/iterate/scripts
+COPY s6-daemons /iterate-repo/s6-daemons
+COPY scripts /iterate-repo/scripts
 
 COPY apps/os2/sandbox/entry.ts /app/entry.ts
+
+# Development: Mount local iterate repo to override the baked-in clone:
+#   docker run -v /path/to/local/iterate:/iterate-repo -e ITERATE_DEV=true ...
+# Set ITERATE_DEV=true to skip git fetch/reset (preserves your local changes).
 
 ENTRYPOINT [ "tsx", "entry.ts" ]

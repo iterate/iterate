@@ -29,10 +29,13 @@ export interface LocalDockerConfig {
   sandboxPath: string;
   imageName: string;
   findAvailablePort: () => Promise<number>;
+  devMode?: {
+    iterateRepoPath: string;
+  };
 }
 
 export function createLocalDockerProvider(config: LocalDockerConfig): MachineProvider {
-  const { imageName, findAvailablePort } = config;
+  const { imageName, findAvailablePort, devMode } = config;
 
   return {
     type: "local-docker",
@@ -40,20 +43,29 @@ export function createLocalDockerProvider(config: LocalDockerConfig): MachinePro
     async create(machineConfig: CreateMachineConfig): Promise<MachineProviderResult> {
       const port = await findAvailablePort();
 
-      const envArray = Object.entries(machineConfig.envVars).map(
-        ([key, value]) => `${key}=${value}`,
-      );
+      const envVars = { ...machineConfig.envVars };
+      if (devMode) {
+        envVars.ITERATE_DEV = "true";
+      }
+
+      const envArray = Object.entries(envVars).map(([key, value]) => `${key}=${value}`);
+
+      const hostConfig: Record<string, unknown> = {
+        PortBindings: {
+          "3000/tcp": [{ HostPort: String(port) }],
+        },
+      };
+
+      if (devMode) {
+        hostConfig.Binds = [`${devMode.iterateRepoPath}:/iterate-repo`];
+      }
 
       const createResponse = await dockerApi<{ Id: string }>("POST", "/containers/create", {
         Image: imageName,
         name: machineConfig.machineId,
         Env: envArray,
         ExposedPorts: { "3000/tcp": {} },
-        HostConfig: {
-          PortBindings: {
-            "3000/tcp": [{ HostPort: String(port) }],
-          },
-        },
+        HostConfig: hostConfig,
       });
 
       const containerId = createResponse.Id;

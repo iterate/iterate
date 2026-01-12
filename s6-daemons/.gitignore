@@ -1,0 +1,3 @@
+# s6 runtime state directories (created when services run)
+**/supervise/
+.s6-svscan/

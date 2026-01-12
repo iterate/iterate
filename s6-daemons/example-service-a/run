@@ -5,8 +5,9 @@ cd "$ITERATE_REPO/scripts"
 # Health checker in background
 "$ITERATE_REPO/scripts/s6-healthcheck-notify.sh" http://localhost:3001/health &
 
-# Slow-starting service (2 second delay) to test dependency handling
+# Example service A: slow-starting service (2 second delay)
+# Service B depends on this service
 exec node --experimental-strip-types test-daemon.ts \
-  --name pingpong \
+  --name service-a \
   --port 3001 \
   --startup-delay 2000
