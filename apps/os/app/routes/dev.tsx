@@ -10,7 +10,9 @@ export const Route = createFileRoute("/dev")({
 function RouteComponent() {
   const slowMutation = useMutation({
     mutationFn: async () => {
-      await new Promise((resolve) => setTimeout(resolve, 6_000));
+      const timeout =
+        Number(new URL(window.location.href).searchParams.get("slowMutationTimeout")) || 2_000;
+      await new Promise((resolve) => setTimeout(resolve, timeout));
       return "done";
     },
   });

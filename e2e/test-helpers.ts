@@ -15,9 +15,8 @@ export const test = base.extend<TestInputs>({
   spinnerWaiter,
 });
 
-export async function login(page: Page, email: string, baseURL?: string) {
-  const loginURL = baseURL ? `${baseURL}/login` : "/login";
-  await page.goto(loginURL);
+export async function login(page: Page, email: string) {
+  await page.goto("/login");
 
   const emailInput = page.getByTestId("email-input");
   await emailInput.waitFor();

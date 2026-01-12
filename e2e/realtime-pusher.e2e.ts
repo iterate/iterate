@@ -2,7 +2,7 @@ import { expect } from "@playwright/test";
 import { test } from "./test-helpers.ts";
 
 test.describe("realtime pusher", () => {
-  test("mutation broadcasts invalidation via WebSocket", async ({ page, baseURL }) => {
+  test("mutation broadcasts invalidation via WebSocket", async ({ page }) => {
     const realtimeMessages: string[] = [];
 
     page.on("websocket", (ws) => {
@@ -15,7 +15,7 @@ test.describe("realtime pusher", () => {
       }
     });
 
-    await page.goto(`${baseURL}/login`);
+    await page.goto("/login");
 
     await expect
       .poll(() => realtimeMessages)
@@ -39,8 +39,8 @@ test.describe("realtime pusher", () => {
   });
 
   test("two clients both receive invalidation broadcast", async ({ browser, baseURL }) => {
-    const context1 = await browser.newContext();
-    const context2 = await browser.newContext();
+    const context1 = await browser.newContext({ baseURL });
+    const context2 = await browser.newContext({ baseURL });
 
     const page1 = await context1.newPage();
     const page2 = await context2.newPage();
@@ -55,7 +55,7 @@ test.describe("realtime pusher", () => {
       }
     });
 
-    await Promise.all([page1.goto(`${baseURL}/login`), page2.goto(`${baseURL}/login`)]);
+    await Promise.all([page1.goto("/login"), page2.goto("/login")]);
 
     await expect
       .poll(() => page2Messages)
