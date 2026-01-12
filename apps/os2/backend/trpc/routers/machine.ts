@@ -373,11 +373,11 @@ async function getGitHubEnvVars(
     });
   }
 
-  const projectRepo = await db.query.projectRepo.findFirst({
+  const projectRepos = await db.query.projectRepo.findMany({
     where: eq(schema.projectRepo.projectId, projectId),
   });
 
-  if (!projectRepo) {
+  if (projectRepos.length === 0) {
     return {};
   }
 
@@ -393,18 +393,25 @@ async function getGitHubEnvVars(
     });
   }
 
-  const repoInfo = await getRepositoryById(installationToken, projectRepo.externalId);
-
-  if (!repoInfo) {
-    throw new TRPCError({
-      code: "INTERNAL_SERVER_ERROR",
-      message: "Failed to fetch repository from GitHub - it may have been deleted",
-    });
-  }
+  const repos = await Promise.all(
+    projectRepos.map(async (repo) => {
+      const repoInfo = await getRepositoryById(installationToken, repo.externalId);
+      if (!repoInfo) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Failed to fetch repository ${repo.owner}/${repo.name} from GitHub - it may have been deleted`,
+        });
+      }
+      return {
+        owner: repoInfo.owner,
+        name: repoInfo.name,
+        defaultBranch: repoInfo.defaultBranch,
+      };
+    }),
+  );
 
   return {
     GITHUB_ACCESS_TOKEN: installationToken,
-    GITHUB_REPO_FULL_NAME: repoInfo.fullName,
-    GITHUB_REPO_DEFAULT_BRANCH: repoInfo.defaultBranch,
+    GITHUB_REPOS: JSON.stringify(repos),
   };
 }

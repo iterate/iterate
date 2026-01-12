@@ -1,32 +1,72 @@
 import { spawn, execSync, type ExecSyncOptions } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname } from "node:path";
 
-const ITERATE_REPO_PATH = "/repos/iterate";
-const ITERATE_REPO_URL = "https://github.com/iterate/iterate.git";
+interface RepoConfig {
+  owner: string;
+  name: string;
+  defaultBranch: string;
+}
+
+const SRC_BASE = `${homedir()}/src/github.com`;
+const ITERATE_REPO_OWNER = "iterate";
+const ITERATE_REPO_NAME = "iterate";
+const ITERATE_REPO_PATH = `${SRC_BASE}/${ITERATE_REPO_OWNER}/${ITERATE_REPO_NAME}`;
+const ITERATE_REPO_URL = `https://github.com/${ITERATE_REPO_OWNER}/${ITERATE_REPO_NAME}.git`;
 const DAEMON_PATH = `${ITERATE_REPO_PATH}/apps/daemon2`;
 
-const USER_REPO_PATH = "/repos/user";
+const getRepoPath = (owner: string, name: string) => `${SRC_BASE}/${owner}/${name}`;
 
-const getGitEnvWithToken = (): ExecSyncOptions["env"] => {
+const getGitEnvWithToken = (owners: string[]): ExecSyncOptions["env"] => {
   const token = process.env.GITHUB_ACCESS_TOKEN;
-  if (!token) return process.env;
+  if (!token || owners.length === 0) return process.env;
 
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
-  if (!repoFullName) return process.env;
-
-  const [owner] = repoFullName.split("/");
-  return {
+  const uniqueOwners = [...new Set(owners)];
+  const gitConfig: Record<string, string> = {
     ...process.env,
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: `url.https://x-access-token:${token}@github.com/${owner}/.insteadOf`,
-    GIT_CONFIG_VALUE_0: `https://github.com/${owner}/`,
+    GIT_CONFIG_COUNT: uniqueOwners.length.toString(),
   };
+
+  uniqueOwners.forEach((owner, index) => {
+    gitConfig[`GIT_CONFIG_KEY_${index}`] =
+      `url.https://x-access-token:${token}@github.com/${owner}/.insteadOf`;
+    gitConfig[`GIT_CONFIG_VALUE_${index}`] = `https://github.com/${owner}/`;
+  });
+
+  return gitConfig;
 };
 
-const cloneUserRepo = () => {
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
-  if (!repoFullName) {
-    console.log("No GITHUB_REPO_FULL_NAME found, skipping user repository clone");
+const cloneOrUpdateRepo = (repo: RepoConfig, gitEnv: ExecSyncOptions["env"]) => {
+  const repoPath = getRepoPath(repo.owner, repo.name);
+  const repoFullName = `${repo.owner}/${repo.name}`;
+  const repoUrl = `https://github.com/${repoFullName}.git`;
+
+  mkdirSync(dirname(repoPath), { recursive: true });
+
+  if (existsSync(repoPath)) {
+    console.log(`Repository ${repoFullName} already exists at ${repoPath}, pulling latest...`);
+    execSync(`git fetch origin ${repo.defaultBranch}`, {
+      cwd: repoPath,
+      stdio: "inherit",
+      env: gitEnv,
+    });
+    execSync(`git reset --hard origin/${repo.defaultBranch}`, { cwd: repoPath, stdio: "inherit" });
+  } else {
+    console.log(`Cloning ${repoFullName} to ${repoPath}...`);
+    execSync(`git clone --branch ${repo.defaultBranch} ${repoUrl} ${repoPath}`, {
+      stdio: "inherit",
+      env: gitEnv,
+    });
+  }
+
+  console.log(`Repository ${repoFullName} ready at ${repoPath}`);
+};
+
+const cloneUserRepos = () => {
+  const reposJson = process.env.GITHUB_REPOS;
+  if (!reposJson) {
+    console.log("No GITHUB_REPOS found, skipping user repository clone");
     return;
   }
 
@@ -36,42 +76,39 @@ const cloneUserRepo = () => {
     return;
   }
 
-  const defaultBranch = process.env.GITHUB_REPO_DEFAULT_BRANCH || "main";
-  const repoUrl = `https://github.com/${repoFullName}.git`;
-  const gitEnv = getGitEnvWithToken();
-
-  if (existsSync(USER_REPO_PATH)) {
-    console.log(`User repository already exists at ${USER_REPO_PATH}, pulling latest...`);
-    execSync(`git fetch origin ${defaultBranch}`, {
-      cwd: USER_REPO_PATH,
-      stdio: "inherit",
-      env: gitEnv,
-    });
-    execSync(`git reset --hard origin/${defaultBranch}`, { cwd: USER_REPO_PATH, stdio: "inherit" });
-  } else {
-    console.log(`Cloning ${repoFullName} to ${USER_REPO_PATH}...`);
-    execSync(`git clone --branch ${defaultBranch} ${repoUrl} ${USER_REPO_PATH}`, {
-      stdio: "inherit",
-      env: gitEnv,
-    });
+  let repos: RepoConfig[];
+  try {
+    repos = JSON.parse(reposJson) as RepoConfig[];
+  } catch {
+    console.error("Failed to parse GITHUB_REPOS JSON:", reposJson);
+    return;
   }
 
-  console.log(`User repository ${repoFullName} ready at ${USER_REPO_PATH}`);
+  if (repos.length === 0) {
+    console.log("No repositories configured, skipping user repository clone");
+    return;
+  }
+
+  const owners = repos.map((r) => r.owner);
+  const gitEnv = getGitEnvWithToken(owners);
+
+  for (const repo of repos) {
+    cloneOrUpdateRepo(repo, gitEnv);
+  }
 };
 
 const cloneAndSetupIterateRepo = () => {
+  mkdirSync(dirname(ITERATE_REPO_PATH), { recursive: true });
+
   if (existsSync(ITERATE_REPO_PATH)) {
-    // Repo already exists (baked into image), just pull latest
     console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
     execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
     execSync("git reset --hard origin/main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
   } else {
-    // Fallback for local dev without baked repo
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
     execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
   }
 
-  // pnpm install will be fast if lockfile matches cached node_modules
   console.log("Running pnpm install (should be fast if lockfile unchanged)...");
   execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
 };
@@ -105,7 +142,7 @@ const startDaemon = () => {
 
 const main = () => {
   cloneAndSetupIterateRepo();
-  cloneUserRepo();
+  cloneUserRepos();
   const daemon = startDaemon();
 
   process.on("SIGINT", () => {

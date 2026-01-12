@@ -1118,6 +1118,9 @@ importers:
       '@effect/vitest':
         specifier: ^0.22.0
         version: 0.22.5(effect@3.19.14)(vitest@4.0.15)
+      '@playwright/test':
+        specifier: ^1.57.0
+        version: 1.57.0
       '@tailwindcss/vite':
         specifier: ^4.1.17
         version: 4.1.17(vite@7.2.4(@types/node@24.10.1)(jiti@2.6.1)(lightningcss@1.30.2)(terser@5.44.1)(tsx@4.20.6)(yaml@2.8.2))
