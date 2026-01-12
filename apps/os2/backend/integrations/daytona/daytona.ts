@@ -451,9 +451,33 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
     }
   }
 
+  class InlineScriptRewriter {
+    private chunks: string[] = [];
+
+    text(text: Text) {
+      this.chunks.push(text.text);
+      if (text.lastInTextNode) {
+        const content = this.chunks.join("");
+        // Rewrite dynamic import() calls with absolute paths
+        // Matches: import('/path') or import("/path")
+        const rewritten = content.replace(
+          /\bimport\s*\(\s*(['"])(\/)(?!\/)/g,
+          `import($1${proxyBasePath}$2`,
+        );
+        if (rewritten !== content) {
+          text.replace(rewritten, { html: false });
+        }
+        this.chunks = [];
+      } else {
+        text.remove();
+      }
+    }
+  }
+
   return new HTMLRewriter()
     .on("head", new HeadInjector())
     .on("script[src]", new URLRewriter("src"))
+    .on("script:not([src])", new InlineScriptRewriter())
     .on("link[href]", new URLRewriter("href"))
     .on("img[src]", new URLRewriter("src"))
     .on("a[href]", new URLRewriter("href"))
