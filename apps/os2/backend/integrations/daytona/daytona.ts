@@ -408,10 +408,21 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
     }
   }
 
+  class BaseRewriter {
+    element(element: Element) {
+      // Rewrite <base href="/"> to use the proxy base path
+      const href = element.getAttribute("href");
+      if (href === "/" || href === "./") {
+        element.setAttribute("href", `${proxyBasePath}/`);
+      }
+    }
+  }
+
   class HeadInjector {
     element(element: Element) {
-      // Inject a <base> tag so relative URLs resolve correctly
-      element.prepend(`<base href="${proxyBasePath}/">`, { html: true });
+      // If there's no existing <base> tag, inject one
+      // (The BaseRewriter handles existing tags)
+      // Note: This prepend will be a fallback; we prefer rewriting existing tags
       // Inject a WebSocket interceptor to rewrite WebSocket URLs
       // This handles cases where JS constructs WebSocket URLs with absolute paths
       element.append(
@@ -452,6 +463,7 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
   }
 
   return new HTMLRewriter()
+    .on("base[href]", new BaseRewriter())
     .on("head", new HeadInjector())
     .on("script[src]", new URLRewriter("src"))
     .on("link[href]", new URLRewriter("href"))
