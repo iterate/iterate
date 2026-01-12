@@ -1,6 +1,19 @@
-import { expect, type Page } from "@playwright/test";
+// eslint-disable-next-line no-restricted-imports -- this is where the wrapper is defined
+import { expect, type Page, test as base } from "@playwright/test";
+import { spinnerWaiter } from "./spinner-waiter.ts";
 
 const TEST_OTP = "424242";
+
+export type TestInputs = {
+  spinnerWaiter: typeof spinnerWaiter;
+};
+export const test = base.extend<TestInputs>({
+  page: async ({ page }, use) => {
+    spinnerWaiter.setup(page);
+    await use(page);
+  },
+  spinnerWaiter,
+});
 
 export async function login(page: Page, email: string, baseURL?: string) {
   const loginURL = baseURL ? `${baseURL}/login` : "/login";
