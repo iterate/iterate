@@ -458,10 +458,10 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
       this.chunks.push(text.text);
       if (text.lastInTextNode) {
         const content = this.chunks.join("");
-        // Rewrite dynamic import() calls with absolute paths
-        // Matches: import('/path') or import("/path")
+        // Rewrite Vite's dynamic import() in <script type="module" async> tags
+        // e.g. import('/assets/main-BF-EyVXT.js') -> import('/proxy/path/assets/...')
         const rewritten = content.replace(
-          /\bimport\s*\(\s*(['"])(\/)(?!\/)/g,
+          /\bimport\s*\(\s*(['"])(\/assets\/)/g,
           `import($1${proxyBasePath}$2`,
         );
         if (rewritten !== content) {
@@ -477,7 +477,7 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
   return new HTMLRewriter()
     .on("head", new HeadInjector())
     .on("script[src]", new URLRewriter("src"))
-    .on("script:not([src])", new InlineScriptRewriter())
+    .on('script[type="module"][async]', new InlineScriptRewriter())
     .on("link[href]", new URLRewriter("href"))
     .on("img[src]", new URLRewriter("src"))
     .on("a[href]", new URLRewriter("href"))
