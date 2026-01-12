@@ -458,13 +458,11 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
       this.chunks.push(text.text);
       if (text.lastInTextNode) {
         const content = this.chunks.join("");
-        // Rewrite Vite's dynamic import() in <script type="module" async> tags
-        // e.g. import('/assets/main-BF-EyVXT.js') -> import('/proxy/path/assets/...')
-        const rewritten = content.replace(
-          /\bimport\s*\(\s*(['"])(\/assets\/)/g,
-          `import($1${proxyBasePath}$2`,
-        );
-        if (rewritten !== content) {
+        // Only rewrite Vite's bootstrap script: <script type="module" async>import('/assets/...')</script>
+        // The entire content must be just whitespace + import('/assets/...') + whitespace
+        const match = content.match(/^\s*import\s*\(\s*(['"])(\/assets\/[^'"]+)\1\s*\)\s*$/);
+        if (match) {
+          const rewritten = content.replace(match[2], `${proxyBasePath}${match[2]}`);
           text.replace(rewritten, { html: false });
         }
         this.chunks = [];
