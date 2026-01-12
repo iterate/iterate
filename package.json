@@ -11,7 +11,7 @@
     "os": "cd apps/os && pnpm",
     "os2": "cd apps/os2 && pnpm",
     "daemon2": "cd apps/daemon2 && pnpm",
-    "e2e": "WORKER_URL='http://localhost:5173' doppler run -- pnpm os e2e",
+    "e2e": "pnpm --filter @iterate-com/e2e test",
     "eval": "doppler run -- pnpm os eval",
     "eval:light": "doppler run -- env -u BRAINTRUST_API_KEY pnpm os eval",
     "lint": "eslint . --fix",
