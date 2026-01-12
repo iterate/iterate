@@ -22,6 +22,13 @@
       "when": 1767971589234,
       "tag": "0002_wooden_arachne",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1767976751429,
+      "tag": "0003_add-gmail-connection-indexes",
+      "breakpoints": true
     }
   ]
 }

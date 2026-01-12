@@ -1,6 +1,6 @@
 import { pgTable, timestamp, text, uniqueIndex, jsonb, index } from "drizzle-orm/pg-core";
 import { typeid } from "typeid-js";
-import { relations } from "drizzle-orm";
+import { relations, sql } from "drizzle-orm";
 import type { SlackEvent } from "@slack/web-api";
 
 // Organization roles: owner, admin, member (simplified from OS)
@@ -242,6 +242,8 @@ export const projectAccessTokenRelations = relations(projectAccessToken, ({ one 
 }));
 
 // OAuth connections (project-scoped like Slack, or user-scoped like Gmail)
+// Project-scoped: one connection per provider per project (e.g., Slack workspace)
+// User-scoped: one connection per provider per user per project (e.g., Gmail account)
 export const projectConnection = pgTable(
   "project_connection",
   (t) => ({
@@ -258,7 +260,20 @@ export const projectConnection = pgTable(
     scopes: t.text(),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.provider, t.externalId), index().on(t.projectId)],
+  (t) => [
+    // For project-scoped connections: ensure provider+externalId is unique globally
+    // (e.g., a Slack workspace can only be connected to one project)
+    uniqueIndex("project_connection_provider_external_id_idx")
+      .on(t.provider, t.externalId)
+      .where(sql`scope = 'project'`),
+    // For user-scoped connections: ensure each user can only have one connection
+    // per provider per project
+    uniqueIndex("project_connection_user_provider_project_idx")
+      .on(t.projectId, t.provider, t.userId)
+      .where(sql`scope = 'user'`),
+    index().on(t.projectId),
+    index().on(t.userId),
+  ],
 );
 
 export const projectConnectionRelations = relations(projectConnection, ({ one }) => ({

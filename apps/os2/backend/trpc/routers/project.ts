@@ -17,6 +17,11 @@ import {
   deleteGitHubInstallation,
 } from "../../integrations/github/github.ts";
 import { revokeSlackToken, SLACK_BOT_SCOPES } from "../../integrations/slack/slack.ts";
+import {
+  GMAIL_SCOPES,
+  createGmailClient,
+  revokeGmailToken,
+} from "../../integrations/gmail/gmail.ts";
 import { decrypt } from "../../utils/encryption.ts";
 
 export const projectRouter = router({
@@ -330,6 +335,109 @@ export const projectRouter = router({
           eq(projectConnection.provider, "slack"),
         ),
       );
+
+    return { success: true };
+  }),
+
+  // Start Gmail OAuth flow (user-scoped connection)
+  startGmailOAuthFlow: projectProtectedMutation
+    .input(
+      z.object({
+        callbackURL: z.string().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const gmail = createGmailClient(ctx.env);
+      const state = arctic.generateState();
+      const codeVerifier = arctic.generateCodeVerifier();
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      const data = JSON.stringify({
+        userId: ctx.user.id,
+        projectId: ctx.project.id,
+        callbackURL: input.callbackURL,
+        codeVerifier,
+      });
+
+      await ctx.db.insert(verification).values({
+        identifier: state,
+        value: data,
+        expiresAt,
+      });
+
+      const authorizationUrl = gmail.createAuthorizationURL(state, codeVerifier, GMAIL_SCOPES);
+      authorizationUrl.searchParams.set("access_type", "offline");
+      authorizationUrl.searchParams.set("prompt", "consent");
+
+      return { authorizationUrl: authorizationUrl.toString() };
+    }),
+
+  // Get Gmail connection status for the current user
+  getGmailConnection: projectProtectedProcedure.query(async ({ ctx }) => {
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "gmail" && c.userId === ctx.user.id,
+    );
+    const providerData = connection?.providerData as {
+      email?: string;
+      name?: string;
+      picture?: string;
+    } | null;
+
+    return {
+      connected: !!connection,
+      email: providerData?.email ?? null,
+      name: providerData?.name ?? null,
+      picture: providerData?.picture ?? null,
+    };
+  }),
+
+  // List all Gmail connections in the project (for admins to see who has connected)
+  listGmailConnections: projectProtectedProcedure.query(async ({ ctx }) => {
+    const connections = ctx.project.connections.filter((c) => c.provider === "gmail");
+
+    return connections.map((connection) => {
+      const providerData = connection.providerData as {
+        email?: string;
+        name?: string;
+        picture?: string;
+      };
+
+      return {
+        id: connection.id,
+        userId: connection.userId,
+        email: providerData?.email ?? null,
+        name: providerData?.name ?? null,
+        picture: providerData?.picture ?? null,
+        isCurrentUser: connection.userId === ctx.user.id,
+        createdAt: connection.createdAt,
+      };
+    });
+  }),
+
+  // Disconnect Gmail for the current user
+  disconnectGmail: projectProtectedMutation.mutation(async ({ ctx }) => {
+    const connection = ctx.project.connections.find(
+      (c) => c.provider === "gmail" && c.userId === ctx.user.id,
+    );
+
+    if (!connection) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "No Gmail connection found for your account in this project",
+      });
+    }
+
+    const providerData = connection.providerData as { encryptedAccessToken?: string };
+    if (providerData.encryptedAccessToken) {
+      try {
+        const accessToken = await decrypt(providerData.encryptedAccessToken);
+        await revokeGmailToken(accessToken);
+      } catch {
+        // Token revocation failed, but we still delete the connection
+      }
+    }
+
+    await ctx.db.delete(schema.projectConnection).where(eq(projectConnection.id, connection.id));
 
     return { success: true };
   }),
