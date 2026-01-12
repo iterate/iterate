@@ -6,11 +6,20 @@ import { getContext } from "./integrations/tanstack-query/trpc-client.ts";
 
 import { routeTree } from "./routeTree.gen";
 
+// Get base path from proxy injection (if running behind proxy)
+function getBasePath(): string | undefined {
+  if (typeof window === "undefined") return undefined;
+  const proxyBase = (window as { __PROXY_BASE_PATH__?: string }).__PROXY_BASE_PATH__;
+  return proxyBase || undefined;
+}
+
 export const getRouter = () => {
   const rqContext = getContext();
+  const basePath = getBasePath();
 
   const router = createRouter({
     routeTree,
+    basepath: basePath,
     context: {
       ...rqContext,
     },

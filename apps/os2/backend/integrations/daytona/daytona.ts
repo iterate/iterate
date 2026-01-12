@@ -401,63 +401,66 @@ async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promi
   html = html.replace(/(["'(])\/logo\.svg/g, `$1${proxyBasePath}/logo.svg`);
   html = html.replace(/(["'(])\/favicon/g, `$1${proxyBasePath}/favicon`);
 
-  // Inject location override script at the very start of <head>
-  // This MUST run before any other scripts to fool the router
+  // Inject script that intercepts all navigation to add proxy base
+  // The daemon app sees stripped paths, but all URLs must go through the proxy
   const script = `<script>
 (function() {
   var proxyBase = ${JSON.stringify(proxyBasePath)};
-  var realLocation = window.location;
+  window.__PROXY_BASE_PATH__ = proxyBase;
   
-  // Override location.pathname to strip the proxy base
-  var locationProxy = new Proxy(realLocation, {
-    get: function(target, prop) {
-      if (prop === 'pathname') {
-        var path = target.pathname;
-        return path.startsWith(proxyBase) ? (path.slice(proxyBase.length) || '/') : path;
-      }
-      if (prop === 'href') {
-        var url = new URL(target.href);
-        if (url.pathname.startsWith(proxyBase)) url.pathname = url.pathname.slice(proxyBase.length) || '/';
-        return url.toString();
-      }
-      if (prop === 'toString') return function() { return locationProxy.href; };
-      var value = target[prop];
-      return typeof value === 'function' ? value.bind(target) : value;
-    }
-  });
+  // Helper to add proxy base to paths
+  function addBase(url) {
+    if (!url || typeof url !== 'string') return url;
+    // Already has proxy base or is external
+    if (url.startsWith(proxyBase) || url.startsWith('http') || url.startsWith('//')) return url;
+    // Add proxy base to root-relative paths
+    if (url.startsWith('/')) return proxyBase + url;
+    return url;
+  }
   
-  try { Object.defineProperty(window, 'location', { get: function() { return locationProxy; }, configurable: true }); } catch(e) {}
-  
-  // Override history to add proxy base back when navigating
+  // Override history.pushState and replaceState
   var pushState = history.pushState.bind(history);
   var replaceState = history.replaceState.bind(history);
-  function addBase(url) { return url && typeof url === 'string' && url.startsWith('/') && !url.startsWith(proxyBase) ? proxyBase + url : url; }
   history.pushState = function(s,t,u) { return pushState(s,t,addBase(u)); };
   history.replaceState = function(s,t,u) { return replaceState(s,t,addBase(u)); };
   
-  // Override fetch to add proxy base
+  // Override fetch
   var origFetch = window.fetch;
   window.fetch = function(input, init) {
-    if (typeof input === 'string' && input.startsWith('/') && !input.startsWith(proxyBase)) input = proxyBase + input;
+    if (typeof input === 'string') input = addBase(input);
     return origFetch.call(this, input, init);
   };
   
-  // Override WebSocket to add proxy base
+  // Override XMLHttpRequest
+  var origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url) {
+    arguments[1] = addBase(url);
+    return origOpen.apply(this, arguments);
+  };
+  
+  // Override WebSocket
   var WS = window.WebSocket;
   window.WebSocket = function(url, protocols) {
-    if (typeof url === 'string') {
-      try {
-        var parsed = new URL(url, realLocation.origin);
-        if (!parsed.pathname.startsWith(proxyBase)) { parsed.pathname = proxyBase + parsed.pathname; url = parsed.toString(); }
-      } catch(e) {
-        if (url.startsWith('/') && !url.startsWith(proxyBase)) url = (realLocation.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + realLocation.host + proxyBase + url;
-      }
+    if (typeof url === 'string' && url.startsWith('/') && !url.startsWith(proxyBase)) {
+      var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      url = protocol + '//' + location.host + proxyBase + url;
     }
     return new WS(url, protocols);
   };
   window.WebSocket.prototype = WS.prototype;
-  window.WebSocket.CONNECTING = 0; window.WebSocket.OPEN = 1; window.WebSocket.CLOSING = 2; window.WebSocket.CLOSED = 3;
-  window.__PROXY_BASE_PATH__ = proxyBase;
+  Object.assign(window.WebSocket, WS);
+  
+  // Intercept all link clicks to add proxy base
+  document.addEventListener('click', function(e) {
+    var link = e.target.closest('a[href]');
+    if (!link) return;
+    var href = link.getAttribute('href');
+    if (href && href.startsWith('/') && !href.startsWith(proxyBase)) {
+      e.preventDefault();
+      history.pushState(null, '', proxyBase + href);
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    }
+  }, true);
 })();
 </script><base href="${proxyBasePath}/">`;
 
