@@ -1,8 +1,10 @@
 import { z } from "zod/v4";
 import { and, eq, ilike } from "drizzle-orm";
+import { TRPCError } from "@trpc/server";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
-import { user } from "../../db/schema.ts";
+import { user, billingAccount } from "../../db/schema.ts";
+import { getStripe } from "../../integrations/stripe/stripe.ts";
 
 export const adminRouter = router({
   // Impersonate a user (creates a session as that user)
@@ -129,14 +131,50 @@ export const adminRouter = router({
     };
   }),
 
-  // Get impersonation info for the current user (for UI display)
+  chargeUsage: adminProcedure
+    .input(
+      z.object({
+        organizationId: z.string(),
+        units: z.number().int().positive(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const account = await ctx.db.query.billingAccount.findFirst({
+        where: eq(billingAccount.organizationId, input.organizationId),
+      });
+
+      if (!account?.stripeCustomerId) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Organization has no billing account or Stripe customer",
+        });
+      }
+
+      const stripe = getStripe();
+
+      const meterEvent = await stripe.v2.billing.meterEvents.create({
+        event_name: "test_usage_units",
+        payload: {
+          stripe_customer_id: account.stripeCustomerId,
+          value: String(input.units),
+        },
+      });
+
+      return {
+        success: true,
+        units: input.units,
+        costCents: input.units,
+        meterEventId: meterEvent.identifier,
+        stripeCustomerId: account.stripeCustomerId,
+      };
+    }),
+
   impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
     const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
     const isAdmin = ctx?.user?.role === "admin" || undefined;
     return { impersonatedBy, isAdmin };
   }),
 
-  // Search users by email (for admin impersonation autocomplete)
   searchUsersByEmail: adminProcedure
     .input(z.object({ searchEmail: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -148,7 +186,6 @@ export const adminRouter = router({
       return users;
     }),
 
-  // Find a user by exact email (for admin impersonation)
   findUserByEmail: adminProcedure
     .input(z.object({ email: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -158,7 +195,6 @@ export const adminRouter = router({
       return foundUser;
     }),
 
-  // Get the owner of a project's organization (for admin impersonation by project ID)
   getProjectOwner: adminProcedure
     .input(z.object({ projectId: z.string() }))
     .query(async ({ ctx, input }) => {
@@ -189,7 +225,6 @@ export const adminRouter = router({
       };
     }),
 
-  // Set a user's system-wide role (admin only)
   setUserRole: adminProcedure
     .input(
       z.object({
@@ -198,7 +233,6 @@ export const adminRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Prevent admins from demoting themselves
       if (input.userId === ctx.user.id && input.role !== "admin") {
         throw new Error("You cannot remove your own admin role");
       }

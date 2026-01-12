@@ -1,6 +1,7 @@
 import { type ReactNode, useMemo, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import { Box, ChevronsUpDown, LogOut, Settings, UserCog } from "lucide-react";
+import { usePostHog } from "posthog-js/react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { fromString } from "typeid-js";
@@ -225,6 +226,7 @@ async function resolveImpersonation(type: ImpersonationType, value: string): Pro
 
 export function SidebarShell({ header, children, user }: SidebarShellProps) {
   const [impersonationDialogOpen, setImpersonationDialogOpen] = useState(false);
+  const posthog = usePostHog();
 
   const impersonationInfoQuery = useQuery(
     trpc.admin.impersonationInfo.queryOptions(undefined, {
@@ -352,6 +354,8 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
                   onClick={() => {
+                    // Reset PostHog identity before logout to prevent session linking
+                    posthog?.reset();
                     signOut().then(() => {
                       window.location.href = "/login";
                     });

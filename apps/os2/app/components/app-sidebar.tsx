@@ -12,7 +12,7 @@ import {
   SidebarMenuSub,
   SidebarMenuSubButton,
   SidebarMenuSubItem,
-} from "app/components/ui/sidebar";
+} from "./ui/sidebar.tsx";
 
 // This is sample data.
 const data = {

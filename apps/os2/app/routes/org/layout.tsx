@@ -3,6 +3,7 @@ import { useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { usePostHogIdentity } from "../../hooks/use-posthog-identity.tsx";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
@@ -55,6 +56,19 @@ function OrgLayout() {
         : null,
     [user],
   );
+
+  // Identify user and organization in PostHog
+  usePostHogIdentity({
+    user: user ?? null,
+    organization:
+      currentOrg?.id && currentOrg?.name && currentOrg?.slug
+        ? {
+            id: currentOrg.id,
+            name: currentOrg.name,
+            slug: currentOrg.slug,
+          }
+        : null,
+  });
 
   // If we're in a project route, just render the outlet (project layout handles UI)
   if (projectMatch) {

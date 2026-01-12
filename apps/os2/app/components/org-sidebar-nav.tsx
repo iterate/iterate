@@ -1,5 +1,5 @@
 import { Link, useLocation } from "@tanstack/react-router";
-import { Box, FolderOpen, Plus, Settings, Users } from "lucide-react";
+import { Box, CreditCard, FolderOpen, Plus, Settings, Users } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -27,6 +27,7 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
 
   const isOrgSettingsActive = location.pathname === `/orgs/${orgSlug}/settings`;
   const isTeamActive = location.pathname === `/orgs/${orgSlug}/team`;
+  const isBillingActive = location.pathname === `/orgs/${orgSlug}/billing`;
 
   return (
     <>
@@ -58,6 +59,14 @@ export function OrgSidebarNav({ orgSlug, projects }: OrgSidebarNavProps) {
                 <Link to="/orgs/$organizationSlug/team" params={{ organizationSlug: orgSlug }}>
                   <Users className="h-4 w-4" />
                   <span>Team</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton asChild isActive={isBillingActive}>
+                <Link to="/orgs/$organizationSlug/billing" params={{ organizationSlug: orgSlug }}>
+                  <CreditCard className="h-4 w-4" />
+                  <span>Billing</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

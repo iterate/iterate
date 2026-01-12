@@ -1,3 +1,4 @@
+import "./tracked-mutations.ts";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
@@ -5,7 +6,12 @@ import superjson from "superjson";
 import { organizationUserMembership, organization, project as projectTable } from "../db/schema.ts";
 import { broadcastInvalidation } from "../utils/query-invalidation.ts";
 import { logger } from "../tag-logger.ts";
+import { captureServerEvent } from "../lib/posthog.ts";
+import { waitUntil } from "../../env.ts";
+import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
+
+// Import tracked mutations to register them on module load
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
 const looksLikeStandardSchemaFailureResult = (
@@ -191,17 +197,108 @@ const withQueryInvalidation = t.middleware(async ({ ctx, next }) => {
   return result;
 });
 
+/** Middleware that tracks mutations to PostHog */
+const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawInput }) => {
+  // Only track mutations
+  if (type !== "mutation") {
+    return next();
+  }
+
+  // Check if this mutation should be tracked
+  const config = getTrackingConfig(path);
+  if (!config) {
+    return next();
+  }
+
+  // Capture input BEFORE mutation to avoid blocking response path
+  const rawInput = await getRawInput();
+
+  // Execute the mutation
+  const result = await next();
+
+  // Only track successful mutations
+  if (!result.ok) {
+    return result;
+  }
+
+  // Wrap analytics in try-catch to prevent analytics errors from affecting the mutation response
+  try {
+    // Get user ID for distinct_id
+    const userId = ctx.user?.id;
+    if (!userId) {
+      return result;
+    }
+
+    // Extract properties
+    let properties: Record<string, unknown> = {
+      procedure: path,
+      success: true,
+    };
+
+    if (config.extractProperties) {
+      const extracted = config.extractProperties(rawInput);
+      if (extracted === undefined) {
+        // Skip tracking this specific call
+        return result;
+      }
+      properties = { ...properties, ...extracted };
+    } else if (config.includeFullInput) {
+      properties.input = rawInput;
+    }
+
+    if (config.staticProperties) {
+      properties = { ...properties, ...config.staticProperties };
+    }
+
+    // Build groups
+    const groups: Record<string, string> = {};
+
+    if ("organization" in ctx && ctx.organization) {
+      const org = ctx.organization as { id: string };
+      groups.organization = org.id;
+    }
+
+    if ("project" in ctx && ctx.project) {
+      const proj = ctx.project as { id: string };
+      groups.project = proj.id;
+    }
+
+    // Capture the event using waitUntil to ensure delivery
+    const eventName = config.eventName || `trpc.${path}`;
+    waitUntil(
+      captureServerEvent(ctx.env, {
+        distinctId: userId,
+        event: eventName,
+        properties,
+        groups: Object.keys(groups).length > 0 ? groups : undefined,
+      }),
+    );
+  } catch (error) {
+    logger.error("PostHog tracking error (mutation succeeded, analytics failed):", error);
+  }
+
+  return result;
+});
+
 /** Public mutation procedure - invalidates queries after successful mutation (for testing) */
-export const publicMutation = publicProcedure.use(withQueryInvalidation);
+export const publicMutation = publicProcedure.use(withQueryInvalidation).use(withPostHogTracking);
 
 /** Protected mutation procedure - invalidates queries after successful mutation */
-export const protectedMutation = protectedProcedure.use(withQueryInvalidation);
+export const protectedMutation = protectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Org protected mutation procedure - invalidates queries after successful mutation */
-export const orgProtectedMutation = orgProtectedProcedure.use(withQueryInvalidation);
+export const orgProtectedMutation = orgProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Org admin mutation procedure - invalidates queries after successful mutation */
-export const orgAdminMutation = orgAdminProcedure.use(withQueryInvalidation);
+export const orgAdminMutation = orgAdminProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Project protected mutation procedure - invalidates queries after successful mutation */
-export const projectProtectedMutation = projectProtectedProcedure.use(withQueryInvalidation);
+export const projectProtectedMutation = projectProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);

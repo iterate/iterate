@@ -114,3 +114,77 @@ The snapshot (`sandbox/Dockerfile`) includes:
 - Git (configured for iterate-bot)
 
 The entry point (`sandbox/entry.ts`) clones the iterate repository and starts the daemon server on port 3000.
+
+---
+
+## Analytics (PostHog)
+
+OS2 uses PostHog for product analytics, session replay, and group analytics with EU data residency.
+
+### Configuration
+
+PostHog is configured via environment variables (managed by Doppler):
+
+| Variable                  | Description                                     |
+| ------------------------- | ----------------------------------------------- |
+| `VITE_POSTHOG_PUBLIC_KEY` | PostHog project API key (client-side)           |
+| `VITE_POSTHOG_PROXY_URI`  | Proxy endpoint for PostHog (default: `/ingest`) |
+| `POSTHOG_KEY`             | PostHog API key for server-side tracking        |
+
+### Architecture
+
+- **Client-side**: PostHog JS SDK with session replay enabled
+- **Server-side**: posthog-node for tRPC mutation tracking
+- **Proxy**: `/ingest/*` routes proxy to PostHog EU (`eu.i.posthog.com`) for ad-blocker bypass
+
+### Environments
+
+All environments use a single PostHog project with `$environment` property set via `VITE_APP_STAGE`:
+
+| Stage     | Description                  |
+| --------- | ---------------------------- |
+| `local-*` | Developer local environments |
+| `stg`     | Staging                      |
+| `prd`     | Production                   |
+| `pr-*`    | PR preview environments      |
+
+Filter by `$environment` in PostHog to see data from specific environments.
+
+### Group Analytics
+
+Two group types are configured:
+
+- **organization**: Tracks organization-level metrics
+- **project**: Tracks project-level metrics
+
+Users are identified in the auth-required layout (covering all authenticated routes), and groups are set when navigating to org/project routes. PostHog is reset on logout to prevent session linking.
+
+### Adding New Tracked Mutations
+
+To track a new tRPC mutation, add it to `backend/trpc/tracked-mutations.ts`:
+
+```typescript
+registerTrackedMutation("router.mutationName", {
+  eventName: "human_readable_event_name",
+  extractProperties: (input) => ({
+    // Extract only safe, non-sensitive properties
+    some_property: input.someField,
+  }),
+});
+```
+
+### PostHog Project Setup
+
+1. Create a PostHog account at https://eu.posthog.com (EU data residency)
+2. Create a single project named "OS2"
+3. Get API key from Settings > Project API Key
+4. Enable Session Replay in settings
+5. Add environment variables to Doppler for each environment (dev, stg, prd)
+
+**Note:** Group types (`organization` and `project`) are automatically created when the first event with a group is sent. You'll see them appear in Settings > Group Analytics after deploying and using the app.
+
+### Privacy Considerations
+
+- Session replay has no masking (can be enabled if needed)
+- Server-side tracking filters sensitive data (passwords, tokens, env var values)
+- User identification uses internal IDs, not emails (though email is set as a property)
