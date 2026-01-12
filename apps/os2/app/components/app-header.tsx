@@ -64,8 +64,9 @@ export function AppHeader({
     isOrgRoute &&
     (lastPart === organizationSlug || location.pathname.endsWith(`/${organizationSlug}/`));
 
-  // Get the current page name
-  const currentPageName = PAGE_NAMES[lastPart] || null;
+  // Get the current page name (only if we're on a sub-page, not a home page)
+  // This prevents slugs matching PAGE_NAMES keys from being treated as sub-pages
+  const currentPageName = !isProjectHome && !isOrgHome ? (PAGE_NAMES[lastPart] ?? null) : null;
 
   // Find current project ID for aria-current
   const currentProjectId = projects.find((p) => p.slug === projectSlug)?.id ?? "";
