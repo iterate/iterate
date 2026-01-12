@@ -396,61 +396,55 @@ async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promi
 
   let html = await response.text();
 
-  // Replace absolute /assets/ paths with the proxy base path
+  // Replace /./assets/ and /assets/ paths with the proxy base path
+  // Daemon uses base: "./" so paths are like "/./assets/xxx.js"
+  html = html.replace(/(["'(])\/\.\/assets\//g, `$1${proxyBasePath}/assets/`);
   html = html.replace(/(["'(])\/assets\//g, `$1${proxyBasePath}/assets/`);
   html = html.replace(/(["'(])\/logo\.svg/g, `$1${proxyBasePath}/logo.svg`);
   html = html.replace(/(["'(])\/favicon/g, `$1${proxyBasePath}/favicon`);
 
-  // Inject script that intercepts all navigation to add proxy base
-  // The daemon app sees stripped paths, but all URLs must go through the proxy
-  const script = `<script>
+  // Inject everything in one go: import map, proxy script, and base tag
+  const injection = `
+<script type="importmap">{"imports":{"/./assets/":"${proxyBasePath}/assets/","/assets/":"${proxyBasePath}/assets/"}}</script>
+<script>
 (function() {
   var proxyBase = ${JSON.stringify(proxyBasePath)};
   window.__PROXY_BASE_PATH__ = proxyBase;
   
-  // Helper to add proxy base to paths
   function addBase(url) {
     if (!url || typeof url !== 'string') return url;
-    // Already has proxy base or is external
     if (url.startsWith(proxyBase) || url.startsWith('http') || url.startsWith('//')) return url;
-    // Add proxy base to root-relative paths
     if (url.startsWith('/')) return proxyBase + url;
     return url;
   }
   
-  // Override history.pushState and replaceState
   var pushState = history.pushState.bind(history);
   var replaceState = history.replaceState.bind(history);
   history.pushState = function(s,t,u) { return pushState(s,t,addBase(u)); };
   history.replaceState = function(s,t,u) { return replaceState(s,t,addBase(u)); };
   
-  // Override fetch
   var origFetch = window.fetch;
   window.fetch = function(input, init) {
     if (typeof input === 'string') input = addBase(input);
     return origFetch.call(this, input, init);
   };
   
-  // Override XMLHttpRequest
   var origOpen = XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open = function(method, url) {
     arguments[1] = addBase(url);
     return origOpen.apply(this, arguments);
   };
   
-  // Override WebSocket
   var WS = window.WebSocket;
   window.WebSocket = function(url, protocols) {
     if (typeof url === 'string' && url.startsWith('/') && !url.startsWith(proxyBase)) {
-      var protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-      url = protocol + '//' + location.host + proxyBase + url;
+      url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + proxyBase + url;
     }
     return new WS(url, protocols);
   };
   window.WebSocket.prototype = WS.prototype;
   Object.assign(window.WebSocket, WS);
   
-  // Intercept all link clicks to add proxy base
   document.addEventListener('click', function(e) {
     var link = e.target.closest('a[href]');
     if (!link) return;
@@ -462,9 +456,10 @@ async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promi
     }
   }, true);
 })();
-</script><base href="${proxyBasePath}/">`;
+</script>
+<base href="${proxyBasePath}/">`;
 
-  html = html.replace(/<head([^>]*)>/i, `<head$1>${script}`);
+  html = html.replace(/<head([^>]*)>/i, `<head$1>${injection}`);
 
   return new Response(html, {
     status: response.status,
