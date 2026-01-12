@@ -1,13 +1,14 @@
 packages:
-  - apps/*
+  - apps/cli
+  - apps/daemon2
+  - apps/mcp-mock-server
+  - apps/os2
+  - apps/tanstack-template
   - packages/*
   - estates/*
   - estates/*/apps/*
   - e2e
   - .github/ts-workflows
-  # DEPRECATED: apps/os is deprecated in favor of apps/os2. These paths are kept for backwards compatibility.
-  - apps/os/backend/sandbox/scripts
-  - apps/os/build-manager
 
 minimumReleaseAge: 1440
 minimumReleaseAgeExclude:
