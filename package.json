@@ -71,7 +71,10 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "node-pty"
-    ]
+    ],
+    "overrides": {
+      "baseline-browser-mapping": "^2.9.14"
+    }
   },
   "lint-staged": {
     "*.{ts,tsx,js,jsx,mjs,cjs}": [
