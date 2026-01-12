@@ -29,7 +29,7 @@ This monorepo uses pnpm workspaces and is organized around the primary app (`app
   - **`rules/`**: Markdown rule files with YAML frontmatter.
   - **`llms.ts`**: Loads rules from `vibe-rules/rules/**.md`.
 - **`scripts/`**: Developer scripts and setup helpers.
-- **`docs/`**: Documentation including task system and daemon architecture.
+- **`tasks/`**: Task planning documents and architecture notes.
 
 ### Root-level configuration and tooling
 
