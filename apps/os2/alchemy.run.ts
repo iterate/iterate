@@ -91,7 +91,10 @@ async function verifyDopplerEnvironment() {
 
 const Required = z.string().nonempty();
 const Optional = z.string().optional();
+/** needed by the deploy script, but not at runtime */
 const Env = z.object({
+  // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
+
   BETTER_AUTH_SECRET: Required,
   DAYTONA_API_KEY: Required,
   DAYTONA_SNAPSHOT_PREFIX: Required,

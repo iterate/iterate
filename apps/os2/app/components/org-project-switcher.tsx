@@ -23,7 +23,7 @@ interface OrgSwitcherProps {
 
 export function OrgSwitcher({ organizations, currentOrg }: OrgSwitcherProps) {
   return (
-    <SidebarMenu>
+    <SidebarMenu data-component="OrgSwitcher">
       <SidebarMenuItem>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>

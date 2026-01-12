@@ -17,26 +17,25 @@ test.describe("realtime pusher", () => {
 
     await page.goto(`${baseURL}/login`);
 
-    await page.waitForTimeout(3000);
+    await expect
+      .poll(() => realtimeMessages)
+      .toEqual(expect.arrayContaining([expect.stringContaining("CONNECTED")]));
 
-    console.log("[TEST] Messages so far:", realtimeMessages);
-    expect(realtimeMessages.some((msg) => msg.includes("CONNECTED"))).toBe(true);
-
-    const triggerResult = await page.evaluate(async () => {
-      const res = await fetch("/api/trpc/testing.triggerInvalidation", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+    const triggerResult = () =>
+      page.evaluate(async () => {
+        const res = await fetch("/api/trpc/testing.triggerInvalidation", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({}),
+        });
+        return { ok: res.ok, status: res.status, text: await res.text() };
       });
-      return { ok: res.ok, status: res.status };
-    });
-    console.log("[TEST] Mutation result:", triggerResult);
-    expect(triggerResult.ok).toBe(true);
+    await expect.poll(() => triggerResult()).toMatchObject({ ok: true });
+    console.log("[TEST] Mutation result:", await triggerResult());
 
-    await page.waitForTimeout(2000);
-
-    console.log("[TEST] All messages:", realtimeMessages);
-    expect(realtimeMessages.some((msg) => msg.includes("INVALIDATE_ALL"))).toBe(true);
+    await expect
+      .poll(() => realtimeMessages)
+      .toEqual(expect.arrayContaining([expect.stringContaining("INVALIDATE_ALL")]));
   });
 
   test("two clients both receive invalidation broadcast", async ({ browser, baseURL }) => {
@@ -58,11 +57,9 @@ test.describe("realtime pusher", () => {
 
     await Promise.all([page1.goto(`${baseURL}/login`), page2.goto(`${baseURL}/login`)]);
 
-    await page1.waitForTimeout(3000);
-    await page2.waitForTimeout(1000);
-
-    console.log("[TEST] Page2 messages after connect:", page2Messages);
-    expect(page2Messages.some((msg) => msg.includes("CONNECTED"))).toBe(true);
+    await expect
+      .poll(() => page2Messages)
+      .toEqual(expect.arrayContaining([expect.stringContaining("CONNECTED")]));
 
     await page1.evaluate(async () => {
       await fetch("/api/trpc/testing.triggerInvalidation", {
@@ -72,10 +69,9 @@ test.describe("realtime pusher", () => {
       });
     });
 
-    await page2.waitForTimeout(2000);
-
-    console.log("[TEST] Page2 all messages:", page2Messages);
-    expect(page2Messages.some((msg) => msg.includes("INVALIDATE_ALL"))).toBe(true);
+    await expect
+      .poll(() => page2Messages)
+      .toEqual(expect.arrayContaining([expect.stringContaining("INVALIDATE_ALL")]));
 
     await context1.close();
     await context2.close();

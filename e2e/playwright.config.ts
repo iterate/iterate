@@ -14,7 +14,7 @@ export default defineConfig({
   use: {
     actionTimeout: 1_000,
     baseURL,
-    trace: "on-first-retry",
+    trace: process.env.CI ? "on-first-retry" : "on",
   },
   projects: [
     {
