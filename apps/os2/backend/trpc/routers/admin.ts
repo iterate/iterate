@@ -188,4 +188,36 @@ export const adminRouter = router({
         name: ownerMembership.user.name,
       };
     }),
+
+  // Set a user's system-wide role (admin only)
+  setUserRole: adminProcedure
+    .input(
+      z.object({
+        userId: z.string(),
+        role: z.enum(["user", "admin"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      // Prevent admins from demoting themselves
+      if (input.userId === ctx.user.id && input.role !== "admin") {
+        throw new Error("You cannot remove your own admin role");
+      }
+
+      const targetUser = await ctx.db.query.user.findFirst({
+        where: eq(user.id, input.userId),
+      });
+
+      if (!targetUser) {
+        throw new Error("User not found");
+      }
+
+      await ctx.db.update(user).set({ role: input.role }).where(eq(user.id, input.userId));
+
+      return {
+        userId: input.userId,
+        email: targetUser.email,
+        name: targetUser.name,
+        role: input.role,
+      };
+    }),
 });
