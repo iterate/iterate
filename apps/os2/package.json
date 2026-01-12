@@ -15,7 +15,8 @@
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
     "snapshot:daytona": "doppler run -- tsx sandbox/daytona-snapshot.ts",
-    "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts"
+    "snapshot:local-docker": "tsx sandbox/local-docker-snapshot.ts",
+    "billing:generate": "tsx scripts/generate-billing-meters.ts"
   },
   "dependencies": {
     "@daytonaio/sdk": "^0.128.1",
@@ -73,6 +74,7 @@
     "react-hook-form": "^7.67.0",
     "remeda": "^2.32.0",
     "sonner": "^2.0.7",
+    "stripe": "^20.1.2",
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.4.0",
     "tiny-invariant": "^1.3.3",
