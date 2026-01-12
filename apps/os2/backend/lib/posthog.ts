@@ -28,8 +28,8 @@ export async function captureServerEvent(
       ...params.properties,
       $environment: env.VITE_APP_STAGE,
       $lib: "posthog-fetch",
+      ...(params.groups && { $groups: params.groups }),
     },
-    ...(params.groups && { $groups: params.groups }),
     timestamp: new Date().toISOString(),
   };
 
