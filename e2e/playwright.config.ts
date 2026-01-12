@@ -12,7 +12,7 @@ export default defineConfig({
   reporter: "list",
   timeout: 120_000,
   use: {
-    actionTimeout: 10_000,
+    actionTimeout: 1_000,
     baseURL,
     trace: "on-first-retry",
   },
@@ -22,4 +22,10 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"] },
     },
   ],
+  // webServer: {
+  //   command: "cd .. && pnpm dev", // todo: uncomment when dev script runs os and daemon
+  //   url: baseURL,
+  //   reuseExistingServer: true,
+  //   timeout: 120_000,
+  // },
 });
