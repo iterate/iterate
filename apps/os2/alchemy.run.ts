@@ -89,8 +89,10 @@ async function verifyDopplerEnvironment() {
   }
 }
 
-const Required = z.string().nonempty();
-const Optional = z.string().optional();
+const NonEmpty = z.string().nonempty();
+const Required = NonEmpty;
+const Optional = NonEmpty.optional();
+const BoolyString = z.enum(["true", "false"]).optional();
 /** needed by the deploy script, but not at runtime */
 const Env = z.object({
   // you'll need CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN for this to work, but not at runtime
@@ -101,24 +103,24 @@ const Env = z.object({
   GOOGLE_CLIENT_ID: Required,
   GOOGLE_CLIENT_SECRET: Required,
   OPENAI_API_KEY: Required,
-  SLACK_CLIENT_ID: Required,
-  SLACK_CLIENT_SECRET: Required,
-  SLACK_SIGNING_SECRET: Required,
+  // SLACK_CLIENT_ID: Required,
+  // SLACK_CLIENT_SECRET: Required,
+  // SLACK_SIGNING_SECRET: Required,
   GITHUB_APP_CLIENT_ID: Required,
   GITHUB_APP_CLIENT_SECRET: Required,
   GITHUB_APP_SLUG: Required,
   GITHUB_APP_ID: Required,
   GITHUB_APP_PRIVATE_KEY: Required,
-  SERVICE_AUTH_TOKEN: Required,
+  // SERVICE_AUTH_TOKEN: Required,
   VITE_PUBLIC_URL: Required,
   VITE_APP_STAGE: Required,
   ENCRYPTION_SECRET: Required,
-  ITERATE_USER: Optional,
+  // ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
-  SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
-  VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
-} satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
+  SIGNUP_ALLOWLIST: NonEmpty.default("*@nustom.com"),
+  VITE_ENABLE_EMAIL_OTP_SIGNIN: BoolyString,
+} satisfies Record<string, z.ZodType<unknown, string | undefined>>);
 
 async function setupEnvironmentVariables() {
   const parsed = Env.safeParse({ ...process.env, VITE_APP_STAGE: app.stage, APP_STAGE: app.stage });
