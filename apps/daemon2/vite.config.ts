@@ -6,19 +6,17 @@ import viteTsConfigPaths from "vite-tsconfig-paths";
 import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 
-const config = defineConfig(() => ({
+const config = defineConfig({
   base: "./",
   server: {
-    hmr: {
-      path: "vite-hmr",
-    },
+    strictPort: false,
   },
   plugins: [
-    devtools(),
-    viteTsConfigPaths({
-      projects: ["./tsconfig.json"],
+    devtools({
+      eventBusConfig: {
+        port: 42070,
+      },
     }),
-    tailwindcss(),
     nitro({
       preset: "node-server",
       serverDir: "server",
@@ -29,9 +27,13 @@ const config = defineConfig(() => ({
         websocket: true,
       },
     }),
+    viteTsConfigPaths({
+      projects: ["./tsconfig.json"],
+    }),
+    tailwindcss(),
     tanstackStart(),
     viteReact(),
   ],
-}));
+});
 
 export default config;
