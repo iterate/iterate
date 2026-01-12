@@ -9,6 +9,8 @@ node_modules
 .tanstack
 build
 dist
+!packages/sdk/dist/
+!packages/sdk/dist/**
 
 # Cloudflare
 .mf
