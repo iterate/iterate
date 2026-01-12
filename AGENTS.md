@@ -41,6 +41,7 @@ Run before PRs: `pnpm install && pnpm typecheck && pnpm lint && pnpm format && p
 ## Pointers
 
 - Brand & tone: `docs/brand-and-tone-of-voice.md`
+- Website (iterate.com): `apps/iterate-com`
 - Frontend: `apps/os2/app/AGENTS.md`
 - Backend: `apps/os2/backend/AGENTS.md`
 - E2E: `e2e/AGENTS.md`

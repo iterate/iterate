@@ -76,7 +76,7 @@ jobs:
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
         run: pnpm run deploy
-        working-directory: estates/iterate/apps/website
+        working-directory: apps/iterate-com
   deploy-mcp-mock-server:
     runs-on: ${{ github.repository_owner == 'iterate' && 'depot-ubuntu-24.04-arm-4' || 'ubuntu-24.04' }}
     steps:

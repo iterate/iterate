@@ -132,7 +132,7 @@ export default function Home() {
                 </a>{" "}
                 or{" "}
                 <a
-                  href="https://github.com/iterate/iterate/tree/main/estates/iterate"
+                  href="https://github.com/iterate/iterate/tree/main/apps/iterate-com"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="underline hover:text-gray-900"
