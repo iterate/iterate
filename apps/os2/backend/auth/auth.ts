@@ -12,7 +12,7 @@ const TEST_EMAIL_PATTERN = /\+.*test@/i;
 const TEST_OTP_CODE = "424242";
 
 function createAuth(db: DB, envParam: CloudflareEnv) {
-  const signupAllowlist = (envParam.SIGNUP_ALLOWLIST ?? "*@nustom.com")
+  const signupAllowlist = (envParam.SIGNUP_ALLOWLIST ?? "*@example.com")
     .split(",")
     .map((p) => p.trim().toLowerCase())
     .filter((p) => p.length > 0);
