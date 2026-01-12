@@ -451,31 +451,9 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
     }
   }
 
-  class InlineScriptRewriter {
-    private chunks: string[] = [];
-
-    text(text: Text) {
-      this.chunks.push(text.text);
-      if (text.lastInTextNode) {
-        const content = this.chunks.join("");
-        // Only rewrite Vite's bootstrap script: <script type="module" async>import('/assets/...')</script>
-        // The entire content must be just whitespace + import('/assets/...') + whitespace
-        const match = content.match(/^\s*import\s*\(\s*(['"])(\/assets\/[^'"]+)\1\s*\)\s*$/);
-        if (match) {
-          const rewritten = content.replace(match[2], `${proxyBasePath}${match[2]}`);
-          text.replace(rewritten, { html: false });
-        }
-        this.chunks = [];
-      } else {
-        text.remove();
-      }
-    }
-  }
-
   return new HTMLRewriter()
     .on("head", new HeadInjector())
     .on("script[src]", new URLRewriter("src"))
-    .on('script[type="module"][async]', new InlineScriptRewriter())
     .on("link[href]", new URLRewriter("href"))
     .on("img[src]", new URLRewriter("src"))
     .on("a[href]", new URLRewriter("href"))

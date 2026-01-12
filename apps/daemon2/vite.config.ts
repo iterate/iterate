@@ -7,6 +7,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { nitro } from "nitro/vite";
 
 const config = defineConfig(() => ({
+  base: "./",
   server: {
     hmr: {
       path: "vite-hmr",

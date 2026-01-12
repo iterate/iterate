@@ -57,6 +57,8 @@ function RootDocument({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className="dark" suppressHydrationWarning>
       <head>
+        {/* Base path for reverse proxy support - proxy rewrites this href */}
+        <base href="/" />
         <HeadContent />
       </head>
       <body>

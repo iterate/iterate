@@ -115,14 +115,14 @@ function ptyWebSocketPlugin() {
 }
 
 const config = defineConfig({
+  base: "./",
   server: {
     strictPort: false,
   },
   plugins: [
     devtools({
       eventBusConfig: {
-        // Port 0 enables auto-assigned port (default behavior)
-        port: 0,
+        port: 42069,
       },
     }),
     nitro({

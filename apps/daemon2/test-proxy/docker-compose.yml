@@ -1,0 +1,16 @@
+# Test proxy setup for base path rewriting
+#
+# Usage:
+#   1. In one terminal: cd apps/daemon2 && pnpm build && pnpm start
+#   2. In another: cd apps/daemon2/test-proxy && docker compose up
+#   3. Open http://localhost:8080/machines/test-123/
+#
+services:
+  proxy:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
