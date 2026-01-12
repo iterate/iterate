@@ -13,7 +13,7 @@ import { Toaster } from "sonner";
 import appCss from "../styles.css?url";
 import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
 import { useRealtimePusher } from "../hooks/use-realtime-pusher.ts";
-import { PostHogIdentityProvider } from "../hooks/use-posthog-identity.tsx";
+import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx";
 import type { TanstackRouterContext } from "../router.tsx";
 
 // Check if PostHog should be enabled (only in production with key)

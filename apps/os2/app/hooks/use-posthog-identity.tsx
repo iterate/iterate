@@ -1,5 +1,6 @@
-import { createContext, useContext, useEffect, useRef } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { usePostHog } from "posthog-js/react";
+import { PostHogIdentityContext, type IdentityState } from "./posthog-identity-context.ts";
 
 type User = {
   id: string;
@@ -26,26 +27,6 @@ type PostHogIdentityOptions = {
   organization?: Organization | null;
   project?: Project | null;
 };
-
-type IdentityState = {
-  userId: string | null;
-  organizationId: string | null;
-  projectId: string | null;
-};
-
-const PostHogIdentityContext = createContext<{ current: IdentityState } | null>(null);
-
-export function PostHogIdentityProvider({ children }: { children: React.ReactNode }) {
-  const stateRef = useRef<IdentityState>({
-    userId: null,
-    organizationId: null,
-    projectId: null,
-  });
-
-  return (
-    <PostHogIdentityContext.Provider value={stateRef}>{children}</PostHogIdentityContext.Provider>
-  );
-}
 
 /**
  * Hook to manage PostHog user identification and group analytics.
