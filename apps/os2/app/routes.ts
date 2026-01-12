@@ -3,7 +3,7 @@ import { rootRoute, route, layout, index } from "@tanstack/virtual-file-routes";
 export const routes = rootRoute("root.tsx", [
   // Public routes
   route("/login", "login.tsx"),
-  route("/test-page", "test-page.tsx"),
+  ...(process.env.NODE_ENV !== "production" ? [route("/dev", "dev.tsx")] : []),
 
   // Auth required layout (named ID creates cleaner route IDs)
   layout("auth.layout", "auth-required.layout.tsx", [

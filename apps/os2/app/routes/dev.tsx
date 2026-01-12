@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useHydrated } from "@tanstack/react-router";
 
-export const Route = createFileRoute("/test-page")({
+export const Route = createFileRoute("/dev")({
   component: RouteComponent,
 });
 

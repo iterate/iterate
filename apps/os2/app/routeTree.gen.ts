@@ -9,8 +9,8 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/root.tsx'
-import { Route as testPageRouteImport } from './routes/test-page.tsx'
 import { Route as loginRouteImport } from './routes/login.tsx'
+import { Route as devRouteImport } from './routes/dev.tsx'
 import { Route as authRequiredDotlayoutRouteImport } from './routes/auth-required.layout.tsx'
 import { Route as newOrganizationRouteImport } from './routes/new-organization.tsx'
 import { Route as adminLayoutRouteImport } from './routes/admin/layout.tsx'
@@ -34,14 +34,14 @@ import { Route as orgProjectConnectorsRouteImport } from './routes/org/project/c
 import { Route as orgProjectAgentsRouteImport } from './routes/org/project/agents.tsx'
 import { Route as orgProjectAccessTokensRouteImport } from './routes/org/project/access-tokens.tsx'
 
-const testPageRoute = testPageRouteImport.update({
-  id: '/test-page',
-  path: '/test-page',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const loginRoute = loginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const devRoute = devRouteImport.update({
+  id: '/dev',
+  path: '/dev',
   getParentRoute: () => rootRouteImport,
 } as any)
 const authRequiredDotlayoutRoute = authRequiredDotlayoutRouteImport.update({
@@ -155,8 +155,8 @@ const orgProjectAccessTokensRoute = orgProjectAccessTokensRouteImport.update({
 } as any)
 
 export interface FileRoutesByFullPath {
+  '/dev': typeof devRoute
   '/login': typeof loginRoute
-  '/test-page': typeof testPageRoute
   '/': typeof indexRoute
   '/admin': typeof adminLayoutRouteWithChildren
   '/new-organization': typeof newOrganizationRoute
@@ -180,8 +180,8 @@ export interface FileRoutesByFullPath {
   '/orgs/$organizationSlug/projects/$projectSlug/': typeof orgProjectIndexRoute
 }
 export interface FileRoutesByTo {
+  '/dev': typeof devRoute
   '/login': typeof loginRoute
-  '/test-page': typeof testPageRoute
   '/': typeof indexRoute
   '/new-organization': typeof newOrganizationRoute
   '/admin/session-info': typeof adminSessionInfoRoute
@@ -204,8 +204,8 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_auth.layout': typeof authRequiredDotlayoutRouteWithChildren
+  '/dev': typeof devRoute
   '/login': typeof loginRoute
-  '/test-page': typeof testPageRoute
   '/_auth.layout/': typeof indexRoute
   '/_auth.layout/admin': typeof adminLayoutRouteWithChildren
   '/_auth.layout/new-organization': typeof newOrganizationRoute
@@ -231,8 +231,8 @@ export interface FileRoutesById {
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
+    | '/dev'
     | '/login'
-    | '/test-page'
     | '/'
     | '/admin'
     | '/new-organization'
@@ -256,8 +256,8 @@ export interface FileRouteTypes {
     | '/orgs/$organizationSlug/projects/$projectSlug/'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/dev'
     | '/login'
-    | '/test-page'
     | '/'
     | '/new-organization'
     | '/admin/session-info'
@@ -279,8 +279,8 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_auth.layout'
+    | '/dev'
     | '/login'
-    | '/test-page'
     | '/_auth.layout/'
     | '/_auth.layout/admin'
     | '/_auth.layout/new-organization'
@@ -306,24 +306,24 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   authRequiredDotlayoutRoute: typeof authRequiredDotlayoutRouteWithChildren
+  devRoute: typeof devRoute
   loginRoute: typeof loginRoute
-  testPageRoute: typeof testPageRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/test-page': {
-      id: '/test-page'
-      path: '/test-page'
-      fullPath: '/test-page'
-      preLoaderRoute: typeof testPageRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof loginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/dev': {
+      id: '/dev'
+      path: '/dev'
+      fullPath: '/dev'
+      preLoaderRoute: typeof devRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth.layout': {
@@ -567,8 +567,8 @@ const authRequiredDotlayoutRouteWithChildren =
 
 const rootRouteChildren: RootRouteChildren = {
   authRequiredDotlayoutRoute: authRequiredDotlayoutRouteWithChildren,
+  devRoute: devRoute,
   loginRoute: loginRoute,
-  testPageRoute: testPageRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
