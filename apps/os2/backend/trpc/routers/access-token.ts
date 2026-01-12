@@ -98,7 +98,7 @@ async function hashToken(token: string): Promise<string> {
     .join("");
 }
 
-function generateToken(): string {
+export function generateToken(): string {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
   return `pat_${Array.from(array)

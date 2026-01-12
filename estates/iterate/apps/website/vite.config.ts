@@ -9,6 +9,7 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    strictPort: false,
   },
   plugins: [reactRouter(), cloudflare({ viteEnvironment: { name: "ssr" } }), tailwindcss()],
 });

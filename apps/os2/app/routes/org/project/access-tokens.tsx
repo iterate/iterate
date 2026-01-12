@@ -154,6 +154,7 @@ function ProjectAccessTokensPage() {
                 onChange={(e) => setName(e.target.value)}
                 placeholder="My API Token"
                 disabled={createToken.isPending}
+                autoFocus
               />
             </Field>
           </FieldSet>

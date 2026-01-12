@@ -14,7 +14,7 @@ const looksLikeStandardSchemaFailureResult = (
   return typeof error === "object" && !!error && "issues" in error && Array.isArray(error.issues);
 };
 
-const t = initTRPC.context<Context>().create({
+export const t = initTRPC.context<Context>().create({
   transformer: superjson,
   errorFormatter: (opts) => {
     const { shape, error } = opts;

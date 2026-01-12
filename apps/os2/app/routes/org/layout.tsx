@@ -2,7 +2,6 @@ import { createFileRoute, Outlet, redirect, useLocation, useParams } from "@tans
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
-import { useQueryInvalidation } from "../../hooks/use-query-invalidation.ts";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
@@ -43,8 +42,6 @@ function OrgLayout() {
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
-
-  useQueryInvalidation(currentOrg.id);
 
   const isProjectRoute = location.pathname.includes("/projects/");
 

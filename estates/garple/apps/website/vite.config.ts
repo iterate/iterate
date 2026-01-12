@@ -7,6 +7,7 @@ export default defineConfig({
   },
   server: {
     port: 3500,
+    strictPort: false,
   },
   plugins: [
     cloudflare({

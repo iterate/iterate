@@ -12,7 +12,7 @@ export const MachineState = ["started", "archived"] as const;
 export type MachineState = (typeof MachineState)[number];
 
 // Machine types
-export const MachineType = ["daytona"] as const;
+export const MachineType = ["daytona", "local-docker"] as const;
 export type MachineType = (typeof MachineType)[number];
 
 export const withTimestamps = {
@@ -192,17 +192,27 @@ export const projectEnvVar = pgTable(
       .text()
       .notNull()
       .references(() => project.id, { onDelete: "cascade" }),
+    machineId: t.text().references(() => machine.id, { onDelete: "cascade" }),
     key: t.text().notNull(),
     encryptedValue: t.text().notNull(),
+    type: t.text({ enum: ["user", "system"] }).default("user"),
     ...withTimestamps,
   }),
-  (t) => [uniqueIndex().on(t.projectId, t.key), index().on(t.projectId)],
+  (t) => [
+    uniqueIndex().on(t.projectId, t.machineId, t.key),
+    index().on(t.projectId),
+    index().on(t.machineId),
+  ],
 );
 
 export const projectEnvVarRelations = relations(projectEnvVar, ({ one }) => ({
   project: one(project, {
     fields: [projectEnvVar.projectId],
     references: [project.id],
+  }),
+  machine: one(machine, {
+    fields: [projectEnvVar.machineId],
+    references: [machine.id],
   }),
 }));
 
@@ -281,19 +291,45 @@ export const machine = pgTable(
       .text({ enum: [...MachineState] })
       .notNull()
       .default("started"),
+    externalId: t.text().notNull(),
     metadata: jsonb().$type<Record<string, unknown>>().default({}).notNull(),
     ...withTimestamps,
   }),
   (t) => [index().on(t.projectId), index().on(t.state)],
 );
 
-export const machineRelations = relations(machine, ({ one }) => ({
+export const machineRelations = relations(machine, ({ one, many }) => ({
   project: one(project, {
     fields: [machine.projectId],
     references: [project.id],
   }),
+  previewTokens: many(daytonaPreviewToken),
 }));
 // #endregion ========== Machine ==========
+
+// #region ========== Daytona Preview Tokens ==========
+export const daytonaPreviewToken = pgTable(
+  "daytona_preview_token",
+  (t) => ({
+    id: iterateId("dtpv"),
+    machineId: t
+      .text()
+      .notNull()
+      .references(() => machine.id, { onDelete: "cascade" }),
+    port: t.text().notNull(),
+    encryptedToken: t.text().notNull(),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex().on(t.machineId, t.port), index().on(t.machineId)],
+);
+
+export const daytonaPreviewTokenRelations = relations(daytonaPreviewToken, ({ one }) => ({
+  machine: one(machine, {
+    fields: [daytonaPreviewToken.machineId],
+    references: [machine.id],
+  }),
+}));
+// #endregion ========== Daytona Preview Tokens ==========
 
 // #region ========== Events (unified) ==========
 export const event = pgTable(
@@ -325,6 +361,7 @@ export const projectRepo = pgTable("project_repo", (t) => ({
     .unique()
     .references(() => project.id, { onDelete: "cascade" }),
   provider: t.text().notNull(),
+  externalId: t.text().notNull(),
   owner: t.text().notNull(),
   name: t.text().notNull(),
   defaultBranch: t.text().notNull().default("main"),

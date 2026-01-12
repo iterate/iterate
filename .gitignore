@@ -36,3 +36,10 @@ evalite-export
 test-results/
 playwright-report/
 .last-run.json
+
+*.db
+*.sqlite
+.output
+
+# opensrc - source code for packages
+opensrc/
