@@ -65,3 +65,4 @@ For tests needing credentials (Daytona, Stripe, etc.), wrap with `doppler run`.
 - E2E: `e2e/AGENTS.md`
 - Design system: `docs/design-system.md`
 - Vitest patterns: `docs/vitest-patterns.md`
+- Drizzle migration conflicts: `docs/fixing-drizzle-migration-conflicts.md`
