@@ -15,8 +15,6 @@
     "db:migrate": "drizzle-kit migrate",
     "db:generate": "drizzle-kit generate",
     "db:studio": "drizzle-kit studio",
-    "billing:generate": "tsx backend/billing/scripts/generate-billing-meters.ts",
-    "billing:sync": "doppler run -- tsx backend/billing/scripts/sync-billing-meters-to-stripe.ts",
     "sandbox:snapshot": "doppler run -- tsx sandbox/snapshot.ts"
   },
   "dependencies": {
@@ -71,7 +69,6 @@
     "react-hook-form": "^7.67.0",
     "remeda": "^2.32.0",
     "sonner": "^2.0.7",
-    "stripe": "^20.1.2",
     "superjson": "^2.2.6",
     "tailwind-merge": "^3.4.0",
     "tiny-invariant": "^1.3.3",

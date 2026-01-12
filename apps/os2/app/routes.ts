@@ -24,7 +24,6 @@ export const routes = rootRoute("root.tsx", [
       // Org settings
       route("/settings", "org/settings.tsx"),
       route("/team", "org/team.tsx"),
-      route("/billing", "org/billing.tsx"),
       route("/new-project", "org/new-project.tsx"),
 
       // Project routes

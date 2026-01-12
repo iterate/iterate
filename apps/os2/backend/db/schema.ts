@@ -114,10 +114,9 @@ export const organization = pgTable("organization", (t) => ({
   ...withTimestamps,
 }));
 
-export const organizationRelations = relations(organization, ({ many, one }) => ({
+export const organizationRelations = relations(organization, ({ many }) => ({
   projects: many(project),
   members: many(organizationUserMembership),
-  billingAccount: one(billingAccount),
 }));
 
 export const organizationUserMembership = pgTable(
@@ -376,51 +375,3 @@ export const projectRepoRelations = relations(projectRepo, ({ one }) => ({
   }),
 }));
 // #endregion ========== Project Repo ==========
-
-// #region ========== Billing ==========
-export const SubscriptionStatus = [
-  "active",
-  "canceled",
-  "incomplete",
-  "incomplete_expired",
-  "past_due",
-  "paused",
-  "trialing",
-  "unpaid",
-] as const;
-export type SubscriptionStatus = (typeof SubscriptionStatus)[number];
-
-export const billingAccount = pgTable(
-  "billing_account",
-  (t) => ({
-    id: iterateId("bill"),
-    organizationId: t
-      .text()
-      .notNull()
-      .unique()
-      .references(() => organization.id, { onDelete: "cascade" }),
-    stripeCustomerId: t.text().unique(),
-    stripeSubscriptionId: t.text(),
-    stripeSubscriptionItemId: t.text(),
-    subscriptionStatus: t.text({ enum: [...SubscriptionStatus] }),
-    currentPeriodStart: t.timestamp(),
-    currentPeriodEnd: t.timestamp(),
-    cancelAtPeriodEnd: t.boolean().default(false),
-    ...withTimestamps,
-  }),
-  (t) => [index().on(t.stripeCustomerId), index().on(t.stripeSubscriptionId)],
-);
-
-export const billingAccountRelations = relations(billingAccount, ({ one }) => ({
-  organization: one(organization, {
-    fields: [billingAccount.organizationId],
-    references: [organization.id],
-  }),
-}));
-
-export const stripeEvent = pgTable("stripe_event", (t) => ({
-  eventId: t.text().primaryKey(),
-  type: t.text().notNull(),
-  processedAt: timestamp().defaultNow().notNull(),
-}));
-// #endregion ========== Billing ==========
