@@ -1,5 +1,5 @@
 import { z } from "zod/v4";
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, ilike } from "drizzle-orm";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
 import * as schema from "../../db/schema.ts";
 import { user } from "../../db/schema.ts";
@@ -141,7 +141,7 @@ export const adminRouter = router({
     .input(z.object({ searchEmail: z.string() }))
     .query(async ({ ctx, input }) => {
       const users = await ctx.db.query.user.findMany({
-        where: like(schema.user.email, `%${input.searchEmail}%`),
+        where: ilike(schema.user.email, `%${input.searchEmail}%`),
         columns: { id: true, email: true, name: true },
         limit: 10,
       });

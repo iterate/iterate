@@ -83,7 +83,7 @@ function ImpersonationDialog({
 
   const isValid = useMemo(() => {
     if (type === "email") {
-      return emailUsersQuery.data?.some((user) => user.email === value);
+      return emailUsersQuery.data?.some((user) => user.email.toLowerCase() === value.toLowerCase());
     }
     if (type === "user_id") {
       try {
@@ -323,7 +323,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
                 align="end"
                 sideOffset={4}
               >
-                {isAdmin && (
+                {isAdmin && !isImpersonating && (
                   <DropdownMenuItem onClick={() => setImpersonationDialogOpen(true)}>
                     <UserCog className="mr-2 h-4 w-4" />
                     Impersonate another user
@@ -369,7 +369,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
           </SidebarMenuItem>
         </SidebarMenu>
 
-        {isAdmin && (
+        {isAdmin && !isImpersonating && (
           <ImpersonationDialog
             open={impersonationDialogOpen}
             onOpenChange={setImpersonationDialogOpen}
