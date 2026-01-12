@@ -20,11 +20,11 @@ const PostHogProvider =
     : ({ children }: PropsWithChildren) => <>{children}</>;
 
 function RouterProgress() {
-  const isLoading = useRouterState({
-    select: (s) => s.status === "pending",
+  const isTransitioning = useRouterState({
+    select: (s) => s.isTransitioning,
   });
 
-  if (!isLoading) return null;
+  if (!isTransitioning) return null;
 
   return (
     <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-primary/20">
