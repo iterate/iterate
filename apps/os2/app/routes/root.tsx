@@ -1,5 +1,11 @@
 import { Suspense, useEffect, type PropsWithChildren, type ReactNode } from "react";
-import { Outlet, createRootRouteWithContext, HeadContent, Scripts, useRouter } from "@tanstack/react-router";
+import {
+  Outlet,
+  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+  useRouter,
+} from "@tanstack/react-router";
 import { PostHogProvider as _PostHogProvider, usePostHog } from "posthog-js/react";
 import posthog from "posthog-js";
 import { ThemeProvider } from "next-themes";

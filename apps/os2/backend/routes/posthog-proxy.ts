@@ -27,7 +27,8 @@ posthogProxyApp.all("/ingest/*", async (c) => {
   const response = await fetch(posthogUrl.toString(), {
     method: c.req.method,
     headers,
-    body: c.req.method !== "GET" && c.req.method !== "HEAD" ? await c.req.raw.arrayBuffer() : undefined,
+    body:
+      c.req.method !== "GET" && c.req.method !== "HEAD" ? await c.req.raw.arrayBuffer() : undefined,
   });
 
   // Return the PostHog response

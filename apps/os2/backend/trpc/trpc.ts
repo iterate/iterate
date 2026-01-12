@@ -1,3 +1,4 @@
+import "./tracked-mutations.ts";
 import { initTRPC, TRPCError } from "@trpc/server";
 import { prettifyError, z, ZodError } from "zod/v4";
 import { and, eq } from "drizzle-orm";
@@ -10,7 +11,6 @@ import { getTrackingConfig } from "./middleware/posthog.ts";
 import type { Context } from "./context.ts";
 
 // Import tracked mutations to register them on module load
-import "./tracked-mutations.ts";
 
 type StandardSchemaFailureResult = Parameters<typeof prettifyError>[0];
 const looksLikeStandardSchemaFailureResult = (
@@ -276,13 +276,21 @@ const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawI
 export const publicMutation = publicProcedure.use(withQueryInvalidation).use(withPostHogTracking);
 
 /** Protected mutation procedure - invalidates queries after successful mutation */
-export const protectedMutation = protectedProcedure.use(withQueryInvalidation).use(withPostHogTracking);
+export const protectedMutation = protectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Org protected mutation procedure - invalidates queries after successful mutation */
-export const orgProtectedMutation = orgProtectedProcedure.use(withQueryInvalidation).use(withPostHogTracking);
+export const orgProtectedMutation = orgProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Org admin mutation procedure - invalidates queries after successful mutation */
-export const orgAdminMutation = orgAdminProcedure.use(withQueryInvalidation).use(withPostHogTracking);
+export const orgAdminMutation = orgAdminProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);
 
 /** Project protected mutation procedure - invalidates queries after successful mutation */
-export const projectProtectedMutation = projectProtectedProcedure.use(withQueryInvalidation).use(withPostHogTracking);
+export const projectProtectedMutation = projectProtectedProcedure
+  .use(withQueryInvalidation)
+  .use(withPostHogTracking);

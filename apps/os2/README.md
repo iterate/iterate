@@ -125,11 +125,11 @@ OS2 uses PostHog for product analytics, session replay, and group analytics with
 
 PostHog is configured via environment variables (managed by Doppler):
 
-| Variable                   | Description                                      |
-| -------------------------- | ------------------------------------------------ |
-| `VITE_POSTHOG_PUBLIC_KEY`  | PostHog project API key (client-side)            |
-| `VITE_POSTHOG_PROXY_URI`   | Proxy endpoint for PostHog (default: `/ingest`)  |
-| `POSTHOG_KEY`              | PostHog API key for server-side tracking         |
+| Variable                  | Description                                     |
+| ------------------------- | ----------------------------------------------- |
+| `VITE_POSTHOG_PUBLIC_KEY` | PostHog project API key (client-side)           |
+| `VITE_POSTHOG_PROXY_URI`  | Proxy endpoint for PostHog (default: `/ingest`) |
+| `POSTHOG_KEY`             | PostHog API key for server-side tracking        |
 
 ### Architecture
 
@@ -141,12 +141,12 @@ PostHog is configured via environment variables (managed by Doppler):
 
 All environments use a single PostHog project with `$environment` property set via `VITE_APP_STAGE`:
 
-| Stage       | Description                     |
-| ----------- | ------------------------------- |
-| `local-*`   | Developer local environments    |
-| `stg`       | Staging                         |
-| `prd`       | Production                      |
-| `pr-*`      | PR preview environments         |
+| Stage     | Description                  |
+| --------- | ---------------------------- |
+| `local-*` | Developer local environments |
+| `stg`     | Staging                      |
+| `prd`     | Production                   |
+| `pr-*`    | PR preview environments      |
 
 Filter by `$environment` in PostHog to see data from specific environments.
 
