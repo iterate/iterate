@@ -25,7 +25,7 @@ pnpm os2 dev
 - `apps/daemon2/` - Local daemon for durable streams and agent orchestration
 - `apps/os/` - **DEPRECATED** - Legacy application
 - `estates/` - Example configurations and customizations
-- `vibe-rules/` - Coding agent rules (generates AGENTS.md, CLAUDE.md)
+- `docs/` - Detailed documentation and patterns
 
 ## Development Commands
 

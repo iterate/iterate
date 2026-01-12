@@ -1,24 +1,19 @@
----
-description: "Vitest test patterns and polling helpers"
-globs: ["**/*.test.ts"]
----
-
 # Vitest Testing Patterns
 
-## Using idiomatic, built-in helpers
+This document covers detailed testing patterns used in this codebase.
 
-Use vi mocks and vi fake timers for time-based assertions.
+## Core Principles
 
-## Prefer use .toMatchInlineSnapshot()
-
-We like snapshot tests that are inline
+- Use vi mocks and vi fake timers for time-based assertions
+- Prefer `.toMatchInlineSnapshot()` for snapshot tests
+- Tests are colocated next to source files as `*.test.ts`
 
 ## Using pluckFields with Inline Snapshots
 
-Use the `pluckFields` helper from `@iterate-com/helpers/test-helpers/test-utils` to extract specific fields from arrays of objects for concise inline snapshot testing:
+Use the `pluckFields` helper to extract specific fields from arrays of objects for concise inline snapshot testing:
 
 ```typescript
-import { pluckFields } from "@iterate-com/helpers/test-helpers/test-utils";
+import { pluckFields } from "./test-utils.ts";
 
 test("should track state changes", async () => {
   const events = await getEvents();
@@ -38,8 +33,6 @@ test("should track state changes", async () => {
 // For more compact output, use the optional flags
 test("compact state tracking", async () => {
   const events = await getEvents();
-
-  // Create a single string with all events
   const summary = pluckFields(events, ["type", "status"], { joinRows: true });
 
   expect(summary).toMatchInlineSnapshot(`
@@ -48,35 +41,12 @@ test("compact state tracking", async () => {
     ["completed","success"]"
   `);
 });
-
-// Or create an array of JSON strings
-test("stringified events", async () => {
-  const events = await getEvents();
-
-  const jsonEvents = pluckFields(events, ["type", "status"], { stringifyColumns: true });
-
-  expect(jsonEvents).toMatchInlineSnapshot(`
-    [
-      "["started","pending"]",
-      "["progress","running"]",
-      "["completed","success"]"
-    ]
-  `);
-});
 ```
 
 Options:
 
 - `joinRows: true` - Joins all rows with newlines into a single string
 - `stringifyColumns: true` - JSON.stringify each row (can be combined with joinRows)
-
-This is particularly useful for:
-
-- Testing sequences of events or state changes
-- Focusing on specific fields in complex objects
-- Making tests more readable and maintainable
-- Avoiding brittle tests that break when unrelated fields change
-- Creating compact debug output for multi-step workflows
 
 ## Table-based Testing with describe.for and test.for
 
@@ -107,7 +77,7 @@ test.for([
 
 ## Polling and Waiting for Conditions
 
-### 1. expect.poll() - Recommended for async assertions
+### expect.poll() - Recommended for async assertions
 
 Polls a function until it returns the expected value or times out.
 
@@ -115,7 +85,6 @@ Polls a function until it returns the expected value or times out.
 import { expect, test } from "vitest";
 
 test("should eventually return expected value", async () => {
-  // Basic usage
   await expect
     .poll(
       async () => {
@@ -133,18 +102,10 @@ test("should eventually return expected value", async () => {
       return result.status;
     })
     .toBe("ready");
-
-  // Finding specific content
-  await expect
-    .poll(async () => {
-      const response = await api.getMessage();
-      return response.text.toLowerCase();
-    })
-    .toContain("expected content");
 });
 ```
 
-### 2. vi.waitFor() - More flexible alternative
+### vi.waitFor() - More flexible alternative
 
 Waits for a callback to execute successfully (without throwing).
 
@@ -152,7 +113,6 @@ Waits for a callback to execute successfully (without throwing).
 import { vi, expect, test } from "vitest";
 
 test("should wait for condition", async () => {
-  // Wait for any condition to be met
   await vi.waitFor(
     async () => {
       const data = await fetchData();
@@ -171,7 +131,7 @@ test("should wait for condition", async () => {
 });
 ```
 
-### 3. vi.waitUntil() - For custom conditions
+### vi.waitUntil() - For custom conditions
 
 Similar to waitFor but returns the first truthy value.
 

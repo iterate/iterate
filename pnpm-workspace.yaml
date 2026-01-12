@@ -3,7 +3,6 @@ packages:
   - packages/*
   - estates/*
   - estates/*/apps/*
-  - vibe-rules
   - e2e
   - .github/ts-workflows
   # DEPRECATED: apps/os is deprecated in favor of apps/os2. These paths are kept for backwards compatibility.

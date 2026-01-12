@@ -36,14 +36,11 @@
     "db:exec": "docker exec -i postgres-iterate psql -U postgres -d iterate -c",
     "clean": "rm -rf ./**/node_modules",
     "workflows": "cd .github/ts-workflows && pnpm generate",
-    "postinstall:vibe-rules": "vibe-rules install cursor && vibe-rules install codex && vibe-rules install claude-code",
     "super-reset": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os db:migrate",
-    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate",
-    "postinstall": "is-ci || pnpm /postinstall:/"
+    "super-reset2": "pnpm i && pnpm docker:down && pnpm docker:clean && pnpm docker:up && sleep 3 && pnpm os2 db:migrate"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@iterate-com/vibe-rules": "workspace:*",
     "@tanstack/eslint-plugin-router": "^1.139.0",
     "@types/node": "^24.10.1",
     "@typescript-eslint/eslint-plugin": "^8.48.0",
@@ -65,9 +62,7 @@
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
   },
-  "dependencies": {
-    "vibe-rules": "^0.3.91"
-  },
+  "dependencies": {},
   "packageManager": "pnpm@10.24.0",
   "pnpm": {
     "overrides": {
