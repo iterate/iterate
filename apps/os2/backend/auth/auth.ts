@@ -17,6 +17,11 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     .map((p) => p.trim().toLowerCase())
     .filter((p) => p.length > 0);
 
+  const adminEmailHosts = (envParam.ADMIN_EMAIL_HOSTS ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h.length > 0);
+
   return betterAuth({
     baseURL: envParam.VITE_PUBLIC_URL,
     telemetry: { enabled: false },
@@ -42,7 +47,16 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
                 message: "Sign up is not available for this email address",
               });
             }
-            return { data: user };
+
+            const emailDomain = email.split("@")[1];
+            const isAdminEmail = emailDomain && adminEmailHosts.includes(emailDomain);
+
+            return {
+              data: {
+                ...user,
+                ...(isAdminEmail ? { role: "admin" } : {}),
+              },
+            };
           },
         },
       },

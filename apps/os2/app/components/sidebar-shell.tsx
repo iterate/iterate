@@ -239,7 +239,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
       await authClient.admin.impersonateUser({ userId });
     },
     onSuccess: () => {
-      window.location.reload();
+      window.location.href = "/";
     },
     onError: (error) => {
       toast.error(
@@ -253,7 +253,7 @@ export function SidebarShell({ header, children, user }: SidebarShellProps) {
       await authClient.admin.stopImpersonating();
     },
     onSuccess: () => {
-      window.location.reload();
+      window.location.href = "/";
     },
     onError: (error) => {
       toast.error(
