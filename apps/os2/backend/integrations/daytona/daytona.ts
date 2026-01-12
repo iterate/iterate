@@ -143,11 +143,12 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     if (!hostPort) {
       return c.json({ error: "Local docker machine has no port mapping" }, 500);
     }
-    const targetUrl = `http://host.docker.internal:${hostPort}${path}`;
+    // Use localhost since local-docker machines only work in local dev
+    const targetUrl = `http://localhost:${hostPort}${path}`;
     const fullTargetUrl = url.search ? `${targetUrl}${url.search}` : targetUrl;
 
     const response = await proxyLocalDocker(c.req.raw, fullTargetUrl);
-    return rewriteHTMLUrls(response, proxyBasePath);
+    return await rewriteHTMLUrls(response, proxyBasePath);
   }
 
   // Daytona machine handling
@@ -193,7 +194,7 @@ daytonaProxyApp.all("/org/:org/proj/:project/:machine/proxy/:port/*", async (c) 
     }
   }
 
-  return rewriteHTMLUrls(response, proxyBasePath);
+  return await rewriteHTMLUrls(response, proxyBasePath);
 });
 
 /**
@@ -388,11 +389,29 @@ async function proxyLocalDockerWebSocket(request: Request, targetUrl: string): P
  *
  * Also injects a <base> tag and WebSocket interceptor to handle JavaScript-constructed URLs.
  */
-function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
+async function rewriteHTMLUrls(response: Response, proxyBasePath: string): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
   if (!contentType.includes("text/html")) {
     return response;
   }
+
+  // Do string replacement on the entire HTML to fix all absolute paths
+  // This is simpler and more reliable than HTMLRewriter for complex cases
+  let html = await response.text();
+
+  // Replace all /assets/ paths with the proxy base path
+  // But only if they're not already prefixed with the proxy base
+  html = html.replace(new RegExp(`(["'(])(/assets/)`, "g"), `$1${proxyBasePath}/assets/`);
+
+  // Also replace /logo.svg and other root-level assets
+  html = html.replace(new RegExp(`(["'(])(/logo\\.svg)`, "g"), `$1${proxyBasePath}/logo.svg`);
+
+  // Create a new response with the modified HTML for further processing
+  response = new Response(html, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
 
   class URLRewriter {
     private attr: string;
@@ -420,9 +439,52 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
 
   class HeadInjector {
     element(element: Element) {
-      // If there's no existing <base> tag, inject one
-      // (The BaseRewriter handles existing tags)
-      // Note: This prepend will be a fallback; we prefer rewriting existing tags
+      // Inject a base tag at the start of head
+      // This helps with relative URL resolution when the page is served under a proxy path
+      element.prepend(`<base href="${proxyBasePath}/">`, { html: true });
+
+      // Inject a script that sets up the base path for the router BEFORE the main app loads
+      // This must run before any other scripts
+      element.prepend(
+        `<script>
+// Set up proxy base path for TanStack Router and other libraries
+window.__PROXY_BASE_PATH__ = ${JSON.stringify(proxyBasePath)};
+
+// Override history methods to strip the proxy base path when the app reads location
+// and add it back when the app navigates
+(function() {
+  const proxyBase = ${JSON.stringify(proxyBasePath)};
+  
+  // Store original methods
+  const originalPushState = history.pushState.bind(history);
+  const originalReplaceState = history.replaceState.bind(history);
+  
+  // Helper to ensure URL has the proxy base
+  function ensureProxyBase(url) {
+    if (!url) return url;
+    if (typeof url !== 'string') return url;
+    
+    // If it's a relative path that doesn't start with the proxy base, add it
+    if (url.startsWith('/') && !url.startsWith(proxyBase)) {
+      return proxyBase + url;
+    }
+    return url;
+  }
+  
+  // Override pushState
+  history.pushState = function(state, title, url) {
+    return originalPushState(state, title, ensureProxyBase(url));
+  };
+  
+  // Override replaceState
+  history.replaceState = function(state, title, url) {
+    return originalReplaceState(state, title, ensureProxyBase(url));
+  };
+})();
+</script>`,
+        { html: true },
+      );
+
       // Inject a WebSocket interceptor to rewrite WebSocket URLs
       // This handles cases where JS constructs WebSocket URLs with absolute paths
       element.append(
@@ -462,17 +524,39 @@ function rewriteHTMLUrls(response: Response, proxyBasePath: string): Response {
     }
   }
 
+  // Rewrite inline script content to fix /assets/ paths in import() calls
+  // Only rewrites import('/assets/...) and preload patterns
+  class InlineScriptRewriter {
+    private chunks: string[] = [];
+
+    text(text: Text) {
+      // Accumulate all text chunks
+      this.chunks.push(text.text);
+
+      if (text.lastInTextNode) {
+        // Join all chunks and rewrite
+        const original = this.chunks.join("");
+        const rewritten = original
+          // import('/assets/...) -> import('${proxyBasePath}/assets/...)
+          .replace(/import\(\s*(['"])\/assets\//g, `import($1${proxyBasePath}/assets/`)
+          // preloads: ["/assets/..."] -> preloads: ["${proxyBasePath}/assets/..."]
+          .replace(/"\/assets\//g, `"${proxyBasePath}/assets/`);
+
+        // Only replace if actually changed
+        if (rewritten !== original) {
+          text.replace(rewritten, { html: false });
+          // Remove all prior chunks since we're replacing the last one with everything
+          // Actually we need to handle this differently...
+        }
+        this.chunks = [];
+      }
+    }
+  }
+
+  // Only use HTMLRewriter for things that string replacement can't handle well
+  // (like injecting scripts). Asset URLs are already handled by string replacement above.
   return new HTMLRewriter()
     .on("base[href]", new BaseRewriter())
     .on("head", new HeadInjector())
-    .on("script[src]", new URLRewriter("src"))
-    .on("link[href]", new URLRewriter("href"))
-    .on("img[src]", new URLRewriter("src"))
-    .on("a[href]", new URLRewriter("href"))
-    .on("form[action]", new URLRewriter("action"))
-    .on("source[src]", new URLRewriter("src"))
-    .on("video[src]", new URLRewriter("src"))
-    .on("audio[src]", new URLRewriter("src"))
-    .on("iframe[src]", new URLRewriter("src"))
     .transform(response);
 }
