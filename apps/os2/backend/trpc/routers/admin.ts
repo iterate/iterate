@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
-import { eq } from "drizzle-orm";
+import { and, eq, like } from "drizzle-orm";
 import { router, adminProcedure, protectedProcedure } from "../trpc.ts";
+import * as schema from "../../db/schema.ts";
 import { user } from "../../db/schema.ts";
 
 export const adminRouter = router({
@@ -127,4 +128,64 @@ export const adminRouter = router({
         : null,
     };
   }),
+
+  // Get impersonation info for the current user (for UI display)
+  impersonationInfo: protectedProcedure.query(async ({ ctx }) => {
+    const impersonatedBy = ctx?.session?.session.impersonatedBy || undefined;
+    const isAdmin = ctx?.user?.role === "admin" || undefined;
+    return { impersonatedBy, isAdmin };
+  }),
+
+  // Search users by email (for admin impersonation autocomplete)
+  searchUsersByEmail: adminProcedure
+    .input(z.object({ searchEmail: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const users = await ctx.db.query.user.findMany({
+        where: like(schema.user.email, `%${input.searchEmail}%`),
+        columns: { id: true, email: true, name: true },
+        limit: 10,
+      });
+      return users;
+    }),
+
+  // Find a user by exact email (for admin impersonation)
+  findUserByEmail: adminProcedure
+    .input(z.object({ email: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const foundUser = await ctx.db.query.user.findFirst({
+        where: eq(user.email, input.email),
+      });
+      return foundUser;
+    }),
+
+  // Get the owner of a project's organization (for admin impersonation by project ID)
+  getProjectOwner: adminProcedure
+    .input(z.object({ projectId: z.string() }))
+    .query(async ({ ctx, input }) => {
+      const project = await ctx.db.query.project.findFirst({
+        where: eq(schema.project.id, input.projectId),
+      });
+
+      if (!project) {
+        throw new Error("Project not found");
+      }
+
+      const ownerMembership = await ctx.db.query.organizationUserMembership.findFirst({
+        where: and(
+          eq(schema.organizationUserMembership.organizationId, project.organizationId),
+          eq(schema.organizationUserMembership.role, "owner"),
+        ),
+        with: { user: true },
+      });
+
+      if (!ownerMembership) {
+        throw new Error("Organization owner not found");
+      }
+
+      return {
+        userId: ownerMembership.user.id,
+        email: ownerMembership.user.email,
+        name: ownerMembership.user.name,
+      };
+    }),
 });
