@@ -35,6 +35,8 @@ const snapshot = await daytona.snapshot.create(
     name: snapshotName,
     image: Image.fromDockerfile(join(import.meta.dirname, "./Dockerfile")),
     resources: {
+      cpu: 2,
+      memory: 4,
       disk: 10,
     },
   },
