@@ -49,5 +49,12 @@ export function getHarness(type: AgentType): AgentHarness {
 }
 
 export function getCommandString(command: string[]): string {
-  return command.map((arg) => (arg.includes(" ") ? `"${arg}"` : arg)).join(" ");
+  return command.map((arg) => shellEscape(arg)).join(" ");
+}
+
+function shellEscape(arg: string): string {
+  if (!/[\s"'`$\\!#&|;<>(){}[\]*?~]/.test(arg)) {
+    return arg;
+  }
+  return "'" + arg.replace(/'/g, "'\\''") + "'";
 }

@@ -66,6 +66,7 @@ export function AppHeader({ agent }: AppHeaderProps) {
     mutationFn: () => trpcClient.stopAgent.mutate({ slug: agent!.slug }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: trpc.listAgents.queryKey() });
+      queryClient.removeQueries({ queryKey: ["ensureAgentStarted", agent!.slug] });
       toast.success("Agent stopped");
     },
     onError: () => {
