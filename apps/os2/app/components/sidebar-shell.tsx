@@ -190,7 +190,7 @@ function ImpersonationDialog({
           </div>
 
           <div className="flex justify-end space-x-2">
-            <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isPending}>
+            <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={isPending}>
               Cancel
             </Button>
             <Button onClick={handleSubmit} disabled={!isValid || isPending}>

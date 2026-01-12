@@ -153,7 +153,7 @@ export const adminRouter = router({
     .input(z.object({ email: z.string() }))
     .query(async ({ ctx, input }) => {
       const foundUser = await ctx.db.query.user.findFirst({
-        where: eq(user.email, input.email),
+        where: eq(user.email, input.email.toLowerCase()),
       });
       return foundUser;
     }),
