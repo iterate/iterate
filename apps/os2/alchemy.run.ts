@@ -113,8 +113,8 @@ const Env = z.object({
   ITERATE_USER: Optional,
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
-  SIGNUP_ALLOWLIST: z.string().default("*@example.com"),
-  ADMIN_EMAIL_HOSTS: z.string().default("example.com"),
+  ALLOW_SIGNUP_FROM_EMAILS: z.string().default("*@example.com"),
+  ADMIN_EMAIL_HOSTS: z.string().default("*@example.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
