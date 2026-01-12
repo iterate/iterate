@@ -740,6 +740,9 @@ importers:
       posthog-js:
         specifier: ^1.313.0
         version: 1.313.0
+      posthog-node:
+        specifier: ^5.14.1
+        version: 5.14.1
       radix-ui:
         specifier: ^1.4.3
         version: 1.4.3(@types/react-dom@19.2.3(@types/react@19.2.7))(@types/react@19.2.7)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)

@@ -2,6 +2,7 @@ import { createFileRoute, Outlet, redirect, useLocation, useParams } from "@tans
 import { useSuspenseQuery } from "@tanstack/react-query";
 import { trpc } from "../../lib/trpc.tsx";
 import { useSessionUser } from "../../hooks/use-session-user.ts";
+import { usePostHogIdentity } from "../../hooks/use-posthog-identity.ts";
 import { SidebarShell } from "../../components/sidebar-shell.tsx";
 import { OrgSwitcher } from "../../components/org-project-switcher.tsx";
 import { OrgSidebarNav } from "../../components/org-sidebar-nav.tsx";
@@ -42,6 +43,16 @@ function OrgLayout() {
   if (!currentOrg || !currentOrg.id || !currentOrg.name || !currentOrg.slug) {
     throw redirect({ to: "/" });
   }
+
+  // Identify user and organization in PostHog
+  usePostHogIdentity({
+    user: user ?? null,
+    organization: {
+      id: currentOrg.id,
+      name: currentOrg.name,
+      slug: currentOrg.slug,
+    },
+  });
 
   const isProjectRoute = location.pathname.includes("/projects/");
 

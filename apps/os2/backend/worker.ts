@@ -14,6 +14,7 @@ import { createContext } from "./trpc/context.ts";
 import { slackApp } from "./integrations/slack/slack.ts";
 import { githubApp } from "./integrations/github/github.ts";
 import { daytonaProxyApp } from "./integrations/daytona/daytona.ts";
+import { posthogProxyApp } from "./routes/posthog-proxy.ts";
 import { logger } from "./tag-logger.ts";
 import { RealtimePusher } from "./durable-objects/realtime-pusher.ts";
 
@@ -91,6 +92,9 @@ app.get("/api/ws/realtime", (c) => {
   const stub = c.env.REALTIME_PUSHER.get(id);
   return stub.fetch(c.req.raw);
 });
+
+// Mount PostHog reverse proxy (for ad-blocker bypass)
+app.route("", posthogProxyApp);
 
 // Mount Daytona preview proxy
 app.route("", daytonaProxyApp);
