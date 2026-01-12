@@ -43,3 +43,6 @@ playwright-report/
 
 # opensrc - source code for packages
 opensrc/
+
+# opencode sessions
+session-ses*.md

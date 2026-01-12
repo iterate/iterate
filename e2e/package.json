@@ -1,0 +1,15 @@
+{
+  "name": "@iterate-com/e2e",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@types/node": "^24.10.1",
+    "playwright": "^1.57.0",
+    "typescript": "^5.9.3"
+  }
+}

@@ -3,6 +3,12 @@ import { existsSync, mkdirSync, rmSync, symlinkSync, lstatSync, readdirSync } fr
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
+interface RepoConfig {
+  owner: string;
+  name: string;
+  defaultBranch: string;
+}
+
 // Fixed path for iterate repo (user-agnostic, set by Dockerfile or bind mount)
 const ITERATE_REPO_PATH = "/iterate-repo";
 const ITERATE_REPO_URL = "https://github.com/iterate/iterate.git";
@@ -14,6 +20,8 @@ const SRC_BASE = join(homedir(), "src", "github.com");
 const GO_STYLE_ITERATE_PATH = join(SRC_BASE, "iterate", "iterate");
 
 const isDevMode = () => process.env.ITERATE_DEV === "true";
+
+const getRepoPath = (owner: string, name: string) => join(SRC_BASE, owner, name);
 
 const setupGoStyleSymlink = () => {
   if (existsSync(GO_STYLE_ITERATE_PATH)) {
@@ -43,71 +51,83 @@ const setupGoStyleSymlink = () => {
   symlinkSync(ITERATE_REPO_PATH, GO_STYLE_ITERATE_PATH);
 };
 
-const getUserRepoPath = (): string | null => {
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
-  if (!repoFullName) return null;
-  const [owner, repo] = repoFullName.split("/");
-  if (!owner || !repo) return null;
-  return join(SRC_BASE, owner, repo);
-};
-
-const getGitEnvWithToken = (): ExecSyncOptions["env"] => {
+const getGitEnvWithToken = (owners: string[]): ExecSyncOptions["env"] => {
   const token = process.env.GITHUB_ACCESS_TOKEN;
-  if (!token) return process.env;
+  if (!token || owners.length === 0) return process.env;
 
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME;
-  if (!repoFullName) return process.env;
-
-  const [owner] = repoFullName.split("/");
-  return {
+  const uniqueOwners = [...new Set(owners)];
+  const gitConfig: Record<string, string> = {
     ...process.env,
-    GIT_CONFIG_COUNT: "1",
-    GIT_CONFIG_KEY_0: `url.https://x-access-token:${token}@github.com/${owner}/.insteadOf`,
-    GIT_CONFIG_VALUE_0: `https://github.com/${owner}/`,
+    GIT_CONFIG_COUNT: uniqueOwners.length.toString(),
   };
+
+  uniqueOwners.forEach((owner, index) => {
+    gitConfig[`GIT_CONFIG_KEY_${index}`] =
+      `url.https://x-access-token:${token}@github.com/${owner}/.insteadOf`;
+    gitConfig[`GIT_CONFIG_VALUE_${index}`] = `https://github.com/${owner}/`;
+  });
+
+  return gitConfig;
 };
 
-const cloneUserRepo = () => {
-  const userRepoPath = getUserRepoPath();
-  if (!userRepoPath) {
-    console.log("No GITHUB_REPO_FULL_NAME found, skipping user repository clone");
+const cloneOrUpdateRepo = (repo: RepoConfig, gitEnv: ExecSyncOptions["env"]) => {
+  const repoPath = getRepoPath(repo.owner, repo.name);
+  const repoFullName = `${repo.owner}/${repo.name}`;
+  const repoUrl = `https://github.com/${repoFullName}.git`;
+
+  mkdirSync(dirname(repoPath), { recursive: true });
+
+  if (existsSync(repoPath)) {
+    console.log(`Repository ${repoFullName} already exists at ${repoPath}, pulling latest...`);
+    execSync(`git fetch origin ${repo.defaultBranch}`, {
+      cwd: repoPath,
+      stdio: "inherit",
+      env: gitEnv,
+    });
+    execSync(`git reset --hard origin/${repo.defaultBranch}`, { cwd: repoPath, stdio: "inherit" });
+  } else {
+    console.log(`Cloning ${repoFullName} to ${repoPath}...`);
+    execSync(`git clone --branch ${repo.defaultBranch} ${repoUrl} ${repoPath}`, {
+      stdio: "inherit",
+      env: gitEnv,
+    });
+  }
+
+  console.log(`Repository ${repoFullName} ready at ${repoPath}`);
+};
+
+const cloneUserRepos = () => {
+  const reposJson = process.env.GITHUB_REPOS;
+  if (!reposJson) {
+    console.log("No GITHUB_REPOS found, skipping user repository clone");
     return;
   }
 
-  const repoFullName = process.env.GITHUB_REPO_FULL_NAME!;
   const token = process.env.GITHUB_ACCESS_TOKEN;
   if (!token) {
     console.log("No GITHUB_ACCESS_TOKEN found, skipping user repository clone");
     return;
   }
 
-  const defaultBranch = process.env.GITHUB_REPO_DEFAULT_BRANCH || "main";
-  const repoUrl = `https://github.com/${repoFullName}.git`;
-  const gitEnv = getGitEnvWithToken();
-
-  // Ensure parent directory exists
-  const parentDir = dirname(userRepoPath);
-  if (!existsSync(parentDir)) {
-    mkdirSync(parentDir, { recursive: true });
+  let repos: RepoConfig[];
+  try {
+    repos = JSON.parse(reposJson) as RepoConfig[];
+  } catch {
+    console.error("Failed to parse GITHUB_REPOS JSON:", reposJson);
+    return;
   }
 
-  if (existsSync(userRepoPath)) {
-    console.log(`User repository already exists at ${userRepoPath}, pulling latest...`);
-    execSync(`git fetch origin ${defaultBranch}`, {
-      cwd: userRepoPath,
-      stdio: "inherit",
-      env: gitEnv,
-    });
-    execSync(`git reset --hard origin/${defaultBranch}`, { cwd: userRepoPath, stdio: "inherit" });
-  } else {
-    console.log(`Cloning ${repoFullName} to ${userRepoPath}...`);
-    execSync(`git clone --branch ${defaultBranch} ${repoUrl} ${userRepoPath}`, {
-      stdio: "inherit",
-      env: gitEnv,
-    });
+  if (repos.length === 0) {
+    console.log("No repositories configured, skipping user repository clone");
+    return;
   }
 
-  console.log(`User repository ${repoFullName} ready at ${userRepoPath}`);
+  const owners = repos.map((r) => r.owner);
+  const gitEnv = getGitEnvWithToken(owners);
+
+  for (const repo of repos) {
+    cloneOrUpdateRepo(repo, gitEnv);
+  }
 };
 
 const isNodeModulesEmpty = (path: string): boolean => {
@@ -202,7 +222,7 @@ const startS6Svscan = (): ChildProcess => {
 const main = () => {
   setupGoStyleSymlink();
   cloneAndSetupIterateRepo();
-  cloneUserRepo();
+  cloneUserRepos();
   buildDaemonIfNeeded();
 
   const svscan = startS6Svscan();

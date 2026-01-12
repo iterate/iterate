@@ -147,7 +147,7 @@ export const projectProtectedProcedure = orgProtectedProcedure
         eq(projectTable.slug, input.projectSlug),
       ),
       with: {
-        projectRepo: true,
+        projectRepos: true,
         envVars: true,
         accessTokens: true,
         connections: true,

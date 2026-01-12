@@ -1,0 +1,2 @@
+ALTER TABLE "project_repo" DROP CONSTRAINT "project_repo_projectId_unique";--> statement-breakpoint
+CREATE UNIQUE INDEX "project_repo_project_owner_name_idx" ON "project_repo" USING btree ("project_id","owner","name");
