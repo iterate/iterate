@@ -69,7 +69,7 @@ export default {
             DOPPLER_TOKEN: "${{ secrets.DOPPLER_TOKEN }}",
           },
           run: "pnpm run deploy",
-          "working-directory": "estates/iterate/apps/website",
+          "working-directory": "apps/iterate-com",
         },
       ],
     },

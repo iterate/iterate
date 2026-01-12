@@ -1,0 +1,19 @@
+{
+  // this is horrible but we need to do it this way because it doesn't seem to work with symlinks
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "iterate-website",
+  "compatibility_date": "2025-02-24",
+  "compatibility_flags": ["nodejs_compat_v2"],
+  "main": "./backend/worker.ts",
+  "assets": {},
+  "routes": [
+    {
+      "pattern": "iterate.com",
+      "custom_domain": true
+    },
+    {
+      "pattern": "www.iterate.com",
+      "custom_domain": true
+    }
+  ]
+}
