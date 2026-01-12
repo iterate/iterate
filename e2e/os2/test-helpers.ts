@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-restricted-imports -- this is the place that we wrap it
 import { expect, type Page, test as base } from "@playwright/test";
 import { spinnerWaiter } from "./spinner-waiter.ts";
 

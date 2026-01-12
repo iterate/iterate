@@ -168,7 +168,7 @@ export default defineConfig([
   },
   {
     name: "playwright-rules",
-    files: ["apps/os2/**/*.e2e.ts", "apps/os2/**/e2e/**/*.ts"],
+    files: ["e2e/**/*"],
     rules: {
       "react-hooks/rules-of-hooks": "off",
       "no-console": "off",

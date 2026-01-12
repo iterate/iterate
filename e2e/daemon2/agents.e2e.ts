@@ -1,4 +1,5 @@
-import { test, expect } from "@playwright/test";
+import { expect } from "@playwright/test";
+import { test } from "../os2/test-helpers.ts";
 
 function uniqueSlug(base: string): string {
   return `${base}-${Date.now()}`;
