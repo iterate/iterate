@@ -32,9 +32,10 @@ if (shouldEnablePostHog()) {
     // Disable automatic pageview - we'll track manually with router
     capture_pageview: false,
     capture_pageleave: true,
-    // Session replay configuration (no masking per requirements)
+    // Session replay configuration - mask passwords for security
     session_recording: {
       maskAllInputs: false,
+      maskInputOptions: { password: true },
       maskTextSelector: "",
     },
     // Register environment as super property

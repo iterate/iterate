@@ -210,6 +210,9 @@ const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawI
     return next();
   }
 
+  // Capture input BEFORE mutation to avoid blocking response path
+  const rawInput = await getRawInput();
+
   // Execute the mutation
   const result = await next();
 
@@ -225,9 +228,6 @@ const withPostHogTracking = t.middleware(async ({ ctx, next, path, type, getRawI
     if (!userId) {
       return result;
     }
-
-    // Get raw input for property extraction
-    const rawInput = await getRawInput();
 
     // Extract properties
     let properties: Record<string, unknown> = {

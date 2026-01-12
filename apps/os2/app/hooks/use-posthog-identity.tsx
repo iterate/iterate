@@ -49,9 +49,11 @@ export function usePostHogIdentity({ user, organization, project }: PostHogIdent
 
   const state = sharedState?.current ?? fallbackRef.current;
 
+  // Single consolidated effect for user identification and group analytics
   useEffect(() => {
     if (!posthog) return;
 
+    // Handle user identification
     if (user && state.userId !== user.id) {
       posthog.identify(user.id, {
         email: user.email,
@@ -60,17 +62,20 @@ export function usePostHogIdentity({ user, organization, project }: PostHogIdent
         role: user.role,
       });
       state.userId = user.id;
+      // Reset org/project state when user changes to prevent stale data
+      state.organizationId = null;
+      state.projectId = null;
     } else if (!user && state.userId) {
       posthog.reset();
       state.userId = null;
       state.organizationId = null;
       state.projectId = null;
+      return;
     }
-  }, [posthog, user, state]);
 
-  useEffect(() => {
-    if (!posthog || !user) return;
+    if (!user) return;
 
+    // Handle organization group
     if (organization && state.organizationId !== organization.id) {
       posthog.group("organization", organization.id, {
         name: organization.name,
@@ -80,12 +85,9 @@ export function usePostHogIdentity({ user, organization, project }: PostHogIdent
     } else if (!organization && state.organizationId) {
       state.organizationId = null;
     }
-  }, [posthog, user, organization, state]);
 
-  useEffect(() => {
-    if (!posthog || !user || !organization) return;
-
-    if (project && state.projectId !== project.id) {
+    // Handle project group
+    if (organization && project && state.projectId !== project.id) {
       posthog.group("project", project.id, {
         name: project.name,
         slug: project.slug,
