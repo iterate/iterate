@@ -1,5 +1,14 @@
 # Agent Instructions
 
+Sacrifice grammar for concision. Don't waste tokens.
+
+## Meta: Writing AGENTS.md
+
+- CLAUDE.md = symlink to AGENTS.md (always)
+- Reference example code in codebase, don't copy-paste
+- Keep files short - use as table of contents
+- Link to real files, not inline snippets
+
 ## Quick Reference
 
 ```bash
