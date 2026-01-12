@@ -37,11 +37,9 @@ posthogProxyApp.all("/ingest/*", async (c) => {
   const posthogPath = url.pathname.replace(/^\/ingest/, "");
 
   // Validate path against allowlist
+  // Only allow exact match or match with trailing slash (e.g., "/e" or "/e/something")
   const isAllowed = ALLOWED_PATH_PREFIXES.some(
-    (prefix) =>
-      posthogPath === prefix ||
-      posthogPath.startsWith(prefix + "/") ||
-      posthogPath.startsWith(prefix),
+    (prefix) => posthogPath === prefix || posthogPath.startsWith(prefix + "/"),
   );
 
   if (!isAllowed) {

@@ -76,17 +76,21 @@ export function usePostHogIdentity({ user, organization, project }: PostHogIdent
     if (!user) return;
 
     // Handle organization group
+    // Only set if org is provided and different from current state
+    // Only clear if org is explicitly null (not undefined - undefined means "not managing this")
     if (organization && state.organizationId !== organization.id) {
       posthog.group("organization", organization.id, {
         name: organization.name,
         slug: organization.slug,
       });
       state.organizationId = organization.id;
-    } else if (!organization && state.organizationId) {
+    } else if (organization === null && state.organizationId) {
       state.organizationId = null;
     }
 
     // Handle project group
+    // Only set if project is provided and different from current state
+    // Only clear if project is explicitly null (not undefined - undefined means "not managing this")
     if (organization && project && state.projectId !== project.id) {
       posthog.group("project", project.id, {
         name: project.name,
@@ -95,7 +99,7 @@ export function usePostHogIdentity({ user, organization, project }: PostHogIdent
         organization_name: organization.name,
       });
       state.projectId = project.id;
-    } else if (!project && state.projectId) {
+    } else if (project === null && state.projectId) {
       state.projectId = null;
     }
   }, [posthog, user, organization, project, state]);
