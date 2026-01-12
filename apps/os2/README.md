@@ -66,10 +66,23 @@ The `DAYTONA_SNAPSHOT_PREFIX` environment variable is configured in Doppler for 
 
 ### Creating a New Snapshot
 
-To create a new snapshot:
+To create a new snapshot, run from the repo root with the appropriate Doppler config:
 
 ```bash
-doppler run -- tsx apps/os2/sandbox/snapshot.ts
+# For development snapshots
+doppler run --config dev -- tsx apps/os2/sandbox/snapshot.ts
+
+# For staging snapshots
+doppler run --config stg -- tsx apps/os2/sandbox/snapshot.ts
+
+# For production snapshots
+doppler run --config prd -- tsx apps/os2/sandbox/snapshot.ts
+```
+
+Or from the `apps/os2` directory:
+
+```bash
+doppler run --config prd -- tsx sandbox/snapshot.ts
 ```
 
 This will:

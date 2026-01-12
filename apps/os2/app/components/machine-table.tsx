@@ -14,7 +14,6 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
-import { isNonProd } from "../../env-client.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -154,7 +153,7 @@ export function MachineTable({
                         View Logs
                       </DropdownMenuItem>
                     )}
-                    {isNonProd && machine.type === "daytona" && (
+                    {machine.type === "daytona" && (
                       <DropdownMenuItem onClick={() => openTerminal(machine.id)}>
                         <SquareTerminal className="h-4 w-4 mr-2" />
                         Terminal
