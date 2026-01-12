@@ -18,8 +18,9 @@ RUN git config --global user.name "iterate" && \
     git config --global user.email "233973017+iterate[bot]@users.noreply.github.com"
 
 # Clone iterate repo and install dependencies (baked into image for faster startup)
-RUN git clone https://github.com/iterate/iterate.git /repos/iterate && \
-    cd /repos/iterate && \
+RUN mkdir -p /root/src/github.com/iterate && \
+    git clone https://github.com/iterate/iterate.git /root/src/github.com/iterate/iterate && \
+    cd /root/src/github.com/iterate/iterate && \
     pnpm install
 
 COPY entry.ts /app/entry.ts

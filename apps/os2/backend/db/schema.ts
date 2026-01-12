@@ -177,7 +177,7 @@ export const projectRelations = relations(project, ({ one, many }) => ({
   }),
   events: many(event),
   machines: many(machine),
-  projectRepo: one(projectRepo),
+  projectRepos: many(projectRepo),
   envVars: many(projectEnvVar),
   accessTokens: many(projectAccessToken),
   connections: many(projectConnection),
@@ -353,20 +353,23 @@ export const eventRelations = relations(event, ({ one }) => ({
 // #endregion ========== Events ==========
 
 // #region ========== Project Repo (simplified iterateConfigSource) ==========
-export const projectRepo = pgTable("project_repo", (t) => ({
-  id: iterateId("repo"),
-  projectId: t
-    .text()
-    .notNull()
-    .unique()
-    .references(() => project.id, { onDelete: "cascade" }),
-  provider: t.text().notNull(),
-  externalId: t.text().notNull(),
-  owner: t.text().notNull(),
-  name: t.text().notNull(),
-  defaultBranch: t.text().notNull().default("main"),
-  ...withTimestamps,
-}));
+export const projectRepo = pgTable(
+  "project_repo",
+  (t) => ({
+    id: iterateId("repo"),
+    projectId: t
+      .text()
+      .notNull()
+      .references(() => project.id, { onDelete: "cascade" }),
+    provider: t.text().notNull(),
+    externalId: t.text().notNull(),
+    owner: t.text().notNull(),
+    name: t.text().notNull(),
+    defaultBranch: t.text().notNull().default("main"),
+    ...withTimestamps,
+  }),
+  (t) => [uniqueIndex("project_repo_project_owner_name_idx").on(t.projectId, t.owner, t.name)],
+);
 
 export const projectRepoRelations = relations(projectRepo, ({ one }) => ({
   project: one(project, {

@@ -162,8 +162,11 @@ export const projectRouter = router({
     }
   }),
 
-  // Set project repository
-  setProjectRepo: projectProtectedMutation
+  listProjectRepos: projectProtectedProcedure.query(async ({ ctx }) => {
+    return ctx.project.projectRepos;
+  }),
+
+  addProjectRepo: projectProtectedMutation
     .input(
       z.object({
         repoId: z.number(),
@@ -174,17 +177,18 @@ export const projectRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const existingRepo = await ctx.db.query.projectRepo.findFirst({
-        where: eq(projectRepo.projectId, ctx.project.id),
+        where: and(
+          eq(projectRepo.projectId, ctx.project.id),
+          eq(projectRepo.owner, input.owner),
+          eq(projectRepo.name, input.name),
+        ),
       });
 
       if (existingRepo) {
         await ctx.db
           .update(projectRepo)
           .set({
-            provider: "github",
             externalId: input.repoId.toString(),
-            owner: input.owner,
-            name: input.name,
             defaultBranch: input.defaultBranch,
           })
           .where(eq(projectRepo.id, existingRepo.id));
@@ -198,6 +202,20 @@ export const projectRouter = router({
           defaultBranch: input.defaultBranch,
         });
       }
+
+      return { success: true };
+    }),
+
+  removeProjectRepo: projectProtectedMutation
+    .input(
+      z.object({
+        repoId: z.string(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await ctx.db
+        .delete(projectRepo)
+        .where(and(eq(projectRepo.projectId, ctx.project.id), eq(projectRepo.id, input.repoId)));
 
       return { success: true };
     }),

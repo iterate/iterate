@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { trpcClient } from "../lib/trpc.tsx";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
+import { ConfirmDialog } from "./ui/confirm-dialog.tsx";
 import {
   Dialog,
   DialogContent,
@@ -59,6 +60,7 @@ export function MachineTable({
   isLoading,
 }: MachineTableProps) {
   const [logsDialogMachine, setLogsDialogMachine] = useState<Machine | null>(null);
+  const [deleteConfirmMachine, setDeleteConfirmMachine] = useState<Machine | null>(null);
 
   if (isLoading) {
     return (
@@ -166,7 +168,7 @@ export function MachineTable({
                       </DropdownMenuItem>
                     )}
                     <DropdownMenuItem
-                      onClick={() => onDelete(machine.id)}
+                      onClick={() => setDeleteConfirmMachine(machine)}
                       className="text-destructive"
                     >
                       <Trash2 className="h-4 w-4 mr-2" />
@@ -181,6 +183,16 @@ export function MachineTable({
       </Table>
 
       <LogsDialog machine={logsDialogMachine} onClose={() => setLogsDialogMachine(null)} />
+
+      <ConfirmDialog
+        open={!!deleteConfirmMachine}
+        onOpenChange={(open) => !open && setDeleteConfirmMachine(null)}
+        title="Delete machine?"
+        description={`This will permanently delete ${deleteConfirmMachine?.name}. This action cannot be undone.`}
+        confirmLabel="Delete"
+        onConfirm={() => deleteConfirmMachine && onDelete(deleteConfirmMachine.id)}
+        destructive
+      />
     </>
   );
 }

@@ -1,7 +1,7 @@
 import { Suspense, useState } from "react";
 import { createFileRoute, useParams } from "@tanstack/react-router";
 import { useSuspenseQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, Github, ChevronDown, Check, ExternalLink } from "lucide-react";
+import { GitBranch, Github, ChevronDown, Check, ExternalLink, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../../../components/ui/button.tsx";
 import { EmptyState } from "../../../components/empty-state.tsx";
@@ -13,6 +13,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../../../components/ui/dropdown-menu.tsx";
+import { ConfirmDialog } from "../../../components/ui/confirm-dialog.tsx";
 import { trpc, trpcClient } from "../../../lib/trpc.tsx";
 
 function useDisconnectGithub(params: { organizationSlug: string; projectSlug: string }) {
@@ -37,9 +38,45 @@ function useDisconnectGithub(params: { organizationSlug: string; projectSlug: st
           projectSlug: params.projectSlug,
         }),
       });
+      queryClient.invalidateQueries({
+        queryKey: trpc.project.listProjectRepos.queryKey({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      });
     },
     onError: (error) => {
       toast.error(`Failed to disconnect GitHub: ${error.message}`);
+    },
+  });
+}
+
+function useRemoveRepo(params: { organizationSlug: string; projectSlug: string }) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (repoId: string) =>
+      trpcClient.project.removeProjectRepo.mutate({
+        organizationSlug: params.organizationSlug,
+        projectSlug: params.projectSlug,
+        repoId,
+      }),
+    onSuccess: () => {
+      toast.success("Repository removed");
+      queryClient.invalidateQueries({
+        queryKey: trpc.project.bySlug.queryKey({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      });
+      queryClient.invalidateQueries({
+        queryKey: trpc.project.listProjectRepos.queryKey({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      });
+    },
+    onError: (error) => {
+      toast.error(`Failed to remove repository: ${error.message}`);
     },
   });
 }
@@ -68,7 +105,12 @@ function ProjectRepoPage() {
   const params = useParams({
     from: "/_auth.layout/orgs/$organizationSlug/projects/$projectSlug/repo",
   });
-  const [isChangingRepo, setIsChangingRepo] = useState(false);
+  const [isAddingRepo, setIsAddingRepo] = useState(false);
+  const [repoToDelete, setRepoToDelete] = useState<{
+    id: string;
+    owner: string;
+    name: string;
+  } | null>(null);
 
   const { data: project } = useSuspenseQuery(
     trpc.project.bySlug.queryOptions({
@@ -84,7 +126,7 @@ function ProjectRepoPage() {
     }),
   );
 
-  const repo = project?.projectRepo;
+  const repos = project?.projectRepos ?? [];
 
   const startGithubInstall = useMutation({
     mutationFn: () =>
@@ -101,65 +143,46 @@ function ProjectRepoPage() {
   });
 
   const disconnectGithub = useDisconnectGithub(params);
+  const removeRepo = useRemoveRepo(params);
 
-  if (repo && !isChangingRepo) {
+  if (!githubConnection.connected) {
     return (
-      <div className="p-8 max-w-2xl">
-        <h1 className="text-2xl font-bold">Repository</h1>
-        <Card className="mt-6 p-6">
-          <div className="flex items-start gap-4">
-            <div className="rounded-md border bg-muted p-2">
-              <Github className="h-6 w-6" />
-            </div>
-            <div className="flex-1 space-y-4">
-              <div>
-                <h2 className="text-lg font-semibold">
-                  {repo.owner}/{repo.name}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Branch: {repo.defaultBranch} · Provider: {repo.provider}
-                </p>
-              </div>
-              <a
-                href={`https://github.com/${repo.owner}/${repo.name}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+      <div className="p-8">
+        <h1 className="text-2xl font-bold">Repositories</h1>
+        <div className="mt-6">
+          <EmptyState
+            icon={<GitBranch className="h-12 w-12" />}
+            title="No GitHub connected"
+            description="Connect your GitHub account to link repositories."
+            action={
+              <Button
+                onClick={() => startGithubInstall.mutate()}
+                disabled={startGithubInstall.isPending}
               >
-                View on GitHub
-                <ExternalLink className="h-3.5 w-3.5" />
-              </a>
-            </div>
-          </div>
-        </Card>
-        <div className="mt-4 flex gap-2">
-          <Button variant="outline" onClick={() => setIsChangingRepo(true)}>
-            Change repository
-          </Button>
-          <Button
-            variant="outline"
-            onClick={() => disconnectGithub.mutate()}
-            disabled={disconnectGithub.isPending}
-            className="text-destructive border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
-          >
-            {disconnectGithub.isPending ? <Spinner className="mr-2" /> : null}
-            Disconnect
-          </Button>
+                {startGithubInstall.isPending ? (
+                  <Spinner className="mr-2" />
+                ) : (
+                  <Github className="mr-2 h-4 w-4" />
+                )}
+                Connect GitHub
+              </Button>
+            }
+          />
         </div>
       </div>
     );
   }
 
-  if (githubConnection.connected || isChangingRepo) {
+  if (isAddingRepo) {
     return (
       <div className="p-8 max-w-2xl">
-        <h1 className="text-2xl font-bold">Repository</h1>
+        <h1 className="text-2xl font-bold">Add Repository</h1>
         <div className="mt-6">
           <Suspense fallback={<RepoPickerSkeleton />}>
             <RepoPicker
               params={params}
-              currentRepo={repo}
-              onCancel={repo ? () => setIsChangingRepo(false) : undefined}
+              existingRepos={repos}
+              onCancel={() => setIsAddingRepo(false)}
             />
           </Suspense>
         </div>
@@ -168,28 +191,92 @@ function ProjectRepoPage() {
   }
 
   return (
-    <div className="p-8">
-      <h1 className="text-2xl font-bold">Repository</h1>
-      <div className="mt-6">
-        <EmptyState
-          icon={<GitBranch className="h-12 w-12" />}
-          title="No repo connected"
-          description="Connect your GitHub account to link a repository."
-          action={
-            <Button
-              onClick={() => startGithubInstall.mutate()}
-              disabled={startGithubInstall.isPending}
-            >
-              {startGithubInstall.isPending ? (
-                <Spinner className="mr-2" />
-              ) : (
-                <Github className="mr-2 h-4 w-4" />
-              )}
-              Connect GitHub
-            </Button>
-          }
-        />
+    <div className="p-8 max-w-2xl">
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold">Repositories</h1>
+        <Button variant="outline" onClick={() => setIsAddingRepo(true)}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add Repository
+        </Button>
       </div>
+
+      {repos.length === 0 ? (
+        <div className="mt-6">
+          <EmptyState
+            icon={<GitBranch className="h-12 w-12" />}
+            title="No repositories linked"
+            description="Add a repository to get started."
+            action={
+              <Button onClick={() => setIsAddingRepo(true)}>
+                <Plus className="mr-2 h-4 w-4" />
+                Add Repository
+              </Button>
+            }
+          />
+        </div>
+      ) : (
+        <div className="mt-6 space-y-4">
+          {repos.map((repo) => (
+            <Card key={repo.id} className="p-6">
+              <div className="flex items-start gap-4">
+                <div className="rounded-md border bg-muted p-2">
+                  <Github className="h-6 w-6" />
+                </div>
+                <div className="flex-1 space-y-2">
+                  <div>
+                    <h2 className="text-lg font-semibold">
+                      {repo.owner}/{repo.name}
+                    </h2>
+                    <p className="text-sm text-muted-foreground">Branch: {repo.defaultBranch}</p>
+                  </div>
+                  <a
+                    href={`https://github.com/${repo.owner}/${repo.name}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground"
+                  >
+                    View on GitHub
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="text-muted-foreground"
+                  onClick={() => setRepoToDelete(repo)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div className="mt-6 border-t pt-6">
+        <Button
+          variant="outline"
+          onClick={() => disconnectGithub.mutate()}
+          disabled={disconnectGithub.isPending}
+          className="text-destructive border-destructive/50 hover:bg-destructive/10 hover:text-destructive"
+        >
+          {disconnectGithub.isPending ? <Spinner className="mr-2" /> : null}
+          Disconnect GitHub
+        </Button>
+        <p className="mt-2 text-sm text-muted-foreground">
+          This will remove all linked repositories and disconnect your GitHub account.
+        </p>
+      </div>
+
+      <ConfirmDialog
+        open={!!repoToDelete}
+        onOpenChange={(open) => !open && setRepoToDelete(null)}
+        title="Remove repository?"
+        description={`This will remove ${repoToDelete?.owner}/${repoToDelete?.name} from this project. The repository itself will not be affected.`}
+        confirmLabel="Remove"
+        onConfirm={() => repoToDelete && removeRepo.mutate(repoToDelete.id)}
+        destructive
+      />
     </div>
   );
 }
@@ -207,11 +294,11 @@ function RepoPickerSkeleton() {
 
 function RepoPicker({
   params,
-  currentRepo,
+  existingRepos,
   onCancel,
 }: {
   params: { organizationSlug: string; projectSlug: string };
-  currentRepo?: { owner: string; name: string; defaultBranch: string } | null;
+  existingRepos: { owner: string; name: string }[];
   onCancel?: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -229,9 +316,9 @@ function RepoPicker({
     }),
   );
 
-  const setProjectRepo = useMutation({
+  const addProjectRepo = useMutation({
     mutationFn: (repo: { id: number; owner: string; name: string; defaultBranch: string }) =>
-      trpcClient.project.setProjectRepo.mutate({
+      trpcClient.project.addProjectRepo.mutate({
         organizationSlug: params.organizationSlug,
         projectSlug: params.projectSlug,
         repoId: repo.id,
@@ -240,9 +327,15 @@ function RepoPicker({
         defaultBranch: repo.defaultBranch,
       }),
     onSuccess: () => {
-      toast.success("Repository connected successfully");
+      toast.success("Repository added successfully");
       queryClient.invalidateQueries({
         queryKey: trpc.project.bySlug.queryKey({
+          organizationSlug: params.organizationSlug,
+          projectSlug: params.projectSlug,
+        }),
+      });
+      queryClient.invalidateQueries({
+        queryKey: trpc.project.listProjectRepos.queryKey({
           organizationSlug: params.organizationSlug,
           projectSlug: params.projectSlug,
         }),
@@ -250,7 +343,7 @@ function RepoPicker({
       onCancel?.();
     },
     onError: (error) => {
-      toast.error(`Failed to set repository: ${error.message}`);
+      toast.error(`Failed to add repository: ${error.message}`);
     },
   });
 
@@ -268,34 +361,37 @@ function RepoPicker({
     },
   });
 
-  const repositories = reposData.repositories;
+  const existingRepoKeys = new Set(existingRepos.map((r) => `${r.owner}/${r.name}`));
+  const availableRepositories = reposData.repositories.filter(
+    (repo) => !existingRepoKeys.has(repo.fullName),
+  );
 
-  if (repositories.length === 0) {
+  if (availableRepositories.length === 0) {
     return (
       <Card className="p-6">
         <p className="text-sm text-muted-foreground">
-          No repositories found. Make sure you have granted access to at least one repository during
-          GitHub App installation.
+          {reposData.repositories.length === 0
+            ? "No repositories found. Make sure you have granted access to at least one repository during GitHub App installation."
+            : "All available repositories have already been added."}
         </p>
-        <Button
-          variant="outline"
-          className="mt-4"
-          onClick={() => updateGithubPermissions.mutate()}
-          disabled={updateGithubPermissions.isPending}
-        >
-          {updateGithubPermissions.isPending ? <Spinner className="mr-2" /> : null}
-          Update GitHub permissions
-        </Button>
+        <div className="mt-4 flex gap-2">
+          <Button
+            variant="outline"
+            onClick={() => updateGithubPermissions.mutate()}
+            disabled={updateGithubPermissions.isPending}
+          >
+            {updateGithubPermissions.isPending ? <Spinner className="mr-2" /> : null}
+            Update GitHub permissions
+          </Button>
+          {onCancel && (
+            <Button variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+          )}
+        </div>
       </Card>
     );
   }
-
-  const hasChanged =
-    selectedRepo &&
-    currentRepo &&
-    (selectedRepo.owner !== currentRepo.owner ||
-      selectedRepo.name !== currentRepo.name ||
-      selectedRepo.defaultBranch !== currentRepo.defaultBranch);
 
   return (
     <Card className="p-6">
@@ -303,23 +399,19 @@ function RepoPicker({
         <div>
           <h2 className="text-sm font-medium">Select a repository</h2>
           <p className="text-sm text-muted-foreground">
-            Choose which repository to connect to this project.
+            Choose which repository to add to this project.
           </p>
         </div>
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="outline" className="w-full justify-between">
-              {selectedRepo
-                ? `${selectedRepo.owner}/${selectedRepo.name}`
-                : currentRepo
-                  ? `${currentRepo.owner}/${currentRepo.name}`
-                  : "Select repository..."}
+              {selectedRepo ? `${selectedRepo.owner}/${selectedRepo.name}` : "Select repository..."}
               <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent className="w-[var(--radix-dropdown-menu-trigger-width)] max-h-[300px] overflow-y-auto">
-            {repositories.map((repo) => (
+            {availableRepositories.map((repo) => (
               <DropdownMenuItem
                 key={repo.id}
                 onClick={() =>
@@ -332,10 +424,9 @@ function RepoPicker({
                 }
               >
                 <span className="flex-1">{repo.fullName}</span>
-                {((selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name) ||
-                  (!selectedRepo &&
-                    currentRepo?.owner === repo.owner &&
-                    currentRepo?.name === repo.name)) && <Check className="h-4 w-4" />}
+                {selectedRepo?.owner === repo.owner && selectedRepo?.name === repo.name && (
+                  <Check className="h-4 w-4" />
+                )}
               </DropdownMenuItem>
             ))}
           </DropdownMenuContent>
@@ -343,11 +434,11 @@ function RepoPicker({
 
         <div className="flex gap-2">
           <Button
-            onClick={() => selectedRepo && setProjectRepo.mutate(selectedRepo)}
-            disabled={!selectedRepo || setProjectRepo.isPending || (!!currentRepo && !hasChanged)}
+            onClick={() => selectedRepo && addProjectRepo.mutate(selectedRepo)}
+            disabled={!selectedRepo || addProjectRepo.isPending}
           >
-            {setProjectRepo.isPending ? <Spinner className="mr-2" /> : null}
-            {currentRepo ? "Save" : "Connect repository"}
+            {addProjectRepo.isPending ? <Spinner className="mr-2" /> : null}
+            Add repository
           </Button>
           {onCancel && (
             <Button variant="outline" onClick={onCancel}>
