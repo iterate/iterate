@@ -1,4 +1,11 @@
-import { test } from "./test-helpers.ts";
+import { test as base } from "./test-helpers.ts";
+
+const test = base.extend<{ baseURL: string }>({
+  baseURL: async ({ baseURL }, use) => {
+    const newURL = baseURL.includes("//localhost:5173") ? "http://localhost:3000" : baseURL;
+    await use(newURL);
+  },
+});
 
 function uniqueSlug(base: string): string {
   return `${base}-${Date.now()}`;
