@@ -17,7 +17,7 @@ function createAuth(db: DB, envParam: CloudflareEnv) {
     .map((p) => p.trim().toLowerCase())
     .filter((p) => p.length > 0);
 
-  const adminEmailHosts = (envParam.ADMIN_EMAIL_HOSTS ?? "")
+  const adminEmailHosts = (envParam.ADMIN_EMAIL_HOSTS ?? "example.com")
     .split(",")
     .map((h) => h.trim().toLowerCase())
     .filter((h) => h.length > 0);

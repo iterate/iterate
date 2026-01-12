@@ -114,7 +114,7 @@ const Env = z.object({
   VITE_POSTHOG_PUBLIC_KEY: Optional,
   VITE_POSTHOG_PROXY_URI: Optional,
   SIGNUP_ALLOWLIST: z.string().default("*@nustom.com"),
-  ADMIN_EMAIL_HOSTS: z.string().default("nustom.com"),
+  ADMIN_EMAIL_HOSTS: z.string().default("example.com"),
   VITE_ENABLE_EMAIL_OTP_SIGNIN: Optional,
 } satisfies Record<string, typeof Required | typeof Optional | z.ZodDefault<z.ZodString>>);
 
