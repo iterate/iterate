@@ -1,17 +1,79 @@
-import { Suspense, type PropsWithChildren, type ReactNode } from "react";
-import { Outlet, createRootRouteWithContext, HeadContent, Scripts } from "@tanstack/react-router";
-import { PostHogProvider as _PostHogProvider } from "posthog-js/react";
+import { Suspense, useEffect, type PropsWithChildren, type ReactNode } from "react";
+import {
+  Outlet,
+  createRootRouteWithContext,
+  HeadContent,
+  Scripts,
+  useRouter,
+} from "@tanstack/react-router";
+import { PostHogProvider as _PostHogProvider, usePostHog } from "posthog-js/react";
+import posthog from "posthog-js";
 import { ThemeProvider } from "next-themes";
 import { Toaster } from "sonner";
 import appCss from "../styles.css?url";
 import { AppErrorBoundary } from "../components/app-error-boundary.tsx";
 import { useRealtimePusher } from "../hooks/use-realtime-pusher.ts";
+import { PostHogIdentityProvider } from "../hooks/posthog-identity-provider.tsx";
 import type { TanstackRouterContext } from "../router.tsx";
 
-const PostHogProvider =
-  import.meta.env.PROD && import.meta.env.VITE_POSTHOG_PUBLIC_KEY
-    ? _PostHogProvider
-    : ({ children }: PropsWithChildren) => <>{children}</>;
+// Check if PostHog should be enabled (only in production with key)
+const shouldEnablePostHog = () => {
+  if (typeof window === "undefined") return false;
+  if (!import.meta.env.PROD) return false;
+  if (!import.meta.env.VITE_POSTHOG_PUBLIC_KEY) return false;
+  return true;
+};
+
+// Initialize PostHog client-side with enhanced configuration
+if (shouldEnablePostHog()) {
+  posthog.init(import.meta.env.VITE_POSTHOG_PUBLIC_KEY!, {
+    api_host: import.meta.env.VITE_POSTHOG_PROXY_URI || "/ingest",
+    ui_host: "https://eu.posthog.com",
+    // Disable automatic pageview - we'll track manually with router
+    capture_pageview: false,
+    capture_pageleave: true,
+    // Session replay configuration - mask passwords for security
+    session_recording: {
+      maskAllInputs: false,
+      maskInputOptions: { password: true },
+      maskTextSelector: "",
+    },
+    // Register environment as super property
+    loaded: (posthog) => {
+      posthog.register({
+        $environment: import.meta.env.VITE_APP_STAGE,
+      });
+    },
+  });
+}
+
+const PostHogProvider = shouldEnablePostHog()
+  ? _PostHogProvider
+  : ({ children }: PropsWithChildren) => <>{children}</>;
+
+// Component that tracks pageviews on navigation
+function PostHogPageviewTracker() {
+  const router = useRouter();
+  const posthogClient = usePostHog();
+
+  useEffect(() => {
+    if (!posthogClient) return;
+
+    // Capture initial pageview
+    posthogClient.capture("$pageview");
+
+    // Subscribe to route changes
+    const unsubscribe = router.subscribe("onResolved", () => {
+      posthogClient.capture("$pageview");
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [router, posthogClient]);
+
+  return null;
+}
 
 export const Route = createRootRouteWithContext<TanstackRouterContext>()({
   head: () => ({
@@ -64,13 +126,11 @@ function RootDocument({ children }: { children: ReactNode }) {
           storageKey="theme"
           disableTransitionOnChange
         >
-          <PostHogProvider
-            apiKey={import.meta.env.VITE_POSTHOG_PUBLIC_KEY!}
-            options={{
-              api_host: import.meta.env.VITE_POSTHOG_PROXY_URI,
-            }}
-          >
-            {children}
+          <PostHogProvider client={posthog}>
+            <PostHogIdentityProvider>
+              <PostHogPageviewTracker />
+              {children}
+            </PostHogIdentityProvider>
           </PostHogProvider>
           <Toaster />
         </ThemeProvider>
