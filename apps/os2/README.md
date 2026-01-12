@@ -1,5 +1,42 @@
 # os2
 
+## Local Docker Development
+
+For local development, you can create machines using local Docker containers instead of Daytona. This requires OrbStack (or Docker Desktop) with the TCP API enabled.
+
+### OrbStack Setup
+
+1. Open **OrbStack** → Click the gear icon (Settings) → **Docker** tab
+2. In the "Docker Engine" config section, add:
+   ```json
+   {
+     "hosts": ["tcp://127.0.0.1:2375", "unix:///var/run/docker.sock"]
+   }
+   ```
+3. Click **Apply & Restart**
+
+To verify it's working:
+
+```bash
+curl http://127.0.0.1:2375/version
+```
+
+### Automatic Image Building
+
+When you run `pnpm dev`, the `iterate-sandbox:local` Docker image is automatically built from `sandbox/Dockerfile` if it doesn't exist.
+
+To manually rebuild the image:
+
+```bash
+docker build -t iterate-sandbox:local ./sandbox
+```
+
+### Creating a Local Machine
+
+In the UI, select "local-docker" as the machine type when creating a new machine. The container will run locally and be accessible at `http://localhost:<port>`.
+
+---
+
 ## Daytona Snapshots
 
 The os2 app uses Daytona sandboxes for machine execution. Snapshots are Docker images pre-configured with the necessary tools and dependencies.

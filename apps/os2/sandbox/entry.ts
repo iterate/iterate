@@ -61,20 +61,24 @@ const cloneUserRepo = () => {
 
 const cloneAndSetupIterateRepo = () => {
   if (existsSync(ITERATE_REPO_PATH)) {
-    console.log(`Iterate repository already exists at ${ITERATE_REPO_PATH}, pulling latest...`);
-    execSync("git pull", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+    // Repo already exists (baked into image), just pull latest
+    console.log(`Iterate repository exists at ${ITERATE_REPO_PATH}, fetching latest...`);
+    execSync("git fetch origin main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
+    execSync("git reset --hard origin/main", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
   } else {
+    // Fallback for local dev without baked repo
     console.log(`Cloning ${ITERATE_REPO_URL} to ${ITERATE_REPO_PATH}...`);
     execSync(`git clone ${ITERATE_REPO_URL} ${ITERATE_REPO_PATH}`, { stdio: "inherit" });
   }
 
-  console.log("Running pnpm install...");
+  // pnpm install will be fast if lockfile matches cached node_modules
+  console.log("Running pnpm install (should be fast if lockfile unchanged)...");
   execSync("pnpm install", { cwd: ITERATE_REPO_PATH, stdio: "inherit" });
 };
 
 const startDaemon = () => {
   console.log(`Building daemon in ${DAEMON_PATH}...`);
-  execSync("pnpm build", { cwd: DAEMON_PATH, stdio: "inherit" });
+  execSync("npx vite build", { cwd: DAEMON_PATH, stdio: "inherit" });
 
   console.log(`Starting daemon server in ${DAEMON_PATH}...`);
   const daemon = spawn("node", ["dist/server/index.mjs"], {

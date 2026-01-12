@@ -1,17 +1,20 @@
 import { useState } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { useQuery } from "@tanstack/react-query";
 import {
   MoreHorizontal,
   Archive,
   Trash2,
   RotateCcw,
-  ExternalLink,
+  Monitor,
+  Terminal,
+  ScrollText,
   Copy,
   Check,
+  SquareTerminal,
 } from "lucide-react";
 import { toast } from "sonner";
-import { trpc } from "../lib/trpc.tsx";
+import { trpcClient } from "../lib/trpc.tsx";
+import { isNonProd } from "../../env-client.ts";
 import { Badge } from "./ui/badge.tsx";
 import { Button } from "./ui/button.tsx";
 import {
@@ -28,7 +31,6 @@ import {
   DropdownMenuTrigger,
 } from "./ui/dropdown-menu.tsx";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table.tsx";
-import { Spinner } from "./ui/spinner.tsx";
 
 interface Machine {
   id: string;
@@ -58,7 +60,7 @@ export function MachineTable({
   onDelete,
   isLoading,
 }: MachineTableProps) {
-  const [previewDialogMachineId, setPreviewDialogMachineId] = useState<string | null>(null);
+  const [logsDialogMachine, setLogsDialogMachine] = useState<Machine | null>(null);
 
   if (isLoading) {
     return (
@@ -71,6 +73,24 @@ export function MachineTable({
   if (machines.length === 0) {
     return null;
   }
+
+  const openDaemon = async (machineId: string, daemonKey: "daemon1Url" | "daemon2Url") => {
+    const result = await trpcClient.machine.getPreviewInfo.query({
+      organizationSlug,
+      projectSlug,
+      machineId,
+    });
+    window.open(result[daemonKey], "_blank");
+  };
+
+  const openTerminal = async (machineId: string) => {
+    const result = await trpcClient.machine.getPreviewInfo.query({
+      organizationSlug,
+      projectSlug,
+      machineId,
+    });
+    window.open(result.terminalUrl, "_blank");
+  };
 
   return (
     <>
@@ -93,7 +113,16 @@ export function MachineTable({
                 {machine.metadata?.snapshotName ?? "-"}
               </TableCell>
               <TableCell>
-                <Badge variant="outline">{machine.type}</Badge>
+                <Badge
+                  variant="outline"
+                  className={
+                    machine.type === "local-docker" ? "border-orange-500 text-orange-600" : ""
+                  }
+                >
+                  {machine.type === "local-docker"
+                    ? `Local :${(machine.metadata as { port?: number })?.port ?? "?"}`
+                    : "Daytona"}
+                </Badge>
               </TableCell>
               <TableCell>
                 <Badge variant={machine.state === "started" ? "success" : "secondary"}>
@@ -111,10 +140,26 @@ export function MachineTable({
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => setPreviewDialogMachineId(machine.id)}>
-                      <ExternalLink className="h-4 w-4 mr-2" />
-                      Preview
+                    <DropdownMenuItem onClick={() => openDaemon(machine.id, "daemon1Url")}>
+                      <Monitor className="h-4 w-4 mr-2" />
+                      Open Daemon 1 (Fancy)
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openDaemon(machine.id, "daemon2Url")}>
+                      <Terminal className="h-4 w-4 mr-2" />
+                      Open Daemon 2 (Just tmux)
+                    </DropdownMenuItem>
+                    {machine.type === "local-docker" && (
+                      <DropdownMenuItem onClick={() => setLogsDialogMachine(machine)}>
+                        <ScrollText className="h-4 w-4 mr-2" />
+                        View Logs
+                      </DropdownMenuItem>
+                    )}
+                    {isNonProd && machine.type === "daytona" && (
+                      <DropdownMenuItem onClick={() => openTerminal(machine.id)}>
+                        <SquareTerminal className="h-4 w-4 mr-2" />
+                        Terminal
+                      </DropdownMenuItem>
+                    )}
                     {machine.state === "started" ? (
                       <DropdownMenuItem onClick={() => onArchive(machine.id)}>
                         <Archive className="h-4 w-4 mr-2" />
@@ -141,120 +186,42 @@ export function MachineTable({
         </TableBody>
       </Table>
 
-      <MachinePreviewDialog
-        machineId={previewDialogMachineId}
-        machineName={machines.find((m) => m.id === previewDialogMachineId)?.name}
-        organizationSlug={organizationSlug}
-        projectSlug={projectSlug}
-        onClose={() => setPreviewDialogMachineId(null)}
-      />
+      <LogsDialog machine={logsDialogMachine} onClose={() => setLogsDialogMachine(null)} />
     </>
   );
 }
 
-function MachinePreviewDialog({
-  machineId,
-  machineName,
-  organizationSlug,
-  projectSlug,
-  onClose,
-}: {
-  machineId: string | null;
-  machineName?: string;
-  organizationSlug: string;
-  projectSlug: string;
-  onClose: () => void;
-}) {
-  const [copiedField, setCopiedField] = useState<"url" | "token" | null>(null);
+function LogsDialog({ machine, onClose }: { machine: Machine | null; onClose: () => void }) {
+  const [copied, setCopied] = useState(false);
+  const containerId = (machine?.metadata as { containerId?: string })?.containerId;
+  const command = containerId ? `docker logs -f ${containerId}` : "Container ID not found";
 
-  const { data, isLoading, error } = useQuery({
-    ...trpc.machine.getPreviewInfo.queryOptions({
-      organizationSlug,
-      projectSlug,
-      machineId: machineId ?? "",
-    }),
-    enabled: !!machineId,
-  });
-
-  const handleCopy = async (text: string, field: "url" | "token") => {
-    await navigator.clipboard.writeText(text);
-    setCopiedField(field);
+  const handleCopy = async () => {
+    await navigator.clipboard.writeText(command);
+    setCopied(true);
     toast.success("Copied to clipboard");
-    setTimeout(() => setCopiedField(null), 2000);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <Dialog open={!!machineId} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent>
+    <Dialog open={!!machine} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Machine Preview</DialogTitle>
+          <DialogTitle>View Container Logs</DialogTitle>
           <DialogDescription>
-            {machineName
-              ? `Preview URL and credentials for ${machineName}`
-              : "Preview URL and credentials"}
+            Run this command in your terminal to tail the logs for {machine?.name}
           </DialogDescription>
         </DialogHeader>
-
-        {isLoading && (
-          <div className="flex items-center justify-center py-8">
-            <Spinner className="h-6 w-6" />
+        <div className="space-y-2">
+          <div className="flex items-center gap-2">
+            <code className="flex-1 bg-muted px-3 py-2 rounded text-sm font-mono break-all">
+              {command}
+            </code>
+            <Button variant="outline" size="icon" onClick={handleCopy}>
+              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+            </Button>
           </div>
-        )}
-
-        {error && (
-          <div className="text-destructive text-sm py-4">
-            Failed to load preview info: {error.message}
-          </div>
-        )}
-
-        {data && (
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Preview URL</label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-muted px-3 py-2 rounded text-sm break-all">
-                  {data.url}
-                </code>
-                <Button variant="outline" size="icon" onClick={() => handleCopy(data.url, "url")}>
-                  {copiedField === "url" ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-                <Button variant="outline" size="icon" asChild>
-                  <a href={data.url} target="_blank" rel="noopener noreferrer">
-                    <ExternalLink className="h-4 w-4" />
-                  </a>
-                </Button>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Headers</label>
-              <div className="flex items-center gap-2">
-                <code className="flex-1 bg-muted px-3 py-2 rounded text-sm font-mono break-all">
-                  {Object.entries(data.headers).map(([key, value]) => (
-                    <div key={key}>
-                      {key}: {value}
-                    </div>
-                  ))}
-                </code>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => handleCopy(data.headers.Authorization, "token")}
-                >
-                  {copiedField === "token" ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <Copy className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
+        </div>
       </DialogContent>
     </Dialog>
   );
